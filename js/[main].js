@@ -1,5 +1,0 @@
-import * as graphics from "./engine/graphics.js"
-import * as physics from "./engine/physics.js"
-// import * as light from "./vfx/light.js"
-import * as controls from "./controls.js"
-import * as terrain from "./terrain/terrain.js"
