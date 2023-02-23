@@ -1,7 +1,7 @@
 // import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.112.1/build/three.module.js';
 import {controls} from './controls.js';
 import {graphics} from './graphics.js';
-import {terrain} from './terrain/terrain.js';
+import {terrain} from './world/terrain.js';
 
 
 let _APP = null;

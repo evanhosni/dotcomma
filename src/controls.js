@@ -28,7 +28,7 @@ export const controls = (function() {
         this._standing = true;
         this._velocity = new THREE.Vector3(0, 0, 0);
         this._decceleration = new THREE.Vector3(-10, -10, -10);
-        this._acceleration = new THREE.Vector3(2500, 100, 2500);
+        this._acceleration = new THREE.Vector3(2500, 10000, 2500);
 
         this._SetupPointerLock();
 
@@ -179,7 +179,7 @@ export const controls = (function() {
         this._velocity.add(frameDecceleration);
 
         if (this._move.forward) {
-          this._velocity.z -= this._acceleration.z * timeInSeconds;
+          this._velocity.z -= this._acceleration.z * timeInSeconds * 5;
         }
         if (this._move.backward) {
           this._velocity.z += this._acceleration.z * timeInSeconds;
