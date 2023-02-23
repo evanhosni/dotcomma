@@ -1,14 +1,14 @@
-// import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.112.1/build/three.module.js';
-
-import {noise} from '../engine/noise/noise.js';
 import {math} from '../engine/math/math.js';
+
+import {glitchcity} from './glitchcity.js';
 
 export const terrain = (function() {
   
   const _MIN_CELL_SIZE = 100;
   const _FIXED_GRID_SIZE = 10;
-  const _MIN_CELL_RESOLUTION = 32;
+  const _MIN_CELL_RESOLUTION = 16;
   const _MIN_NODE_SIZE = 500;
+  const _WORLD_SIZE = 32000;
 
   function DictIntersection(dictA, dictB) {
     const intersection = {};
@@ -110,10 +110,10 @@ export const terrain = (function() {
   }
 
   class HeightGenerator {
-    constructor(generator, position, minRadius, maxRadius) {
+    constructor(biome, position, minRadius, maxRadius) {
       this._position = position.clone();
       this._radius = [minRadius, maxRadius];
-      this._generator = generator;
+      this._biome = biome;
     }
   
     Get(x, y) {
@@ -122,13 +122,7 @@ export const terrain = (function() {
           (distance - this._radius[0]) / (this._radius[1] - this._radius[0]));
       normalization = normalization * normalization * (3 - 2 * normalization);
 
-      let heightAtVertex = this._generator.Get(x, y); //you created this variable
-
-      //TODO: MODIFY HEIGHT HERE
-      // if (x > 0) heightAtVertex = this._generator.Get(x, y) * 10;
-      // if (x > -15 && x < 0) heightAtVertex = this._generator.Get(x, y) * (1 + (-1 / x));
-
-      //END MODIFY HEIGHT
+      let heightAtVertex = this._biome.Height(x, y)
 
       return [heightAtVertex, normalization];
     }
@@ -204,7 +198,7 @@ export const terrain = (function() {
       const offset = this._params.offset;
       let count = 0;
       
-      console.log(this._plane)
+      // console.log(this._plane)
 
       let pos = this._plane.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
@@ -369,18 +363,7 @@ export const terrain = (function() {
     }
 
     _InitNoise(params) {
-      params.noise = {
-        octaves: 6,
-        persistence: 0.707,
-        lacunarity: 1.8,
-        exponentiation: 4.5,
-        height: 300.0,
-        scale: 1100.0,
-        noiseType: 'simplex',
-        seed: 1
-      };
-
-      this._noise = new noise.Noise(params.noise);
+      this._biome = new glitchcity.Biome(); //TODO: make this variable for different biomes, based on url extension or whatever its called
 
       params.heightmap = {
         height: 16,
@@ -409,7 +392,6 @@ export const terrain = (function() {
 
     _CreateTerrainChunk(offset, width) {
       const params = {
-        type: "GRASS",
         group: this._group,
         material: this._material,
         width: width,
@@ -417,7 +399,7 @@ export const terrain = (function() {
         resolution: _MIN_CELL_RESOLUTION,
         // biomeGenerator: this._biomes,
         // colourGenerator: new HyposemetricTints({biomeGenerator: this._biomes}),
-        heightGenerators: [new HeightGenerator(this._noise, offset, 100000, 100000 + 1)],
+        heightGenerators: [new HeightGenerator(this._biome, offset, 100000, 100000 + 1)],
       };
 
       return this._builder.AllocateChunk(params);
@@ -436,8 +418,8 @@ export const terrain = (function() {
       }
 
       const q = new QuadTree({
-        min: new THREE.Vector2(-32000, -32000),
-        max: new THREE.Vector2(32000, 32000),
+        min: new THREE.Vector2(-(_WORLD_SIZE), -(_WORLD_SIZE)),
+        max: new THREE.Vector2(_WORLD_SIZE, _WORLD_SIZE),
       });
       q.Insert(this._params.camera.position);
 
