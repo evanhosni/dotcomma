@@ -1,6 +1,6 @@
 import {noise} from '../engine/noise/noise.js';
 
-export const glitchcity = (function() {
+export const pharmaphorest = (function() {
 
     const blocks = [
         {

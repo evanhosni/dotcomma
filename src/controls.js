@@ -179,7 +179,7 @@ export const controls = (function() {
         this._velocity.add(frameDecceleration);
 
         if (this._move.forward) {
-          this._velocity.z -= this._acceleration.z * timeInSeconds * 5;
+          this._velocity.z -= this._acceleration.z * timeInSeconds;
         }
         if (this._move.backward) {
           this._velocity.z += this._acceleration.z * timeInSeconds;

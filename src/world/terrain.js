@@ -8,7 +8,8 @@ export const terrain = (function() {
   const _FIXED_GRID_SIZE = 10;
   const _MIN_CELL_RESOLUTION = 16;
   const _MIN_NODE_SIZE = 500;
-  const _WORLD_SIZE = 32000;
+  const _WORLD_SIZE = 6400;
+  const _MOVE_THRESHOLD = 1600;
 
   function DictIntersection(dictA, dictB) {
     const intersection = {};
@@ -30,7 +31,11 @@ export const terrain = (function() {
 
   class QuadTree {
     constructor(params) {
-      const b = new THREE.Box2(params.min, params.max);
+      var min = new THREE.Vector2(-_WORLD_SIZE + (params.camPos.x * _MOVE_THRESHOLD), -_WORLD_SIZE + (params.camPos.y * _MOVE_THRESHOLD));
+      var max = new THREE.Vector2(_WORLD_SIZE + (params.camPos.x * _MOVE_THRESHOLD), _WORLD_SIZE + (params.camPos.y * _MOVE_THRESHOLD));
+
+      const b = new THREE.Box2(min, max);
+
       this._root = {
         bounds: b,
         children: [],
@@ -412,14 +417,17 @@ export const terrain = (function() {
       }
     }
 
+    _LocalizeAroundPlayer(camPos) {
+      return new THREE.Vector2(Math.floor(camPos.x / _MOVE_THRESHOLD), Math.floor(camPos.z / _MOVE_THRESHOLD))
+    }
+
     _UpdateVisibleChunks_Quadtree() {
       function _Key(c) {
         return c.position[0] + '/' + c.position[1] + ' [' + c.dimensions[0] + ']';
       }
 
       const q = new QuadTree({
-        min: new THREE.Vector2(-(_WORLD_SIZE), -(_WORLD_SIZE)),
-        max: new THREE.Vector2(_WORLD_SIZE, _WORLD_SIZE),
+        camPos: this._LocalizeAroundPlayer(this._params.camera.position)
       });
       q.Insert(this._params.camera.position);
 
