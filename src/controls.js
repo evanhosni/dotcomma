@@ -3,6 +3,9 @@ import {PointerLockControls} from 'https://cdn.jsdelivr.net/npm/three@0.112.1/ex
 
 
 export const controls = (function() {
+
+  const _SPRINT_MULTIPLIER = 5;
+
   return {
     // FPSControls was adapted heavily from a threejs example. Movement control
     // and collision detection was completely rewritten, but credit to original
@@ -29,6 +32,7 @@ export const controls = (function() {
         this._velocity = new THREE.Vector3(0, 0, 0);
         this._decceleration = new THREE.Vector3(-10, -10, -10);
         this._acceleration = new THREE.Vector3(2500, 10000, 2500);
+        this._sprinting = false;
 
         this._SetupPointerLock();
 
@@ -64,6 +68,9 @@ export const controls = (function() {
           case 34: // PG_DOWN
             this._move.down = true;
             break;
+          case 16: // SHIFT
+            this._sprinting = true;
+            break;
         }
       }
 
@@ -90,6 +97,9 @@ export const controls = (function() {
             break;
           case 34: // PG_DOWN
             this._move.down = false;
+            break;
+          case 16: // SHIFT
+            this._sprinting = false;
             break;
         }
       }
@@ -179,22 +189,22 @@ export const controls = (function() {
         this._velocity.add(frameDecceleration);
 
         if (this._move.forward) {
-          this._velocity.z -= this._acceleration.z * timeInSeconds;
+          this._velocity.z -= this._acceleration.z * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
         if (this._move.backward) {
-          this._velocity.z += this._acceleration.z * timeInSeconds;
+          this._velocity.z += this._acceleration.z * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
         if (this._move.left) {
-          this._velocity.x -= this._acceleration.x * timeInSeconds;
+          this._velocity.x -= this._acceleration.x * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
         if (this._move.right) {
-          this._velocity.x += this._acceleration.x * timeInSeconds;
+          this._velocity.x += this._acceleration.x * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
         if (this._move.up) {
-          this._velocity.y += this._acceleration.y * timeInSeconds;
+          this._velocity.y += this._acceleration.y * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
         if (this._move.down) {
-          this._velocity.y -= this._acceleration.y * timeInSeconds;
+          this._velocity.y -= this._acceleration.y * timeInSeconds * (this._sprinting ? _SPRINT_MULTIPLIER : 1);
         }
 
         const controlObject = this._controls.getObject();

@@ -6,7 +6,7 @@ import {terrain} from './world/terrain.js';
 
 let _APP = null;
 
-class ProceduralTerrain_Demo {
+class dotcomma {
   constructor() {
     this._Initialize();
   }
@@ -92,7 +92,7 @@ class ProceduralTerrain_Demo {
 
 
 function _Main() {
-  _APP = new ProceduralTerrain_Demo();
+  _APP = new dotcomma();
 }
 
 _Main();

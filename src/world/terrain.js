@@ -1,6 +1,6 @@
 import {math} from '../engine/math/math.js';
 
-import {glitchcity} from './glitchcity.js';
+import {biomes} from './biomes.js';
 
 export const terrain = (function() {
   
@@ -115,10 +115,10 @@ export const terrain = (function() {
   }
 
   class HeightGenerator {
-    constructor(biome, position, minRadius, maxRadius) {
+    constructor(biomes, position, minRadius, maxRadius) {
       this._position = position.clone();
       this._radius = [minRadius, maxRadius];
-      this._biome = biome;
+      this._biomes = biomes;
     }
   
     Get(x, y) {
@@ -127,7 +127,7 @@ export const terrain = (function() {
           (distance - this._radius[0]) / (this._radius[1] - this._radius[0]));
       normalization = normalization * normalization * (3 - 2 * normalization);
 
-      let heightAtVertex = this._biome.Height(x, y)
+      let heightAtVertex = this._biomes.Height(x, y)
 
       return [heightAtVertex, normalization];
     }
@@ -273,7 +273,7 @@ export const terrain = (function() {
 
       this._queued.push(c);
 
-      return c;    
+      return c;
     }
 
     _RecycleChunks(chunks) {
@@ -368,7 +368,7 @@ export const terrain = (function() {
     }
 
     _InitNoise(params) {
-      this._biome = new glitchcity.Biome(); //TODO: make this variable for different biomes, based on url extension or whatever its called
+      this._biomes = new biomes.Biomes(); //TODO: make this variable for different biomes, based on url extension or whatever its called
 
       params.heightmap = {
         height: 16,
@@ -404,7 +404,7 @@ export const terrain = (function() {
         resolution: _MIN_CELL_RESOLUTION,
         // biomeGenerator: this._biomes,
         // colourGenerator: new HyposemetricTints({biomeGenerator: this._biomes}),
-        heightGenerators: [new HeightGenerator(this._biome, offset, 100000, 100000 + 1)],
+        heightGenerators: [new HeightGenerator(this._biomes, offset, 100000, 100000 + 1)],
       };
 
       return this._builder.AllocateChunk(params);
