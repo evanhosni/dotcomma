@@ -1,6 +1,6 @@
 import {noise} from '../engine/noise/noise.js';
 
-export const glitchcity = (function() {
+export const biomes = (function() {
 
     const blocks = [
         {
@@ -93,24 +93,9 @@ export const glitchcity = (function() {
     }
   
     return {
-      Biome: BiomeGenerator
+      Biomes: BiomeGenerator
     }
   })();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
