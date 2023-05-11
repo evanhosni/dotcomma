@@ -4,9 +4,22 @@ import {biomes} from './biomes.js';
 
 export const terrain = (function() {
   
-  const _MIN_CELL_SIZE = 1600;
-  const _FIXED_GRID_SIZE = 5;
+  const _MIN_CELL_SIZE = 500;
+  const _FIXED_GRID_SIZE = 10;
   const _MIN_CELL_RESOLUTION = 16;
+  const _MIN_NODE_SIZE = 1600;
+  const _WORLD_SIZE = 6400;
+  const _MOVE_THRESHOLD = 1600;
+
+  function DictIntersection(dictA, dictB) {
+    const intersection = {};
+    for (let k in dictB) {
+      if (k in dictA) {
+        intersection[k] = dictA[k];
+      }
+    }
+    return intersection
+  }
 
   function DictDifference(dictA, dictB) {
     const diff = {...dictA};
@@ -14,6 +27,91 @@ export const terrain = (function() {
       delete diff[k];
     }
     return diff;
+  }
+
+  class QuadTree {
+    constructor(params) {
+      var min = new THREE.Vector2(-_WORLD_SIZE + (params.camPos.x * _MOVE_THRESHOLD), -_WORLD_SIZE + (params.camPos.y * _MOVE_THRESHOLD));
+      var max = new THREE.Vector2(_WORLD_SIZE + (params.camPos.x * _MOVE_THRESHOLD), _WORLD_SIZE + (params.camPos.y * _MOVE_THRESHOLD));
+
+      const b = new THREE.Box2(min, max);
+
+      this._root = {
+        bounds: b,
+        children: [],
+        center: b.getCenter(new THREE.Vector2()),
+        size: b.getSize(new THREE.Vector2()),
+      };
+    }
+
+    GetChildren() {
+      const children = [];
+      this._GetChildren(this._root, children);
+      return children;
+    }
+
+    _GetChildren(node, target) {
+      if (node.children.length == 0) {
+        target.push(node);
+        return;
+      }
+
+      for (let c of node.children) {
+        this._GetChildren(c, target);
+      }
+    }
+
+    Insert(pos) {
+      this._Insert(this._root, new THREE.Vector2(pos.x, pos.z));
+    }
+
+    _Insert(child, pos) {
+      const distToChild = this._DistanceToChild(child, pos);
+
+      if (distToChild < child.size.x && child.size.x > _MIN_NODE_SIZE) {
+        child.children = this._CreateChildren(child); //TODO i can simplify the fuck out of this and remove quadtree
+
+        for (let c of child.children) {
+          this._Insert(c, pos);
+        }
+      }
+    }
+
+    _DistanceToChild(child, pos) {
+      return child.center.distanceTo(pos);
+    }
+
+    _CreateChildren(child) {
+      const midpoint = child.bounds.getCenter(new THREE.Vector2());
+
+      // Bottom left
+      const b1 = new THREE.Box2(child.bounds.min, midpoint);
+
+      // Bottom right
+      const b2 = new THREE.Box2(
+        new THREE.Vector2(midpoint.x, child.bounds.min.y),
+        new THREE.Vector2(child.bounds.max.x, midpoint.y));
+
+      // Top left
+      const b3 = new THREE.Box2(
+        new THREE.Vector2(child.bounds.min.x, midpoint.y),
+        new THREE.Vector2(midpoint.x, child.bounds.max.y));
+
+      // Top right
+      const b4 = new THREE.Box2(midpoint, child.bounds.max);
+
+      const children = [b1, b2, b3, b4].map(
+          b => {
+            return {
+              bounds: b,
+              children: [],
+              center: b.getCenter(new THREE.Vector2()),
+              size: b.getSize(new THREE.Vector2())
+            };
+          });
+
+      return children;
+    }
   }
 
   class HeightGenerator {
@@ -167,13 +265,12 @@ export const terrain = (function() {
       }
 
       let c = null;
-      if (this._pool[w].length > 0) { // checks pool for existing version of chunk //TODO for some reason, pool gets fucked with new version of threejs
-        c = this._pool[w].pop();
-        c._params = params;
-        // console.log("ye") //TODO: this is never reached
-      } else {
+      // if (this._pool[w].length > 0) { // checks pool for existing version of chunk //TODO for some reason, pool gets fucked with new version of threejs
+      //   c = this._pool[w].pop();
+      //   c._params = params;
+      // } else {
         c = new TerrainChunk(params);
-      }
+      // }
 
       c.Hide();
 
@@ -202,6 +299,26 @@ export const terrain = (function() {
 
     get Busy() {
       return this._active;
+    }
+
+    Update2() {
+      for (let b of this._queued) {
+        b._Rebuild().next();
+        this._new.push(b);
+      }
+      this._queued = [];
+
+      if (this._active) {
+        return;
+      }
+
+      if (!this._queued.length) {
+        this._RecycleChunks(this._old);
+        for (let b of this._new) {
+          b.Show();
+        }
+        this._Reset();
+      }
     }
 
     // spread creation of terrain chunks over multiple frames
@@ -336,8 +453,62 @@ export const terrain = (function() {
     Update(_) {
       this._builder.Update();
       if (!this._builder.Busy) {
-        this._UpdateVisibleChunks_FixedGrid();
+        this._UpdateVisibleChunks_Quadtree();
       }
+    }
+
+    _LocalizeAroundPlayer(camPos) {
+      return new THREE.Vector2(Math.floor(camPos.x / _MOVE_THRESHOLD), Math.floor(camPos.z / _MOVE_THRESHOLD))
+    }
+
+    _UpdateVisibleChunks_Quadtree() {
+      function _Key(c) {
+        return c.position[0] + '/' + c.position[1] + ' [' + c.dimensions[0] + ']';
+      }
+
+      const q = new QuadTree({
+        camPos: this._LocalizeAroundPlayer(this._params.camera.position)
+      });
+      q.Insert(this._params.camera.position);
+
+      const children = q.GetChildren();
+
+      let newTerrainChunks = {};
+      const center = new THREE.Vector2();
+      const dimensions = new THREE.Vector2();
+      for (let c of children) {
+        c.bounds.getCenter(center);
+        c.bounds.getSize(dimensions);
+
+        const child = {
+          position: [center.x, center.y],
+          bounds: c.bounds,
+          dimensions: [dimensions.x, dimensions.y],
+        };
+
+        const k = _Key(child);
+        newTerrainChunks[k] = child;
+      }
+
+      const intersection = DictIntersection(this._chunks, newTerrainChunks);
+      const difference = DictDifference(newTerrainChunks, this._chunks); //compares list of terrain chunks to ones we already have
+      const recycle = Object.values(DictDifference(this._chunks, newTerrainChunks));
+
+      this._builder._old.push(...recycle);
+
+      newTerrainChunks = intersection;
+
+      for (let k in difference) {
+        const [xp, zp] = difference[k].position;
+
+        const offset = new THREE.Vector2(xp, zp);
+        newTerrainChunks[k] = {
+          position: [xp, zp],
+          chunk: this._CreateTerrainChunk(offset, difference[k].dimensions[0]),
+        };
+      }
+
+      this._chunks = newTerrainChunks;
     }
 
     _UpdateVisibleChunks_FixedGrid() {
@@ -375,6 +546,28 @@ export const terrain = (function() {
           chunk: this._CreateTerrainChunk(offset, _MIN_CELL_SIZE),
         };
       }
+    }
+
+    _UpdateVisibleChunks_Single() {
+      function _Key(xc, zc) {
+        return xc + '/' + zc;
+      }
+
+      // Check the camera's position.
+      const [xc, zc] = this._CellIndex(this._params.camera.position);
+      const newChunkKey = _Key(xc, zc);
+
+      // We're still in the bounds of the previous chunk of terrain.
+      if (newChunkKey in this._chunks) {
+        return;
+      }
+
+      // Create a new chunk of terrain.
+      const offset = new THREE.Vector2(xc * _MIN_CELL_SIZE, zc * _MIN_CELL_SIZE);
+      this._chunks[newChunkKey] = {
+        position: [xc, zc],
+        chunk: this._CreateTerrainChunk(offset, _MIN_CELL_SIZE),
+      };
     }
   }
 
