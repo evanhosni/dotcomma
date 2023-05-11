@@ -69,7 +69,7 @@ export const controls = (function() {
             this._move.down = true;
             break;
           case 16: // SHIFT
-            this._sprinting = true;
+            this._sprinting = false;
             break;
         }
       }
@@ -99,7 +99,7 @@ export const controls = (function() {
             this._move.down = false;
             break;
           case 16: // SHIFT
-            this._sprinting = false;
+            this._sprinting = true;
             break;
         }
       }

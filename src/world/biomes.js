@@ -36,7 +36,7 @@ export const biomes = (function() {
 
     class BiomeGenerator {
         GetBlock(x,y) {
-            const gridSize = 2000
+            const gridSize = 5000
             const roadWidth = 150
             const currentGrid = [Math.floor(x/gridSize),Math.floor(y/gridSize)]
             var points = []
