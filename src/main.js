@@ -1,98 +1,118 @@
-// import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.112.1/build/three.module.js';
+import Stats from 'https://cdn.jsdelivr.net/npm/three@0.112.1/examples/jsm/libs/stats.module.js';
+
 import {controls} from './controls.js';
-import {graphics} from './graphics.js';
 import {terrain} from './world/terrain.js';
 
-
-let _APP = null;
+var heyEvanDoYouWantTheStatsWindowVisible = true;
 
 class dotcomma {
-  constructor() {
-    this._Initialize();
-  }
+    constructor() {
+        this.previousRAF = null;
+        this.minFrameTime = 1.0 / 10.0;
+        this.entities = {};
 
-  _Initialize() {
-    this._graphics = new graphics.Graphics(this);
-    if (!this._graphics.Initialize()) {
-      this._DisplayError('WebGL2 is not available.');
-      return;
+        this.Graphics()
+        this.Camera()
+        this.Lighting()
+        this.Skybox()
+        this.Terrain()
+        this.Controls()
+        this.Animate()
     }
 
-    this._previousRAF = null;
-    this._minFrameTime = 1.0 / 10.0;
-    this._entities = {};
+    Graphics() {
+        this.scene = new THREE.Scene();
+        this.renderer = new THREE.WebGLRenderer();
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
 
-    this._OnInitialize();
-    this._RAF();
-  }
+        const target = document.getElementById('[dotcomma]');
+        target.appendChild(this.renderer.domElement);
+        if (heyEvanDoYouWantTheStatsWindowVisible) {
+            this.stats = new Stats();
+            target.appendChild(this.stats.dom);
+        }
 
-  _DisplayError(errorText) {
-    const error = document.getElementById('error');
-    error.innerText = errorText;
-  }
-
-  _RAF() {
-    requestAnimationFrame((t) => {
-      if (this._previousRAF === null) {
-        this._previousRAF = t;
-      }
-      this._Render(t - this._previousRAF);
-      this._previousRAF = t;
-    });
-  }
-
-  _StepEntities(timeInSeconds) {
-    for (let k in this._entities) {
-      this._entities[k].Update(timeInSeconds);
+        window.addEventListener('resize', () => {
+            this.camera.aspect = window.innerWidth / window.innerHeight;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }, false);
     }
-  }
 
-  _Render(timeInMS) {
-    const timeInSeconds = Math.min(timeInMS * 0.001, this._minFrameTime);
+    Camera() {
+        const fov = 60;
+        const aspect = 1920 / 1080;
+        const near = 1;
+        const far = 25000.0;
+        this.camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+        this.camera.position.set(75, 10, 0);
 
-    this._OnStep(timeInSeconds);
-    this._StepEntities(timeInSeconds);
-    this._graphics.Render(timeInSeconds);
+        this.player = new THREE.Object3D();
+        this.player.position.set(475, 75, 900);
 
-    this._RAF();
-  }
+        this.camera.position.copy(this.player.position);
+    }
 
-  _OnInitialize() {
+    Lighting() {
+        let light = new THREE.DirectionalLight(0x808080, 1, 100);
+        light.position.set(-100, 100, -100);
+        light.target.position.set(0, 0, 0);
+        light.castShadow = false;
+        this.scene.add(light);
 
-    this._userCamera = new THREE.Object3D();
-    this._userCamera.position.set(475, 75, 900);
+        light = new THREE.DirectionalLight(0x404040, 1.5, 100);
+        light.position.set(100, 100, -100);
+        light.target.position.set(0, 0, 0);
+        light.castShadow = false;
+        this.scene.add(light);
+    }
 
-    this._entities['_terrain'] = new terrain.TerrainChunkManager({
-      camera: this._userCamera,
-      scene: this._graphics.Scene,
-      gui: this._gui,
-      guiParams: this._guiParams,
-    });
+    Skybox() {
+        this.scene.background = new THREE.Color(0x000000);
+    }
 
-    this._entities['_controls'] = new controls.FPSControls(
-      {
-        scene: this._graphics.Scene,
-        camera: this._userCamera
-      });
+    Terrain() {
+        this.entities['terrain'] = new terrain.TerrainChunkManager({
+            camera: this.player,
+            scene: this.scene,
+            gui: this.gui,
+            guiParams: this.guiParams,
+        });
+    }
 
-    this._graphics.Camera.position.copy(this._userCamera.position);
+    Controls() {
+        this.entities['controls'] = new controls.FPSControls({
+            scene: this.scene,
+            camera: this.player
+        });
+    }
 
-    this._LoadBackground();
-  }
+    Animate() {
+        requestAnimationFrame((t) => {
+            if (this.previousRAF === null) {
+                this.previousRAF = t;
+            }
+            this.Render(t - this.previousRAF);
+            this.previousRAF = t;
+        });
+    }
 
-  _LoadBackground() {
-    this._graphics.Scene.background = new THREE.Color(0x000000);
-  }
+    Render(timeInMS) {
+        const timeInSeconds = Math.min(timeInMS * 0.001, this.minFrameTime);
 
-  _OnStep(_) {
-    this._graphics._camera.position.copy(this._userCamera.position);
-    this._graphics._camera.quaternion.copy(this._userCamera.quaternion);
-  }
+        this.camera.position.copy(this.player.position);
+        this.camera.quaternion.copy(this.player.quaternion);
+
+        for (let k in this.entities) {
+            this.entities[k].Update(timeInSeconds);
+        }
+
+        this.renderer.render(this.scene, this.camera);
+        if (heyEvanDoYouWantTheStatsWindowVisible) this.stats.update();
+
+        this.Animate();
+    }
 }
 
-
-function _Main() {
-  _APP = new dotcomma();
-}
-
-_Main();
+new dotcomma();
