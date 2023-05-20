@@ -22,7 +22,6 @@ export const terrain = (()=>{
       this._group = new THREE.Group();
       this._params.scene.add(this._group);
       this.chunks = {};
-      this._pool = {};
       this._active = null;
       this._queued = [];
       this._new = [];
