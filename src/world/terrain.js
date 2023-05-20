@@ -11,12 +11,8 @@ export const terrain = (function() {
     constructor(params) {
       this._params = params;
       this.Init();
-
-      this._pool = {};
-      this.chunks = []
-      this.Reset();
     }
-
+    
     Init() {
       this._material = new THREE.MeshBasicMaterial({
         wireframe: true,
@@ -30,14 +26,18 @@ export const terrain = (function() {
       this._material4 = new THREE.MeshBasicMaterial({wireframe: true,wireframeLinewidth: 1,color: 0xFFFF00,side: THREE.FrontSide});//
       this._material5 = new THREE.MeshBasicMaterial({wireframe: true,wireframeLinewidth: 1,color: 0x0000FF,side: THREE.FrontSide});//
       this._material6 = new THREE.MeshBasicMaterial({wireframe: true,wireframeLinewidth: 1,color: 0xFF0000,side: THREE.FrontSide});//
-
+      
       //used to be InitNoise()
       this._biomes = new biomes.Biomes();
-
+      
       //used to be InitTerrain()
       this._group = new THREE.Group()
       this._params.scene.add(this._group);
-      this._chunks = {};
+      this.preChunks = {};
+
+      this._pool = {};
+      this.chunks = []
+      this.Reset();
     }
 
     CreateTerrainChunk(offset, width) {
@@ -78,22 +78,30 @@ export const terrain = (function() {
             };
           }
         }
+
+        for (let bierce in this.preChunks) {
+          if (!keys[bierce]) {
+            delete this.preChunks[bierce]
+          }
+        }
         
         //used to be DictDifference()
         const difference = {...keys};
-        for (let k in this._chunks) {
+        for (let k in this.preChunks) {
           delete difference[k];
         }
+
+        // console.log(this.preChunks)
   
         for (let k in difference) {
-          if (k in this._chunks) {
+          if (k in this.preChunks) {//TODO you have this.preChunks and this.chunks
             continue;
           }
   
           const [xp, zp] = difference[k].position;
   
           const offset = new THREE.Vector2(xp * _MIN_CELL_SIZE, zp * _MIN_CELL_SIZE);
-          this._chunks[k] = {
+          this.preChunks[k] = {
             position: [xc, zc],
             chunk: this.CreateTerrainChunk(offset, _MIN_CELL_SIZE),
           };
@@ -143,13 +151,12 @@ export const terrain = (function() {
         for (let c of this.chunks) {
           if (Math.abs(c.GetPos().x - this._params.camera.position.x) > _MIN_CELL_SIZE * (_FIXED_GRID_SIZE + 1) ||
           Math.abs(c.GetPos().z - this._params.camera.position.z) > _MIN_CELL_SIZE * (_FIXED_GRID_SIZE + 1)) {
-            c.Hide() //TODO or c.Destroy()?
-            // const i = this.chunks.indexOf(c); //TODO cannot remove from array cuz then they wont show when coming back to them (see else block below)
-            // if (i > -1) {
-            //   this.chunks.splice(i, 1);
-            // }
-          } else {
-            c.Show() //TODO find a way to add chunk back into queue?
+            c.Destroy() //TODO or c.Hide()?
+
+            const i = this.chunks.indexOf(c);
+            if (i > -1) {
+              this.chunks.splice(i, 1);
+            }
           }
         }
         
