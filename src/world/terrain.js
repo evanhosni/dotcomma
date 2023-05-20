@@ -33,10 +33,9 @@ export const terrain = (function() {
       //used to be InitTerrain()
       this._group = new THREE.Group()
       this._params.scene.add(this._group);
-      this.preChunks = {};
+      this.chunks = {};
 
       this._pool = {};
-      this.chunks = []
       this.Reset();
     }
 
@@ -79,29 +78,28 @@ export const terrain = (function() {
           }
         }
 
-        for (let bierce in this.preChunks) {
+        for (let bierce in this.chunks) {
           if (!keys[bierce]) {
-            delete this.preChunks[bierce]
+            this.chunks[bierce].chunk.Destroy()
+            delete this.chunks[bierce]
           }
         }
         
         //used to be DictDifference()
         const difference = {...keys};
-        for (let k in this.preChunks) {
+        for (let k in this.chunks) {
           delete difference[k];
         }
-
-        // console.log(this.preChunks)
   
         for (let k in difference) {
-          if (k in this.preChunks) {//TODO you have this.preChunks and this.chunks
+          if (k in this.chunks) {
             continue;
           }
   
           const [xp, zp] = difference[k].position;
   
           const offset = new THREE.Vector2(xp * _MIN_CELL_SIZE, zp * _MIN_CELL_SIZE);
-          this.preChunks[k] = {
+          this.chunks[k] = {
             position: [xc, zc],
             chunk: this.CreateTerrainChunk(offset, _MIN_CELL_SIZE),
           };
@@ -145,19 +143,6 @@ export const terrain = (function() {
         // this.RecycleChunks(this._old); //send old chunks to object pool
         for (let b of this._new) {
           b.Show();
-          this.chunks.push(b)
-        }
-        
-        for (let c of this.chunks) {
-          if (Math.abs(c.GetPos().x - this._params.camera.position.x) > _MIN_CELL_SIZE * (_FIXED_GRID_SIZE + 1) ||
-          Math.abs(c.GetPos().z - this._params.camera.position.z) > _MIN_CELL_SIZE * (_FIXED_GRID_SIZE + 1)) {
-            c.Destroy() //TODO or c.Hide()?
-
-            const i = this.chunks.indexOf(c);
-            if (i > -1) {
-              this.chunks.splice(i, 1);
-            }
-          }
         }
         
         this.Reset();
@@ -266,7 +251,7 @@ export const terrain = (function() {
       return {x: this._plane.position.x, z: this._plane.position.z}
     }
   }
-  
+
   class HeightGenerator {
     constructor(biomes, position, minRadius, maxRadius) {
       this._position = position.clone();
