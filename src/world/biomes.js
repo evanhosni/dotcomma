@@ -58,8 +58,7 @@ export const biomes = (function() {
 
                 return distanceA - distanceB
             })
-            var closest = points[0],
-            secondClosest = points[1]
+            var closest = points[0]
 
             for (let ix = currentVertex.x - roadWidth; ix < currentVertex.x + roadWidth; ix += roadWidth) {
                 for (let iy = currentVertex.y - roadWidth; iy < currentVertex.y + roadWidth; iy += roadWidth) {

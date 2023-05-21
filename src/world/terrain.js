@@ -19,6 +19,7 @@ export const terrain = (()=>{
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0xFF0000, side: THREE.FrontSide })
       ];
       this.biomes = new biomes.Biomes();
+      this.radius = [100000, 100001];//TODO not sure what the point of this is
       this.group = new THREE.Group();
       this.params.scene.add(this.group);
       this.chunks = {};
@@ -108,12 +109,9 @@ export const terrain = (()=>{
       plane.rotation.x = -Math.PI / 2;
       this.group.add(plane);
   
-      const heightGenerators = [new HeightGenerator(this.biomes, offset, 100000, 100000 + 1)];
-  
       const chunk = {
         offset: new THREE.Vector3(offset.x, offset.y, 0),
         plane: plane,
-        heightGenerators: heightGenerators,
         rebuildIterator: null
       };
 
@@ -124,7 +122,7 @@ export const terrain = (()=>{
     }
 
     *BuildChunk(chunk) {
-      const NUM_STEPS = 50; //TODO was 2000, 50 is more performant for firefox...make it variable based on browser?
+      const NUM_STEPS = 5000; //TODO was 2000 originally (works well on chrome), 50 is more performant for firefox...make it variable based on browser? maybe make infinite for initial gen to make load time quicker
       const offset = chunk.offset;
       const pos = chunk.plane.geometry.attributes.position;
       const colours = [];
@@ -132,7 +130,8 @@ export const terrain = (()=>{
       
       for (let i = 0; i < pos.count; i++) {
         const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-        pos.setXYZ(i, v.x, v.y, this.GenerateHeight(chunk, v));
+        pos.setXYZ(i, v.x, v.y, this.GenerateHeight(chunk, v)); //TODO add some x, y randomization? (see below)
+        // pos.setXYZ(i, v.x + Math.floor(new Math.seedrandom((v.x + offset.x) + "/" + (v.y + offset.y))() * 50), v.y + Math.floor(new Math.seedrandom((v.y + offset.y) + "/" + (v.x + offset.x))() * 50), this.GenerateHeight(chunk, v));
         colours.push(this.GenerateColor(chunk, v.x + offset.x, v.z, -v.y + offset.y));
         count++;
   
@@ -159,19 +158,26 @@ export const terrain = (()=>{
 
     GenerateHeight(chunk, v) {
       const offset = chunk.offset;
-      const heightGenerators = chunk.heightGenerators;
       const heightPairs = [];
-      let normalization = 0;
+      let bormalization = 0;
       let z = 0;
+      let x = v.x + offset.x;
+      let y = -v.y + offset.y;
+
+      const bosition = new THREE.Vector2(offset.x, offset.y)
+
+      const distance = bosition.distanceTo(new THREE.Vector2(x, y));
+      let normalization = 1.0 - math.sat((distance - this.radius[0]) / (this.radius[1] - this.radius[0]));
+      normalization = normalization * normalization * (3 - 2 * normalization);
+
+      let heightAtVertex = this.biomes.Height(x, y);
   
-      for (let gen of heightGenerators) {
-        heightPairs.push(gen.Get(v.x + offset.x, -v.y + offset.y));
-        normalization += heightPairs[heightPairs.length - 1][1];
-      }
+      heightPairs.push([heightAtVertex, normalization]);
+      bormalization += heightPairs[heightPairs.length - 1][1];
   
-      if (normalization > 0) {
+      if (bormalization > 0) {
         for (let h of heightPairs) {
-          z += h[0] * h[1] / normalization;
+          z += h[0] * h[1] / bormalization;
         }
       }
   
@@ -184,24 +190,6 @@ export const terrain = (()=>{
       }
   
       return { r: 1, g: 1, b: 1 };
-    }
-  }
-
-  class HeightGenerator {
-    constructor(biomes, position, minRadius, maxRadius) {
-      this._position = position.clone();
-      this._radius = [minRadius, maxRadius];
-      this.biomes = biomes;
-    }
-
-    Get(x, y) {
-      const distance = this._position.distanceTo(new THREE.Vector2(x, y));
-      let normalization = 1.0 - math.sat((distance - this._radius[0]) / (this._radius[1] - this._radius[0]));
-      normalization = normalization * normalization * (3 - 2 * normalization);
-
-      let heightAtVertex = this.biomes.Height(x, y);
-
-      return [heightAtVertex, normalization];
     }
   }
 
