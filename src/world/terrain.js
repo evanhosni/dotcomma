@@ -9,73 +9,59 @@ export const terrain = (()=>{
 
   class TerrainChunkManager {
     constructor(params) {
-      this._params = params;
+      this.params = params;
       this._material = new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0xFFFFFF, side: THREE.FrontSide });
-      this._materialArray = [
+      this.materialArray = [
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0x00FFFF, side: THREE.FrontSide }),
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0xFF00FF, side: THREE.FrontSide }),
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0xFFFF00, side: THREE.FrontSide }),
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0x0000FF, side: THREE.FrontSide }),
         new THREE.MeshBasicMaterial({ wireframe: true, wireframeLinewidth: 1, color: 0xFF0000, side: THREE.FrontSide })
       ];
-      this._biomes = new biomes.Biomes();
-      this._group = new THREE.Group();
-      this._params.scene.add(this._group);
+      this.biomes = new biomes.Biomes();
+      this.group = new THREE.Group();
+      this.params.scene.add(this.group);
       this.chunks = {};
-      this._active = null;
-      this._queued = [];
-      this._new = [];
-      this.Reset();
+      this.active = null;
+      this.queued = [];
+      this.new = [];
     }
-
-    CreateTerrainChunk(offset, width) {
-      const size = new THREE.Vector3(width, 0, width);
-      const randomMaterial = this._materialArray[Math.floor(Math.random() * this._materialArray.length)];
-      const plane = new THREE.Mesh(
-        new THREE.PlaneGeometry(size.x, size.z, _MIN_CELL_RESOLUTION, _MIN_CELL_RESOLUTION),
-        randomMaterial
-      );
-      plane.castShadow = false;
-      plane.receiveShadow = true;
-      plane.rotation.x = -Math.PI / 2;
-      this._group.add(plane);
-  
-      const heightGenerators = [new HeightGenerator(this._biomes, offset, 100000, 100000 + 1)];
-  
-      const chunk = {
-        offset: new THREE.Vector3(offset.x, offset.y, 0),
-        plane: plane,
-        heightGenerators: heightGenerators,
-        rebuildIterator: null
-      };
-
-      chunk.plane.visible = false;
-      this._queued.push(chunk);
-  
-      return chunk;
-    }
-
-    Reset() {
-      for (let chunkKey in this.chunks) {
-        this.DestroyChunk(chunkKey);
+    
+    Update() {
+      if (this.active) {
+        const iteratorResult = this.active.rebuildIterator.next();
+        if (iteratorResult.done) {
+          this.active = null;
+        }
+      } else {
+        const chunk = this.queued.pop();
+        if (chunk) {
+          this.active = chunk;
+          this.active.rebuildIterator = this.BuildChunk(chunk);
+          this.new.push(chunk);
+        }
+      }
+      
+      if (this.active) {
+        return;
       }
   
-      this.chunks = {};
-      this._active = null;
-      this._queued = [];
-      this._new = [];
-    }
-  
-    Update() {
-      this.UpdateChunks();
-      if (!this._active) {
-        const camera = this._params.camera;
+      if (!this.queued.length) {
+        for (let chunk of this.new) {
+          chunk.plane.visible = true;
+        }
+        
+        this.new = [];
+      }
+      
+      if (!this.active) {
+        const camera = this.params.camera;
         const xp = camera.position.x + _MIN_CELL_SIZE * 0.5;
         const yp = camera.position.z + _MIN_CELL_SIZE * 0.5;
         const xc = Math.floor(xp / _MIN_CELL_SIZE);
         const zc = Math.floor(yp / _MIN_CELL_SIZE);
         const keys = {};
-  
+        
         for (let x = -_FIXED_GRID_SIZE; x <= _FIXED_GRID_SIZE; x++) {
           for (let z = -_FIXED_GRID_SIZE; z <= _FIXED_GRID_SIZE; z++) {
             const k = `${x + xc}/${z + zc}`;
@@ -88,20 +74,20 @@ export const terrain = (()=>{
             this.DestroyChunk(chunkKey);
           }
         }
-  
+        
         const difference = { ...keys };
         for (let chunkKey in this.chunks) {
           delete difference[chunkKey];
         }
-  
+        
         for (let chunkKey in difference) {
           if (chunkKey in this.chunks) {
             continue;
           }
-  
+          
           const [xp, zp] = difference[chunkKey].position;
           const offset = new THREE.Vector2(xp * _MIN_CELL_SIZE, zp * _MIN_CELL_SIZE);
-          const chunk = this.CreateTerrainChunk(offset, _MIN_CELL_SIZE);
+          const chunk = this.QueueChunk(offset, _MIN_CELL_SIZE);
           this.chunks[chunkKey] = {
             position: [xc, zc],
             chunk: chunk
@@ -109,42 +95,41 @@ export const terrain = (()=>{
         }
       }
     }
+
+    QueueChunk(offset, width) {
+      const size = new THREE.Vector3(width, 0, width);
+      const randomMaterial = this.materialArray[Math.floor(Math.random() * this.materialArray.length)];
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(size.x, size.z, _MIN_CELL_RESOLUTION, _MIN_CELL_RESOLUTION),
+        randomMaterial
+      );
+      plane.castShadow = false;
+      plane.receiveShadow = true;
+      plane.rotation.x = -Math.PI / 2;
+      this.group.add(plane);
   
-    UpdateChunks() {
-      if (this._active) {
-        const iteratorResult = this._active.rebuildIterator.next();
-        if (iteratorResult.done) {
-          this._active = null;
-        }
-      } else {
-        const chunk = this._queued.pop();
-        if (chunk) {
-          this._active = chunk;
-          this._active.rebuildIterator = this.RebuildChunk(chunk);
-          this._new.push(chunk);
-        }
-      }
+      const heightGenerators = [new HeightGenerator(this.biomes, offset, 100000, 100000 + 1)];
   
-      if (this._active) {
-        return;
-      }
-  
-      if (!this._queued.length) {
-        for (let chunk of this._new) {
-          chunk.plane.visible = true;
-        }
-  
-        this._new = [];
-      }
+      const chunk = {
+        offset: new THREE.Vector3(offset.x, offset.y, 0),
+        plane: plane,
+        heightGenerators: heightGenerators,
+        rebuildIterator: null
+      };
+
+      chunk.plane.visible = false;
+      this.queued.push(chunk);
+
+      return chunk;
     }
-  
-    *RebuildChunk(chunk) {
-      const NUM_STEPS = 2000;
+
+    *BuildChunk(chunk) {
+      const NUM_STEPS = 50; //TODO was 2000, 50 is more performant for firefox...make it variable based on browser?
       const offset = chunk.offset;
       const pos = chunk.plane.geometry.attributes.position;
       const colours = [];
       let count = 0;
-  
+      
       for (let i = 0; i < pos.count; i++) {
         const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
         pos.setXYZ(i, v.x, v.y, this.GenerateHeight(chunk, v));
@@ -156,14 +141,22 @@ export const terrain = (()=>{
           yield;
         }
       }
-  
+
       yield;
       chunk.plane.geometry.elementsNeedUpdate = true;
       chunk.plane.geometry.verticesNeedUpdate = true;
       chunk.plane.geometry.computeVertexNormals();
       chunk.plane.position.set(offset.x, 0, offset.y);
     }
-  
+
+    DestroyChunk(chunkKey) {
+      const chunkData = this.chunks[chunkKey];
+      chunkData.chunk.plane.geometry.dispose();
+      chunkData.chunk.plane.material.dispose();
+      this.group.remove(chunkData.chunk.plane);
+      delete this.chunks[chunkKey];
+    }
+
     GenerateHeight(chunk, v) {
       const offset = chunk.offset;
       const heightGenerators = chunk.heightGenerators;
@@ -184,7 +177,7 @@ export const terrain = (()=>{
   
       return z;
     }
-  
+
     GenerateColor(chunk, x, y, z) {
       if (chunk.type === "GRASS") {
         return { r: 0, g: 1, b: 0 };
@@ -192,21 +185,13 @@ export const terrain = (()=>{
   
       return { r: 1, g: 1, b: 1 };
     }
-  
-    DestroyChunk(chunkKey) {
-      const chunkData = this.chunks[chunkKey];
-      chunkData.chunk.plane.geometry.dispose();
-      chunkData.chunk.plane.material.dispose();
-      this._group.remove(chunkData.chunk.plane);
-      delete this.chunks[chunkKey];
-    }
   }
 
   class HeightGenerator {
     constructor(biomes, position, minRadius, maxRadius) {
       this._position = position.clone();
       this._radius = [minRadius, maxRadius];
-      this._biomes = biomes;
+      this.biomes = biomes;
     }
 
     Get(x, y) {
@@ -214,7 +199,7 @@ export const terrain = (()=>{
       let normalization = 1.0 - math.sat((distance - this._radius[0]) / (this._radius[1] - this._radius[0]));
       normalization = normalization * normalization * (3 - 2 * normalization);
 
-      let heightAtVertex = this._biomes.Height(x, y);
+      let heightAtVertex = this.biomes.Height(x, y);
 
       return [heightAtVertex, normalization];
     }
