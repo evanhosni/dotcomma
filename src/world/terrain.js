@@ -2,7 +2,7 @@ import { math } from '../engine/math/math.js';
 import { biomes } from './biomes.js';
 
 const _MIN_CELL_SIZE = 1600;
-const _FIXED_GRID_SIZE = 5;
+const _FIXED_GRID_SIZE = 15;
 const _MIN_CELL_RESOLUTION = 16;
 
 export const terrain = (()=>{
