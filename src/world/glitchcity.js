@@ -1,16 +1,16 @@
 import {noise} from '../engine/noise/noise.js';
 
-export const dustworld = (function() {
+export const glitchcity = (function() {
 
-    class Dustworld {
+    class GlitchCity {
         constructor() {
             this.noise = new noise.Noise({
-                octaves: 6,
+                octaves: 2,
                 persistence: 0.707,
                 lacunarity: 1.8,
-                exponentiation: 4.5,
-                height: 800.0,
-                scale: 500.0,
+                exponentiation: 2,
+                height: 200.0,
+                scale: 3000.0,
                 noiseType: 'simplex',
                 seed: 1
             })
@@ -22,6 +22,6 @@ export const dustworld = (function() {
     }
   
     return {
-      Dustworld: Dustworld
+      GlitchCity: GlitchCity
     }
   })();

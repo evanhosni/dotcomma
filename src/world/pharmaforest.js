@@ -1,16 +1,16 @@
 import {noise} from '../engine/noise/noise.js';
 
-export const dustworld = (function() {
+export const pharmaforest = (function() {
 
-    class Dustworld {
+    class PharmaForest {
         constructor() {
             this.noise = new noise.Noise({
                 octaves: 6,
                 persistence: 0.707,
                 lacunarity: 1.8,
                 exponentiation: 4.5,
-                height: 800.0,
-                scale: 500.0,
+                height: 6000.0,
+                scale: 1100.0,
                 noiseType: 'simplex',
                 seed: 1
             })
@@ -22,6 +22,6 @@ export const dustworld = (function() {
     }
   
     return {
-      Dustworld: Dustworld
+      PharmaForest: PharmaForest
     }
   })();
