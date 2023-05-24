@@ -29,6 +29,7 @@ export const terrain = (()=>{
     }
     
     Update() {
+       //console.log(this.biomes.GetVertexData(this.params.camera.position.x,this.params.camera.position.z).blendRatio) //this will tell u what tile u are in
       if (this.active) {
         const iteratorResult = this.active.rebuildIterator.next();
         if (iteratorResult.done) {

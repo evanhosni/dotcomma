@@ -17,6 +17,7 @@ export const dustworld = (function() {
         }
 
         GetHeight(x,y) {
+            return 1000
             return this.noise.Get(x,y)
         }
     }

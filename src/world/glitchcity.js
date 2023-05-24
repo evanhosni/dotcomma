@@ -17,6 +17,7 @@ export const glitchcity = (function() {
         }
 
         GetHeight(x,y) {
+            return 100
             return this.noise.Get(x,y)
         }
     }

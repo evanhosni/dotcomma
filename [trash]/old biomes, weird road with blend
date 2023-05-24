@@ -1,0 +1,182 @@
+import {noise} from '../engine/noise/noise.js';
+
+import { glitchcity } from './glitchcity.js';
+import { pharmaforest } from './pharmaforest.js';
+import { dustworld } from './dustworld.js';
+
+export const biomes = (function() {
+
+    const road = {
+        noise: new noise.Noise({
+            octaves: 6,
+            persistence: 0.707,
+            lacunarity: 1.8,
+            exponentiation: 4.5,
+            height: 0.0,
+            scale: 1100.0,
+            noiseType: 'simplex',
+            seed: 1
+        }),
+        material: "whatever",
+        tempValueForHeight: -100
+    }
+    const overallHeight = {
+        noise: new noise.Noise({
+            octaves: 2,
+            persistence: 0.707,
+            lacunarity: 1.8,
+            exponentiation: 2,
+            height: 500.0,
+            scale: 30000.0,
+            noiseType: 'simplex',
+            seed: 1
+        }),
+    }
+    const blocks = [
+        new glitchcity.GlitchCity(),
+        // new glitchcity.GlitchCity(),
+        new pharmaforest.PharmaForest(),
+        new dustworld.Dustworld(),
+    ]
+
+
+    class BiomeGenerator {
+        GetVertexData(x,y) {
+            var vertexData = {
+                blockType: null,
+                blendRatio: 1
+            }
+            const gridSize = 10000
+            const roadWidth = 500
+            const blendWidth = 2500
+            const currentGrid = [Math.floor(x/gridSize),Math.floor(y/gridSize)]
+            var points = []
+
+            for (let ix = currentGrid[0] - 1; ix <= currentGrid[0] + 1; ix++) {
+                for (let iy = currentGrid[1] - 1; iy <= currentGrid[1] + 1; iy++) {
+                    var pointX = new Math.seedrandom(ix + "X" + iy)()
+                    var pointY = new Math.seedrandom(ix + "Y" + iy)()
+                    var point = new THREE.Vector2((ix + pointX) * gridSize, (iy + pointY) * gridSize)
+        
+                    points.push(point)
+                }
+            }
+
+            var currentVertex = new THREE.Vector2(x,y)
+            points.sort((a,b) => {
+                var distanceA = currentVertex.distanceTo(new THREE.Vector2(a.x,a.y)) //TODO make everything u can vector2 on terrain.js
+                var distanceB = currentVertex.distanceTo(new THREE.Vector2(b.x,b.y))
+
+                return distanceA - distanceB
+            })
+
+            var closest = points[0]
+            vertexData.blockType = blocks[Math.floor(new Math.seedrandom(points[0])() * blocks.length)];//TODO maybe change to mainBlockType?
+
+
+            var borderWidth = roadWidth// + Math.floor(new Math.seedrandom(points[0])() * roadWidth * 2)
+
+            //ROAD
+            for (let ix = currentVertex.x - borderWidth; ix < currentVertex.x + borderWidth; ix += borderWidth) {
+                for (let iy = currentVertex.y - borderWidth; iy < currentVertex.y + borderWidth; iy += borderWidth) {
+                    var nearbyVertex = new THREE.Vector2(ix,iy)
+                    points.sort((a,b) => {
+                        var distanceA = nearbyVertex.distanceTo(new THREE.Vector2(a.x,a.y))
+                        var distanceB = nearbyVertex.distanceTo(new THREE.Vector2(b.x,b.y))
+
+                        return distanceA - distanceB
+                    })
+                    var neighborClosest = points[0]
+                    var neighborBlockType = blocks[Object.keys(blocks)[ Object.keys(blocks).length * new Math.seedrandom(neighborClosest)() << 0]];
+
+                    if (closest != neighborClosest/* && vertexData.blockType != neighborBlockType/*TODO if u  want to combine neighbor blocks, uncomment this section and the above neighborBlockType line*/) {
+                        return road
+                    }
+                }
+            }
+
+            //BLEND
+            for (let ix = currentVertex.x - blendWidth; ix < currentVertex.x + blendWidth; ix += blendWidth) {
+                for (let iy = currentVertex.y - blendWidth; iy < currentVertex.y + blendWidth; iy += blendWidth) {
+                    var nearbyVertex = new THREE.Vector2(ix,iy)
+                    points.sort((a,b) => {
+                        var distanceA = nearbyVertex.distanceTo(new THREE.Vector2(a.x,a.y))
+                        var distanceB = nearbyVertex.distanceTo(new THREE.Vector2(b.x,b.y))
+
+                        return distanceA - distanceB
+                    })
+                    var neighborClosest = points[0]
+                    var neighborBlockType = blocks[Object.keys(blocks)[ Object.keys(blocks).length * new Math.seedrandom(neighborClosest)() << 0]];
+
+                    if (closest != neighborClosest/* && vertexData.blockType != neighborBlockType*/) {
+                        console.log('ey')
+                        return "blend"
+                    }
+                }
+            }
+
+            return vertexData
+        }
+
+
+        Height(x,y) {
+            const vertexData = this.GetVertexData(x,y)
+            // const block = vertexData.blockType
+
+            if (vertexData == road) return -100
+            if (vertexData == "blend") return -200
+
+            return vertexData.blockType.GetHeight(x,y) * vertexData.blendRatio
+
+            var z = 0
+
+            for (let i = 0; i < vertexData.blendData.length; i++) {
+                z += vertexData.blendData[i].blockType.GetHeight(x,y) * vertexData.blendData[i].blendRatio
+            }
+
+            return z
+            // return block.GetHeight(x, y)// + vertexData.blendRatio// + overallHeight.noise.Get(x, y)
+        }
+
+        
+    
+    }
+  
+    return {
+      Biomes: BiomeGenerator
+    }
+  })();
+
+
+
+
+
+
+
+// function getObjectKey() {
+//     var obj = {
+//         myKey: { 
+//             subkey1: 1,
+//             subkey2: 2
+//         }
+//     }
+//     return obj.myKey
+// }
+
+// console.log(getObjectKey().constructor.name)
+// // Object
+
+
+
+  //this was used to generate noise
+//   params.bumps = {
+//     octaves: 6,
+//     persistence: 0.707,
+//     lacunarity: 1.8,
+//     exponentiation: 4.5,
+//     height: 300.0,
+//     scale: 1100.0,
+//     noiseType: 'simplex',
+//     seed: 1
+//   };
+//   heightGenerators: [new HeightGenerator(this._biomes, this._bumps, offset, 100000, 100000 + 1)],
