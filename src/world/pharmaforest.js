@@ -17,6 +17,7 @@ export const pharmaforest = (function() {
         }
 
         GetHeight(x,y) {
+            return 500
             return this.noise.Get(x,y)
         }
     }
