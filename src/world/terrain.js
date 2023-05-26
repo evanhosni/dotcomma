@@ -1,9 +1,9 @@
 import { math } from '../engine/math/math.js';
 import { biomes } from './biomes.js';
 
-const _MIN_CELL_SIZE = 1600;
+const _MIN_CELL_SIZE = 6400;
 const _FIXED_GRID_SIZE = 5;
-const _MIN_CELL_RESOLUTION = 16;
+const _MIN_CELL_RESOLUTION = 32;
 
 export const terrain = (()=>{
 
@@ -29,7 +29,7 @@ export const terrain = (()=>{
     }
     
     Update() {
-       //console.log(this.biomes.GetVertexData(this.params.camera.position.x,this.params.camera.position.z).blendRatio) //this will tell u what tile u are in
+        console.log(this.biomes.GetVertexData(this.params.camera.position.x,this.params.camera.position.z).distanceToEdge) //this will tell u what tile u are in
       if (this.active) {
         const iteratorResult = this.active.rebuildIterator.next();
         if (iteratorResult.done) {
