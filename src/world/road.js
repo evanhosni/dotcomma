@@ -1,7 +1,6 @@
-import {noise} from '../engine/noise/noise.js';
+import { noise } from "../engine/noise/noise.js";
 
-export const road = (function() {
-
+export const road = (function () {
     class Road {
         constructor() {
             this.noise = new noise.Noise({
@@ -11,18 +10,18 @@ export const road = (function() {
                 exponentiation: 2,
                 height: 200.0,
                 scale: 3000.0,
-                noiseType: 'simplex',
-                seed: 1
-            })
+                noiseType: "simplex",
+                seed: 1,
+            });
         }
 
-        GetHeight(x,y) {
-            return -100
-            return this.noise.Get(x,y)
+        GetHeight(x, y) {
+            return -100;
+            return this.noise.Get(x, y);
         }
     }
-  
+
     return {
-      Road: Road
-    }
-  })();
+        Road: Road,
+    };
+})();

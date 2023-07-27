@@ -1,7 +1,6 @@
-import {noise} from '../engine/noise/noise.js';
+import { noise } from "../engine/noise/noise.js";
 
-export const glitchcity = (function() {
-
+export const glitchcity = (function () {
     class GlitchCity {
         constructor() {
             this.noise = new noise.Noise({
@@ -11,18 +10,18 @@ export const glitchcity = (function() {
                 exponentiation: 2,
                 height: 200.0,
                 scale: 3000.0,
-                noiseType: 'simplex',
-                seed: 1
-            })
+                noiseType: "simplex",
+                seed: 1,
+            });
         }
 
-        GetHeight(x,y) {
-            return 100
-            return this.noise.Get(x,y)
+        GetHeight(x, y) {
+            return 100;
+            return this.noise.Get(x, y);
         }
     }
-  
+
     return {
-      GlitchCity: GlitchCity
-    }
-  })();
+        GlitchCity: GlitchCity,
+    };
+})();
