@@ -1,7 +1,6 @@
-import {noise} from '../engine/noise/noise.js';
+import { noise } from "../engine/noise/noise.js";
 
-export const dustworld = (function() {
-
+export const dustworld = (function () {
     class Dustworld {
         constructor() {
             this.noise = new noise.Noise({
@@ -11,18 +10,18 @@ export const dustworld = (function() {
                 exponentiation: 4.5,
                 height: 800.0,
                 scale: 500.0,
-                noiseType: 'simplex',
-                seed: 1
-            })
+                noiseType: "simplex",
+                seed: 1,
+            });
         }
 
-        GetHeight(x,y) {
-            return 1000
-            return this.noise.Get(x,y)
+        GetHeight(x, y) {
+            return 1000;
+            return this.noise.Get(x, y);
         }
     }
-  
+
     return {
-      Dustworld: Dustworld
-    }
-  })();
+        Dustworld: Dustworld,
+    };
+})();
