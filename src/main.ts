@@ -1,43 +1,42 @@
-import Stats from 'https://cdn.jsdelivr.net/npm/three@0.112.1/examples/jsm/libs/stats.module.js';
+import * as THREE from "three";
+import "./style.css";
 
-import {controls} from './controls.js';
-import {terrain} from './world/terrain.js';
+class Dotcomma {
+    private prevRAF: number | null = null;
+    private minFrameTime = 0.1;
+    // private entities: { [key: string]: any } = {};
+    private scene = new THREE.Scene();
+    private renderer = new THREE.WebGLRenderer();
+    private camera = new THREE.PerspectiveCamera(60, 1920 / 1080, 1, 25000); //TODO set values and make them accessible by other scripts
+    private player = new THREE.Object3D();
+    // private stats = make stats thingy here
 
-var heyEvanDoYouWantTheStatsWindowVisible = true;
-
-class dotcomma {
     constructor() {
-        this.previousRAF = null;
-        this.minFrameTime = 1.0 / 10.0;
-        this.entities = {};
-
-        this.Graphics()
-        this.Camera()
-        this.Lighting()
-        this.Skybox()
-        this.Terrain()
-        this.Controls()
-        this.Animate()
+        this.Graphics();
+        this.Camera();
+        this.Lighting();
+        this.Skybox();
+        this.Terrain();
+        this.Controls();
+        this.Animate();
     }
 
     Graphics() {
-        this.scene = new THREE.Scene();
-        this.renderer = new THREE.WebGLRenderer();
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.setSize(window.innerWidth, window.innerHeight);
 
-        const target = document.getElementById('[dotcomma]');
+        const target = document.getElementById("[dotcomma]")!;
         target.appendChild(this.renderer.domElement);
-        if (heyEvanDoYouWantTheStatsWindowVisible) {
-            this.stats = new Stats();
-            target.appendChild(this.stats.dom);
-        }
 
-        window.addEventListener('resize', () => {
-            this.camera.aspect = window.innerWidth / window.innerHeight;
-            this.camera.updateProjectionMatrix();
-            this.renderer.setSize(window.innerWidth, window.innerHeight);
-        }, false);
+        window.addEventListener(
+            "resize",
+            () => {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            },
+            false
+        );
     }
 
     Camera() {
@@ -73,7 +72,7 @@ class dotcomma {
     }
 
     Terrain() {
-        this.entities['terrain'] = new terrain.TerrainChunkManager({
+        this.entities["terrain"] = new terrain.TerrainChunkManager({
             camera: this.player,
             scene: this.scene,
             gui: this.gui,
@@ -82,23 +81,23 @@ class dotcomma {
     }
 
     Controls() {
-        this.entities['controls'] = new controls.FPSControls({
+        this.entities["controls"] = new controls.FPSControls({
             scene: this.scene,
-            camera: this.player
+            camera: this.player,
         });
     }
 
     Animate() {
         requestAnimationFrame((t) => {
-            if (this.previousRAF === null) {
-                this.previousRAF = t;
+            if (this.prevRAF === null) {
+                this.prevRAF = t;
             }
-            this.Render(t - this.previousRAF);
-            this.previousRAF = t;
+            this.Render(t - this.prevRAF);
+            this.prevRAF = t;
         });
     }
 
-    Render(timeInMS) {
+    Render(timeInMS: number) {
         const timeInSeconds = Math.min(timeInMS * 0.001, this.minFrameTime);
 
         this.camera.position.copy(this.player.position);
@@ -109,10 +108,10 @@ class dotcomma {
         }
 
         this.renderer.render(this.scene, this.camera);
-        if (heyEvanDoYouWantTheStatsWindowVisible) this.stats.update();
+        //TODO, you can update camera fov and stuff somewhere here
 
         this.Animate();
     }
 }
 
-new dotcomma();
+new Dotcomma();
