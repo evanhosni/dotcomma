@@ -1,15 +1,16 @@
 import * as THREE from "three";
 import "./style.css";
+import {terrain} from "./terrain"
 
 class Dotcomma {
     private prevRAF: number | null = null;
     private minFrameTime = 0.1;
-    // private entities: { [key: string]: any } = {};
     private scene = new THREE.Scene();
     private renderer = new THREE.WebGLRenderer();
     private camera = new THREE.PerspectiveCamera(60, 1920 / 1080, 1, 25000); //TODO set values and make them accessible by other scripts
     private player = new THREE.Object3D();
-    // private stats = make stats thingy here
+    private entities: { [key: string]: any } = {}; //TODO rename entities to something that makes more sense
+    // private stats = make stats thingy here, or add to entities more likely
 
     constructor() {
         this.Graphics();
@@ -54,13 +55,13 @@ class Dotcomma {
     }
 
     Lighting() {
-        let light = new THREE.DirectionalLight(0x808080, 1, 100);
+        let light = new THREE.DirectionalLight(0x808080, 1);
         light.position.set(-100, 100, -100);
         light.target.position.set(0, 0, 0);
         light.castShadow = false;
         this.scene.add(light);
 
-        light = new THREE.DirectionalLight(0x404040, 1.5, 100);
+        light = new THREE.DirectionalLight(0x404040, 1.5);
         light.position.set(100, 100, -100);
         light.target.position.set(0, 0, 0);
         light.castShadow = false;
@@ -73,10 +74,8 @@ class Dotcomma {
 
     Terrain() {
         this.entities["terrain"] = new terrain.TerrainChunkManager({
-            camera: this.player,
             scene: this.scene,
-            gui: this.gui,
-            guiParams: this.guiParams,
+            camera: this.player,
         });
     }
 
