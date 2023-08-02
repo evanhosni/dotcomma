@@ -80,10 +80,10 @@ class Dotcomma {
     }
 
     Controls() {
-        this.entities["controls"] = new controls.FPSControls({
-            scene: this.scene,
-            camera: this.player,
-        });
+        // this.entities["controls"] = new controls.FPSControls({
+        //     scene: this.scene,
+        //     camera: this.player,
+        // });
     }
 
     Animate() {

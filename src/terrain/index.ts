@@ -1,17 +1,17 @@
 import * as THREE from "three";
 import { math } from "../math";
-import { biomes } from "./biomes.js";
+// import { biomes } from "./biomes.js";
 
 const _MIN_CELL_SIZE = 6400;
 const _FIXED_GRID_SIZE = 5;
 const _MIN_CELL_RESOLUTION = 32;
 
 export namespace terrain {
-    class TerrainChunkManager {
+    export class TerrainChunkManager {
         params: any;
         _material: THREE.MeshBasicMaterial;
         materialArray: THREE.MeshBasicMaterial[];
-        biomes: biomes.Biomes;
+        // biomes: biomes.Biomes;
         radius: number[];
         group: THREE.Group;
         chunks: { [key: string]: any };
@@ -36,7 +36,7 @@ export namespace terrain {
                 }),
                 // Add other materials as needed
             ];
-            this.biomes = new biomes.Biomes();
+            // this.biomes = new biomes.Biomes();
             this.radius = [100000, 100001]; // TODO not sure what the point of this is
             this.group = new THREE.Group();
             this.params.scene.add(this.group);
@@ -219,7 +219,9 @@ export namespace terrain {
                 );
             norm = norm * norm * (3 - 2 * norm);
 
-            const heightAtVertex = this.biomes.Height(x, y);
+            // const heightAtVertex = this.biomes.Height(x, y);
+
+            const heightAtVertex = 1;
 
             heightPairs.push([heightAtVertex, norm]);
             normalization += heightPairs[heightPairs.length - 1][1];
@@ -242,6 +244,4 @@ export namespace terrain {
             return { r: 1, g: 1, b: 1 };
         }
     }
-
-    export const ChunkManager = TerrainChunkManager;
 }
