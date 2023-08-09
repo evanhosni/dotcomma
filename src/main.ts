@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import "./style.css";
-import {terrain} from "./terrain"
+import { terrain } from "./terrain"
+import { controls } from "./controls";
 
 class Dotcomma {
     private prevRAF: number | null = null;
@@ -80,10 +81,10 @@ class Dotcomma {
     }
 
     Controls() {
-        // this.entities["controls"] = new controls.FPSControls({
-        //     scene: this.scene,
-        //     camera: this.player,
-        // });
+        this.entities["controls"] = new controls.FPSControls({
+            scene: this.scene,
+            camera: this.player,//TODO: fix this when u fix controls. for now, works regardless of typescript error
+        });
     }
 
     Animate() {
