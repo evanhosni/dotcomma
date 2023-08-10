@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import { math } from "../math";
-// import { biomes } from "./biomes.js";
+import { _math } from "../math";
+import { _biomes } from "./biomes";
+import { _noise } from "../noise";
 
 const _MIN_CELL_SIZE = 6400;
 const _FIXED_GRID_SIZE = 5;
@@ -11,7 +12,7 @@ export namespace terrain {
         params: any;
         _material: THREE.MeshBasicMaterial;
         materialArray: THREE.MeshBasicMaterial[];
-        // biomes: biomes.Biomes;
+        biomes: any;
         radius: number[];
         group: THREE.Group;
         chunks: { [key: string]: any };
@@ -36,7 +37,7 @@ export namespace terrain {
                 }),
                 // Add other materials as needed
             ];
-            // this.biomes = new biomes.Biomes();
+            this.biomes = new _biomes.Biomes();
             this.radius = [100000, 100001]; // TODO not sure what the point of this is
             this.group = new THREE.Group();
             this.params.scene.add(this.group);
@@ -47,6 +48,7 @@ export namespace terrain {
         }
 
         Update() {
+            // console.log(this._biomes.GetVertexData(this.params.camera.position.x,this.params.camera.position.z))
             if (this.active) {
                 const iteratorResult = this.active.rebuildIterator.next();
                 if (iteratorResult.done) {
@@ -213,15 +215,13 @@ export namespace terrain {
             const distance = position.distanceTo(new THREE.Vector2(x, y));
             let norm =
                 1.0 -
-                math.sat(
+                _math.sat(
                     (distance - this.radius[0]) /
                         (this.radius[1] - this.radius[0])
                 );
             norm = norm * norm * (3 - 2 * norm);
 
-            // const heightAtVertex = this.biomes.Height(x, y);
-
-            const heightAtVertex = 1;
+            const heightAtVertex = _noise.simplex(x, y) * 100;
 
             heightPairs.push([heightAtVertex, norm]);
             normalization += heightPairs[heightPairs.length - 1][1];
