@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "seedrandom": "^3.0.5",
+    "simplex-noise": "^4.0.1",
     "three": "^0.155.0"
   }
 }

@@ -19,7 +19,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true/**/,/**/
 
-    /**/"allowSyntheticDefaultImports": true/**///added this
+    /**/"allowSyntheticDefaultImports": true,/**///TODO added this
+    /**/"strictPropertyInitialization": false/**///TODO added this, might not need after fixing controls
   },
   "include": ["src"]
 }
