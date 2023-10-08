@@ -1,3 +1,14 @@
+import { Canvas } from "@react-three/fiber";
+import { Controls } from "../_/player/controls/Controls";
+
 export const Dust = () => {
-  return <h1>Dust</h1>;
+  return (
+    <Canvas>
+      <Controls />
+      <mesh>
+        <sphereGeometry />
+        <meshStandardMaterial />
+      </mesh>
+    </Canvas>
+  );
 };
