@@ -2,6 +2,43 @@
 // import { pharmaforest } from "./pharmaforest";
 // import { dustworld } from "./dustworld";
 
+import { _noise } from "../../noise";
+
+export interface BiomeNoiseParams {
+  octaves: number;
+  persistence: number;
+  lacunarity: number;
+  exponentiation: number;
+  height: number;
+  scale: number;
+  // noise_type: string, //TODO bring this back if u ever find a use for having both perlin and simplex
+  seed: number | string;
+}
+
+export interface Biome {
+  noise: BiomeNoiseParams;
+}
+
+export const BiomeHeight = (biome: Biome, x: number, y: number) => {
+  const xs = x / biome.noise.scale;
+  const ys = y / biome.noise.scale;
+  const G = 2.0 ** -biome.noise.persistence;
+  let amplitude = 1.0;
+  let frequency = 1.0;
+  let normalization = 0;
+  let total = 0;
+  for (let o = 0; o < biome.noise.octaves; o++) {
+    const noiseValue =
+      _noise.simplex(xs * frequency, ys * frequency) * 0.5 + 0.5;
+    total += noiseValue * amplitude;
+    normalization += amplitude;
+    amplitude *= G;
+    frequency *= biome.noise.lacunarity;
+  }
+  total /= normalization;
+  return Math.pow(total, biome.noise.exponentiation) * biome.noise.height;
+};
+
 export namespace _biomes {
   const overallHeight = 40;
 
