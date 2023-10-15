@@ -1,11 +1,12 @@
-import { NavLink } from "react-router-dom";
+import { Stats } from "@react-three/drei";
 
 export const PauseMenu = () => {
   return (
     <div id="PauseMenu">
-      <NavLink to="/">city</NavLink>
+      <Stats />
+      {/* <NavLink to="/">city</NavLink>
       <NavLink to="dust">dust</NavLink>
-      <NavLink to="pharma">pharma</NavLink>
+      <NavLink to="pharma">pharma</NavLink> */}
     </div>
   );
 };
