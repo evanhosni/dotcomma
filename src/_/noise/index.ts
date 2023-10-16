@@ -1,14 +1,14 @@
-import { RandomFn, createNoise2D } from "simplex-noise";
 import { _math } from "../math";
+import Noise from "./noise";
 
 export namespace _noise {
-  const blarnky = _math.seed_rand("bierce");
-  const prng: RandomFn = () => {
-    return blarnky;
-  };
+  var noise = new Noise(_math.seed_rand("bierce"));
 
   export const simplex = (x: number, y: number) => {
-    const noise2d = createNoise2D(prng);
-    return noise2d(x, y);
+    return noise.simplex2(x, y);
+  };
+
+  export const perlin = (x: number, y: number) => {
+    return noise.perlin2(x, y);
   };
 }
