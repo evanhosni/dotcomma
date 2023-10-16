@@ -29,7 +29,7 @@ export const BiomeHeight = (biome: Biome, x: number, y: number) => {
   let total = 0;
   for (let o = 0; o < biome.noise.octaves; o++) {
     const noiseValue =
-      _noise.simplex(xs * frequency, ys * frequency) * 0.5 + 0.5;
+      _noise.perlin(xs * frequency, ys * frequency) * 0.5 + 0.5;
     total += noiseValue * amplitude;
     normalization += amplitude;
     amplitude *= G;
