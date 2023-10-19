@@ -2,8 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { PauseMenu } from "./PauseMenu";
-import { City } from "./city/City";
 import { Dust } from "./dust/Dust";
+import { GlitchCity } from "./glitch-city";
 import { Pharma } from "./pharma/Pharma";
 import "./style.css";
 
@@ -22,7 +22,7 @@ function Dotcomma() {
     <BrowserRouter>
       <PauseMenu />
       <Routes>
-        <Route index element={<City />} />
+        <Route index element={<GlitchCity />} />
         <Route path="dust" element={<Dust />} />
         <Route path="pharma" element={<Pharma />} />
       </Routes>
