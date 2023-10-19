@@ -1,5 +1,5 @@
+import Noise from "noise-ts";
 import { _math } from "../math";
-import Noise from "./noise";
 
 export namespace _noise {
   var noise = new Noise(_math.seed_rand("bierce"));
