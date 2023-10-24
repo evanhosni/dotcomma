@@ -11,13 +11,7 @@ const root = ReactDOM.createRoot(
   document.getElementById("dotcomma") as HTMLElement
 );
 
-root.render(
-  <React.StrictMode>
-    <Dotcomma />
-  </React.StrictMode>
-);
-
-function Dotcomma() {
+const Dotcomma = () => {
   return (
     <BrowserRouter>
       <PauseMenu />
@@ -28,6 +22,10 @@ function Dotcomma() {
       </Routes>
     </BrowserRouter>
   );
-}
+};
 
-export default Dotcomma;
+root.render(
+  <React.StrictMode>
+    <Dotcomma />
+  </React.StrictMode>
+);
