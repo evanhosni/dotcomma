@@ -1,7 +1,6 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { _math } from "../math";
-import { _noise } from "../noise";
 
 const MIN_CELL_SIZE = 16;
 const FIXED_GRID_SIZE = 5;
@@ -18,41 +17,6 @@ interface Terrain {
   getHeight: (x: number, y: number) => number;
   getMaterial: (x: number, y: number) => string;
 }
-
-export interface TerrainNoiseParams {
-  octaves: number;
-  persistence: number;
-  lacunarity: number;
-  exponentiation: number;
-  height: number;
-  scale: number;
-  // noise_type: string, //TODO bring this back if u ever find a use for having both perlin and simplex
-  seed: number | string;
-}
-
-export const TerrainHeight = (
-  params: TerrainNoiseParams,
-  x: number,
-  y: number
-) => {
-  const xs = x / params.scale;
-  const ys = y / params.scale;
-  const G = 2.0 ** -params.persistence;
-  let amplitude = 1.0;
-  let frequency = 1.0;
-  let normalization = 0;
-  let total = 0;
-  for (let o = 0; o < params.octaves; o++) {
-    const noiseValue =
-      _noise.perlin(xs * frequency, ys * frequency) * 0.5 + 0.5;
-    total += noiseValue * amplitude;
-    normalization += amplitude;
-    amplitude *= G;
-    frequency *= params.lacunarity;
-  }
-  total /= normalization;
-  return Math.pow(total, params.exponentiation) * params.height;
-};
 
 export const Terrain = ({
   getHeight,
@@ -84,11 +48,10 @@ export const Terrain = ({
 
   useFrame(() => {
     UpdateTerrain();
+    // getTerrainInfo() //TODO add this function
   });
 
   const UpdateTerrain = () => {
-    // console.log(this._biomes.GetVertexData(this.params.camera.position.x,this.params.camera.position.z)) //TODO something like this here (or elsewhere if it makes sense) to gather data about player location. you can useContext to store it and use it elsewhere
-
     if (terrain.active_chunk) {
       const iteratorResult = terrain.active_chunk.rebuildIterator.next();
       if (iteratorResult.done) {
