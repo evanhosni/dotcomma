@@ -1,4 +1,3 @@
-import { Component } from "react";
 import { _noise, TerrainNoiseParams } from "../../_/noise";
 
 const noise: TerrainNoiseParams = {
@@ -11,12 +10,8 @@ const noise: TerrainNoiseParams = {
   scale: 8,
 };
 
-export class City extends Component {
-  static getHeight(x: number, y: number) {
+export const CityProperties = {
+  getHeight: (x: number, y: number) => {
     return _noise.terrain(noise, x, y);
-  }
-
-  render() {
-    return <></>;
-  }
-}
+  },
+};
