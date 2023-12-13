@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { TerrainNoiseParams, _noise } from "../../_/noise";
 import { VertexData, default_vertexData } from "../../types/VertexData";
 import { CityProperties } from "./City";
@@ -31,6 +32,41 @@ export const GlitchCityProperties = {
   },
 
   getMaterial: (x: number, y: number) => {
-    return "material";
+    const terrainHeight = GlitchCityProperties.getHeight(x, y); // not sure if this is actually doing anything
+
+    return new THREE.ShaderMaterial({
+      wireframe: true,
+      uniforms: {
+        // not sure if this is actually doing anything
+        berrainHeight: { value: terrainHeight },
+      }, //
+      vertexShader: `
+      varying float vTerrainHeight;
+    
+      void main() {
+        vTerrainHeight = position.z; // Assuming Y is the height axis, adjust if needed
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+      fragmentShader: `
+        varying float vTerrainHeight;
+  
+        void main() {
+          // Define colors for low and high terrain heights
+          vec3 lowColor = vec3(0.0, 1.0, 0.0); // Green
+          vec3 highColor = vec3(1.0, 0.0, 0.0); // Red
+  
+          // Adjust these values based on your terrain height range
+          float minHeight = 0.0;
+          float maxHeight = 20.0;
+  
+          // Interpolate between low and high colors based on terrain height
+          float gradient = (vTerrainHeight - minHeight) / (maxHeight - minHeight);
+          vec3 interpolatedColor = mix(lowColor, highColor, smoothstep(0.0, 1.0, gradient));
+  
+          gl_FragColor = vec4(interpolatedColor, 1.0);
+        }
+      `,
+    });
   },
 };
