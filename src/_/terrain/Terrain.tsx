@@ -8,14 +8,14 @@ const MIN_CELL_RESOLUTION = 16;
 const RADIUS = [100000, 100001];
 
 interface Terrain {
-  material: THREE.MeshBasicMaterial;
+  // material: THREE.MeshBasicMaterial;
   group: THREE.Group;
   chunks: { [key: string]: any }; //TODO better typing
   active_chunk: any | null; //TODO better typing
   queued_chunks: any[]; //TODO better typing
   new_chunks: any[]; //TODO better typing and naming
   getHeight: (x: number, y: number) => number;
-  getMaterial: (x: number, y: number) => string;
+  getMaterial: (x: number, y: number) => THREE.Material;
 }
 
 export const Terrain = ({
@@ -23,18 +23,12 @@ export const Terrain = ({
   getMaterial,
 }: {
   getHeight: (x: number, y: number) => number;
-  getMaterial: (x: number, y: number) => string;
+  getMaterial: (x: number, y: number) => THREE.Material;
 }) => {
   const scene = useThree((state) => state.scene);
   const camera = useThree((state) => state.camera);
 
   const terrain: Terrain = {
-    material: new THREE.MeshBasicMaterial({
-      wireframe: true,
-      wireframeLinewidth: 1,
-      color: 0x000000,
-      side: THREE.FrontSide,
-    }),
     group: new THREE.Group(),
     chunks: {},
     active_chunk: null,
@@ -48,7 +42,7 @@ export const Terrain = ({
 
   useFrame(() => {
     UpdateTerrain();
-    // getTerrainInfo() //TODO add this function
+    // getTerrainInfo() //TODO you can console log terrain info here maybe?
   });
 
   const UpdateTerrain = () => {
@@ -124,7 +118,6 @@ export const Terrain = ({
 
   const QueueChunk = (offset: THREE.Vector2, width: number) => {
     const size = new THREE.Vector3(width, 0, width);
-    const randomMaterial = terrain.material;
     const plane = new THREE.Mesh(
       new THREE.PlaneGeometry(
         size.x,
@@ -132,7 +125,7 @@ export const Terrain = ({
         MIN_CELL_RESOLUTION,
         MIN_CELL_RESOLUTION
       ),
-      randomMaterial
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
     plane.castShadow = false;
     plane.receiveShadow = true;
@@ -155,15 +148,16 @@ export const Terrain = ({
     const NUM_STEPS = 5000; //TODO was 2000 originally (works well on chrome), 50 is more performant for firefox...make it variable based on browser? maybe make infinite for initial gen to make load time quicker
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
-    const colours: any[] = [];
+    // const colours: any[] = [];
     let count = 0;
+
+    let material;
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
       pos.setXYZ(i, v.x, v.y, GenerateHeight(chunk, v)); //TODO add some x, y randomization?
-      colours.push(
-        GenerateMaterial(chunk, v.x + offset.x, v.z, -v.y + offset.y)
-      );
+
+      material = GenerateMaterial(v.x + offset.x, -v.y + offset.y);
       count++;
 
       if (count > NUM_STEPS) {
@@ -177,6 +171,7 @@ export const Terrain = ({
     chunk.plane.geometry.verticesNeedUpdate = true;
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
+    chunk.plane.material = material;
   };
 
   const DestroyChunk = (chunkKey: string) => {
@@ -216,13 +211,8 @@ export const Terrain = ({
     return z;
   };
 
-  const GenerateMaterial = (chunk: any, x: number, y: number, z: number) => {
-    // Update this function to return the appropriate color based on the chunk type
-    if (chunk.type === "GRASS") {
-      return { r: 0, g: 1, b: 0 };
-    }
-
-    return { r: 1, g: 1, b: 1 };
+  const GenerateMaterial = (x: number, y: number) => {
+    return terrain.getMaterial(x, y);
   };
 
   return <></>;
