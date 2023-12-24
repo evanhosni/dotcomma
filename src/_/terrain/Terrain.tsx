@@ -2,9 +2,9 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { _math } from "../math";
 
-const MIN_CELL_SIZE = 16;
-const FIXED_GRID_SIZE = 5;
-const MIN_CELL_RESOLUTION = 16;
+const MIN_CELL_SIZE = 32;
+const FIXED_GRID_SIZE = 8;
+const MIN_CELL_RESOLUTION = 8;
 const RADIUS = [100000, 100001];
 
 interface Terrain {
