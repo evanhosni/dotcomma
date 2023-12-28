@@ -1,84 +1,100 @@
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
-import { _math } from "../_/math";
+import { TerrainNoiseParams } from "../_/noise";
 import { Controls } from "../_/player/controls/Controls";
 import { Terrain } from "../_/terrain/Terrain";
+import { getVertexData } from "./voronoi";
+
+const noise: TerrainNoiseParams = {
+  type: "simplex",
+  octaves: 1,
+  persistence: 1,
+  lacunarity: 1,
+  exponentiation: 1,
+  height: 10,
+  scale: 200,
+};
 
 export const Biomes = () => {
-  const getVertexData = (x: number, y: number) => {
-    var vertexData = {
-      blockType: "",
-      blendData: [],
-    };
-    const gridSize = 500;
-    const roadWidth = 20;
-    const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
-    var points = [];
+  // const getVertexData = (x: number, y: number) => {
+  //   var vertexData = {
+  //     blockType: "",
+  //     blendData: [],
+  //   };
+  //   const gridSize = 500;
+  //   const roadWidth = 20;
+  //   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
+  //   var points = [];
 
-    for (let ix = currentGrid[0] - 1; ix <= currentGrid[0] + 1; ix++) {
-      for (let iy = currentGrid[1] - 1; iy <= currentGrid[1] + 1; iy++) {
-        var pointX = _math.seed_rand(ix + "X" + iy);
-        var pointY = _math.seed_rand(ix + "Y" + iy);
-        var point = new THREE.Vector3(
-          (ix + pointX) * gridSize,
-          (iy + pointY) * gridSize,
-          0
-        );
+  //   for (let ix = currentGrid[0] - 1; ix <= currentGrid[0] + 1; ix++) {
+  //     for (let iy = currentGrid[1] - 1; iy <= currentGrid[1] + 1; iy++) {
+  //       var pointX = _math.seed_rand(ix + "X" + iy);
+  //       var pointY = _math.seed_rand(ix + "Y" + iy);
+  //       var point = new THREE.Vector3(
+  //         (ix + pointX) * gridSize,
+  //         (iy + pointY) * gridSize,
+  //         0
+  //       );
 
-        points.push(point);
-      }
-    }
+  //       points.push(point);
+  //     }
+  //   }
 
-    var currentVertex = new THREE.Vector3(x, y, 0);
-    points.sort((a, b) => {
-      var distanceA = currentVertex.distanceTo(new THREE.Vector3(a.x, a.y, 0)); //TODO make everything vector2
-      var distanceB = currentVertex.distanceTo(new THREE.Vector3(b.x, b.y, 0));
+  //   var currentVertex = new THREE.Vector3(x, y, 0);
+  //   points.sort((a, b) => {
+  //     var distanceA = currentVertex.distanceTo(new THREE.Vector3(a.x, a.y, 0)); //TODO make everything vector2
+  //     var distanceB = currentVertex.distanceTo(new THREE.Vector3(b.x, b.y, 0));
 
-      return distanceA - distanceB;
-    });
-    var closest = points[0];
-    vertexData.blockType = "city"; // blocks[Math.floor(_math.seed_rand(closest) * blocks.length)];
+  //     return distanceA - distanceB;
+  //   });
+  //   var closest = points[0];
 
-    for (
-      let ix = currentVertex.x - roadWidth;
-      ix < currentVertex.x + roadWidth;
-      ix += roadWidth
-    ) {
-      for (
-        let iy = currentVertex.y - roadWidth;
-        iy < currentVertex.y + roadWidth;
-        iy += roadWidth
-      ) {
-        var nearbyVertex = new THREE.Vector3(ix, iy, 0);
-        var neighborPoints = [...points];
-        neighborPoints.sort((a, b) => {
-          var distanceA = nearbyVertex.distanceTo(
-            new THREE.Vector3(a.x, a.y, 0)
-          );
-          var distanceB = nearbyVertex.distanceTo(
-            new THREE.Vector3(b.x, b.y, 0)
-          );
+  //   if (currentVertex.distanceTo(closest) < 5) return "test";
 
-          return distanceA - distanceB;
-        });
-        var neighborClosest = neighborPoints[0];
-        //var neighborBlockType = blocks[Object.keys(blocks)[ Object.keys(blocks).length * new Math.seedrandom(neighborClosest)() << 0]];
+  //   vertexData.blockType = "city"; // blocks[Math.floor(_math.seed_rand(closest) * blocks.length)];
 
-        if (
-          closest !=
-          neighborClosest /*&& blockType != neighborBlockType/*TODO if u  want to combine neighbor blocks, uncomment this section and the above neighborBlockType line*/
-        )
-          return "road";
-      }
-    }
+  //   for (
+  //     let ix = currentVertex.x - roadWidth;
+  //     ix < currentVertex.x + roadWidth;
+  //     ix += roadWidth
+  //   ) {
+  //     for (
+  //       let iy = currentVertex.y - roadWidth;
+  //       iy < currentVertex.y + roadWidth;
+  //       iy += roadWidth
+  //     ) {
+  //       var nearbyVertex = new THREE.Vector3(ix, iy, 0);
+  //       var neighborPoints = [...points];
+  //       neighborPoints.sort((a, b) => {
+  //         var distanceA = nearbyVertex.distanceTo(
+  //           new THREE.Vector3(a.x, a.y, 0)
+  //         );
+  //         var distanceB = nearbyVertex.distanceTo(
+  //           new THREE.Vector3(b.x, b.y, 0)
+  //         );
 
-    return vertexData;
-  };
+  //         return distanceA - distanceB;
+  //       });
+  //       var neighborClosest = neighborPoints[0];
+  //       //var neighborBlockType = blocks[Object.keys(blocks)[ Object.keys(blocks).length * new Math.seedrandom(neighborClosest)() << 0]];
+
+  //       if (
+  //         closest !=
+  //         neighborClosest /*&& blockType != neighborBlockType/*TODO if u  want to combine neighbor blocks, uncomment this section and the above neighborBlockType line*/
+  //       )
+  //         return "road";
+  //     }
+  //   }
+
+  //   return vertexData;
+  // };
 
   const getHeight = (x: number, y: number) => {
     const vertexData = getVertexData(x, y);
 
     if (vertexData == "road") return -2;
+    if (vertexData == "block") return 0;
+    // if (vertexData == "roadCenter") return 5;
 
     // var z = vertexData.blockType.GetHeight(x,y)
 
@@ -87,7 +103,7 @@ export const Biomes = () => {
     //     z += vertexData.blockType.GetHeight(x,y) * vertexData.blendData[i].blendRatio
     // }
 
-    return 0;
+    return Number(vertexData);
     // return block.GetHeight(x, y)// + vertexData.blendRatio// + overallHeight.noise.Get(x, y)
   };
 
@@ -114,7 +130,7 @@ export const Biomes = () => {
         void main() {
           // Define colors for low and high terrain heights
           vec3 lowColor = vec3(0.0, 0.0, 0.0); // Black
-          vec3 highColor = vec3(1.0, 0.0, 0.0); // Red
+          vec3 highColor = vec3(0.1, 0.8, 0.2); // Green
   
           // Adjust these values based on your terrain height range
           float minHeight = -2.0;

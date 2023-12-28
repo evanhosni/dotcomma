@@ -47,27 +47,29 @@ export const Controls = () => {
 
   const camera = useThree((state) => state.camera);
 
-  useEffect(() => {
-    forward && console.log("forward", forward);
-    backward && console.log("backward", backward);
-    left && console.log("left", left);
-    right && console.log("right", right);
-    sprint && console.log("sprint", sprint);
-    jump && console.log("jump", jump);
-  }, [forward, backward, left, right, sprint, jump]);
+  // useEffect(() => {
+  //   forward && console.log("forward", forward);
+  //   backward && console.log("backward", backward);
+  //   left && console.log("left", left);
+  //   right && console.log("right", right);
+  //   sprint && console.log("sprint", sprint);
+  //   jump && console.log("jump", jump);
+  // }, [forward, backward, left, right, sprint, jump]);
+
+  const tempSpeeeeed = 5;
 
   useFrame((state, delta) => {
     if (forward) {
-      camera.position.z -= 0.1;
+      camera.position.z -= 0.1 * tempSpeeeeed;
     }
     if (backward) {
-      camera.position.z += 0.1;
+      camera.position.z += 0.1 * tempSpeeeeed;
     }
     if (left) {
-      camera.position.x -= 0.1;
+      camera.position.x -= 0.1 * tempSpeeeeed;
     }
     if (right) {
-      camera.position.x += 0.1;
+      camera.position.x += 0.1 * tempSpeeeeed;
     }
     if (jump) {
       camera.position.y += 0.1;
