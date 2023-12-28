@@ -20,7 +20,7 @@ export const Biomes = () => {
     const vertexData = getVertexData(x, y);
 
     if (vertexData == "road") return -2;
-    if (vertexData == "block") return 0;
+    // if (vertexData == "block") return 0;
     // if (vertexData == "roadCenter") return 5;
 
     // var z = vertexData.blockType.GetHeight(x,y)

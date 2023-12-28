@@ -2,28 +2,47 @@ import Delaunator from "delaunator";
 import * as THREE from "three";
 import { _math } from "../_/math";
 
-export const getVertexData = (x: number, y: number) => {
-  const gridSize = 300; //500?
-  const roadWidth = 5;
-  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
-  var points = [];
+const pointsCache: Record<string, THREE.Vector3[]> = {};
 
-  for (let ix = currentGrid[0] - 1; ix <= currentGrid[0] + 1; ix++) {
-    for (let iy = currentGrid[1] - 1; iy <= currentGrid[1] + 1; iy++) {
-      var pointX = _math.seed_rand(ix + "X" + iy);
-      var pointY = _math.seed_rand(ix + "Y" + iy);
-      var point = new THREE.Vector3(
-        (ix + pointX) * gridSize,
-        (iy + pointY) * gridSize,
-        0
-      );
-      points.push(point);
+export const getVertexData = (x: number, y: number) => {
+  const gridSize = 100;
+  const roadWidth = 5;
+  const blendWidth = 20;
+  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
+  var points: THREE.Vector3[] = [];
+
+  if (pointsCache[currentGrid.toString()]) {
+    points = pointsCache[currentGrid.toString()];
+  } else {
+    for (let ix = currentGrid[0] - 2; ix <= currentGrid[0] + 2; ix++) {
+      for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
+        var pointX = _math.seed_rand(ix + "X" + iy);
+        var pointY = _math.seed_rand(ix + "Y" + iy);
+        var point = new THREE.Vector3(
+          (ix + pointX) * gridSize,
+          (iy + pointY) * gridSize,
+          0
+        );
+        points.push(point);
+      }
     }
+    pointsCache[currentGrid.toString()] = points;
+
+    for (const key in pointsCache) {
+      const cachedGrid = key.split(",").map(Number);
+      if (
+        Math.abs(currentGrid[0] - cachedGrid[0]) > 5 ||
+        Math.abs(currentGrid[1] - cachedGrid[1]) > 5
+      ) {
+        delete pointsCache[key];
+      }
+    }
+    console.log(pointsCache);
   }
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
-  const circumcenters = [];
+  const circumcenters: THREE.Vector3[] = [];
   for (let i = 0; i < delaunay.triangles.length; i += 3) {
     const a = points[delaunay.triangles[i]];
     const b = points[delaunay.triangles[i + 1]];
@@ -53,14 +72,24 @@ export const getVertexData = (x: number, y: number) => {
       if (v1 && v2) voronoiWalls.push(new THREE.Line3(v1, v2));
     }
   }
-
   var currentVertex = new THREE.Vector3(x, y, 0);
 
+  var closestPoints = [];
   for (let i = 0; i < voronoiWalls.length; i++) {
     var closestPoint = new THREE.Vector3(0, 0, 0);
     voronoiWalls[i].closestPointToPoint(currentVertex, true, closestPoint);
-    if (currentVertex.distanceTo(closestPoint) <= roadWidth) return "road";
+    closestPoints.push(closestPoint);
   }
 
-  return "block";
+  closestPoints.sort(
+    (a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex)
+  );
+
+  const distance = currentVertex.distanceTo(closestPoints[0]);
+  if (distance <= roadWidth) return "road";
+
+  const blend =
+    Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+
+  return 10 * blend;
 };
