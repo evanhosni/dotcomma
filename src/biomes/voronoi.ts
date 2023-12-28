@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { _math } from "../_/math";
 
 export const getVertexData = (x: number, y: number) => {
-  const gridSize = 100; //500?
+  const gridSize = 300; //500?
   const roadWidth = 5;
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points = [];
@@ -21,7 +21,6 @@ export const getVertexData = (x: number, y: number) => {
     }
   }
 
-  var currentVertex = new THREE.Vector3(x, y, 0);
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
   const circumcenters = [];
@@ -54,6 +53,8 @@ export const getVertexData = (x: number, y: number) => {
       if (v1 && v2) voronoiWalls.push(new THREE.Line3(v1, v2));
     }
   }
+
+  var currentVertex = new THREE.Vector3(x, y, 0);
 
   for (let i = 0; i < voronoiWalls.length; i++) {
     var closestPoint = new THREE.Vector3(0, 0, 0);
