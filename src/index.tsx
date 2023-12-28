@@ -1,10 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { NotFound } from "./404/NotFound";
 import { PauseMenu } from "./PauseMenu";
 import { Biomes } from "./biomes";
-import { Dust } from "./dust/Dust";
-import { Pharma } from "./pharma/Pharma";
 import "./style.css";
 
 const root = ReactDOM.createRoot(
@@ -17,8 +16,7 @@ const Dotcomma = () => {
       <PauseMenu />
       <Routes>
         <Route index element={<Biomes />} />
-        <Route path="dust" element={<Dust />} />
-        <Route path="pharma" element={<Pharma />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   );
