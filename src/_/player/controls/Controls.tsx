@@ -1,6 +1,7 @@
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
+import { getVertexData } from "../../../biomes/city/props/getVertexData";
 
 const useInput = () => {
   const [input, setInput] = useState({
@@ -56,7 +57,7 @@ export const Controls = () => {
   //   jump && console.log("jump", jump);
   // }, [forward, backward, left, right, sprint, jump]);
 
-  const tempSpeeeeed = 5;
+  const tempSpeeeeed = 2;
 
   useFrame((state, delta) => {
     if (forward) {
@@ -76,6 +77,23 @@ export const Controls = () => {
     }
     if (sprint) {
       camera.position.y -= 0.1;
+      console.log(getVertexData(camera.position.x, camera.position.z));
+      // if (
+      //   getVertexData(camera.position.x, camera.position.z).blendData.length
+      // ) {
+      //   console.log(
+      //     // getVertexData(camera.position.x, camera.position.z).biome.name,
+      //     getVertexData(camera.position.x, camera.position.z).blendData[0]
+      //       .biome?.name,
+      //     getVertexData(camera.position.x, camera.position.z).blendData[0]
+      //       .value
+      //   );
+      //   camera.position.y -= 0.1;
+      // } else {
+      //   console.log(
+      //     getVertexData(camera.position.x, camera.position.z).biome.name
+      //   );
+      // }
     }
   });
 

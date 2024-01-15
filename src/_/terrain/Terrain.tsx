@@ -1,30 +1,24 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+// import { getVertexData } from "../../biomes/city/props/getVertexData";
+import { Biome } from "../../types/Biome";
 import { _math } from "../math";
 
 const MIN_CELL_SIZE = 32;
-const FIXED_GRID_SIZE = 8;
+const FIXED_GRID_SIZE = 10;
 const MIN_CELL_RESOLUTION = 8;
 const RADIUS = [100000, 100001];
 
 interface Terrain {
-  // material: THREE.MeshBasicMaterial;
   group: THREE.Group;
   chunks: { [key: string]: any }; //TODO better typing
   active_chunk: any | null; //TODO better typing
   queued_chunks: any[]; //TODO better typing
   new_chunks: any[]; //TODO better typing and naming
-  getHeight: (x: number, y: number) => number;
-  getMaterial: (x: number, y: number) => THREE.Material;
+  biome: Biome;
 }
 
-export const Terrain = ({
-  getHeight,
-  getMaterial,
-}: {
-  getHeight: (x: number, y: number) => number;
-  getMaterial: (x: number, y: number) => THREE.Material;
-}) => {
+export const Terrain = ({ biome }: { biome: Biome }) => {
   const scene = useThree((state) => state.scene);
   const camera = useThree((state) => state.camera);
 
@@ -34,15 +28,13 @@ export const Terrain = ({
     active_chunk: null,
     queued_chunks: [],
     new_chunks: [],
-    getHeight: getHeight,
-    getMaterial: getMaterial,
+    biome: biome,
   };
 
   scene.add(terrain.group);
 
   useFrame(() => {
     UpdateTerrain();
-    // getTerrainInfo() //TODO you can console log terrain info here maybe?
   });
 
   const UpdateTerrain = () => {
@@ -145,33 +137,59 @@ export const Terrain = ({
   };
 
   const BuildChunk = function* (chunk: any) {
-    const NUM_STEPS = 5000; //TODO was 2000 originally (works well on chrome), 50 is more performant for firefox...make it variable based on browser? maybe make infinite for initial gen to make load time quicker
+    const NUM_STEPS = 5000;
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
-    // const colours: any[] = [];
+    const material = terrain.biome.material;
+
     let count = 0;
 
-    let material;
+    const vertexDataArray = [];
+    const attributeBuffers: any = {};
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      pos.setXYZ(i, v.x, v.y, GenerateHeight(chunk, v)); //TODO add some x, y randomization?
+      pos.setXYZ(i, v.x, v.y, GenerateHeight(chunk, v));
 
-      material = GenerateMaterial(v.x + offset.x, -v.y + offset.y);
-      count++;
+      const vertexData = terrain.biome.getVertexData(
+        v.x + offset.x,
+        -v.y + offset.y
+      );
+      vertexDataArray.push(vertexData);
 
-      if (count > NUM_STEPS) {
+      // Initialize buffers on the first iteration
+      if (i === 0) {
+        for (const attrName in vertexData.attributes) {
+          attributeBuffers[attrName] = new Float32Array(pos.count);
+        }
+      }
+
+      // Populate buffers
+      for (const attrName in vertexData.attributes) {
+        attributeBuffers[attrName][i] = vertexData.attributes[attrName];
+      }
+
+      if (++count > NUM_STEPS) {
         count = 0;
         yield;
       }
     }
 
-    yield;
-    chunk.plane.geometry.elementsNeedUpdate = true;
-    chunk.plane.geometry.verticesNeedUpdate = true;
+    // Set attributes on geometry
+    for (const attrName in attributeBuffers) {
+      const bufferAttribute = new THREE.BufferAttribute(
+        attributeBuffers[attrName],
+        1
+      );
+      chunk.plane.geometry.setAttribute(attrName, bufferAttribute);
+    }
+
+    chunk.plane.material = material;
+    chunk.plane.geometry.attributes.position.needsUpdate = true;
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
-    chunk.plane.material = material;
+
+    yield;
   };
 
   const DestroyChunk = (chunkKey: string) => {
@@ -197,7 +215,7 @@ export const Terrain = ({
       1.0 - _math.sat((distance - RADIUS[0]) / (RADIUS[1] - RADIUS[0]));
     norm = norm * norm * (3 - 2 * norm);
 
-    const heightAtVertex = terrain.getHeight(x, y);
+    const heightAtVertex = terrain.biome.getVertexData(x, y).height;
 
     heightPairs.push([heightAtVertex, norm]);
     normalization += heightPairs[heightPairs.length - 1][1];
@@ -209,10 +227,6 @@ export const Terrain = ({
     }
 
     return z;
-  };
-
-  const GenerateMaterial = (x: number, y: number) => {
-    return terrain.getMaterial(x, y);
   };
 
   return <></>;

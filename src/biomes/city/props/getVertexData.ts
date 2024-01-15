@@ -1,15 +1,21 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
-import { _math } from "../_/math";
+import { _math } from "../../../_/math";
+import { VertexData, vertexData_default } from "../../../types/VertexData";
+import { blocks } from "../[blocks]";
+import { getHeight } from "./getHeight";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 
 export const getVertexData = (x: number, y: number) => {
-  const gridSize = 100;
-  const roadWidth = 5;
-  const blendWidth = 20;
+  const gridSize = 200;
+  const roadWidth = 10;
+  const blendWidth = 50;
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
+  var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
+
+  var currentVertex = new THREE.Vector3(x, y, 0);
 
   if (pointsCache[currentGrid.toString()]) {
     points = pointsCache[currentGrid.toString()];
@@ -37,8 +43,16 @@ export const getVertexData = (x: number, y: number) => {
         delete pointsCache[key];
       }
     }
-    console.log(pointsCache);
   }
+
+  points.sort(
+    (a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b)
+  );
+
+  vertexData.biome =
+    blocks[
+      Math.floor(_math.seed_rand(JSON.stringify(points[0])) * blocks.length)
+    ];
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -69,10 +83,9 @@ export const getVertexData = (x: number, y: number) => {
       const v1 = circumcenters[Math.floor(i / 3)];
       const v2 = circumcenters[Math.floor(edge / 3)];
 
-      if (v1 && v2) voronoiWalls.push(new THREE.Line3(v1, v2));
+      voronoiWalls.push(new THREE.Line3(v1, v2));
     }
   }
-  var currentVertex = new THREE.Vector3(x, y, 0);
 
   var closestPoints = [];
   for (let i = 0; i < voronoiWalls.length; i++) {
@@ -86,10 +99,19 @@ export const getVertexData = (x: number, y: number) => {
   );
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
-  if (distance <= roadWidth) return "road";
 
   const blend =
     Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
-  return 10 * blend;
+  vertexData.blendData = [{ biome: vertexData.biome, value: blend }];
+
+  if (distance <= roadWidth) {
+    vertexData.attributes.isRoad = true;
+  } else {
+    vertexData.attributes.isRoad = false;
+  }
+
+  vertexData.height = getHeight(vertexData);
+
+  return vertexData;
 };

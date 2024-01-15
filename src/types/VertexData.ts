@@ -1,16 +1,25 @@
+import { blocks } from "../biomes/city/[blocks]";
+import { Biome } from "./Biome";
+
 export interface BiomeBlend {
-  biome?: string; //TODO change string to Biome when u have a Biome type
+  biome: Biome;
   value: number;
 }
 
 export interface VertexData {
-  biome?: string; //TODO change string to Biome when u have a Biome type
-  biomeBlending: BiomeBlend[];
+  biome: Biome;
+  blendData: BiomeBlend[];
+  x: number;
+  y: number;
   height: number;
+  attributes: any;
 }
 
-export const default_vertexData: VertexData = {
-  biome: undefined,
-  biomeBlending: [],
+export const vertexData_default: VertexData = {
+  biome: blocks[0],
+  blendData: [],
+  x: 0,
+  y: 0,
   height: 0,
+  attributes: {},
 };
