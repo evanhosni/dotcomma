@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "downlevelIteration": true,
     "target": "es5",
     "lib": [
       "dom",
@@ -23,5 +22,5 @@
   },
   "include": [
     "src"
-, "[trash]/biomestuff/added noise.ts", "[trash]/biomestuff/blending.ts", "[trash]/biomestuff/curvy roads.ts", "[trash]/biomestuff/no blending.ts", "[trash]/biomestuff/sampling.ts", "[trash]/biomestuff/with roads.ts", "[trash]/biomestuff/newer/another backup.ts", "[trash]/biomestuff/newer/associated circs and tris.ts", "[trash]/biomestuff/newer/backup.ts", "[trash]/biomestuff/newer/recent mega fuct backup.ts", "[trash]/biomestuff/newer/the long way.ts", "[trash]/backup roads (str8).ts", "[trash]/backup.ts"  ]
+, "[trash]/biomestuff/added noise.ts", "[trash]/biomestuff/blending.ts", "[trash]/biomestuff/curvy roads.ts", "[trash]/biomestuff/no blending.ts", "[trash]/biomestuff/sampling.ts", "[trash]/biomestuff/with roads.ts", "[trash]/biomestuff/newer/another backup.ts", "[trash]/biomestuff/newer/associated circs and tris.ts", "[trash]/biomestuff/newer/backup.ts", "[trash]/biomestuff/newer/recent mega fuct backup.ts", "[trash]/biomestuff/newer/the long way.ts", "[trash]/backup roads (str8).ts", "[trash]/backup.ts", "[trash]/wait"  ]
 }

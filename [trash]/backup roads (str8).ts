@@ -2,7 +2,7 @@ import Delaunator from "delaunator";
 import * as THREE from "three";
 import { _math } from "../src/_/math";
 import { TerrainNoiseParams, _noise } from "../src/_/noise";
-import { biomes } from "../src/biomes/city/[blocks]";
+import { biomes } from "../src/biomes/city/blocks/[blocks]";
 import { VertexData, vertexData_default } from "../src/types/VertexData";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
@@ -33,11 +33,7 @@ export const getVertexData = (x: number, y: number) => {
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
         var pointX = _math.seed_rand(ix + "X" + iy);
         var pointY = _math.seed_rand(ix + "Y" + iy);
-        var point = new THREE.Vector3(
-          (ix + pointX) * gridSize,
-          (iy + pointY) * gridSize,
-          0
-        );
+        var point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
         points.push(point);
       }
     }
@@ -45,23 +41,15 @@ export const getVertexData = (x: number, y: number) => {
 
     for (const key in pointsCache) {
       const cachedGrid = key.split(",").map(Number);
-      if (
-        Math.abs(currentGrid[0] - cachedGrid[0]) > 5 ||
-        Math.abs(currentGrid[1] - cachedGrid[1]) > 5
-      ) {
+      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
         delete pointsCache[key];
       }
     }
   }
 
-  points.sort(
-    (a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b)
-  );
+  points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
-  vertexData.biome =
-    biomes[
-      Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)
-    ];
+  vertexData.biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -103,14 +91,11 @@ export const getVertexData = (x: number, y: number) => {
     closestPoints.push(closestPoint);
   }
 
-  closestPoints.sort(
-    (a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex)
-  );
+  closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
 
-  const blend =
-    Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  const blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
   vertexData.blendData = [{ biome: vertexData.biome, value: blend }];
 

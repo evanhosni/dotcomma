@@ -2,8 +2,7 @@ import Delaunator from "delaunator";
 import * as THREE from "three";
 import { _math } from "../../../_/math";
 import { VertexData, vertexData_default } from "../../../types/VertexData";
-import { blocks } from "../[blocks]";
-import { getHeight } from "./getHeight";
+import { blocks } from "../blocks/[blocks]";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 
@@ -24,11 +23,7 @@ export const getVertexData = (x: number, y: number) => {
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
         var pointX = _math.seed_rand(ix + "X" + iy);
         var pointY = _math.seed_rand(ix + "Y" + iy);
-        var point = new THREE.Vector3(
-          (ix + pointX) * gridSize,
-          (iy + pointY) * gridSize,
-          0
-        );
+        var point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
         points.push(point);
       }
     }
@@ -36,23 +31,15 @@ export const getVertexData = (x: number, y: number) => {
 
     for (const key in pointsCache) {
       const cachedGrid = key.split(",").map(Number);
-      if (
-        Math.abs(currentGrid[0] - cachedGrid[0]) > 5 ||
-        Math.abs(currentGrid[1] - cachedGrid[1]) > 5
-      ) {
+      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
         delete pointsCache[key];
       }
     }
   }
 
-  points.sort(
-    (a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b)
-  );
+  points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
-  vertexData.biome =
-    blocks[
-      Math.floor(_math.seed_rand(JSON.stringify(points[0])) * blocks.length)
-    ];
+  vertexData.attributes.block = blocks[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * blocks.length)];
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -94,16 +81,13 @@ export const getVertexData = (x: number, y: number) => {
     closestPoints.push(closestPoint);
   }
 
-  closestPoints.sort(
-    (a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex)
-  );
+  closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
 
-  const blend =
-    Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  const blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
-  vertexData.blendData = [{ biome: vertexData.biome, value: blend }];
+  vertexData.attributes.blendData = [{ block: vertexData.attributes.block, value: blend }];
 
   if (distance <= roadWidth) {
     vertexData.attributes.isRoad = true;
@@ -114,4 +98,20 @@ export const getVertexData = (x: number, y: number) => {
   vertexData.height = getHeight(vertexData);
 
   return vertexData;
+};
+
+const getHeight = (vertexData: VertexData) => {
+  if (vertexData.attributes.isRoad) return -5;
+
+  let height = 0;
+
+  if (vertexData.attributes.blendData.length === 0) {
+    return 20; //vertexData.block.getHeight(vertexData);
+  }
+
+  for (let i = 0; i < vertexData.attributes.blendData.length; i++) {
+    height += 20 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
+  }
+
+  return height;
 };
