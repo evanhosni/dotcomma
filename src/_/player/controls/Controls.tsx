@@ -1,7 +1,6 @@
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
-import { getVertexData } from "../../../biomes/city/props/getVertexData";
 
 const useInput = () => {
   const [input, setInput] = useState({
@@ -77,7 +76,7 @@ export const Controls = () => {
     }
     if (sprint) {
       camera.position.y -= 0.1;
-      console.log(getVertexData(camera.position.x, camera.position.z));
+      // console.log(biome.getVertexData(camera.position.x, camera.position.z));
       // if (
       //   getVertexData(camera.position.x, camera.position.z).blendData.length
       // ) {

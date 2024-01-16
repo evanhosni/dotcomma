@@ -1,6 +1,6 @@
 import { useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useState } from "react";
 import * as THREE from "three";
-// import { getVertexData } from "../../biomes/city/props/getVertexData";
 import { Biome } from "../../types/Biome";
 import { _math } from "../math";
 
@@ -15,7 +15,6 @@ interface Terrain {
   active_chunk: any | null; //TODO better typing
   queued_chunks: any[]; //TODO better typing
   new_chunks: any[]; //TODO better typing and naming
-  biome: Biome;
 }
 
 export const Terrain = ({ biome }: { biome: Biome }) => {
@@ -28,16 +27,23 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     active_chunk: null,
     queued_chunks: [],
     new_chunks: [],
-    biome: biome,
   };
 
   scene.add(terrain.group);
 
+  const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+
+  useEffect(() => {
+    biome.getMaterial().then(setTerrainMaterial);
+  }, []);
+
   useFrame(() => {
-    UpdateTerrain();
+    if (terrainMaterial) {
+      UpdateTerrain(terrainMaterial);
+    }
   });
 
-  const UpdateTerrain = () => {
+  const UpdateTerrain = (material: THREE.Material) => {
     if (terrain.active_chunk) {
       const iteratorResult = terrain.active_chunk.rebuildIterator.next();
       if (iteratorResult.done) {
@@ -47,13 +53,9 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
       const chunk = terrain.queued_chunks.pop();
       if (chunk) {
         terrain.active_chunk = chunk;
-        terrain.active_chunk.rebuildIterator = BuildChunk(chunk);
+        terrain.active_chunk.rebuildIterator = BuildChunk(chunk, material);
         terrain.new_chunks.push(chunk);
       }
-    }
-
-    if (terrain.active_chunk) {
-      return;
     }
 
     if (!terrain.queued_chunks.length) {
@@ -95,11 +97,8 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
         }
 
         const [xp, zp] = difference[chunkKey].position;
-        const offset = new THREE.Vector2(
-          xp * MIN_CELL_SIZE,
-          zp * MIN_CELL_SIZE
-        );
-        const chunk = QueueChunk(offset, MIN_CELL_SIZE);
+        const offset = new THREE.Vector2(xp * MIN_CELL_SIZE, zp * MIN_CELL_SIZE);
+        const chunk = QueueChunk(offset, MIN_CELL_SIZE, material);
         terrain.chunks[chunkKey] = {
           position: [xc, zc],
           chunk: chunk,
@@ -108,22 +107,16 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     }
   };
 
-  const QueueChunk = (offset: THREE.Vector2, width: number) => {
+  const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
     const size = new THREE.Vector3(width, 0, width);
     const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(
-        size.x,
-        size.z,
-        MIN_CELL_RESOLUTION,
-        MIN_CELL_RESOLUTION
-      ),
-      new THREE.MeshBasicMaterial({ color: 0xffffff })
+      new THREE.PlaneGeometry(size.x, size.z, MIN_CELL_RESOLUTION, MIN_CELL_RESOLUTION),
+      material
     );
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
     terrain.group.add(plane);
-
     const chunk = {
       offset: new THREE.Vector3(offset.x, offset.y, 0),
       plane: plane,
@@ -136,35 +129,25 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     return chunk;
   };
 
-  const BuildChunk = function* (chunk: any) {
+  const BuildChunk = function* (chunk: any, material: THREE.Material) {
     const NUM_STEPS = 5000;
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
-    const material = terrain.biome.material;
-
     let count = 0;
-
-    const vertexDataArray = [];
     const attributeBuffers: any = {};
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
       pos.setXYZ(i, v.x, v.y, GenerateHeight(chunk, v));
 
-      const vertexData = terrain.biome.getVertexData(
-        v.x + offset.x,
-        -v.y + offset.y
-      );
-      vertexDataArray.push(vertexData);
+      const vertexData = biome.getVertexData(v.x + offset.x, -v.y + offset.y);
 
-      // Initialize buffers on the first iteration
       if (i === 0) {
         for (const attrName in vertexData.attributes) {
           attributeBuffers[attrName] = new Float32Array(pos.count);
         }
       }
 
-      // Populate buffers
       for (const attrName in vertexData.attributes) {
         attributeBuffers[attrName][i] = vertexData.attributes[attrName];
       }
@@ -175,12 +158,8 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
       }
     }
 
-    // Set attributes on geometry
     for (const attrName in attributeBuffers) {
-      const bufferAttribute = new THREE.BufferAttribute(
-        attributeBuffers[attrName],
-        1
-      );
+      const bufferAttribute = new THREE.BufferAttribute(attributeBuffers[attrName], 1);
       chunk.plane.geometry.setAttribute(attrName, bufferAttribute);
     }
 
@@ -194,9 +173,11 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
 
   const DestroyChunk = (chunkKey: string) => {
     const chunkData = terrain.chunks[chunkKey];
-    chunkData.chunk.plane.geometry.dispose();
-    chunkData.chunk.plane.material.dispose();
-    terrain.group.remove(chunkData.chunk.plane);
+    if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
+      chunkData.chunk.plane.geometry.dispose();
+      chunkData.chunk.plane.material.dispose();
+      terrain.group.remove(chunkData.chunk.plane);
+    }
     delete terrain.chunks[chunkKey];
   };
 
@@ -211,11 +192,10 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     const position = new THREE.Vector2(offset.x, offset.y);
 
     const distance = position.distanceTo(new THREE.Vector2(x, y));
-    let norm =
-      1.0 - _math.sat((distance - RADIUS[0]) / (RADIUS[1] - RADIUS[0]));
+    let norm = 1.0 - _math.sat((distance - RADIUS[0]) / (RADIUS[1] - RADIUS[0]));
     norm = norm * norm * (3 - 2 * norm);
 
-    const heightAtVertex = terrain.biome.getVertexData(x, y).height;
+    const heightAtVertex = biome.getVertexData(x, y).height;
 
     heightPairs.push([heightAtVertex, norm]);
     normalization += heightPairs[heightPairs.length - 1][1];

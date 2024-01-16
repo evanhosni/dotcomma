@@ -41,6 +41,8 @@ export namespace _noise {
       frequency *= params.lacunarity;
     }
     total /= normalization;
+    total -= 0.5;
+
     return Math.pow(total, params.exponentiation) * params.height;
   };
 }

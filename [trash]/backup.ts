@@ -1,7 +1,7 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
 import { _math } from "../src/_/math";
-import { biomes } from "../src/biomes/city/[blocks]";
+import { biomes } from "../src/biomes/city/blocks/[blocks]";
 import { VertexData, vertexData_default } from "../src/types/VertexData";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
@@ -22,11 +22,7 @@ export const getVertexData = (x: number, y: number) => {
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
         var pointX = _math.seed_rand(ix + "X" + iy);
         var pointY = _math.seed_rand(ix + "Y" + iy);
-        var point = new THREE.Vector3(
-          (ix + pointX) * gridSize,
-          (iy + pointY) * gridSize,
-          0
-        );
+        var point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
         points.push(point);
       }
     }
@@ -34,23 +30,15 @@ export const getVertexData = (x: number, y: number) => {
 
     for (const key in pointsCache) {
       const cachedGrid = key.split(",").map(Number);
-      if (
-        Math.abs(currentGrid[0] - cachedGrid[0]) > 5 ||
-        Math.abs(currentGrid[1] - cachedGrid[1]) > 5
-      ) {
+      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
         delete pointsCache[key];
       }
     }
   }
 
-  points.sort(
-    (a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b)
-  );
+  points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
-  vertexData.biome =
-    biomes[
-      Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)
-    ];
+  vertexData.biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -87,17 +75,8 @@ export const getVertexData = (x: number, y: number) => {
         const closestPoint = new THREE.Vector3();
         wall.closestPointToPoint(currentVertex, true, closestPoint);
         if (currentVertex.distanceTo(closestPoint) < blendWidth) {
-          if (
-            !closestPoints.find(
-              (point) => closestPoint.distanceTo(point) < 0.05
-            )
-          )
-            if (
-              !circumcenters.find(
-                (circumcenter) =>
-                  circumcenter.distanceTo(closestPoint) < 0.00000005
-              )
-            )
+          if (!closestPoints.find((point) => closestPoint.distanceTo(point) < 0.05))
+            if (!circumcenters.find((circumcenter) => circumcenter.distanceTo(closestPoint) < 0.00000005))
               closestPoints.push(closestPoint);
         }
       }
@@ -107,18 +86,14 @@ export const getVertexData = (x: number, y: number) => {
   if (closestPoints.length) console.log(closestPoints);
 
   if (closestPoints.length) {
-    closestPoints.sort(
-      (a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b)
-    );
+    closestPoints.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
     const closestClosest = closestPoints[0];
 
     const condensedArray: any[] = [];
 
     for (let i = 0; i < closestPoints.length; i++) {
-      if (
-        !condensedArray.find((item) => item.distanceTo(closestPoints[i]) < 0.05)
-      ) {
+      if (!condensedArray.find((item) => item.distanceTo(closestPoints[i]) < 0.05)) {
         condensedArray.push(closestPoints[i]);
       }
     }
@@ -131,10 +106,7 @@ export const getVertexData = (x: number, y: number) => {
   vertexData.data = closestPoints;
 
   for (let i = 0; i < closestPoints.length; i++) {
-    var biome =
-      biomes[
-        Math.floor(_math.seed_rand(JSON.stringify(points[i])) * biomes.length)
-      ];
+    var biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[i])) * biomes.length)];
     var value =
       i === 0
         ? blendWidth + currentVertex.distanceTo(closestPoints[i])
