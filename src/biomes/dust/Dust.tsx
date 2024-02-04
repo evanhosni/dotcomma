@@ -1,6 +1,7 @@
+import { Physics } from "@react-three/cannon";
 import { Sky } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { Controls } from "../../_/player/controls/Controls";
+import { Player } from "../../_/player/Player";
 import { Terrain } from "../../_/terrain/Terrain";
 import { Biome } from "../../types/Biome";
 import { getMaterial } from "./props/getMaterial";
@@ -15,10 +16,12 @@ export const DustProperties: Biome = {
 export const Dust = () => {
   return (
     <Canvas>
-      <Controls />
-      <Sky />
-      {/* TODO <Settings (gravity and such)/> */}
-      <Terrain biome={DustProperties} />
+      <Physics>
+        <Player />
+        <Sky />
+        {/* TODO <Settings (gravity and such)/> */}
+        <Terrain biome={DustProperties} />
+      </Physics>
     </Canvas>
   );
 };

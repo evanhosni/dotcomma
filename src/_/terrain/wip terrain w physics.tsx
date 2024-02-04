@@ -1,4 +1,5 @@
 import { useFrame, useThree } from "@react-three/fiber";
+import * as CANNON from "cannon-es";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Biome } from "../../types/Biome";
@@ -7,19 +8,66 @@ import { _math } from "../math";
 const MIN_CELL_SIZE = 32;
 const FIXED_GRID_SIZE = 10;
 const MIN_CELL_RESOLUTION = 8;
-const RADIUS = [100000, 100001];
+
+interface Chunk {
+  offset: THREE.Vector3;
+  plane: THREE.Mesh;
+  rebuildIterator: Generator | null;
+  physicsBody?: CANNON.Body;
+}
 
 interface Terrain {
   group: THREE.Group;
-  chunks: { [key: string]: any }; //TODO better typing
-  active_chunk: any | null; //TODO better typing
-  queued_chunks: any[]; //TODO better typing
-  new_chunks: any[]; //TODO better typing and naming
+  chunks: { [key: string]: { position: number[]; chunk: Chunk } };
+  active_chunk: Chunk | null;
+  queued_chunks: Chunk[];
+  new_chunks: Chunk[];
 }
 
-export const Terrain = ({ biome }: { biome: Biome }) => {
-  const { camera, scene } = useThree();
+const terrainPhysicsMaterial = new CANNON.Material({
+  friction: 0.0,
+  restitution: 0.3,
+});
 
+const convertToHeightfieldData = (geometry: THREE.BufferGeometry): number[][] => {
+  const positions = geometry.attributes.position.array;
+  const size = Math.sqrt(positions.length / 3);
+  const data: number[][] = [];
+
+  for (let i = 0; i < size; i++) {
+    const row: number[] = [];
+    for (let j = 0; j < size; j++) {
+      const height = (positions as unknown as number[])[3 * (i * size + j) + 1];
+      row.push(height);
+    }
+    data.push(row);
+  }
+  return data;
+};
+
+const createPhysicsBodyForChunk = (chunk: Chunk, material: THREE.Material): CANNON.Body => {
+  const heightfieldData = convertToHeightfieldData(chunk.plane.geometry as THREE.BufferGeometry);
+  const heightfieldShape = new CANNON.Heightfield(heightfieldData, {
+    elementSize: MIN_CELL_SIZE / MIN_CELL_RESOLUTION,
+  });
+  const body = new CANNON.Body({
+    mass: 0,
+    shape: heightfieldShape,
+    material: terrainPhysicsMaterial,
+  });
+  body.position.set(chunk.offset.x, 0, chunk.offset.y);
+  body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  return body;
+};
+
+const addChunkToPhysicsWorld = (chunk: Chunk, material: THREE.Material, world: CANNON.World): void => {
+  const body = createPhysicsBodyForChunk(chunk, material);
+  chunk.physicsBody = body;
+  world.addBody(body);
+};
+
+export const Terrain: React.FC<{ biome: Biome; world: CANNON.World }> = ({ biome, world }) => {
+  const { camera, scene } = useThree();
   const terrain: Terrain = {
     group: new THREE.Group(),
     chunks: {},
@@ -27,14 +75,13 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     queued_chunks: [],
     new_chunks: [],
   };
-
   scene.add(terrain.group);
 
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
 
   useEffect(() => {
     biome.getMaterial().then(setTerrainMaterial);
-  }, []);
+  }, [biome]);
 
   useFrame(() => {
     if (terrainMaterial) {
@@ -42,9 +89,30 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     }
   });
 
+  const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material): Chunk => {
+    const size = new THREE.Vector3(width, 0, width);
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(size.x, size.z, MIN_CELL_RESOLUTION, MIN_CELL_RESOLUTION),
+      material
+    );
+    plane.castShadow = false;
+    plane.receiveShadow = true;
+    plane.rotation.x = -Math.PI / 2;
+    terrain.group.add(plane);
+    const chunk: Chunk = {
+      offset: new THREE.Vector3(offset.x, offset.y, 0),
+      plane: plane,
+      rebuildIterator: null,
+    };
+    chunk.plane.visible = false;
+    terrain.queued_chunks.push(chunk);
+    addChunkToPhysicsWorld(chunk, material, world);
+    return chunk;
+  };
+
   const UpdateTerrain = (material: THREE.Material) => {
     if (terrain.active_chunk) {
-      const iteratorResult = terrain.active_chunk.rebuildIterator.next();
+      const iteratorResult = terrain.active_chunk.rebuildIterator!.next();
       if (iteratorResult.done) {
         terrain.active_chunk = null;
       }
@@ -106,28 +174,6 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     }
   };
 
-  const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
-    const size = new THREE.Vector3(width, 0, width);
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(size.x, size.z, MIN_CELL_RESOLUTION, MIN_CELL_RESOLUTION),
-      material
-    );
-    plane.castShadow = false;
-    plane.receiveShadow = true;
-    plane.rotation.x = -Math.PI / 2;
-    terrain.group.add(plane);
-    const chunk = {
-      offset: new THREE.Vector3(offset.x, offset.y, 0),
-      plane: plane,
-      rebuildIterator: null,
-    };
-
-    chunk.plane.visible = false;
-    terrain.queued_chunks.push(chunk);
-
-    return chunk;
-  };
-
   const BuildChunk = function* (chunk: any, material: THREE.Material) {
     const NUM_STEPS = 5000;
     const offset = chunk.offset;
@@ -170,16 +216,6 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     yield;
   };
 
-  const DestroyChunk = (chunkKey: string) => {
-    const chunkData = terrain.chunks[chunkKey];
-    if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
-      chunkData.chunk.plane.geometry.dispose();
-      chunkData.chunk.plane.material.dispose();
-      terrain.group.remove(chunkData.chunk.plane);
-    }
-    delete terrain.chunks[chunkKey];
-  };
-
   const GenerateHeight = (chunk: any, v: THREE.Vector3) => {
     const offset = chunk.offset;
     const heightPairs: number[][] = [];
@@ -191,7 +227,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     const position = new THREE.Vector2(offset.x, offset.y);
 
     const distance = position.distanceTo(new THREE.Vector2(x, y));
-    let norm = 1.0 - _math.sat((distance - RADIUS[0]) / (RADIUS[1] - RADIUS[0]));
+    let norm = 1.0 - _math.sat((distance - 100000) / 1);
     norm = norm * norm * (3 - 2 * norm);
 
     const heightAtVertex = biome.getVertexData(x, y).height;
@@ -206,6 +242,19 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     }
 
     return z;
+  };
+
+  const DestroyChunk = (chunkKey: string): void => {
+    const chunkData = terrain.chunks[chunkKey];
+    if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
+      chunkData.chunk.plane.geometry.dispose();
+      // chunkData.chunk.plane.material.dispose();
+      terrain.group.remove(chunkData.chunk.plane);
+      if (chunkData.chunk.physicsBody) {
+        world.removeBody(chunkData.chunk.physicsBody);
+      }
+    }
+    delete terrain.chunks[chunkKey];
   };
 
   return <></>;
