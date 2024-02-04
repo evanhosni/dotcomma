@@ -1,5 +1,6 @@
+import { Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
-import { Controls } from "../../_/player/controls/Controls";
+import { Player } from "../../_/player/Player";
 import { Terrain } from "../../_/terrain/Terrain";
 import { Biome } from "../../types/Biome";
 import { getMaterial } from "./props/getMaterial";
@@ -14,9 +15,11 @@ export const CityProperties: Biome = {
 export const City = () => {
   return (
     <Canvas style={{ backgroundColor: "black" }}>
-      <Controls />
-      {/* TODO <Settings (gravity and such)/> */}
-      <Terrain biome={CityProperties} />
+      <Physics gravity={[0, 0, 0]}>
+        <Player />
+        {/* TODO <Settings (gravity and such)/> */}
+        <Terrain biome={CityProperties} />
+      </Physics>
     </Canvas>
   );
 };

@@ -7,9 +7,7 @@ import { City } from "./biomes/city/City";
 import { Dust } from "./biomes/dust/Dust";
 import "./style.css";
 
-const root = ReactDOM.createRoot(
-  document.getElementById("dotcomma") as HTMLElement
-);
+const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
 const Dotcomma = () => {
   return (
