@@ -15,8 +15,8 @@ export const CityProperties: Biome = {
 export const City = () => {
   return (
     <Canvas style={{ backgroundColor: "black" }}>
-      <Physics gravity={[0, 0, 0]}>
-        <Player />
+      <Physics gravity={[0, -1000, 0]}>
+        <Player vertexData={getVertexData} />
         {/* TODO <Settings (gravity and such)/> */}
         <Terrain biome={CityProperties} />
       </Physics>

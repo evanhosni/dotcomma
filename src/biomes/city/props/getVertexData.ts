@@ -5,11 +5,11 @@ import { VertexData, vertexData_default } from "../../../types/VertexData";
 import { blocks } from "../blocks/[blocks]";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
+const gridSize = 200;
+export const roadWidth = 10;
+const blendWidth = 50;
 
 export const getVertexData = (x: number, y: number) => {
-  const gridSize = 200;
-  const roadWidth = 10;
-  const blendWidth = 50;
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
   var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
@@ -95,13 +95,15 @@ export const getVertexData = (x: number, y: number) => {
     vertexData.attributes.isRoad = false;
   }
 
+  vertexData.attributes.distanceToRoadCenter = distance;
+
   vertexData.height = getHeight(vertexData);
 
   return vertexData;
 };
 
 const getHeight = (vertexData: VertexData) => {
-  if (vertexData.attributes.isRoad) return -5;
+  if (vertexData.attributes.isRoad) return 0;
 
   let height = 0;
 
