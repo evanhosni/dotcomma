@@ -1,6 +1,7 @@
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
 import { Player } from "../../_/player/Player";
+import { getVertexData } from "../city/props/getVertexData";
 
 export const NotFound = () => {
   const getHeight = (x: number, y: number) => {
@@ -43,7 +44,7 @@ export const NotFound = () => {
 
   return (
     <Canvas>
-      <Player />
+      <Player vertexData={getVertexData} />
       {/* <Terrain getHeight={getHeight} getMaterial={getMaterial} /> */}
     </Canvas>
   );
