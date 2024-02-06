@@ -103,7 +103,7 @@ export const getVertexData = (x: number, y: number) => {
 };
 
 const getHeight = (vertexData: VertexData) => {
-  if (vertexData.attributes.isRoad) return -1;
+  if (vertexData.attributes.isRoad) return 0;
 
   let height = 0;
 
