@@ -1,7 +1,7 @@
 import { useSphere } from "@react-three/cannon";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { VertexData } from "../../types/VertexData";
 import { useInput } from "./useInput";
@@ -9,10 +9,23 @@ import { useInput } from "./useInput";
 export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => VertexData }) => {
   const { forward, backward, left, right, sprint, jump } = useInput();
   const { camera } = useThree();
+  const [distanceToGround, setDistanceToGround] = useState(0);
+  const [canJump, setCanJump] = useState(true);
 
   const walkSpeed = 10;
   const sprintSpeed = 20;
   const playerHeight = 2;
+  const jumpHeight = 12;
+  const gravity = -4; //TODO get gravity from context eventually
+
+  useEffect(() => {
+    if (distanceToGround < 0.5 && !jump) {
+      setCanJump(true);
+    }
+    if (distanceToGround > jumpHeight) {
+      setCanJump(false);
+    }
+  }, [distanceToGround, jumpHeight]);
 
   const [ref, api] = useSphere(() => ({
     mass: 1,
@@ -31,7 +44,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     return unsubscribe;
   }, [api.position]);
 
-  useFrame(() => {
+  useFrame((state, delta) => {
     const direction = new THREE.Vector3();
     const sideDirection = new THREE.Vector3();
     const upVector = new THREE.Vector3(0, 1, 0);
@@ -49,13 +62,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     if (right) velocity.sub(sideDirection);
 
     const terrainHeight = vertexData(positionRef.current[0], positionRef.current[2]).height;
-    const isGrounded = Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight) < 0.5;
-
-    if (jump && isGrounded) {
-      console.log("jump");
-      // api.applyLocalImpulse([0, 1000, 0], [0, 0, 0]);
-      //TODO jump
-    }
+    setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
 
     if (forward || backward || left || right) {
       const futurePosition = new THREE.Vector3().addVectors(
@@ -80,24 +87,34 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
       api.velocity.set(0, 0, 0);
     }
 
+    let jumpVelocity = 0;
+
+    if (jump && canJump) {
+      const currentTime = Date.now() * delta;
+      const t = Math.max(0, Math.min(1, currentTime));
+      const smoothedT = smoothstep(0, 1, t);
+      jumpVelocity = Math.sqrt(-gravity * jumpHeight) * smoothedT;
+    }
+
+    jumpVelocity += gravity * 0.5;
+
+    const newYPosition = Math.max(positionRef.current[1] + jumpVelocity * 0.1, terrainHeight + 0.5 * playerHeight);
+
+    api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
+
     var [x, y, z] = positionRef.current;
-
-    api.position.set(
-      positionRef.current[0],
-      Math.max(positionRef.current[1], terrainHeight + 0.5 * playerHeight),
-      positionRef.current[2]
-    );
-
     camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
   });
 
   return (
     <>
       <PointerLockControls />
-      <mesh ref={ref as any}>
-        {/* <sphereGeometry args={[0.5 * playerHeight, 32, 32]} />
-        <meshStandardMaterial wireframe /> */}
-      </mesh>
+      <mesh ref={ref as any} />
     </>
   );
 };
+
+function smoothstep(edge0: number, edge1: number, x: number) {
+  x = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
