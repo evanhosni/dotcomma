@@ -90,10 +90,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     let jumpVelocity = 0;
 
     if (jump && canJump) {
-      const currentTime = Date.now() * delta;
-      const t = Math.max(0, Math.min(1, currentTime));
-      const smoothedT = smoothstep(0, 1, t);
-      jumpVelocity = Math.sqrt(-gravity * jumpHeight) * smoothedT;
+      jumpVelocity = Math.sqrt(-gravity * jumpHeight);
     }
 
     jumpVelocity += gravity * 0.5;
@@ -113,8 +110,3 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     </>
   );
 };
-
-function smoothstep(edge0: number, edge1: number, x: number) {
-  x = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return x * x * x * (x * (x * 6 - 15) + 10);
-}
