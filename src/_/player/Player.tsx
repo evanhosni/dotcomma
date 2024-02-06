@@ -11,11 +11,13 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
   const { camera } = useThree();
   const [distanceToGround, setDistanceToGround] = useState(0);
   const [canJump, setCanJump] = useState(true);
+  const [isJumping, setIsJumping] = useState(false);
+  const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const walkSpeed = 10;
   const sprintSpeed = 20;
   const playerHeight = 2;
-  const jumpHeight = 15;
+  const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
 
   useEffect(() => {
@@ -96,10 +98,15 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     let jumpVelocity = gravity;
 
     if (jump && canJump) {
-      jumpVelocity += Math.sqrt(-gravity * jumpHeight);
+      setJumpingPointHeight(terrainHeight);
+      setIsJumping(true);
     }
 
-    const newYPosition = Math.max(positionRef.current[1] + jumpVelocity * 0.05, terrainHeight + 0.5 * playerHeight);
+    if (isJumping) jumpVelocity += Math.sqrt(-gravity * jumpHeight);
+
+    if (Math.abs(positionRef.current[1] - 0.5 * playerHeight - jumpingPointHeight) > jumpHeight) setIsJumping(false); //TODO get distance to jumping point instead
+
+    const newYPosition = Math.max(positionRef.current[1] + jumpVelocity * 0.08, terrainHeight + 0.5 * playerHeight);
 
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
