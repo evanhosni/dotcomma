@@ -1,4 +1,4 @@
-import { Physics } from "@react-three/cannon";
+import { Debug, Physics } from "@react-three/cannon";
 import { Sky } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Player } from "../../_/player/Player";
@@ -19,8 +19,10 @@ export const Dust = () => {
       <Physics>
         <Player vertexData={getVertexData} />
         <Sky />
-        {/* TODO <Settings (gravity and such)/> */}
-        <Terrain biome={DustProperties} />
+        <Debug>
+          {/* TODO <Settings (gravity and such)/> */}
+          <Terrain biome={DustProperties} />
+        </Debug>
       </Physics>
     </Canvas>
   );

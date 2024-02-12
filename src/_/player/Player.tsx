@@ -14,7 +14,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
   const [isJumping, setIsJumping] = useState(false);
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
-  const walkSpeed = 10;
+  const walkSpeed = 50;
   const sprintSpeed = 20;
   const playerHeight = 2;
   const jumpHeight = 12;
@@ -80,8 +80,8 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
       const stepHeight = vertexData(stepPosition.x, stepPosition.z).height;
       const slope = Math.atan2(futureHeight - currentHeight, 0.1);
 
-      const maxSlope = 0.4;
-      const maxStepHeight = 3;
+      const maxSlope = 0.9;
+      const maxStepHeight = 300;
 
       if ((slope <= maxSlope && stepHeight - currentHeight <= maxStepHeight) || distanceToGround > 0.5) {
         velocity.normalize();
@@ -111,7 +111,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
+    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + 20), z), 0.1);
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed

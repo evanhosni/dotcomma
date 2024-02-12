@@ -1,12 +1,13 @@
+import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Biome } from "../../types/Biome";
 import { _math } from "../math";
 
-const MIN_CELL_SIZE = 32;
-const FIXED_GRID_SIZE = 10;
-const MIN_CELL_RESOLUTION = 8;
+const MIN_CELL_SIZE = 256;
+const FIXED_GRID_SIZE = 2;
+const MIN_CELL_RESOLUTION = 16;
 const RADIUS = [100000, 100001];
 
 interface Terrain {
@@ -17,16 +18,18 @@ interface Terrain {
   new_chunks: any[]; //TODO better typing and naming
 }
 
+const terrain: Terrain = {
+  //TODO i moved this outside of Terrain component. Will this have any negative affect on the functionality of the rest of this code?
+  group: new THREE.Group(),
+  chunks: {},
+  active_chunk: null,
+  queued_chunks: [],
+  new_chunks: [],
+};
+
 export const Terrain = ({ biome }: { biome: Biome }) => {
   const { camera, scene } = useThree();
-
-  const terrain: Terrain = {
-    group: new THREE.Group(),
-    chunks: {},
-    active_chunk: null,
-    queued_chunks: [],
-    new_chunks: [],
-  };
+  const [colliders, setColliders] = useState<any[]>([]);
 
   scene.add(terrain.group);
 
@@ -167,6 +170,8 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
 
+    GenerateColliders(chunk, offset);
+
     yield;
   };
 
@@ -178,6 +183,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
       terrain.group.remove(chunkData.chunk.plane);
     }
     delete terrain.chunks[chunkKey];
+    setColliders((prev) => prev.filter((collider) => collider.key !== chunkKey));
   };
 
   const GenerateHeight = (chunk: any, v: THREE.Vector3) => {
@@ -208,5 +214,68 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     return z;
   };
 
-  return <></>;
+  const GenerateColliders = (chunk: any, offset: THREE.Vector2) => {
+    const linearArray = chunk.plane.geometry.attributes.position.array;
+    const gridSize = Math.sqrt(linearArray.length / 3);
+    const heightfield = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
+
+    for (let i = 0; i < linearArray.length; i += 3) {
+      const x = linearArray[i];
+      const z = linearArray[i + 1];
+      const height = linearArray[i + 2];
+
+      const xIndex = Math.round((x - -(MIN_CELL_SIZE / 2)) / (MIN_CELL_SIZE / MIN_CELL_RESOLUTION));
+      const zIndex = Math.round((z - -(MIN_CELL_SIZE / 2)) / (MIN_CELL_SIZE / MIN_CELL_RESOLUTION));
+
+      const transformedXIndex = MIN_CELL_RESOLUTION - xIndex;
+
+      if (
+        zIndex >= 0 &&
+        zIndex < MIN_CELL_RESOLUTION + 1 &&
+        transformedXIndex >= 0 &&
+        transformedXIndex < MIN_CELL_RESOLUTION + 1
+      ) {
+        heightfield[zIndex][transformedXIndex] = height;
+      }
+    }
+
+    const isDiff = !colliders.some((collider) => collider.pos[0] === offset.x && collider.pos[1] === offset.y);
+    isDiff &&
+      setColliders((prev) => [
+        ...prev,
+        {
+          key: `${offset.x / MIN_CELL_SIZE}/${offset.y / MIN_CELL_SIZE}`,
+          vector3Array: heightfield,
+          pos: offset.toArray(),
+          elementSize: MIN_CELL_SIZE / MIN_CELL_RESOLUTION,
+        },
+      ]);
+  };
+
+  return (
+    <>
+      {colliders.map((collider: TerrainColliderProps) => {
+        return <TerrainCollider {...collider} />;
+      })}
+    </>
+  );
 };
+
+export interface TerrainColliderProps {
+  key: string;
+  vector3Array: number[][];
+  pos: number[];
+  elementSize: number;
+}
+
+export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, pos, elementSize }) => {
+  const [ref] = useHeightfield(() => ({
+    args: [vector3Array, { elementSize }],
+    position: [pos[0] + MIN_CELL_SIZE / 2, 0, pos[1] + MIN_CELL_SIZE / 2],
+    rotation: [-Math.PI / 2, 0, Math.PI / 2],
+  }));
+
+  return <mesh ref={ref as any} />;
+};
+
+//TODO LOD system? at least for colliders?
