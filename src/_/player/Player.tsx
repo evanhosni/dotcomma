@@ -14,11 +14,14 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
   const [isJumping, setIsJumping] = useState(false);
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
-  const walkSpeed = 50;
+  const walkSpeed = 100;
   const sprintSpeed = 20;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
+
+  // camera.far = 720;
+  // camera.updateProjectionMatrix();
 
   useEffect(() => {
     if (distanceToGround < 0.5 && !jump) {
@@ -111,7 +114,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + 20), z), 0.1);
+    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed
