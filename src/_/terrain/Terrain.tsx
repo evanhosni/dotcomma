@@ -3,12 +3,10 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Biome } from "../../types/Biome";
-import { _math } from "../math";
 
-const MIN_CELL_SIZE = 256;
-const FIXED_GRID_SIZE = 2;
-const MIN_CELL_RESOLUTION = 16;
-const RADIUS = [100000, 100001];
+const CHUNK_SIZE = 240;
+const CHUNK_RESOLUTION = 24;
+const GRID_SIZE = 5;
 
 interface Terrain {
   group: THREE.Group;
@@ -29,11 +27,26 @@ const terrain: Terrain = {
 
 export const Terrain = ({ biome }: { biome: Biome }) => {
   const { camera, scene } = useThree();
+  const [gameLoaded, setGameLoaded] = useState(false);
+  const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [colliders, setColliders] = useState<any[]>([]);
+  const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
 
   scene.add(terrain.group);
 
-  const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+  useEffect(() => {
+    if (!gameLoaded) {
+      let totalChunks = 1;
+      for (let i = 0; i <= GRID_SIZE; i++) {
+        totalChunks += 8 * i;
+      }
+
+      const progress = remainingChunks === null ? 0 : Math.floor(((totalChunks - remainingChunks) / totalChunks) * 100);
+      console.log(progress, "%");
+
+      remainingChunks === 0 && setGameLoaded(true);
+    }
+  }, [remainingChunks]);
 
   useEffect(() => {
     biome.getMaterial().then(setTerrainMaterial);
@@ -69,14 +82,14 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     }
 
     if (!terrain.active_chunk) {
-      const xp = camera.position.x + MIN_CELL_SIZE * 0.5;
-      const yp = camera.position.z + MIN_CELL_SIZE * 0.5;
-      const xc = Math.floor(xp / MIN_CELL_SIZE);
-      const zc = Math.floor(yp / MIN_CELL_SIZE);
+      const xp = camera.position.x + CHUNK_SIZE * 0.5;
+      const yp = camera.position.z + CHUNK_SIZE * 0.5;
+      const xc = Math.floor(xp / CHUNK_SIZE);
+      const zc = Math.floor(yp / CHUNK_SIZE);
       const keys: { [key: string]: { position: number[] } } = {};
 
-      for (let x = -FIXED_GRID_SIZE; x <= FIXED_GRID_SIZE; x++) {
-        for (let z = -FIXED_GRID_SIZE; z <= FIXED_GRID_SIZE; z++) {
+      for (let x = -GRID_SIZE; x <= GRID_SIZE; x++) {
+        for (let z = -GRID_SIZE; z <= GRID_SIZE; z++) {
           const k = `${x + xc}/${z + zc}`;
           keys[k] = { position: [x + xc, z + zc] };
         }
@@ -99,22 +112,21 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
         }
 
         const [xp, zp] = difference[chunkKey].position;
-        const offset = new THREE.Vector2(xp * MIN_CELL_SIZE, zp * MIN_CELL_SIZE);
-        const chunk = QueueChunk(offset, MIN_CELL_SIZE, material);
+        const offset = new THREE.Vector2(xp * CHUNK_SIZE, zp * CHUNK_SIZE);
+        const chunk = QueueChunk(offset, CHUNK_SIZE, material);
         terrain.chunks[chunkKey] = {
           position: [xc, zc],
           chunk: chunk,
         };
       }
     }
+
+    setRemainingChunks(terrain.queued_chunks.length);
   };
 
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
     const size = new THREE.Vector3(width, 0, width);
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(size.x, size.z, MIN_CELL_RESOLUTION, MIN_CELL_RESOLUTION),
-      material
-    );
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(size.x, size.z, CHUNK_RESOLUTION, CHUNK_RESOLUTION), material);
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
@@ -132,7 +144,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
   };
 
   const BuildChunk = function* (chunk: any, material: THREE.Material) {
-    const NUM_STEPS = 5000;
+    const NUM_STEPS = 40; //TODO make this vary based on FPS?
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
     let count = 0;
@@ -140,7 +152,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      pos.setXYZ(i, v.x, v.y, GenerateHeight(chunk, v));
+      pos.setXYZ(i, v.x, v.y, biome.getVertexData(v.x + offset.x, -v.y + offset.y).height);
 
       const vertexData = biome.getVertexData(v.x + offset.x, -v.y + offset.y);
 
@@ -154,7 +166,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
         attributeBuffers[attrName][i] = vertexData.attributes[attrName];
       }
 
-      if (++count > NUM_STEPS) {
+      if (++count > NUM_STEPS && gameLoaded) {
         count = 0;
         yield;
       }
@@ -186,34 +198,6 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     setColliders((prev) => prev.filter((collider) => collider.key !== chunkKey));
   };
 
-  const GenerateHeight = (chunk: any, v: THREE.Vector3) => {
-    const offset = chunk.offset;
-    const heightPairs: number[][] = [];
-    let normalization = 0;
-    let z = 0;
-    const x = v.x + offset.x;
-    const y = -v.y + offset.y;
-
-    const position = new THREE.Vector2(offset.x, offset.y);
-
-    const distance = position.distanceTo(new THREE.Vector2(x, y));
-    let norm = 1.0 - _math.sat((distance - RADIUS[0]) / (RADIUS[1] - RADIUS[0]));
-    norm = norm * norm * (3 - 2 * norm);
-
-    const heightAtVertex = biome.getVertexData(x, y).height;
-
-    heightPairs.push([heightAtVertex, norm]);
-    normalization += heightPairs[heightPairs.length - 1][1];
-
-    if (normalization > 0) {
-      for (const h of heightPairs) {
-        z += (h[0] * h[1]) / normalization;
-      }
-    }
-
-    return z;
-  };
-
   const GenerateColliders = (chunk: any, offset: THREE.Vector2) => {
     const linearArray = chunk.plane.geometry.attributes.position.array;
     const gridSize = Math.sqrt(linearArray.length / 3);
@@ -224,16 +208,16 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
       const z = linearArray[i + 1];
       const height = linearArray[i + 2];
 
-      const xIndex = Math.round((x - -(MIN_CELL_SIZE / 2)) / (MIN_CELL_SIZE / MIN_CELL_RESOLUTION));
-      const zIndex = Math.round((z - -(MIN_CELL_SIZE / 2)) / (MIN_CELL_SIZE / MIN_CELL_RESOLUTION));
+      const xIndex = Math.round((x - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / CHUNK_RESOLUTION));
+      const zIndex = Math.round((z - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / CHUNK_RESOLUTION));
 
-      const transformedXIndex = MIN_CELL_RESOLUTION - xIndex;
+      const transformedXIndex = CHUNK_RESOLUTION - xIndex;
 
       if (
         zIndex >= 0 &&
-        zIndex < MIN_CELL_RESOLUTION + 1 &&
+        zIndex < CHUNK_RESOLUTION + 1 &&
         transformedXIndex >= 0 &&
-        transformedXIndex < MIN_CELL_RESOLUTION + 1
+        transformedXIndex < CHUNK_RESOLUTION + 1
       ) {
         heightfield[zIndex][transformedXIndex] = height;
       }
@@ -244,10 +228,10 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
       setColliders((prev) => [
         ...prev,
         {
-          key: `${offset.x / MIN_CELL_SIZE}/${offset.y / MIN_CELL_SIZE}`,
+          key: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
           vector3Array: heightfield,
           pos: offset.toArray(),
-          elementSize: MIN_CELL_SIZE / MIN_CELL_RESOLUTION,
+          elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
         },
       ]);
   };
@@ -271,7 +255,7 @@ export interface TerrainColliderProps {
 export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, pos, elementSize }) => {
   const [ref] = useHeightfield(() => ({
     args: [vector3Array, { elementSize }],
-    position: [pos[0] + MIN_CELL_SIZE / 2, 0, pos[1] + MIN_CELL_SIZE / 2],
+    position: [pos[0] + CHUNK_SIZE / 2, 0, pos[1] + CHUNK_SIZE / 2],
     rotation: [-Math.PI / 2, 0, Math.PI / 2],
   }));
 
