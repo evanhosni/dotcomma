@@ -27,12 +27,16 @@ export const getMaterial = async () => {
     uniform sampler2D sandtexture;
     uniform sampler2D grasstexture;
     varying vec2 vUv;
+
+    void grassfrag() {
+      gl_FragColor = texture2D(grasstexture, vUv);
+    } 
     
     void main() {
       if (vDistanceToRoadCenter < ${roadWidth}.0) {
         gl_FragColor = texture2D(sandtexture, vUv);
       } else {
-        gl_FragColor = texture2D(grasstexture, vUv);
+        grassfrag();
       }
     }
   `,

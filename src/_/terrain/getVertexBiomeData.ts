@@ -1,20 +1,20 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
-import { _math } from "../../../_/math";
-import { VertexData, vertexData_default } from "../../../types/VertexData";
-import { blocks } from "../blocks/[blocks]";
+import { Biome } from "../../types/Biome";
+import { VertexData, vertexData_default } from "../../types/VertexData";
+import { _math } from "../math";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
-const gridSize = 800; //more like 500-800
-export const roadWidth = 10;
-const blendWidth = 50;
+const gridSize = 2500; //more like 2500+
+export const roadWidth = 30;
+const blendWidth = 200;
 
-export const getVertexData = (x: number, y: number) => {
+export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
   var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
 
-  var currentVertex = new THREE.Vector3(x, y, 0);
+  var currentVertex = new THREE.Vector3(x, y, 0); //TODO make road curvy
 
   if (pointsCache[currentGrid.toString()]) {
     points = pointsCache[currentGrid.toString()];
@@ -39,7 +39,14 @@ export const getVertexData = (x: number, y: number) => {
 
   points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
-  vertexData.attributes.block = blocks[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * blocks.length)];
+  const biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
+  vertexData.attributes.biome = biome;
+  vertexData.attributes.biomeId = biomes.indexOf(biome); //TODO do this instead
+  // console.log(biomes.indexOf(biome));
+  // for (let i = 0; i < biomes.length; i++) {
+  //   vertexData.attributes[`biome_${biomes[i].name}`] = false;
+  // }
+  // vertexData.attributes[`biome_${biome.name}`] = true;
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -67,9 +74,26 @@ export const getVertexData = (x: number, y: number) => {
     const edge = delaunay.halfedges[i];
 
     if (edge !== -1) {
-      const v1 = circumcenters[Math.floor(i / 3)];
-      const v2 = circumcenters[Math.floor(edge / 3)];
+      // const v1 = circumcenters[Math.floor(i / 3)];
+      // const v2 = circumcenters[Math.floor(edge / 3)];
 
+      const v1Index = Math.floor(i / 3);
+      const v2Index = Math.floor(edge / 3);
+
+      const v1 = circumcenters[v1Index];
+      const v2 = circumcenters[v2Index];
+
+      //TODO the below commented section grabs relevant delaunay points for getting biome info, but slows shit down hella. might be useful later
+      // const pointIndex1 = delaunay.triangles[3 * v1Index + (edge % 3)];
+      // const pointIndex2 = delaunay.triangles[3 * v2Index + ((edge + 1) % 3)];
+
+      // const point1 = points[pointIndex1];
+      // const point2 = points[pointIndex2];
+
+      // if (
+      //   biomes[Math.floor(_math.seed_rand(JSON.stringify(point1)) * biomes.length)] !==
+      //   biomes[Math.floor(_math.seed_rand(JSON.stringify(point2)) * biomes.length)]
+      // )
       voronoiWalls.push(new THREE.Line3(v1, v2));
     }
   }
@@ -80,16 +104,17 @@ export const getVertexData = (x: number, y: number) => {
     voronoiWalls[i].closestPointToPoint(currentVertex, true, closestPoint);
     closestPoints.push(closestPoint);
   }
-
   closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
 
-  const blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth; //TODO this still sets road height between two of the same biome
 
-  vertexData.attributes.blendData = [{ block: vertexData.attributes.block, value: blend }];
-
-  if (distance <= roadWidth) {
+  if (
+    distance <= roadWidth
+    // && biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)] !==
+    //   biomes[Math.floor(_math.seed_rand(JSON.stringify(points[1])) * biomes.length)]
+  ) {
     vertexData.attributes.isRoad = true;
   } else {
     vertexData.attributes.isRoad = false;
@@ -99,21 +124,14 @@ export const getVertexData = (x: number, y: number) => {
 
   vertexData.height = getHeight(vertexData);
 
-  return vertexData;
+  return vertexData; //.attributes.biome.getVertexData(x, y);
 };
 
 const getHeight = (vertexData: VertexData) => {
   if (vertexData.attributes.isRoad) return 0;
 
-  let height = 0;
-
-  if (vertexData.attributes.blendData.length === 0) {
-    return 5; //vertexData.block.getHeight(vertexData);
-  }
-
-  for (let i = 0; i < vertexData.attributes.blendData.length; i++) {
-    height += 20 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
-  }
+  let height =
+    vertexData.attributes.biome.getVertexData(vertexData.x, vertexData.y).height * vertexData.attributes.blend;
 
   return height;
 };
