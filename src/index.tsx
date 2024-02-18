@@ -6,8 +6,9 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { PauseMenu } from "./PauseMenu";
 import { Player } from "./_/player/Player";
 import { Terrain } from "./_/terrain/Terrain";
-import { CityProperties } from "./biomes/city/City";
-import { DustProperties } from "./biomes/dust/Dust";
+import { City } from "./biomes/city/City";
+import { Dust } from "./biomes/dust/Dust";
+import { Pharmasea } from "./biomes/pharma/Pharma";
 import "./style.css";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
@@ -24,7 +25,7 @@ const Dotcomma = () => {
         </Physics>
         <Physics>
           <Debug>
-            <Terrain biomes={[DustProperties, CityProperties]} />
+            <Terrain biomes={[City, Dust, Pharmasea]} />
             <Routes>
               <Route index />
               <Route path="/dust" />

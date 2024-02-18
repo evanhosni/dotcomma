@@ -1,8 +1,8 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
-import { _math } from "../../../_/math";
-import { VertexData, vertexData_default } from "../../../types/VertexData";
-import { blocks } from "../blocks/[blocks]";
+import { _math } from "../../_/math";
+import { VertexData, vertexData_default } from "../../types/VertexData";
+import { blocks } from "./blocks/[blocks]";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 800; //more like 500-800
