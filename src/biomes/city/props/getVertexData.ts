@@ -95,7 +95,7 @@ export const getVertexData = (x: number, y: number) => {
     vertexData.attributes.isRoad = false;
   }
 
-  vertexData.attributes.distanceToRoadCenter = distance;
+  vertexData.attributes.distanceToRoadCenter2 = distance;
 
   vertexData.height = getHeight(vertexData);
 

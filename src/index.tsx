@@ -1,4 +1,4 @@
-import { Physics } from "@react-three/cannon";
+import { Debug, Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -23,14 +23,14 @@ const Dotcomma = () => {
           <Player />
         </Physics>
         <Physics>
-          {/* <Debug> */}
-          <Terrain biomes={[DustProperties, CityProperties]} />
-          <Routes>
-            <Route index />
-            <Route path="/dust" />
-            <Route path="*" />
-          </Routes>
-          {/* </Debug> */}
+          <Debug>
+            <Terrain biomes={[DustProperties, CityProperties]} />
+            <Routes>
+              <Route index />
+              <Route path="/dust" />
+              <Route path="*" />
+            </Routes>
+          </Debug>
         </Physics>
       </Canvas>
     </BrowserRouter>
