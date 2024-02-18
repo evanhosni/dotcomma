@@ -83,7 +83,12 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
       const v1 = circumcenters[Math.floor(i / 3)];
       const v2 = circumcenters[Math.floor(edge / 3)];
 
+      // const biome1 = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[i])) * biomes.length)];
+      // const biome2 = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[edge])) * biomes.length)];
+
+      // if (biome1 !== biome2) {
       voronoiWalls.push(new THREE.Line3(v1, v2));
+      // }
     }
   }
 
@@ -96,16 +101,9 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
+  vertexData.attributes.distanceToRoadCenter = distance;
 
   vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
-
-  if (distance <= roadWidth) {
-    vertexData.attributes.isRoad = true;
-  } else {
-    vertexData.attributes.isRoad = false;
-  }
-
-  vertexData.attributes.distanceToRoadCenter = distance;
 
   vertexData.height = getHeight(vertexData);
 
@@ -113,7 +111,7 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
 };
 
 const getHeight = (vertexData: VertexData) => {
-  if (vertexData.attributes.isRoad) return 0;
+  if (vertexData.attributes.distanceToRoadCenter < roadWidth) return 0;
 
   let height =
     vertexData.attributes.biome.getVertexData(vertexData.x, vertexData.y).height * vertexData.attributes.blend;

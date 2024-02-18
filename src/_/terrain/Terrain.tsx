@@ -193,7 +193,7 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
 
     GenerateColliders(chunk, offset);
 
-    // console.log(chunk.plane.material.fragmentShader);
+    // console.log(getVertexBiomeData(camera.position.x, camera.position.y, [City, Dust, Pharmasea]).attributes.biome);
 
     yield;
   };

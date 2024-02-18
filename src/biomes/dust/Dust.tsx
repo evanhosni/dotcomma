@@ -1,29 +1,7 @@
-import { Debug, Physics } from "@react-three/cannon";
-import { Sky } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
-import { Player } from "../../_/player/Player";
-import { Terrain } from "../../_/terrain/Terrain";
 import { Biome } from "../../types/Biome";
-import { getMaterial } from "./props/getMaterial";
-import { getVertexData } from "./props/getVertexData";
+import { getVertexData } from "./getVertexData";
 
-export const DustProperties: Biome = {
+export const Dust: Biome = {
   name: "dust",
   getVertexData: getVertexData,
-  getMaterial: getMaterial,
-};
-
-export const Dust = () => {
-  return (
-    <Canvas>
-      <Physics>
-        <Player />
-        <Sky />
-        <Debug>
-          {/* TODO <Settings (gravity and such)/> */}
-          <Terrain biomes={[DustProperties]} />
-        </Debug>
-      </Physics>
-    </Canvas>
-  );
 };

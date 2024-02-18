@@ -3,7 +3,7 @@ import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { CityProperties } from "../../biomes/city/City";
+import { City } from "../../biomes/city/City";
 import { getVertexBiomeData } from "../terrain/getVertexBiomeData";
 import { useInput } from "./useInput";
 
@@ -16,7 +16,7 @@ export const Player = () => {
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
-    return getVertexBiomeData(x, y, [CityProperties]);
+    return getVertexBiomeData(x, y, [City]);
   };
 
   const walkSpeed = 100;
