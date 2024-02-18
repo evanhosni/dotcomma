@@ -1,8 +1,8 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
-import { Biome } from "../../types/Biome";
-import { VertexData, vertexData_default } from "../../types/VertexData";
-import { _math } from "../math";
+import { Biome } from "../../../types/Biome";
+import { VertexData, vertexData_default } from "../../../types/VertexData";
+import { _math } from "../../math";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 2500; //more like 2500+
@@ -41,7 +41,12 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
 
   const biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
   vertexData.attributes.biome = biome;
-  vertexData.attributes.biomeId = biomes.indexOf(biome);
+  vertexData.attributes.biomeId = biomes.indexOf(biome); //TODO do this instead
+  // console.log(biomes.indexOf(biome));
+  // for (let i = 0; i < biomes.length; i++) {
+  //   vertexData.attributes[`biome_${biomes[i].name}`] = false;
+  // }
+  // vertexData.attributes[`biome_${biome.name}`] = true;
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -69,9 +74,26 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
     const edge = delaunay.halfedges[i];
 
     if (edge !== -1) {
-      const v1 = circumcenters[Math.floor(i / 3)];
-      const v2 = circumcenters[Math.floor(edge / 3)];
+      // const v1 = circumcenters[Math.floor(i / 3)];
+      // const v2 = circumcenters[Math.floor(edge / 3)];
 
+      const v1Index = Math.floor(i / 3);
+      const v2Index = Math.floor(edge / 3);
+
+      const v1 = circumcenters[v1Index];
+      const v2 = circumcenters[v2Index];
+
+      //TODO the below commented section grabs relevant delaunay points for getting biome info, but slows shit down hella. might be useful later
+      // const pointIndex1 = delaunay.triangles[3 * v1Index + (edge % 3)];
+      // const pointIndex2 = delaunay.triangles[3 * v2Index + ((edge + 1) % 3)];
+
+      // const point1 = points[pointIndex1];
+      // const point2 = points[pointIndex2];
+
+      // if (
+      //   biomes[Math.floor(_math.seed_rand(JSON.stringify(point1)) * biomes.length)] !==
+      //   biomes[Math.floor(_math.seed_rand(JSON.stringify(point2)) * biomes.length)]
+      // )
       voronoiWalls.push(new THREE.Line3(v1, v2));
     }
   }
@@ -84,11 +106,15 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   }
   closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
-  const distance = currentVertex.distanceTo(closestPoints[0]);
+  const distance = currentVertex.distanceTo(points[1]) - currentVertex.distanceTo(points[0]);
 
   vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth; //TODO this still sets road height between two of the same biome
 
-  if (distance <= roadWidth) {
+  if (
+    distance <= roadWidth //&&
+    // biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)] !==
+    //   biomes[Math.floor(_math.seed_rand(JSON.stringify(points[1])) * biomes.length)]
+  ) {
     vertexData.attributes.isRoad = true;
   } else {
     vertexData.attributes.isRoad = false;
@@ -98,7 +124,7 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
 
   vertexData.height = getHeight(vertexData);
 
-  return vertexData;
+  return vertexData; //.attributes.biome.getVertexData(x, y);
 };
 
 const getHeight = (vertexData: VertexData) => {
