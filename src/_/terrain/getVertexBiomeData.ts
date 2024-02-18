@@ -3,18 +3,29 @@ import * as THREE from "three";
 import { Biome } from "../../types/Biome";
 import { VertexData, vertexData_default } from "../../types/VertexData";
 import { _math } from "../math";
+import { TerrainNoiseParams, _noise } from "../noise";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 2500; //more like 2500+
 export const roadWidth = 30;
 const blendWidth = 200;
 
+const roadNoise: TerrainNoiseParams = {
+  type: "perlin",
+  octaves: 2,
+  persistence: 1,
+  lacunarity: 1,
+  exponentiation: 1,
+  height: 200,
+  scale: 300,
+};
+
 export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
   var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
 
-  var currentVertex = new THREE.Vector3(x, y, 0); //TODO make road curvy
+  var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0); //TODO make road curvy
 
   if (pointsCache[currentGrid.toString()]) {
     points = pointsCache[currentGrid.toString()];
@@ -86,7 +97,7 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
 
-  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth; //TODO this still sets road height between two of the same biome
+  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
   if (distance <= roadWidth) {
     vertexData.attributes.isRoad = true;
