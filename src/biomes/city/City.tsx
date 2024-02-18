@@ -1,7 +1,4 @@
-import { Debug, Physics, useBox } from "@react-three/cannon";
-import { Canvas } from "@react-three/fiber";
-import { Player } from "../../_/player/Player";
-import { Terrain } from "../../_/terrain/Terrain";
+import { useBox } from "@react-three/cannon";
 import { Biome } from "../../types/Biome";
 import { getMaterial } from "./props/getMaterial";
 import { getVertexData } from "./props/getVertexData";
@@ -37,20 +34,5 @@ const SkyCube = () => {
 };
 
 export const City = () => {
-  return (
-    <Canvas style={{ backgroundColor: "gray" }}>
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[10, 10, 5]} intensity={1} />
-      <Physics>
-        <Player vertexData={getVertexData} />
-      </Physics>
-      <Physics>
-        <Debug>
-          <SkyCube />
-          <Terrain biome={CityProperties} />
-        </Debug>
-        {/* TODO <Settings (gravity and such)/> */}
-      </Physics>
-    </Canvas>
-  );
+  return <></>;
 };

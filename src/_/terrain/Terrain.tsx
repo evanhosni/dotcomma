@@ -3,21 +3,29 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Biome } from "../../types/Biome";
+import { getMasterMaterial } from "./getMasterMaterial";
+import { getVertexBiomeData } from "./getVertexBiomeData";
 
 const CHUNK_SIZE = 240;
 const CHUNK_RESOLUTION = 24;
 const GRID_SIZE = 5;
+const NUM_STEPS = 40; //TODO make this vary based on FPS?
+
+interface Chunk {
+  offset: THREE.Vector3;
+  plane: THREE.Mesh;
+  rebuildIterator: Iterator<any> | null;
+}
 
 interface Terrain {
   group: THREE.Group;
-  chunks: { [key: string]: any }; //TODO better typing
-  active_chunk: any | null; //TODO better typing
-  queued_chunks: any[]; //TODO better typing
-  new_chunks: any[]; //TODO better typing and naming
+  chunks: { [key: string]: { position: number[]; chunk: Chunk } };
+  active_chunk: Chunk | null;
+  queued_chunks: Chunk[];
+  new_chunks: Chunk[];
 }
 
 const terrain: Terrain = {
-  //TODO i moved this outside of Terrain component. Will this have any negative affect on the functionality of the rest of this code?
   group: new THREE.Group(),
   chunks: {},
   active_chunk: null,
@@ -25,7 +33,7 @@ const terrain: Terrain = {
   new_chunks: [],
 };
 
-export const Terrain = ({ biome }: { biome: Biome }) => {
+export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
@@ -41,26 +49,28 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
         totalChunks += 8 * i;
       }
 
-      const progress = remainingChunks === null ? 0 : Math.floor(((totalChunks - remainingChunks) / totalChunks) * 100);
-      console.log(progress, "%");
+      // const progress = remainingChunks === null ? 0 : Math.floor(((totalChunks - remainingChunks) / totalChunks) * 100);
+      // console.log(progress, "%");
 
       remainingChunks === 0 && setGameLoaded(true);
     }
   }, [remainingChunks]);
 
   useEffect(() => {
-    biome.getMaterial().then(setTerrainMaterial);
+    getMasterMaterial(biomes).then(setTerrainMaterial);
   }, []);
 
   useFrame(() => {
     if (terrainMaterial) {
       UpdateTerrain(terrainMaterial);
     }
+
+    // console.log(getVertexBiomeData(camera.position.x, camera.position.y, biomes).attributes.blendData.length);
   });
 
   const UpdateTerrain = (material: THREE.Material) => {
     if (terrain.active_chunk) {
-      const iteratorResult = terrain.active_chunk.rebuildIterator.next();
+      const iteratorResult = terrain.active_chunk.rebuildIterator!.next();
       if (iteratorResult.done) {
         terrain.active_chunk = null;
       }
@@ -144,7 +154,6 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
   };
 
   const BuildChunk = function* (chunk: any, material: THREE.Material) {
-    const NUM_STEPS = 40; //TODO make this vary based on FPS?
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
     let count = 0;
@@ -152,9 +161,9 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      pos.setXYZ(i, v.x, v.y, biome.getVertexData(v.x + offset.x, -v.y + offset.y).height);
+      const vertexData = getVertexBiomeData(v.x + offset.x, -v.y + offset.y, biomes);
 
-      const vertexData = biome.getVertexData(v.x + offset.x, -v.y + offset.y);
+      pos.setXYZ(i, v.x, v.y, vertexData.height);
 
       if (i === 0) {
         for (const attrName in vertexData.attributes) {
@@ -184,6 +193,8 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
 
     GenerateColliders(chunk, offset);
 
+    // console.log(chunk.plane.material.fragmentShader);
+
     yield;
   };
 
@@ -191,7 +202,7 @@ export const Terrain = ({ biome }: { biome: Biome }) => {
     const chunkData = terrain.chunks[chunkKey];
     if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
       chunkData.chunk.plane.geometry.dispose();
-      chunkData.chunk.plane.material.dispose();
+      (chunkData.chunk.plane.material as THREE.Material).dispose();
       terrain.group.remove(chunkData.chunk.plane);
     }
     delete terrain.chunks[chunkKey];
@@ -261,5 +272,3 @@ export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, 
 
   return <mesh ref={ref as any} />;
 };
-
-//TODO LOD system? at least for colliders?

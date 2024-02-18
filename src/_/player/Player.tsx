@@ -3,16 +3,21 @@ import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { VertexData } from "../../types/VertexData";
+import { CityProperties } from "../../biomes/city/City";
+import { getVertexBiomeData } from "../terrain/getVertexBiomeData";
 import { useInput } from "./useInput";
 
-export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => VertexData }) => {
+export const Player = () => {
   const { forward, backward, left, right, sprint, jump } = useInput();
   const { camera } = useThree();
   const [distanceToGround, setDistanceToGround] = useState(0);
   const [canJump, setCanJump] = useState(true);
   const [isJumping, setIsJumping] = useState(false);
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
+
+  const vertexData = (x: number, y: number) => {
+    return getVertexBiomeData(x, y, [CityProperties]);
+  };
 
   const walkSpeed = 100;
   const sprintSpeed = 20;
@@ -114,7 +119,7 @@ export const Player = ({ vertexData }: { vertexData: (x: number, y: number) => V
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
+    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + 50), z), 0.1);
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed

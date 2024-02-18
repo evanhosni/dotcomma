@@ -17,11 +17,11 @@ export const Dust = () => {
   return (
     <Canvas>
       <Physics>
-        <Player vertexData={getVertexData} />
+        <Player />
         <Sky />
         <Debug>
           {/* TODO <Settings (gravity and such)/> */}
-          <Terrain biome={DustProperties} />
+          <Terrain biomes={[DustProperties]} />
         </Debug>
       </Physics>
     </Canvas>
