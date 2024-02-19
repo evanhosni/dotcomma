@@ -13,7 +13,7 @@ export const getMaterial = async (biomes: Biome[]) => {
 
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      roadtexture: { value: roadTexture },
+      roadtexture: { value: bluemudTexture },
       sidewalktexture: { value: sidewalkTexture },
       grasstexture: { value: grassTexture },
       sandtexture: { value: sandTexture },
@@ -42,28 +42,32 @@ export const getMaterial = async (biomes: Biome[]) => {
     uniform sampler2D grasstexture;
     uniform sampler2D bluemudtexture;
     varying vec2 vUv;
+
+    void river_frag() {
+      gl_FragColor = vec4(1.0,1.0,1.0,1.0);
+    } 
     
     void city_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(10.0, 100.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(sidewalktexture, adjustedUV), blendFactor);
     } 
 
     void grass_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(10.0, 100.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(grasstexture, adjustedUV), blendFactor);
     } 
 
     void dust_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(10.0, 100.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(sandtexture, adjustedUV), blendFactor);
     }
 
     void pharmasea_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(10.0, 100.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(bluemudtexture, adjustedUV), blendFactor);
     } 
     

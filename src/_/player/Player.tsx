@@ -22,14 +22,14 @@ export const Player = () => {
     return getBiomeData(x, y, [City, Dust, Pharmasea, Grass]);
   };
 
-  const walkSpeed = 80;
-  const sprintSpeed = 20;
+  const walkSpeed = 10;
+  const sprintSpeed = 18;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
 
-  // camera.far = 720;
-  // camera.updateProjectionMatrix();
+  camera.far = 500;
+  camera.updateProjectionMatrix();
 
   useEffect(() => {
     if (distanceToGround < 0.5 && !jump) {
