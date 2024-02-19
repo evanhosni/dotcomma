@@ -4,7 +4,10 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { City } from "../../biomes/city/City";
-import { getVertexBiomeData } from "../terrain/getVertexBiomeData";
+import { Dust } from "../../biomes/dust/Dust";
+import { Grass } from "../../biomes/grass/Grass";
+import { Pharmasea } from "../../biomes/pharma/Pharma";
+import { getBiomeData } from "../terrain/getBiomeData";
 import { useInput } from "./useInput";
 
 export const Player = () => {
@@ -16,10 +19,10 @@ export const Player = () => {
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
-    return getVertexBiomeData(x, y, [City]);
+    return getBiomeData(x, y, [City, Dust, Pharmasea, Grass]);
   };
 
-  const walkSpeed = 100;
+  const walkSpeed = 80;
   const sprintSpeed = 20;
   const playerHeight = 2;
   const jumpHeight = 12;
@@ -88,8 +91,8 @@ export const Player = () => {
       const stepHeight = vertexData(stepPosition.x, stepPosition.z).height;
       const slope = Math.atan2(futureHeight - currentHeight, 0.1);
 
-      const maxSlope = 0.9;
-      const maxStepHeight = 300;
+      const maxSlope = 2.9;
+      const maxStepHeight = 3000;
 
       if ((slope <= maxSlope && stepHeight - currentHeight <= maxStepHeight) || distanceToGround > 0.5) {
         velocity.normalize();
@@ -119,7 +122,7 @@ export const Player = () => {
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + 50), z), 0.1);
+    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed

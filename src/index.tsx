@@ -1,4 +1,5 @@
-import { Debug, Physics } from "@react-three/cannon";
+import { Physics } from "@react-three/cannon";
+import { Sky } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -8,6 +9,7 @@ import { Player } from "./_/player/Player";
 import { Terrain } from "./_/terrain/Terrain";
 import { City } from "./biomes/city/City";
 import { Dust } from "./biomes/dust/Dust";
+import { Grass } from "./biomes/grass/Grass";
 import { Pharmasea } from "./biomes/pharma/Pharma";
 import "./style.css";
 
@@ -17,21 +19,22 @@ const Dotcomma = () => {
   return (
     <BrowserRouter>
       <PauseMenu />
-      <Canvas style={{ backgroundColor: "gray" }}>
+      <Canvas>
         <ambientLight intensity={0.5} />
         <directionalLight position={[10, 10, 5]} intensity={1} />
+        <Sky />
         <Physics>
           <Player />
         </Physics>
         <Physics>
-          <Debug>
-            <Terrain biomes={[City, Dust, Pharmasea]} />
-            <Routes>
-              <Route index />
-              <Route path="/dust" />
-              <Route path="*" />
-            </Routes>
-          </Debug>
+          {/* <Debug> */}
+          <Terrain biomes={[City, Dust, Pharmasea, Grass]} />
+          <Routes>
+            <Route index />
+            <Route path="/dust" />
+            <Route path="*" />
+          </Routes>
+          {/* </Debug> */}
         </Physics>
       </Canvas>
     </BrowserRouter>
