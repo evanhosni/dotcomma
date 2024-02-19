@@ -6,9 +6,9 @@ import { _math } from "../math";
 import { TerrainNoiseParams, _noise } from "../noise";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
-const gridSize = 2500; //more like 2500+
-export const roadWidth = 30;
-const blendWidth = 200;
+const gridSize = 800; //TODO more like 2000
+export const roadWidth = 10;
+const blendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
 const roadNoise: TerrainNoiseParams = {
   type: "perlin",
@@ -16,16 +16,17 @@ const roadNoise: TerrainNoiseParams = {
   persistence: 1,
   lacunarity: 1,
   exponentiation: 1,
-  height: 200,
-  scale: 300,
+  height: 100,
+  scale: 250,
 };
 
-export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
+export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
+  //TODO name something other than biomedata
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
-  var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
+  var biomeData: VertexData = { ...vertexData_default, x: x, y: y };
 
-  var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0); //TODO make road curvy
+  var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0);
 
   if (pointsCache[currentGrid.toString()]) {
     points = pointsCache[currentGrid.toString()];
@@ -51,8 +52,8 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
 
   const biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
-  vertexData.attributes.biome = biome;
-  vertexData.attributes.biomeId = biomes.indexOf(biome);
+  biomeData.attributes.biome = biome;
+  biomeData.attributes.biomeId = biomes.indexOf(biome);
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -83,12 +84,7 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
       const v1 = circumcenters[Math.floor(i / 3)];
       const v2 = circumcenters[Math.floor(edge / 3)];
 
-      // const biome1 = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[i])) * biomes.length)];
-      // const biome2 = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[edge])) * biomes.length)];
-
-      // if (biome1 !== biome2) {
       voronoiWalls.push(new THREE.Line3(v1, v2));
-      // }
     }
   }
 
@@ -101,20 +97,30 @@ export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
   closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
-  vertexData.attributes.distanceToRoadCenter = distance;
+  biomeData.attributes.distanceToRoadCenter = distance;
 
-  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
-  vertexData.height = getHeight(vertexData);
+  biomeData.height = getHeight(biomeData);
 
-  return vertexData;
+  return biomeData;
 };
 
-const getHeight = (vertexData: VertexData) => {
-  if (vertexData.attributes.distanceToRoadCenter < roadWidth) return 0;
+const baseNoise: TerrainNoiseParams = {
+  type: "perlin",
+  octaves: 3,
+  persistence: 2,
+  lacunarity: 2,
+  exponentiation: 2,
+  height: 500,
+  scale: 5000,
+};
 
-  let height =
-    vertexData.attributes.biome.getVertexData(vertexData.x, vertexData.y).height * vertexData.attributes.blend;
+const getHeight = (biomeData: VertexData) => {
+  let height = 0;
 
-  return height;
+  if (biomeData.attributes.distanceToRoadCenter > roadWidth)
+    height = biomeData.attributes.biome.getVertexData(biomeData.x, biomeData.y).height * biomeData.attributes.blend; //TODO: pass all of vertexData into getVertexData
+
+  return height + _noise.terrain(baseNoise, biomeData.x, biomeData.y);
 };

@@ -7,7 +7,7 @@ import { blocks } from "./blocks/[blocks]";
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 800; //more like 500-800
 export const roadWidth = 10;
-const blendWidth = 50;
+const blendWidth = 10;
 
 export const getVertexData = (x: number, y: number) => {
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
@@ -112,7 +112,7 @@ const getHeight = (vertexData: VertexData) => {
   }
 
   for (let i = 0; i < vertexData.attributes.blendData.length; i++) {
-    height += 20 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
+    height += 5 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
   }
 
   return height;

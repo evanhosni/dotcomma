@@ -3,10 +3,10 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Biome } from "../../types/Biome";
-import { getMasterMaterial } from "./getMasterMaterial";
-import { getVertexBiomeData } from "./getVertexBiomeData";
+import { getBiomeData } from "./getBiomeData";
+import { getMaterial } from "./getMaterial";
 
-const CHUNK_SIZE = 240;
+const CHUNK_SIZE = 160;
 const CHUNK_RESOLUTION = 24;
 const GRID_SIZE = 5;
 const NUM_STEPS = 40; //TODO make this vary based on FPS?
@@ -49,23 +49,18 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
         totalChunks += 8 * i;
       }
 
-      // const progress = remainingChunks === null ? 0 : Math.floor(((totalChunks - remainingChunks) / totalChunks) * 100);
-      // console.log(progress, "%");
-
       remainingChunks === 0 && setGameLoaded(true);
     }
   }, [remainingChunks]);
 
   useEffect(() => {
-    getMasterMaterial(biomes).then(setTerrainMaterial);
+    getMaterial(biomes).then(setTerrainMaterial);
   }, []);
 
   useFrame(() => {
     if (terrainMaterial) {
       UpdateTerrain(terrainMaterial);
     }
-
-    // console.log(getVertexBiomeData(camera.position.x, camera.position.y, biomes).attributes.blendData.length);
   });
 
   const UpdateTerrain = (material: THREE.Material) => {
@@ -161,7 +156,7 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = getVertexBiomeData(v.x + offset.x, -v.y + offset.y, biomes);
+      const vertexData = getBiomeData(v.x + offset.x, -v.y + offset.y, biomes);
 
       pos.setXYZ(i, v.x, v.y, vertexData.height);
 
@@ -172,7 +167,7 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
       }
 
       for (const attrName in vertexData.attributes) {
-        attributeBuffers[attrName][i] = vertexData.attributes[attrName];
+        if (attributeBuffers[attrName]) attributeBuffers[attrName][i] = vertexData.attributes[attrName];
       }
 
       if (++count > NUM_STEPS && gameLoaded) {
@@ -192,8 +187,6 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
     chunk.plane.position.set(offset.x, 0, offset.y);
 
     GenerateColliders(chunk, offset);
-
-    // console.log(getVertexBiomeData(camera.position.x, camera.position.y, [City, Dust, Pharmasea]).attributes.biome);
 
     yield;
   };

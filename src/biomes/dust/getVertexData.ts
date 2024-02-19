@@ -7,14 +7,14 @@ const noise: TerrainNoiseParams = {
   persistence: 1,
   lacunarity: 1,
   exponentiation: 1,
-  height: 50,
+  height: 150,
   scale: 200,
 };
 
 export const getVertexData = (x: number, y: number) => {
   var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
 
-  vertexData.height = Math.abs(_noise.terrain(noise, x, y)) * -1;
+  vertexData.height = Math.abs(_noise.terrain(noise, x, y)) * -1 + 20;
 
   return vertexData;
 };

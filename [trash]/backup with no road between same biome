@@ -8,7 +8,7 @@ const gridSize = 500; //more like 2500+
 export const roadWidth = 30;
 const blendWidth = 200;
 
-export const getVertexBiomeData = (x: number, y: number, biomes: Biome[]) => {
+export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
   var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
