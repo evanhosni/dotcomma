@@ -2,6 +2,7 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
+import { biomesInGame } from "../..";
 import { Biome } from "../../types/Biome";
 import { getBiomeData } from "./getBiomeData";
 import { getMaterial } from "./getMaterial";
@@ -61,6 +62,8 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
     if (terrainMaterial) {
       UpdateTerrain(terrainMaterial);
     }
+
+    console.log(getBiomeData(camera.position.x, camera.position.z, biomesInGame).attributes.biome);
   });
 
   const UpdateTerrain = (material: THREE.Material) => {

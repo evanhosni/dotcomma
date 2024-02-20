@@ -3,10 +3,7 @@ import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { City } from "../../biomes/city/City";
-import { Dust } from "../../biomes/dust/Dust";
-import { Grass } from "../../biomes/grass/Grass";
-import { Pharmasea } from "../../biomes/pharma/Pharma";
+import { biomesInGame } from "../..";
 import { getBiomeData } from "../terrain/getBiomeData";
 import { useInput } from "./useInput";
 
@@ -19,17 +16,17 @@ export const Player = () => {
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
-    return getBiomeData(x, y, [City, Dust, Pharmasea, Grass]);
+    return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 80;
-  const sprintSpeed = 20;
+  const walkSpeed = 8;
+  const sprintSpeed = 50;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
 
-  // camera.far = 720;
-  // camera.updateProjectionMatrix();
+  camera.far = 420;
+  camera.updateProjectionMatrix();
 
   useEffect(() => {
     if (distanceToGround < 0.5 && !jump) {
