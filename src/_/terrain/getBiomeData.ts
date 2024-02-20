@@ -7,7 +7,7 @@ import { _math } from "../math";
 import { TerrainNoiseParams, _noise } from "../noise";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
-const gridSize = 800; //TODO more like 2000
+const gridSize = 2000; //TODO more like 2000
 const blendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
 const roadNoise: TerrainNoiseParams = {
@@ -99,17 +99,17 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const distance = currentVertex.distanceTo(closestPoints[0]);
   biomeData.attributes.distanceToRoadCenter = distance;
 
-  biomeData.attributes.blend =
-    Math.min(blendWidth, Math.max(distance - biomeData.attributes.biome.borderWidth, 0)) / blendWidth;
+  biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - biome.borderWidth, 0)) / blendWidth;
 
-  if (biomeData.attributes.distanceToRoadCenter > biomeData.attributes.biome.borderWidth) {
+  if (biomeData.attributes.distanceToRoadCenter > biome.borderWidth) {
     biomeData.height =
-      biomeData.attributes.biome.getVertexData(biomeData.x, biomeData.y).height * biomeData.attributes.blend +
+      biome.getVertexData(biomeData.x, biomeData.y).height * biomeData.attributes.blend +
       (City.getVertexData(x, y).height * 1 - biomeData.attributes.blend); //TODO: pass all of vertexData into getVertexData
+    biomeData.attributes.secondaryBiome = null;
   } else {
     biomeData.height = City.getVertexData(x, y).height;
-    // biomeData.attributes.secondaryBiome = biomeData.attributes.biome;
-    // biomeData.attributes.biome = City;
+    biomeData.attributes.secondaryBiome = biome;
+    biomeData.attributes.biome = City;
   }
 
   biomeData.height += _noise.terrain(baseNoise, biomeData.x, biomeData.y);

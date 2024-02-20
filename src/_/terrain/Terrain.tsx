@@ -63,7 +63,10 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
       UpdateTerrain(terrainMaterial);
     }
 
-    console.log(getBiomeData(camera.position.x, camera.position.y, biomesInGame).attributes.biome);
+    console.log(
+      getBiomeData(camera.position.x, camera.position.z, biomesInGame).attributes.biome.name,
+      getBiomeData(camera.position.x, camera.position.z, biomesInGame).attributes.secondaryBiome?.name
+    );
   });
 
   const UpdateTerrain = (material: THREE.Material) => {

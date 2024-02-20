@@ -19,8 +19,8 @@ export const Player = () => {
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 10;
-  const sprintSpeed = 18;
+  const walkSpeed = 8;
+  const sprintSpeed = 50;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually

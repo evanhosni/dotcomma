@@ -9,12 +9,11 @@ import { Terrain } from "./_/terrain/Terrain";
 import { City } from "./biomes/city/City";
 import { Dust } from "./biomes/dust/Dust";
 import { Grass } from "./biomes/grass/Grass";
-import { Pharmasea } from "./biomes/pharma/Pharma";
 import "./style.css";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
-export const biomesInGame = [City, Dust, Pharmasea, Grass];
+export const biomesInGame = [City, Dust, Grass];
 
 const Dotcomma = () => {
   return (
