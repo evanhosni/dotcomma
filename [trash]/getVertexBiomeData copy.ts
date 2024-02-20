@@ -6,7 +6,7 @@ import { _math } from "../../math";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 2500; //more like 2500+
-export const roadWidth = 30;
+export const borderWidth = 30;
 const blendWidth = 200;
 
 export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
@@ -108,10 +108,10 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
 
   const distance = currentVertex.distanceTo(points[1]) - currentVertex.distanceTo(points[0]);
 
-  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth; //TODO this still sets road height between two of the same biome
+  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - borderWidth, 0)) / blendWidth; //TODO this still sets road height between two of the same biome
 
   if (
-    distance <= roadWidth //&&
+    distance <= borderWidth //&&
     // biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)] !==
     //   biomes[Math.floor(_math.seed_rand(JSON.stringify(points[1])) * biomes.length)]
   ) {

@@ -1,5 +1,4 @@
 import { Physics } from "@react-three/cannon";
-import { Sky } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -15,20 +14,21 @@ import "./style.css";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
+export const biomesInGame = [City, Dust, Pharmasea, Grass];
+
 const Dotcomma = () => {
   return (
     <BrowserRouter>
       <PauseMenu />
-      <Canvas>
+      <Canvas style={{ background: "#08002e" }}>
         <ambientLight intensity={0.5} />
         <directionalLight position={[10, 10, 5]} intensity={1} />
-        <Sky />
         <Physics>
           <Player />
         </Physics>
         <Physics>
           {/* <Debug> */}
-          <Terrain biomes={[City, Dust, Pharmasea, Grass]} />
+          <Terrain biomes={biomesInGame} />
           <Routes>
             <Route index />
             <Route path="/dust" />

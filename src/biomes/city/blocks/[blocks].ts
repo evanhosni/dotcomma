@@ -5,7 +5,7 @@ export const blocks: any[] = [
     params: {
       difficulty: 0,
     },
-    roadWidth: 20,
+    borderWidth: 20,
     roadVary: 0,
     blendWidth: 50,
     blendVary: 0.2,
@@ -16,7 +16,7 @@ export const blocks: any[] = [
     params: {
       difficulty: 6,
     },
-    roadWidth: 30,
+    borderWidth: 30,
     roadVary: 0.6,
     blendWidth: 80,
     blendVary: 0.8,
@@ -27,7 +27,7 @@ export const blocks: any[] = [
     params: {
       difficulty: 4,
     },
-    roadWidth: 30,
+    borderWidth: 30,
     roadVary: 0.6,
     blendWidth: 80,
     blendVary: 0.8,
@@ -38,7 +38,7 @@ export const blocks: any[] = [
     params: {
       difficulty: 7,
     },
-    roadWidth: 30,
+    borderWidth: 30,
     roadVary: 0.6,
     blendWidth: 80,
     blendVary: 0.8,
@@ -49,7 +49,7 @@ export const blocks: any[] = [
     params: {
       difficulty: 9,
     },
-    roadWidth: 30,
+    borderWidth: 30,
     roadVary: 0.6,
     blendWidth: 80,
     blendVary: 0.8,

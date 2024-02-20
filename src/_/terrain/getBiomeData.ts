@@ -1,5 +1,6 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
+import { City } from "../../biomes/city/City";
 import { Biome } from "../../types/Biome";
 import { VertexData, vertexData_default } from "../../types/VertexData";
 import { _math } from "../math";
@@ -7,7 +8,6 @@ import { TerrainNoiseParams, _noise } from "../noise";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 800; //TODO more like 2000
-export const roadWidth = 10;
 const blendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
 const roadNoise: TerrainNoiseParams = {
@@ -16,8 +16,8 @@ const roadNoise: TerrainNoiseParams = {
   persistence: 1,
   lacunarity: 1,
   exponentiation: 1,
-  height: 100,
-  scale: 250,
+  height: 300,
+  scale: 300,
 };
 
 export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
@@ -99,9 +99,20 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const distance = currentVertex.distanceTo(closestPoints[0]);
   biomeData.attributes.distanceToRoadCenter = distance;
 
-  biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  biomeData.attributes.blend =
+    Math.min(blendWidth, Math.max(distance - biomeData.attributes.biome.borderWidth, 0)) / blendWidth;
 
-  biomeData.height = getHeight(biomeData);
+  if (biomeData.attributes.distanceToRoadCenter > biomeData.attributes.biome.borderWidth) {
+    biomeData.height =
+      biomeData.attributes.biome.getVertexData(biomeData.x, biomeData.y).height * biomeData.attributes.blend +
+      (City.getVertexData(x, y).height * 1 - biomeData.attributes.blend); //TODO: pass all of vertexData into getVertexData
+  } else {
+    biomeData.height = City.getVertexData(x, y).height;
+    // biomeData.attributes.secondaryBiome = biomeData.attributes.biome;
+    // biomeData.attributes.biome = City;
+  }
+
+  biomeData.height += _noise.terrain(baseNoise, biomeData.x, biomeData.y);
 
   return biomeData;
 };
@@ -114,13 +125,4 @@ const baseNoise: TerrainNoiseParams = {
   exponentiation: 2,
   height: 500,
   scale: 5000,
-};
-
-const getHeight = (biomeData: VertexData) => {
-  let height = 0;
-
-  if (biomeData.attributes.distanceToRoadCenter > roadWidth)
-    height = biomeData.attributes.biome.getVertexData(biomeData.x, biomeData.y).height * biomeData.attributes.blend; //TODO: pass all of vertexData into getVertexData
-
-  return height + _noise.terrain(baseNoise, biomeData.x, biomeData.y);
 };

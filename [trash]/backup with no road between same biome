@@ -5,7 +5,7 @@ import { _math } from "../math";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 500; //more like 2500+
-export const roadWidth = 30;
+export const borderWidth = 30;
 const blendWidth = 200;
 
 export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
@@ -55,9 +55,9 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const distance =
     newArray.length > 1 ? currentVertex.distanceTo(newArray[1]) - currentVertex.distanceTo(newArray[0]) : 999; //TODO something other than 999?
 
-  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - borderWidth, 0)) / blendWidth;
 
-  if (distance <= roadWidth) {
+  if (distance <= borderWidth) {
     vertexData.attributes.isRoad = true;
   } else {
     vertexData.attributes.isRoad = false;

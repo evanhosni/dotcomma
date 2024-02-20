@@ -6,7 +6,7 @@ import { blocks } from "./blocks/[blocks]";
 
 const pointsCache: Record<string, THREE.Vector3[]> = {};
 const gridSize = 800; //more like 500-800
-export const roadWidth = 10;
+export const borderWidth = 10;
 const blendWidth = 10;
 
 export const getVertexData = (x: number, y: number) => {
@@ -85,11 +85,11 @@ export const getVertexData = (x: number, y: number) => {
 
   const distance = currentVertex.distanceTo(closestPoints[0]);
 
-  const blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  const blend = Math.min(blendWidth, Math.max(distance - borderWidth, 0)) / blendWidth;
 
   vertexData.attributes.blendData = [{ block: vertexData.attributes.block, value: blend }];
 
-  if (distance <= roadWidth) {
+  if (distance <= borderWidth) {
     vertexData.attributes.isRoad = true;
   } else {
     vertexData.attributes.isRoad = false;
@@ -107,12 +107,8 @@ const getHeight = (vertexData: VertexData) => {
 
   let height = 0;
 
-  if (vertexData.attributes.blendData.length === 0) {
-    return 5; //vertexData.block.getHeight(vertexData);
-  }
-
   for (let i = 0; i < vertexData.attributes.blendData.length; i++) {
-    height += 5 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
+    height += 1 /*vertexData.blendData[i].block.getHeight(vertexData) */ * vertexData.attributes.blendData[i].value;
   }
 
   return height;
