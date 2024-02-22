@@ -19,7 +19,7 @@ export const Player = () => {
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 8;
+  const walkSpeed = 90;
   const sprintSpeed = 50;
   const playerHeight = 2;
   const jumpHeight = 12;

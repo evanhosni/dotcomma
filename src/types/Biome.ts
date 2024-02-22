@@ -2,5 +2,6 @@ import { VertexData } from "./VertexData";
 
 export interface Biome {
   name: string;
-  getVertexData: (x: number, y: number) => VertexData;
+  getVertexData: (biomeData: VertexData) => VertexData; //TODO separate biomedata and vertexdata?
+  blendWidth?: number;
 }
