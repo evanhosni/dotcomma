@@ -1,4 +1,4 @@
-import { Physics } from "@react-three/cannon";
+import { Debug, Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
 import React from "react";
 import ReactDOM from "react-dom/client";
@@ -9,11 +9,11 @@ import { Terrain } from "./_/terrain/Terrain";
 import { City } from "./biomes/city/City";
 import { Dust } from "./biomes/dust/Dust";
 import { Grass } from "./biomes/grass/Grass";
-import { Pharmasea } from "./biomes/pharma/Pharma";
 import "./style.css";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
-export const biomesInGame = [City, Dust, Pharmasea, Grass];
+export const biomesInGame = [City, Dust, Grass];
+const debug = false;
 
 const Dotcomma = () => {
   return (
@@ -26,14 +26,25 @@ const Dotcomma = () => {
           <Player />
         </Physics>
         <Physics>
-          {/* <Debug> */}
-          <Terrain biomes={biomesInGame} />
-          <Routes>
-            <Route index />
-            <Route path="/dust" />
-            <Route path="*" />
-          </Routes>
-          {/* </Debug> */}
+          {debug ? (
+            <Debug>
+              <Terrain biomes={biomesInGame} />
+              <Routes>
+                <Route index />
+                <Route path="/dust" />
+                <Route path="*" />
+              </Routes>
+            </Debug>
+          ) : (
+            <>
+              <Terrain biomes={biomesInGame} />
+              <Routes>
+                <Route index />
+                <Route path="/dust" />
+                <Route path="*" />
+              </Routes>
+            </>
+          )}
         </Physics>
       </Canvas>
     </BrowserRouter>
