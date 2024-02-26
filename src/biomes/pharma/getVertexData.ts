@@ -13,7 +13,7 @@ const noise: TerrainNoiseParams = {
 
 export const getVertexData = (biomeData: VertexData) => {
   const { x, y } = biomeData;
-  var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
+  var vertexData: VertexData = { ...vertexData_default, x, y };
 
   vertexData.height = _noise.terrain(noise, x, y) * -3;
 

@@ -12,7 +12,7 @@ const blendWidth = 200;
 export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
   var points: THREE.Vector3[] = [];
-  var vertexData: VertexData = { ...vertexData_default, x: x, y: y };
+  var vertexData: VertexData = { ...vertexData_default, x, y };
 
   var currentVertex = new THREE.Vector3(x, y, 0); //TODO make road curvy
 
