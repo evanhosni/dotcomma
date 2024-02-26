@@ -7,6 +7,8 @@ import { biomesInGame } from "../..";
 import { getBiomeData } from "../terrain/getBiomeData";
 import { useInput } from "./useInput";
 
+const towerOverStuff = 30; //TODO this is temp for testing
+
 export const Player = () => {
   const { forward, backward, left, right, sprint, jump } = useInput();
   const { camera } = useThree();
@@ -19,7 +21,7 @@ export const Player = () => {
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 90;
+  const walkSpeed = 120;
   const sprintSpeed = 50;
   const playerHeight = 2;
   const jumpHeight = 12;
@@ -119,7 +121,7 @@ export const Player = () => {
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight), z), 0.1);
+    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + towerOverStuff), z), 0.1);
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed

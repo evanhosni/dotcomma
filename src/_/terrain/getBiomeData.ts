@@ -5,7 +5,12 @@ import { VertexData, vertexData_default } from "../../types/VertexData";
 import { _math } from "../math";
 import { TerrainNoiseParams, _noise } from "../noise";
 
-const pointsCache: Record<string, THREE.Vector3[]> = {};
+interface Grid {
+  point: THREE.Vector3;
+  biome: Biome;
+}
+
+const gridCache: Record<string, Grid[]> = {};
 const gridSize = 1200; //TODO more like 2000
 export const roadWidth = 10;
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
@@ -20,40 +25,43 @@ const roadNoise: TerrainNoiseParams = {
   scale: 250,
 };
 
-export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
+export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?: boolean) => {
   //TODO name something other than biomedata
-  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
-  var points: THREE.Vector3[] = [];
-  var biomeData: VertexData = { ...vertexData_default, x: x, y: y };
-
+  var biomeData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0);
 
-  if (pointsCache[currentGrid.toString()]) {
-    points = pointsCache[currentGrid.toString()];
+  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)]; //TODO {x,y} rather than [0,1]
+  var grid: Grid[] = [];
+
+  if (gridCache[currentGrid.toString()]) {
+    grid = gridCache[currentGrid.toString()];
   } else {
     for (let ix = currentGrid[0] - 2; ix <= currentGrid[0] + 2; ix++) {
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
-        var pointX = _math.seed_rand(ix + "X" + iy);
-        var pointY = _math.seed_rand(ix + "Y" + iy);
-        var point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
-        points.push(point);
+        let pointX = _math.seed_rand(ix + "X" + iy);
+        let pointY = _math.seed_rand(ix + "Y" + iy);
+        let point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
+        let biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(point)) * biomes.length)];
+        grid.push({ point, biome });
       }
     }
-    pointsCache[currentGrid.toString()] = points;
+    gridCache[currentGrid.toString()] = grid;
 
-    for (const key in pointsCache) {
+    for (const key in gridCache) {
       const cachedGrid = key.split(",").map(Number);
       if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
-        delete pointsCache[key];
+        delete gridCache[key];
       }
     }
   }
 
-  points.sort((a, b) => currentVertex.distanceTo(a) - currentVertex.distanceTo(b));
+  grid.sort((a, b) => currentVertex.distanceTo(a.point) - currentVertex.distanceTo(b.point));
 
-  const biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(points[0])) * biomes.length)];
-  biomeData.attributes.biome = biome;
-  biomeData.attributes.biomeId = biomes.indexOf(biome);
+  const biome = grid[0].biome;
+  if (!preventLoop) biomeData.attributes.biome = biome;
+  if (!preventLoop) biomeData.attributes.biomeId = biomes.indexOf(biome);
+
+  const points = grid.map(({ point }) => point);
 
   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
 
@@ -101,9 +109,9 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[]) => {
 
   const blendWidth = biome.blendWidth || defaultBlendWidth;
 
-  biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  if (!preventLoop) biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
-  biomeData.height = getHeight(biomeData);
+  if (!preventLoop) biomeData.height = getHeight(biomeData);
 
   return biomeData;
 };
@@ -122,7 +130,7 @@ const getHeight = (biomeData: VertexData) => {
   let height = 0;
 
   if (biomeData.attributes.distanceToRoadCenter > roadWidth)
-    height = biomeData.attributes.biome.getVertexData(biomeData).height * biomeData.attributes.blend; //TODO: pass all of vertexData into getVertexData
+    height = biomeData.attributes.biome.getVertexData(biomeData).height * biomeData.attributes.blend;
 
   return height + _noise.terrain(baseNoise, biomeData.x, biomeData.y);
 };
