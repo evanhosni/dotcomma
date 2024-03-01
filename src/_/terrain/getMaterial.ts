@@ -21,8 +21,8 @@ export const getMaterial = async (biomes: Biome[]) => {
     },
     vertexShader: `
     attribute float distanceToRoadCenter;
-    attribute float biomeId;
     varying float vDistanceToRoadCenter;
+    attribute float biomeId;
     flat varying int vBiomeId;
     varying vec2 vUv;
 
@@ -45,10 +45,11 @@ export const getMaterial = async (biomes: Biome[]) => {
     
     void city_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      vec4 newtexture = mix(texture2D(roadtexture, adjustedUV), texture2D(sidewalktexture, adjustedUV), 0.5);
-      float blendFactor = smoothstep(8.0, 15.0, vDistanceToRoadCenter);
-      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), newtexture, blendFactor);
-  }
+      float blendFactorRoad = smoothstep(10.0, 15.0, vDistanceToRoadCenter);
+
+      vec4 blockTexture = mix(texture2D(roadtexture, adjustedUV), texture2D(sidewalktexture, adjustedUV), 0.5);
+      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), blockTexture, blendFactorRoad);
+    }
 
     void grass_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);

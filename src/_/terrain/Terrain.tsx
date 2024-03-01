@@ -7,7 +7,7 @@ import { getBiomeData } from "./getBiomeData";
 import { getMaterial } from "./getMaterial";
 
 const CHUNK_SIZE = 160;
-const CHUNK_RESOLUTION = 24;
+const CHUNK_RESOLUTION = 25;
 const GRID_SIZE = 5;
 const NUM_STEPS = 100; //TODO make this vary based on FPS?
 
@@ -61,8 +61,6 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
     if (terrainMaterial) {
       UpdateTerrain(terrainMaterial);
     }
-
-    // console.log(getBiomeData(camera.position.x, camera.position.z, biomesInGame).attributes.biome);
   });
 
   const UpdateTerrain = (material: THREE.Material) => {
