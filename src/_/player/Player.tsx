@@ -7,7 +7,8 @@ import { biomesInGame } from "../..";
 import { getBiomeData } from "../terrain/getBiomeData";
 import { useInput } from "./useInput";
 
-const towerOverStuff = 30; //TODO this is temp for testing
+const debug_sprint_tower = true; //TODO this is temp for testing
+const debug_console_log = false;
 
 export const Player = () => {
   const { forward, backward, left, right, sprint, jump } = useInput();
@@ -18,11 +19,13 @@ export const Player = () => {
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
+    if (debug_console_log) console.log(getBiomeData(x, y, biomesInGame).attributes.debug);
+
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 120;
-  const sprintSpeed = 50;
+  const walkSpeed = 50;
+  const sprintSpeed = 120;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
@@ -121,7 +124,10 @@ export const Player = () => {
     api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
 
     var [x, y, z] = positionRef.current;
-    camera.position.lerp(new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + towerOverStuff), z), 0.1);
+    camera.position.lerp(
+      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint_tower ? 30 : 0)), z),
+      0.1
+    );
 
     // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
     // console.log(nearestVertex); // TODO if needed
