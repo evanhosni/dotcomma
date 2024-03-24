@@ -7,7 +7,7 @@ import { biomesInGame } from "../..";
 import { getBiomeData } from "../terrain/getBiomeData";
 import { useInput } from "./useInput";
 
-const debug_sprint_tower = true; //TODO this is temp for testing
+const debug_sprint = true; //TODO this is temp for testing
 const debug_console_log = false;
 
 export const Player = () => {
@@ -24,13 +24,13 @@ export const Player = () => {
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 50;
-  const sprintSpeed = 120;
+  const walkSpeed = 12;
+  const sprintSpeed = debug_sprint ? 120 : 24;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
 
-  camera.far = 420;
+  camera.far = 7200; //TODO better view distance
   camera.updateProjectionMatrix();
 
   useEffect(() => {
@@ -125,7 +125,7 @@ export const Player = () => {
 
     var [x, y, z] = positionRef.current;
     camera.position.lerp(
-      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint_tower ? 30 : 0)), z),
+      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint ? 30 : 0)), z),
       0.1
     );
 

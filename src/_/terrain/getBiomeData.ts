@@ -11,8 +11,8 @@ interface Grid {
 }
 
 const gridCache: Record<string, Grid[]> = {};
-const gridSize = 1200; //TODO more like 2000
-export const roadWidth = 10;
+const gridSize = 500; //TODO more like 2500
+export const roadWidth = 12;
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
 const roadNoise: TerrainNoiseParams = {
@@ -41,7 +41,9 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
         let pointX = _math.seed_rand(ix + "X" + iy);
         let pointY = _math.seed_rand(ix + "Y" + iy);
         let point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
-        let biome = biomes[Math.floor(_math.seed_rand(JSON.stringify(point)) * biomes.length)];
+        const uuid = _math.seed_rand(JSON.stringify(point));
+        console.log(uuid);
+        let biome = biomes[Math.floor(uuid * biomes.length)];
         grid.push({ point, biome });
       }
     }
