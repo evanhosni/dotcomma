@@ -11,6 +11,7 @@ interface Grid {
 }
 
 const gridCache: Record<string, Grid[]> = {};
+const joinableCache: Record<string, boolean> = {};
 const gridSize = 500; //TODO more like 2500
 export const roadWidth = 12;
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
@@ -42,7 +43,6 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
         let pointY = _math.seed_rand(ix + "Y" + iy);
         let point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
         const uuid = _math.seed_rand(JSON.stringify(point));
-        console.log(uuid);
         let biome = biomes[Math.floor(uuid * biomes.length)];
         grid.push({ point, biome });
       }
@@ -94,7 +94,19 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
       const v1 = circumcenters[Math.floor(i / 3)];
       const v2 = circumcenters[Math.floor(edge / 3)];
 
-      voronoiWalls.push(new THREE.Line3(v1, v2));
+      const mid = new THREE.Vector3((v1.x + v2.x) / 2, (v1.y + v2.y) / 2, 0);
+      const label = `${Math.floor(mid.x)},${Math.floor(mid.y)}`;
+      const maxJoinableDist = 4000;
+
+      if (joinableCache[label] === undefined) {
+        var midClosestPoints = grid.sort((a, b) => a.point.distanceTo(mid) - b.point.distanceTo(mid));
+        joinableCache[label] =
+          midClosestPoints[0].biome.joinable && midClosestPoints[0].biome === midClosestPoints[1].biome;
+      }
+
+      if (joinableCache[label] === false) {
+        voronoiWalls.push(new THREE.Line3(v1, v2));
+      }
     }
   }
 

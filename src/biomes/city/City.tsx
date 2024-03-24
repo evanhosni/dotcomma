@@ -5,4 +5,5 @@ export const City: Biome = {
   name: "city",
   getVertexData: getVertexData,
   blendWidth: 3,
+  joinable: true,
 };
