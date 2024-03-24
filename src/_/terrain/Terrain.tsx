@@ -8,8 +8,8 @@ import { getMaterial } from "./getMaterial";
 
 const CHUNK_SIZE = 160;
 const CHUNK_RESOLUTION = 25;
-const GRID_SIZE = 5;
-const NUM_STEPS = 100; //TODO make this vary based on FPS?
+const GRID_SIZE = 6; //TODO was 5
+const NUM_STEPS = 200; //TODO make this vary based on FPS?
 
 interface Chunk {
   offset: THREE.Vector3;

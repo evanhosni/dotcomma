@@ -21,8 +21,8 @@ interface Grid {
 }
 
 const gridCache: Record<string, Grid[]> = {};
-const gridSize = 100;
-const roadWidth = 12;
+const gridSize = 100; //TODO note with gridSize 100 and roadWidth 10, blocks are 80x80 and buildings should be like...50x50
+const roadWidth = 10;
 
 const edge = { name: "edge", joinable: true };
 
@@ -44,7 +44,7 @@ export const getVertexData = (biomeData: VertexData) => {
         const point = new THREE.Vector3(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize, 0);
         const isEdge =
           getBiomeData(point.x, point.y, biomesInGame, true).attributes.distanceToRoadCenter <
-          Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO needs work. this runs the functionagain. maybe pass in edges array to biomeData so you can recalculate distance here. also, blocks get pretty close to biome border road
+          Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO needs work. this runs the functionagain. maybe pass in edges array to biomeData so you can recalculate distance here. also, blocks get pretty close to biome border road. //TODO plus or minus the roadNoise because currently distanceToRoadCenter is factoring straight roads
         const block = isEdge ? edge : blocks[Math.floor(_math.seed_rand(JSON.stringify(point)) * blocks.length)];
         const current = ix === currentGrid[0] && iy === currentGrid[1];
         const north = ix === currentGrid[0] && iy === currentGrid[1] + 1;
@@ -127,31 +127,43 @@ export const getVertexData = (biomeData: VertexData) => {
   );
 
   vertexData.attributes.debug = {
-    dist: Math.floor(vertexData.attributes.distanceToRoadCenter),
+    // dist: Math.floor(vertexData.attributes.distanceToRoadCenter),
     _x: Math.floor(x),
     _y: Math.floor(y),
-    north: (currentGrid[1] + 1) * gridSize,
-    east: (currentGrid[0] + 1) * gridSize,
-    south: currentGrid[1] * gridSize,
-    west: currentGrid[0] * gridSize,
-    z: {
-      dist: vertexData.attributes.distanceToRoadCenter,
-      a: current.point.x,
-      aa: current.point.y,
-      aaa: current.block.name,
-      current,
-      north,
-      east,
-      south,
-      west,
-      northEast,
-      southEast,
-      southWest,
-      northWest,
-    },
+    // north: (currentGrid[1] + 1) * gridSize,
+    // east: (currentGrid[0] + 1) * gridSize,
+    // south: currentGrid[1] * gridSize,
+    // west: currentGrid[0] * gridSize,
+    // z: {
+    //   dist: vertexData.attributes.distanceToRoadCenter,
+    // x: current.point.x,
+    // y: current.point.y,
+    // blockname: current.block.name,
+    // current,
+    // north,
+    // east,
+    // south,
+    // west,
+    // northEast,
+    // southEast,
+    // southWest,
+    // northWest,
+    // },
   };
 
   vertexData.height = getHeight(vertexData);
+
+  if (
+    current.block === north.block &&
+    current.block === east.block &&
+    current.block === south.block &&
+    current.block === west.block &&
+    current.block === northEast.block &&
+    current.block === southEast.block &&
+    current.block === southWest.block &&
+    current.block === northWest.block
+  )
+    console.log("this is where a big arena or something could be", current.point); //TODO
 
   return vertexData;
 };
@@ -160,7 +172,11 @@ const getHeight = (vertexData: VertexData) => {
   let height = 0;
 
   if (vertexData.attributes.distanceToRoadCenter > roadWidth) {
-    height = 1;
+    height = 0.5;
+  }
+
+  if (vertexData.attributes.distanceToRoadCenter > roadWidth + 10) {
+    height = 100.5;
   }
 
   return height;
