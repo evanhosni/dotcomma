@@ -7,11 +7,12 @@ import { PauseMenu } from "./PauseMenu";
 import { Player } from "./_/player/Player";
 import { Terrain } from "./_/terrain/Terrain";
 import { City } from "./biomes/city/City";
+import { Dust } from "./biomes/dust/Dust";
 import { Grass } from "./biomes/grass/Grass";
 import "./style.css";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
-export const biomesInGame = [City, Grass];
+export const biomesInGame = [City, Dust, Grass];
 const debug = false;
 
 const Dotcomma = () => {

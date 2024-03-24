@@ -4,4 +4,5 @@ import { getVertexData } from "./getVertexData";
 export const Dust: Biome = {
   name: "dust",
   getVertexData: getVertexData,
+  joinable: true,
 };

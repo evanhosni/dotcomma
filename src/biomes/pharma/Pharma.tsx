@@ -4,4 +4,5 @@ import { getVertexData } from "./getVertexData";
 export const Pharmasea: Biome = {
   name: "pharmasea",
   getVertexData: getVertexData,
+  joinable: true,
 };
