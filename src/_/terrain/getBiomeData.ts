@@ -10,9 +10,11 @@ interface Grid {
   biome: Biome;
 }
 
+const regionGridSize = 2500; //TODO implement regions
+const regionGridCache: Record<string, Grid[]> = {};
+const gridSize = 500;
 const gridCache: Record<string, Grid[]> = {};
-const joinableCache: Record<string, boolean> = {};
-const gridSize = 500; //TODO more like 2500
+const joinableCache: Record<string, any> = {};
 export const roadWidth = 12;
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
@@ -22,7 +24,7 @@ const roadNoise: TerrainNoiseParams = {
   persistence: 1,
   lacunarity: 1,
   exponentiation: 1,
-  height: 100,
+  height: 150, //100 seems safe
   scale: 250,
 };
 
@@ -30,6 +32,32 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
   //TODO name something other than biomedata
   var biomeData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0);
+
+  const currentRegionGrid = [Math.floor(x / regionGridSize), Math.floor(y / regionGridSize)]; //TODO {x,y} rather than [0,1]
+  var regionGrid: Grid[] = [];
+
+  if (regionGridCache[currentRegionGrid.toString()]) {
+    regionGrid = regionGridCache[currentRegionGrid.toString()];
+  } else {
+    for (let ix = currentRegionGrid[0] - 2; ix <= currentRegionGrid[0] + 2; ix++) {
+      for (let iy = currentRegionGrid[1] - 2; iy <= currentRegionGrid[1] + 2; iy++) {
+        let pointX = _math.seed_rand(ix + "X" + iy);
+        let pointY = _math.seed_rand(ix + "Y" + iy);
+        let point = new THREE.Vector3((ix + pointX) * regionGridSize, (iy + pointY) * regionGridSize, 0);
+        let uuid = _math.seed_rand(JSON.stringify(point));
+        let biome = biomes[Math.floor(uuid * biomes.length)];
+        regionGrid.push({ point, biome });
+      }
+    }
+    regionGridCache[currentRegionGrid.toString()] = regionGrid;
+
+    for (const key in regionGridCache) {
+      const cachedGrid = key.split(",").map(Number);
+      if (Math.abs(currentRegionGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentRegionGrid[1] - cachedGrid[1]) > 5) {
+        delete regionGridCache[key];
+      }
+    }
+  }
 
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)]; //TODO {x,y} rather than [0,1]
   var grid: Grid[] = [];
@@ -42,8 +70,9 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
         let pointX = _math.seed_rand(ix + "X" + iy);
         let pointY = _math.seed_rand(ix + "Y" + iy);
         let point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
-        const uuid = _math.seed_rand(JSON.stringify(point));
-        let biome = biomes[Math.floor(uuid * biomes.length)];
+        regionGrid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
+        // let uuid = _math.seed_rand(JSON.stringify(point));
+        let biome = regionGrid[0].biome; //*/ biomes[Math.floor(uuid * biomes.length)];
         grid.push({ point, biome });
       }
     }
@@ -51,7 +80,7 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
 
     for (const key in gridCache) {
       const cachedGrid = key.split(",").map(Number);
-      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
+      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 20 || Math.abs(currentGrid[1] - cachedGrid[1]) > 20) {
         delete gridCache[key];
       }
     }
@@ -96,15 +125,25 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
 
       const mid = new THREE.Vector3((v1.x + v2.x) / 2, (v1.y + v2.y) / 2, 0);
       const label = `${Math.floor(mid.x)},${Math.floor(mid.y)}`;
-      const maxJoinableDist = 4000;
 
       if (joinableCache[label] === undefined) {
         var midClosestPoints = grid.sort((a, b) => a.point.distanceTo(mid) - b.point.distanceTo(mid));
-        joinableCache[label] =
-          midClosestPoints[0].biome.joinable && midClosestPoints[0].biome === midClosestPoints[1].biome;
+        joinableCache[label] = {
+          grid: currentGrid,
+          joinable: midClosestPoints[0].biome.joinable && midClosestPoints[0].biome === midClosestPoints[1].biome,
+        };
+
+        for (const key in joinableCache) {
+          const cachedGrid = joinableCache[key].grid;
+          if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
+            delete joinableCache[key];
+          }
+        }
       }
 
-      if (joinableCache[label] === false) {
+      //TODO somewhere around here, check if other side of wall is a diff (blendable) biome. if so, try one more time for biome blending
+
+      if (!joinableCache[label].joinable) {
         voronoiWalls.push(new THREE.Line3(v1, v2));
       }
     }
@@ -118,7 +157,8 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
   }
   closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
 
-  const distance = currentVertex.distanceTo(closestPoints[0]);
+  const distance = closestPoints[0] ? currentVertex.distanceTo(closestPoints[0]) : 9999; //TODO temp solution. closestPoints[0] doesnt exist for some vertices of joinable biomes
+  // const distance =  currentVertex.distanceTo(closestPoints[0]);
   biomeData.attributes.distanceToRoadCenter = distance;
 
   const blendWidth = biome.blendWidth || defaultBlendWidth;
@@ -126,6 +166,10 @@ export const getBiomeData = (x: number, y: number, biomes: Biome[], preventLoop?
   if (!preventLoop) biomeData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
 
   if (!preventLoop) biomeData.height = getHeight(biomeData);
+
+  // if (distance === 9999) biomeData.height = 999; //TODO temp to check if above temp solution causes any issues
+
+  biomeData.attributes.disterooni = distance;
 
   return biomeData;
 };
@@ -147,4 +191,8 @@ const getHeight = (biomeData: VertexData) => {
     height = biomeData.attributes.biome.getVertexData(biomeData).height * biomeData.attributes.blend;
 
   return height + _noise.terrain(baseNoise, biomeData.x, biomeData.y);
+};
+
+const getGrid = (currentVertex: THREE.Vector3, currentGrid: number[]) => {
+  // TODO - ideally this will work for both grid and regionGrid
 };
