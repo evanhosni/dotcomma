@@ -127,9 +127,10 @@ export const getVertexData = (biomeData: VertexData) => {
   );
 
   vertexData.attributes.debug = {
+    dist: vertexData.attributes.disterooni,
     // dist: Math.floor(vertexData.attributes.distanceToRoadCenter),
-    _x: Math.floor(x),
-    _y: Math.floor(y),
+    // _x: Math.floor(x),
+    // _y: Math.floor(y),
     // north: (currentGrid[1] + 1) * gridSize,
     // east: (currentGrid[0] + 1) * gridSize,
     // south: currentGrid[1] * gridSize,

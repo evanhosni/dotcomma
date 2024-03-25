@@ -24,8 +24,8 @@ export const Player = () => {
     return getBiomeData(x, y, biomesInGame);
   };
 
-  const walkSpeed = 12;
-  const sprintSpeed = debug_sprint ? 120 : 24;
+  const walkSpeed = 102; //usually 12 i think
+  const sprintSpeed = debug_sprint ? 300 : 24;
   const playerHeight = 2;
   const jumpHeight = 12;
   const gravity = -4; //TODO get gravity from context eventually
@@ -125,7 +125,7 @@ export const Player = () => {
 
     var [x, y, z] = positionRef.current;
     camera.position.lerp(
-      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint ? 30 : 0)), z),
+      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint ? 1000 : 0)), z),
       0.1
     );
 
