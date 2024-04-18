@@ -3,16 +3,16 @@ import seedrandom from "seedrandom";
 const masterSeed: string = "mynamebierce";
 
 export namespace _math {
-  export const rand_range = (a: number, b: number): number => {
+  export const randRange = (a: number, b: number): number => {
     return Math.random() * (b - a) + a;
   };
 
-  export const rand_normalish = (): number => {
+  export const randNormalish = (): number => {
     const r = Math.random() + Math.random() + Math.random() + Math.random();
     return (r / 4.0) * 2.0 - 1;
   };
 
-  export const rand_int = (a: number, b: number): number => {
+  export const randInt = (a: number, b: number): number => {
     return Math.round(Math.random() * (b - a) + a);
   };
 
@@ -38,7 +38,7 @@ export namespace _math {
     return Math.min(Math.max(x, 0.0), 1.0);
   };
 
-  export const seed_rand = (seed: any): number => {
+  export const seedRand = (seed: any): number => {
     return seedrandom(seed + masterSeed)();
   };
 }

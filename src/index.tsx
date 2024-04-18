@@ -4,15 +4,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { PauseMenu } from "./PauseMenu";
-import { Player } from "./_/player/Player";
-import { Terrain } from "./_/terrain/Terrain";
-import { City } from "./biomes/city/City";
-import { Dust } from "./biomes/dust/Dust";
-import { Grass } from "./biomes/grass/Grass";
+import { GlitchCity } from "./biomes/glitch-city/GlitchCity";
+import { Player } from "./player/Player";
 import "./style.css";
+import { Terrain } from "./terrain/Terrain";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
-export const biomesInGame = [City, Dust, Grass];
 const debug = false;
 
 const Dotcomma = () => {
@@ -28,7 +25,7 @@ const Dotcomma = () => {
         <Physics>
           {debug ? (
             <Debug>
-              <Terrain biomes={biomesInGame} />
+              <Terrain dimension={GlitchCity} />
               <Routes>
                 <Route index />
                 <Route path="/dust" />
@@ -37,7 +34,7 @@ const Dotcomma = () => {
             </Debug>
           ) : (
             <>
-              <Terrain biomes={biomesInGame} />
+              <Terrain dimension={GlitchCity} />
               <Routes>
                 <Route index />
                 <Route path="/dust" />
