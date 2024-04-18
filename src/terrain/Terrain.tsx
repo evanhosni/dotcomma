@@ -2,9 +2,7 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
-import { Biome } from "../../types/Biome";
-import { getBiomeData } from "./getBiomeData";
-import { getMaterial } from "./getMaterial";
+import { Dimension } from "../types/Biome";
 
 const CHUNK_SIZE = 160;
 const CHUNK_RESOLUTION = 25;
@@ -33,7 +31,7 @@ const terrain: Terrain = {
   new_chunks: [],
 };
 
-export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
+export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
@@ -54,7 +52,7 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
   }, [remainingChunks]);
 
   useEffect(() => {
-    getMaterial(biomes).then(setTerrainMaterial);
+    dimension.getMaterial(dimension).then(setTerrainMaterial);
   }, []);
 
   useFrame(() => {
@@ -156,7 +154,7 @@ export const Terrain = ({ biomes }: { biomes: Biome[] }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = getBiomeData(v.x + offset.x, -v.y + offset.y, biomes);
+      const vertexData = dimension.getRegionData(v.x + offset.x, -v.y + offset.y, dimension.regions);
 
       pos.setXYZ(i, v.x, v.y, vertexData.height);
 

@@ -3,6 +3,8 @@ import { getVertexData } from "./getVertexData";
 
 export const Grass: Biome = {
   name: "grass",
+  id: 3,
   getVertexData: getVertexData,
-  joinable: false,
+  joinable: true,
+  blendable: true,
 };

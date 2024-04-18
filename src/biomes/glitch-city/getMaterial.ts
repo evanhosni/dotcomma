@@ -1,9 +1,16 @@
 import * as THREE from "three";
-import { Biome } from "../../types/Biome";
-import { loadTextures } from "./materialUtils";
+import { _material } from "../../_/_material";
+import { Biome, Dimension } from "../../types/Biome";
 
-export const getMaterial = async (biomes: Biome[]) => {
-  const [roadTexture, sidewalkTexture, grassTexture, sandTexture, bluemudTexture] = await loadTextures([
+export const getMaterial = async (dimension: Dimension) => {
+  const biomes = Array.from(
+    dimension.regions.reduce((acc, val) => {
+      val.biomes.forEach((item) => acc.add(item));
+      return acc;
+    }, new Set<Biome>())
+  );
+
+  const [roadTexture, sidewalkTexture, grassTexture, sandTexture, bluemudTexture] = await _material.loadTextures([
     "road.jpg",
     "road.png",
     "moss.png",
@@ -71,8 +78,8 @@ export const getMaterial = async (biomes: Biome[]) => {
     
     void main() {
       ${biomes
-        .map((biome, index) => {
-          return `if (vBiomeId == ${index}) {
+        .map((biome) => {
+          return `if (vBiomeId == ${biome.id}) {
           ${biome.name}_frag();
         }`;
         })

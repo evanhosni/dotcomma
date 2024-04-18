@@ -1,8 +1,8 @@
 import * as THREE from "three";
-import { biomesInGame } from "../..";
-import { _math } from "../../_/math";
-import { getBiomeData } from "../../_/terrain/getBiomeData";
+import { _math } from "../../_/_math";
 import { VertexData, vertexData_default } from "../../types/VertexData";
+import { GlitchCity } from "../glitch-city/GlitchCity";
+import { getRegionData } from "../glitch-city/getRegionData";
 import { blocks } from "./blocks/[blocks]";
 
 interface Grid {
@@ -43,9 +43,9 @@ export const getVertexData = (biomeData: VertexData) => {
         //TODO check if these can be downsized to 1
         const point = new THREE.Vector3(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize, 0);
         const isEdge =
-          getBiomeData(point.x, point.y, biomesInGame, true).attributes.distanceToRoadCenter <
+          getRegionData(point.x, point.y, GlitchCity.regions, true).attributes.distanceToRoadCenter <
           Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO needs work. this runs the functionagain. maybe pass in edges array to biomeData so you can recalculate distance here. also, blocks get pretty close to biome border road. //TODO plus or minus the roadNoise because currently distanceToRoadCenter is factoring straight roads
-        const block = isEdge ? edge : blocks[Math.floor(_math.seed_rand(JSON.stringify(point)) * blocks.length)];
+        const block = isEdge ? edge : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];
         const current = ix === currentGrid[0] && iy === currentGrid[1];
         const north = ix === currentGrid[0] && iy === currentGrid[1] + 1;
         const east = ix === currentGrid[0] + 1 && iy === currentGrid[1];

@@ -1,5 +1,5 @@
 import Noise from "noise-ts";
-import { _math } from "../math";
+import { _math } from "./_math";
 
 export interface TerrainNoiseParams {
   type: "simplex" | "perlin";
@@ -12,7 +12,7 @@ export interface TerrainNoiseParams {
 }
 
 export namespace _noise {
-  var noise = new Noise(_math.seed_rand("bierce"));
+  var noise = new Noise(_math.seedRand("bierce"));
 
   export const simplex = (x: number, y: number) => {
     return noise.simplex2(x, y);

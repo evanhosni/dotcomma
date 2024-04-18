@@ -1,4 +1,4 @@
-import { TerrainNoiseParams, _noise } from "../../_/noise";
+import { TerrainNoiseParams, _noise } from "../../_/_noise";
 import { VertexData, vertexData_default } from "../../types/VertexData";
 
 const noise: TerrainNoiseParams = {

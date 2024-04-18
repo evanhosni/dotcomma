@@ -1,6 +1,6 @@
 import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
-import { Player } from "../../_/player/Player";
+import { Player } from "../../player/Player";
 
 export const NotFound = () => {
   const getHeight = (x: number, y: number) => {
