@@ -53,3 +53,6 @@ root.render(
     <Dotcomma />
   </React.StrictMode>
 );
+
+//TODO alternative to gh-pages that provides server capabilities.
+// You will then be able to uninstall gh-pages npm package and remove predeploy and deploy scripts as well as homepage value in package.json.
