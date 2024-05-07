@@ -1,6 +1,7 @@
 {
   "name": "dotcomma",
   "version": "0.1.0",
+  "homepage": "https://dotcomma.io",
   "private": true,
   "dependencies": {
     "@react-three/cannon": "^6.6.0",
