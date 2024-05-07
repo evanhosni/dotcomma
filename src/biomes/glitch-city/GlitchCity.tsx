@@ -2,7 +2,6 @@ import { Dimension, Region } from "../../types/Biome";
 import { City } from "../city/City";
 import { Dust } from "../dust/Dust";
 import { Grass } from "../grass/Grass";
-import { Pharmasea } from "../pharma/Pharma";
 import { getMaterial } from "./getMaterial";
 import { getRegionData } from "./getRegionData";
 
@@ -11,9 +10,9 @@ export const CityRegion: Region = {
   biomes: [City, Grass],
 };
 
-export const PharmaseaRegion: Region = {
+export const GrassRegion: Region = {
   name: "grass",
-  biomes: [Pharmasea],
+  biomes: [Grass],
 };
 
 export const DesertRegion: Region = {
@@ -23,7 +22,7 @@ export const DesertRegion: Region = {
 
 export const GlitchCity: Dimension = {
   name: "glitch-city",
-  regions: [CityRegion, PharmaseaRegion, DesertRegion],
+  regions: [CityRegion, GrassRegion, DesertRegion],
   getRegionData: getRegionData,
   getMaterial: getMaterial,
 };
