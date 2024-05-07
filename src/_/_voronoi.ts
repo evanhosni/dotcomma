@@ -137,7 +137,7 @@ export namespace _voronoi {
       const [cachedX, cachedY] = key.split(",").map(Number);
       if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
         delete cache[key];
-        console.log("cache - ", Object.keys(caches).length, caches);
+        // console.log("cache - ", Object.keys(caches).length, caches);
         // console.log("123 - fromRegions - grid", Object.keys(caches.bob).length, caches.bob);
         // console.log("123 - fromRegions - regionGrid", Object.keys(caches.steve).length, caches.steve);
         // console.log("123 - fromRegions - walls", Object.keys(caches.walls).length, caches.walls);
