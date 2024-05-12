@@ -23,7 +23,7 @@ export const getRegionData = (x: number, y: number, regions: Region[], preventLo
   var regionData: VertexData = { ...vertexData_default, x, y }; //TODO name something other than regionData, maybe just vertexData
   var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0);
 
-  const voronoiData = _voronoi.fromRegions({
+  const voronoiData = _voronoi.create({
     seed: "123",
     currentVertex,
     gridSize,
