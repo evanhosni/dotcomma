@@ -1,9 +1,8 @@
-import { Stats } from "@react-three/drei";
+import cn from "./Pause.module.css";
 
 export const PauseMenu = () => {
   return (
-    <div id="PauseMenu">
-      <Stats />
+    <div className={cn.container}>
       {/* <NavLink to="/">city</NavLink>
       <NavLink to="dust">dust</NavLink>
       <NavLink to="pharma">pharma</NavLink> */}

@@ -1,6 +1,7 @@
 import Delaunator from "delaunator";
 import * as THREE from "three";
-import { Biome, Region } from "../types/Biome";
+import { Biome } from "../types/Biome";
+import { Region } from "../types/Region";
 import { _math } from "./_math";
 
 export interface Grid {

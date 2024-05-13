@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { _material } from "../../_/_material";
-import { Biome, Dimension } from "../../types/Biome";
+import { Biome } from "../../types/Biome";
+import { Dimension } from "../../types/Dimension";
 
 export const getMaterial = async (dimension: Dimension) => {
   const biomes = Array.from(

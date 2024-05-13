@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { TerrainNoiseParams, _noise } from "../../_/_noise";
 import { _voronoi } from "../../_/_voronoi";
-import { Region } from "../../types/Biome";
+import { Region } from "../../types/Region";
 import { VertexData, vertexData_default } from "../../types/VertexData";
 
 const regionGridSize = 2500; //TODO implement regions
@@ -19,8 +19,8 @@ const roadNoise: TerrainNoiseParams = {
   scale: 250,
 };
 
-export const getRegionData = (x: number, y: number, regions: Region[], preventLoop?: boolean) => {
-  var regionData: VertexData = { ...vertexData_default, x, y }; //TODO name something other than regionData, maybe just vertexData
+export const getVertexData = (x: number, y: number, regions: Region[]) => {
+  var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector3(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0), 0);
 
   const voronoiData = _voronoi.create({
@@ -31,17 +31,17 @@ export const getRegionData = (x: number, y: number, regions: Region[], preventLo
     regions,
   });
 
-  const { biome, distance } = voronoiData;
-
+  const { biome, distance, walls } = voronoiData;
   const blendWidth = biome.blendWidth || defaultBlendWidth;
 
-  if (!preventLoop) regionData.attributes.biome = biome;
-  if (!preventLoop) regionData.attributes.biomeId = biome.id;
-  regionData.attributes.distanceToRoadCenter = distance;
-  if (!preventLoop) regionData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
-  if (!preventLoop) regionData.height = getHeight(regionData);
+  vertexData.attributes.biome = biome;
+  vertexData.attributes.biomeId = biome.id;
+  vertexData.attributes.walls = walls;
+  vertexData.attributes.distanceToRoadCenter = distance;
+  vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
+  vertexData.height = getHeight(vertexData);
 
-  return regionData;
+  return vertexData;
 };
 
 const baseNoise: TerrainNoiseParams = {
@@ -54,11 +54,11 @@ const baseNoise: TerrainNoiseParams = {
   scale: 5000,
 };
 
-const getHeight = (regionData: VertexData) => {
+const getHeight = (vertexData: VertexData) => {
   let height = 0;
 
-  if (regionData.attributes.distanceToRoadCenter > roadWidth)
-    height = regionData.attributes.biome.getVertexData(regionData).height * regionData.attributes.blend;
+  if (vertexData.attributes.distanceToRoadCenter > roadWidth)
+    height = vertexData.attributes.biome.getVertexData(vertexData).height * vertexData.attributes.blend;
 
-  return height + _noise.terrain(baseNoise, regionData.x, regionData.y);
+  return height + _noise.terrain(baseNoise, vertexData.x, vertexData.y);
 };

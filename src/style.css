@@ -1,15 +1,12 @@
-body {
+@import url("https://fonts.googleapis.com/css2?family=Kode+Mono:wght@400..700&display=swap");
+
+* {
   margin: 0;
-  font-family: "Courier New", Courier, monospace;
+  font-family: "Kode Mono", "Courier New", Courier, monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 #dotcomma {
   height: 100vh;
-}
-
-#PauseMenu {
-  position: absolute;
-  z-index: 2;
 }

@@ -5,6 +5,9 @@ export const Grass: Biome = {
   name: "grass",
   id: 3,
   getVertexData: getVertexData,
+  getSpawners: (dimension) => {
+    return [];
+  },
   joinable: true,
   blendable: true,
 };

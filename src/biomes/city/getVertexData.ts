@@ -1,8 +1,7 @@
 import * as THREE from "three";
 import { _math } from "../../_/_math";
-import { VertexData, vertexData_default } from "../../types/VertexData";
-import { GlitchCity } from "../glitch-city/GlitchCity";
-import { getRegionData } from "../glitch-city/getRegionData";
+import { _voronoi } from "../../_/_voronoi";
+import { VertexData } from "../../types/VertexData";
 import { blocks } from "./blocks/[blocks]";
 
 interface Grid {
@@ -26,9 +25,8 @@ const roadWidth = 10;
 
 const edge = { name: "edge", joinable: true };
 
-export const getVertexData = (biomeData: VertexData) => {
-  const { x, y } = biomeData;
-  var vertexData: VertexData = { ...vertexData_default, x, y };
+export const getVertexData = (vertexData: VertexData) => {
+  const { x, y } = vertexData;
   var currentVertex = new THREE.Vector3(x, y, 0);
 
   const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)]; //TODO {x,y} rather than [0,1]?
@@ -43,8 +41,8 @@ export const getVertexData = (biomeData: VertexData) => {
         //TODO check if these can be downsized to 1
         const point = new THREE.Vector3(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize, 0);
         const isEdge =
-          getRegionData(point.x, point.y, GlitchCity.regions, true).attributes.distanceToRoadCenter <
-          Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO needs work. this runs the functionagain. maybe pass in edges array to biomeData so you can recalculate distance here. also, blocks get pretty close to biome border road. //TODO plus or minus the roadNoise because currently distanceToRoadCenter is factoring straight roads
+          _voronoi.getDistanceToWall({ currentVertex: point, walls: vertexData.attributes.walls }) <
+          Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO plus or minus the roadNoise because currently distanceToRoadCenter is factoring straight roads
         const block = isEdge ? edge : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];
         const current = ix === currentGrid[0] && iy === currentGrid[1];
         const north = ix === currentGrid[0] && iy === currentGrid[1] + 1;
@@ -128,28 +126,6 @@ export const getVertexData = (biomeData: VertexData) => {
 
   vertexData.attributes.debug = {
     dist: vertexData.attributes.disterooni,
-    // dist: Math.floor(vertexData.attributes.distanceToRoadCenter),
-    // _x: Math.floor(x),
-    // _y: Math.floor(y),
-    // north: (currentGrid[1] + 1) * gridSize,
-    // east: (currentGrid[0] + 1) * gridSize,
-    // south: currentGrid[1] * gridSize,
-    // west: currentGrid[0] * gridSize,
-    // z: {
-    //   dist: vertexData.attributes.distanceToRoadCenter,
-    // x: current.point.x,
-    // y: current.point.y,
-    // blockname: current.block.name,
-    // current,
-    // north,
-    // east,
-    // south,
-    // west,
-    // northEast,
-    // southEast,
-    // southWest,
-    // northWest,
-    // },
   };
 
   vertexData.height = getHeight(vertexData);
