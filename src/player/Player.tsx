@@ -3,8 +3,8 @@ import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { GlitchCity } from "../biomes/glitch-city/GlitchCity";
-import { getRegionData } from "../biomes/glitch-city/getRegionData";
+import { GlitchCityDimension } from "../biomes/glitch-city/GlitchCity";
+import { getVertexData } from "../biomes/glitch-city/getVertexData";
 import { useInput } from "./useInput";
 
 const debug_sprint = true; //TODO this is temp for testing
@@ -19,9 +19,9 @@ export const Player = () => {
   const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
-    if (debug_console_log) console.log(getRegionData(x, y, GlitchCity.regions).attributes.debug);
+    if (debug_console_log) console.log(getVertexData(x, y, GlitchCityDimension.regions).attributes.debug);
 
-    return getRegionData(x, y, GlitchCity.regions);
+    return getVertexData(x, y, GlitchCityDimension.regions);
   };
 
   const walkSpeed = 102; //usually 12 i think

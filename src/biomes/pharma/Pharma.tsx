@@ -5,6 +5,9 @@ export const Pharmasea: Biome = {
   name: "pharmasea",
   id: 4,
   getVertexData: getVertexData,
+  getSpawners: (dimension) => {
+    return [];
+  },
   joinable: true,
   blendable: true,
 };
