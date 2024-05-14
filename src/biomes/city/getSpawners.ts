@@ -6,7 +6,6 @@ import { Apartment } from "./blocks/apartment/Apartment";
 
 export const getSpawners = (dimension: Dimension) => {
   const spawners: Spawner[] = [];
-
   const points: THREE.Vector3[] = [];
 
   points.push(

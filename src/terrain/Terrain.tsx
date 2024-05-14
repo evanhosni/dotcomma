@@ -2,6 +2,7 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
+import { Apartment } from "../biomes/city/blocks/apartment/Apartment";
 import { Dimension } from "../types/Dimension";
 
 const CHUNK_SIZE = 160;
@@ -35,7 +36,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
-  const [colliders, setColliders] = useState<any[]>([]);
+  const [colliders, setColliders] = useState<any[]>([]); //TODO typing
+  const [spawners, setSpawners] = useState<any[]>([]); //TODO typing
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
 
   scene.add(terrain.group);
@@ -78,7 +80,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     if (!terrain.queued_chunks.length) {
       for (const chunk of terrain.new_chunks) {
-        chunk.plane.visible = true;
+        setTimeout(() => {
+          chunk.plane.visible = true;
+        }, 100);
+        //TODO potential solution to below "problemA". maybe make the material start fully transparent and here we can trigger it to fade in gradually? or hacky temp solution is to just use the setTimeout, like i am above
       }
 
       terrain.new_chunks = [];
@@ -130,17 +135,17 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
     const size = new THREE.Vector3(width, 0, width);
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(size.x, size.z, CHUNK_RESOLUTION, CHUNK_RESOLUTION), material);
+    plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
-    terrain.group.add(plane);
     const chunk = {
       offset: new THREE.Vector3(offset.x, offset.y, 0),
       plane: plane,
       rebuildIterator: null,
     };
 
-    chunk.plane.visible = false;
+    terrain.group.add(plane);
     terrain.queued_chunks.push(chunk);
 
     return chunk;
@@ -185,6 +190,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     chunk.plane.position.set(offset.x, 0, offset.y);
 
     GenerateColliders(chunk, offset);
+    GenerateSpawners(chunk, offset);
 
     yield;
   };
@@ -198,9 +204,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
     delete terrain.chunks[chunkKey];
     setColliders((prev) => prev.filter((collider) => collider.key !== chunkKey));
+    setSpawners((prev) => prev.filter((spawner) => spawner.key !== chunkKey));
   };
 
   const GenerateColliders = (chunk: any, offset: THREE.Vector2) => {
+    //TODO chunk typing
     const linearArray = chunk.plane.geometry.attributes.position.array;
     const gridSize = Math.sqrt(linearArray.length / 3);
     const heightfield = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
@@ -238,10 +246,29 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       ]);
   };
 
+  const GenerateSpawners = (chunk: any, offset: THREE.Vector2) => {
+    //TODO chunk typing
+    // const { chunkKey } = chunk;
+
+    // if (!spawners.some((spawner) => spawner.key === chunkKey)) { //TODO not working. find a way to prevent 'Encountered two children with the same key' error
+    setSpawners((prev) => [
+      ...prev,
+      {
+        key: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
+        component: Apartment,
+        coordinates: [offset.x, 0, offset.y],
+      },
+    ]);
+    // }
+  };
+
   return (
     <>
       {colliders.map((collider: TerrainColliderProps) => {
         return <TerrainCollider {...collider} />;
+      })}
+      {spawners.map((spawner: TerrainSpawnerProps) => {
+        return <TerrainSpawner {...spawner} />;
       })}
     </>
   );
@@ -262,4 +289,17 @@ export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, 
   }));
 
   return <mesh ref={ref as any} />;
+};
+
+export interface TerrainSpawnerProps {
+  key: string;
+  component: any; //TODO get proper type
+  coordinates: number[]; //TODO Vector3 instead?
+}
+
+export const TerrainSpawner: React.FC<TerrainSpawnerProps> = ({
+  component: Component,
+  coordinates,
+}: TerrainSpawnerProps) => {
+  return <Component coordinates={coordinates} />;
 };

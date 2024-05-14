@@ -2,7 +2,6 @@ import { Physics } from "@react-three/cannon";
 import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Player } from "../../player/Player";
-import { Spawners } from "../../spawners/Spawners";
 import { Terrain } from "../../terrain/Terrain";
 import { Dimension } from "../../types/Dimension";
 import { Region } from "../../types/Region";
@@ -47,7 +46,6 @@ export const GlitchCity = () => {
       </Physics>
       <Physics>
         <Terrain dimension={GlitchCityDimension} />
-        <Spawners dimension={GlitchCityDimension} />
       </Physics>
     </Canvas>
   );
