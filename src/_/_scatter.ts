@@ -30,8 +30,8 @@ export namespace _scatter {
     let grid: ScatterGrid[] = cache[gridKey];
     if (!grid) {
       grid = [];
-      for (let ix = x - 10; ix <= x + 10; ix++) {
-        for (let iy = y - 10; iy <= y + 10; iy++) {
+      for (let ix = x - 5; ix <= x + 5; ix++) {
+        for (let iy = y - 5; iy <= y + 5; iy++) {
           const pointX = gridSize * 0.5;
           const pointY = gridSize * 0.5;
           const point = new THREE.Vector3(ix * gridSize + pointX, 0, iy * gridSize + pointY);
