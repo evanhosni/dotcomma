@@ -1,5 +1,5 @@
+import { ScatterGrid } from "../_/_scatter";
 import { Region } from "./Region";
-import { Spawner } from "./Spawner";
 import { VertexData } from "./VertexData";
 
 export interface Dimension {
@@ -7,5 +7,5 @@ export interface Dimension {
   regions: Region[];
   getVertexData: (x: number, y: number, regions: Region[]) => VertexData; //TODO dimension instead of regions?
   getMaterial: (dimension: Dimension) => Promise<THREE.ShaderMaterial>;
-  getSpawners: () => Spawner[]; //TODO maybe this should work more like getMaterial. It should take in a dimension parameter and be called from a controller script, much like Terrain.tsx
+  getSpawners: (dimension: Dimension, x: number, y: number) => ScatterGrid[]; //TODO maybe this should work more like getMaterial. It should take in a dimension parameter and be called from a controller script, much like Terrain.tsx
 }

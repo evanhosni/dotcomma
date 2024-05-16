@@ -2,6 +2,7 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
+import { Apartment } from "../biomes/city/blocks/apartment/Apartment";
 import { Dimension } from "../types/Dimension";
 
 const CHUNK_SIZE = 160;
@@ -29,7 +30,6 @@ const terrain: Terrain = {
   active_chunk: null,
   queued_chunks: [],
   new_chunks: [],
-  //TODO maybe put colliders here instead of useState?
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -37,6 +37,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [colliders, setColliders] = useState<any[]>([]); //TODO typing
+  const [spawners, setSpawners] = useState<any[]>([]); //TODO typing
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
 
   scene.add(terrain.group);
@@ -189,6 +190,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     chunk.plane.position.set(offset.x, 0, offset.y);
 
     GenerateColliders(chunk, offset);
+    GenerateSpawners(chunk, offset);
 
     yield;
   };
@@ -202,6 +204,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
     delete terrain.chunks[chunkKey];
     setColliders((prev) => prev.filter((collider) => collider.key !== chunkKey));
+    setSpawners((prev) => prev.filter((spawner) => spawner.key !== chunkKey));
   };
 
   const GenerateColliders = (chunk: any, offset: THREE.Vector2) => {
@@ -243,10 +246,29 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       ]);
   };
 
+  const GenerateSpawners = (chunk: any, offset: THREE.Vector2) => {
+    //TODO chunk typing
+    // const { chunkKey } = chunk;
+
+    // if (!spawners.some((spawner) => spawner.key === chunkKey)) { //TODO not working. find a way to prevent 'Encountered two children with the same key' error
+    setSpawners((prev) => [
+      ...prev,
+      {
+        key: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
+        component: Apartment,
+        coordinates: [offset.x, 0, offset.y],
+      },
+    ]);
+    // }
+  };
+
   return (
     <>
       {colliders.map((collider: TerrainColliderProps) => {
         return <TerrainCollider {...collider} />;
+      })}
+      {spawners.map((spawner: TerrainSpawnerProps) => {
+        return <TerrainSpawner {...spawner} />;
       })}
     </>
   );
@@ -267,4 +289,17 @@ export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, 
   }));
 
   return <mesh ref={ref as any} />;
+};
+
+export interface TerrainSpawnerProps {
+  key: string;
+  component: any; //TODO get proper type
+  coordinates: number[]; //TODO Vector3 instead?
+}
+
+export const TerrainSpawner: React.FC<TerrainSpawnerProps> = ({
+  component: Component,
+  coordinates,
+}: TerrainSpawnerProps) => {
+  return <Component coordinates={coordinates} />;
 };

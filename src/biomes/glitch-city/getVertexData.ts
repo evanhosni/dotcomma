@@ -4,7 +4,7 @@ import { _voronoi } from "../../_/_voronoi";
 import { Region } from "../../types/Region";
 import { VertexData, vertexData_default } from "../../types/VertexData";
 
-const regionGridSize = 2500; //TODO implement regions
+const regionGridSize = 2500; //TODO maybe make these dimension props?
 const gridSize = 500;
 export const roadWidth = 12;
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
