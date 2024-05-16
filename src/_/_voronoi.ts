@@ -4,7 +4,7 @@ import { Biome } from "../types/Biome";
 import { Region } from "../types/Region";
 import { _math } from "./_math";
 
-export interface Grid {
+export interface VoronoiGrid {
   point: THREE.Vector3;
   element: any;
 }
@@ -20,7 +20,7 @@ interface VoronoiGetGridParams {
 interface VoronoiGetWallsParams {
   seed: string;
   currentVertex: THREE.Vector3;
-  grid: Grid[]; //TODO must be already sorted
+  grid: VoronoiGrid[]; //TODO must be already sorted
   gridSize: number;
 }
 
@@ -54,7 +54,7 @@ const caches: any = {};
 export namespace _voronoi {
   export const create = (params: VoronoiCreateParams) => {
     const { seed, currentVertex, regionGridSize, regions, gridSize, biomes } = params;
-    let grid: Grid[] = [];
+    let grid: VoronoiGrid[] = [];
 
     if (regionGridSize && regions?.length) {
       const regionGrid = _voronoi.getGrid({
@@ -74,7 +74,7 @@ export namespace _voronoi {
         currentVertex,
         cellArray: regionGrid,
         gridSize: gridSize,
-        gridFunction: (point: THREE.Vector3, grid: Grid[]): Biome => {
+        gridFunction: (point: THREE.Vector3, grid: VoronoiGrid[]): Biome => {
           grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
           const region: Region = grid[0].element;
           let uuid = _math.seedRand(JSON.stringify(point));
@@ -106,7 +106,13 @@ export namespace _voronoi {
     return { region, regionSite, biome, biomeSite, walls, distance };
   };
 
-  export const getGrid = ({ seed, currentVertex, cellArray, gridSize, gridFunction }: VoronoiGetGridParams): Grid[] => {
+  export const getGrid = ({
+    seed,
+    currentVertex,
+    cellArray,
+    gridSize,
+    gridFunction,
+  }: VoronoiGetGridParams): VoronoiGrid[] => {
     const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
     const [x, y] = currentGrid;
 
@@ -114,7 +120,7 @@ export namespace _voronoi {
     const cache = caches[seed];
 
     const gridKey = `${x},${y}`;
-    let grid: Grid[] = cache[gridKey];
+    let grid: VoronoiGrid[] = cache[gridKey];
     if (!grid) {
       grid = [];
       for (let ix = x - 2; ix <= x + 2; ix++) {
@@ -133,32 +139,28 @@ export namespace _voronoi {
       const [cachedX, cachedY] = key.split(",").map(Number);
       if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
         delete cache[key];
-        // console.log("cache - ", Object.keys(caches).length, caches);
-        // console.log("123 - fromRegions - grid", Object.keys(caches.bob).length, caches.bob);
-        // console.log("123 - fromRegions - regionGrid", Object.keys(caches.steve).length, caches.steve);
-        // console.log("123 - fromRegions - walls", Object.keys(caches.walls).length, caches.walls);
       }
     }
 
     return grid;
   };
 
-  export const getCurrentBiome = (point: THREE.Vector3, grid: Grid[]): Biome => {
+  export const getCurrentBiome = (point: THREE.Vector3, grid: VoronoiGrid[]): Biome => {
     grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return grid[0].element;
   };
 
-  export const getCurrentBiomeSite = (point: THREE.Vector3, grid: Grid[]): THREE.Vector3 => {
+  export const getCurrentBiomeSite = (point: THREE.Vector3, grid: VoronoiGrid[]): THREE.Vector3 => {
     grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return grid[0].point;
   };
 
-  export const getCurrentRegion = (point: THREE.Vector3, regionGrid: Grid[]): Region => {
+  export const getCurrentRegion = (point: THREE.Vector3, regionGrid: VoronoiGrid[]): Region => {
     regionGrid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return regionGrid[0].element;
   };
 
-  export const getCurrentRegionSite = (point: THREE.Vector3, regionGrid: Grid[]): THREE.Vector3 => {
+  export const getCurrentRegionSite = (point: THREE.Vector3, regionGrid: VoronoiGrid[]): THREE.Vector3 => {
     regionGrid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return regionGrid[0].point;
   };
