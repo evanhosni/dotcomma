@@ -1,10 +1,9 @@
-import { ScatterGrid } from "../../_/_scatter";
 import { Biome } from "../../types/Biome";
 import { Dimension } from "../../types/Dimension";
 import { Region } from "../../types/Region";
 
 export const getSpawners = (dimension: Dimension, x: number, y: number) => {
-  const spawners: ScatterGrid[] = [];
+  const points: THREE.Vector3[] = [];
 
   const biomes: Biome[] = Array.from(
     new Set(
@@ -16,9 +15,9 @@ export const getSpawners = (dimension: Dimension, x: number, y: number) => {
 
   biomes.forEach((biome) => {
     // if (biome.getSpawners(dimension)) {
-    spawners.push(...biome.getSpawners(dimension, x, y));
+    points.push(...biome.getSpawners(dimension, x, y));
     // }
   });
 
-  return spawners;
+  return points;
 };

@@ -11,22 +11,23 @@ interface Spawners {
 export const Spawners = ({ dimension }: { dimension: Dimension }) => {
   const { camera } = useThree();
   const [spawners, setSpawners] = useState<Spawners>({ group: new Map() });
+  const frameCountRef = React.useRef(0);
 
   const UpdateSpawners = useCallback(() => {
-    const spawners1 = dimension.getSpawners(dimension, camera.position.x, camera.position.z);
-    const currentKeys = new Set(spawners1.map((spawner) => JSON.stringify(spawner.point)));
+    const points = dimension.getSpawners(dimension, camera.position.x, camera.position.z);
+    const currentKeys = new Set(points.map((point) => JSON.stringify(point)));
 
     setSpawners((prevSpawners) => {
       const newGroup = new Map(prevSpawners.group);
 
       // Add new spawners
-      spawners1.forEach((spawner) => {
-        const key = JSON.stringify(spawner.point);
+      points.forEach((point) => {
+        const key = JSON.stringify(point);
         if (!newGroup.has(key)) {
           newGroup.set(key, {
             key,
             component: Apartment,
-            coordinates: [spawner.point.x, 0, spawner.point.z],
+            coordinates: [point.x, 0, point.z],
           });
         }
       });
@@ -43,7 +44,12 @@ export const Spawners = ({ dimension }: { dimension: Dimension }) => {
   }, [dimension, camera.position.x, camera.position.z]);
 
   useFrame(() => {
-    UpdateSpawners();
+    frameCountRef.current += 1;
+    if (frameCountRef.current >= 50) {
+      //TODO this is for efficiency. might be better ways to do this
+      UpdateSpawners();
+      frameCountRef.current = 0;
+    }
   });
 
   const spawnerComponents = useMemo(() => {
