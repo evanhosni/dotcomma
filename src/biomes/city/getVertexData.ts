@@ -9,107 +9,87 @@ interface Grid {
   block: any; //TODO add block type
   isEdge: boolean;
   current: boolean;
-  north: boolean;
-  east: boolean;
-  south: boolean;
-  west: boolean;
-  northEast: boolean;
-  southEast: boolean;
-  southWest: boolean;
-  northWest: boolean;
+  neighbors: { [key: string]: boolean };
 }
 
 const gridCache: Record<string, Grid[]> = {};
-const gridSize = 100; //TODO note with gridSize 100 and roadWidth 10, blocks are 80x80 and buildings should be like...50x50
-const roadWidth = 10;
+const gridSize = 100; //TODO note with gridSize 100 and ROAD_WIDTH 10, blocks are 80x80 and buildings should be like...50x50
+export const ROAD_WIDTH = 10;
 
 const edge = { name: "edge", joinable: true };
 
+const getGridKey = (x: number, y: number) => `${x},${y}`;
+
 export const getVertexData = (vertexData: VertexData) => {
   const { x, y } = vertexData;
-  var currentVertex = new THREE.Vector3(x, y, 0);
+  const currentVertex = new THREE.Vector3(x, y, 0);
 
-  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)]; //TODO {x,y} rather than [0,1]?
-  var grid: Grid[] = [];
+  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
+  const gridKey = getGridKey(currentGrid[0], currentGrid[1]);
+  let grid: Grid[] = gridCache[gridKey] || [];
 
-  if (gridCache[currentGrid.toString()]) {
-    grid = gridCache[currentGrid.toString()];
-  } else {
+  if (grid.length === 0) {
     for (let ix = currentGrid[0] - 2; ix <= currentGrid[0] + 2; ix++) {
-      //TODO check if these can be downsized to 1
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
-        //TODO check if these can be downsized to 1
         const point = new THREE.Vector3(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize, 0);
         const isEdge =
           _voronoi.getDistanceToWall({ currentVertex: point, walls: vertexData.attributes.walls }) <
-          Math.sqrt(gridSize * 0.5 * (gridSize * 0.5) + gridSize * 0.5 * (gridSize * 0.5)); //TODO plus or minus the roadNoise because currently distanceToRoadCenter is factoring straight roads
+          Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
         const block = isEdge ? edge : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];
-        const current = ix === currentGrid[0] && iy === currentGrid[1];
-        const north = ix === currentGrid[0] && iy === currentGrid[1] + 1;
-        const east = ix === currentGrid[0] + 1 && iy === currentGrid[1];
-        const south = ix === currentGrid[0] && iy === currentGrid[1] - 1;
-        const west = ix === currentGrid[0] - 1 && iy === currentGrid[1];
-        const northEast = ix === currentGrid[0] + 1 && iy === currentGrid[1] + 1;
-        const southEast = ix === currentGrid[0] + 1 && iy === currentGrid[1] - 1;
-        const southWest = ix === currentGrid[0] - 1 && iy === currentGrid[1] - 1;
-        const northWest = ix === currentGrid[0] - 1 && iy === currentGrid[1] + 1;
+
+        const neighbors = {
+          north: ix === currentGrid[0] && iy === currentGrid[1] + 1,
+          east: ix === currentGrid[0] + 1 && iy === currentGrid[1],
+          south: ix === currentGrid[0] && iy === currentGrid[1] - 1,
+          west: ix === currentGrid[0] - 1 && iy === currentGrid[1],
+          northEast: ix === currentGrid[0] + 1 && iy === currentGrid[1] + 1,
+          southEast: ix === currentGrid[0] + 1 && iy === currentGrid[1] - 1,
+          southWest: ix === currentGrid[0] - 1 && iy === currentGrid[1] - 1,
+          northWest: ix === currentGrid[0] - 1 && iy === currentGrid[1] + 1,
+        };
 
         grid.push({
           point,
           block,
           isEdge,
-          current,
-          north,
-          east,
-          south,
-          west,
-          northEast,
-          southEast,
-          southWest,
-          northWest,
+          current: ix === currentGrid[0] && iy === currentGrid[1],
+          neighbors,
         });
       }
     }
-    gridCache[currentGrid.toString()] = grid;
+    gridCache[gridKey] = grid;
 
     for (const key in gridCache) {
-      const cachedGrid = key.split(",").map(Number);
-      if (Math.abs(currentGrid[0] - cachedGrid[0]) > 5 || Math.abs(currentGrid[1] - cachedGrid[1]) > 5) {
+      const [cachedX, cachedY] = key.split(",").map(Number);
+      if (Math.abs(currentGrid[0] - cachedX) > 2 || Math.abs(currentGrid[1] - cachedY) > 2) {
         delete gridCache[key];
       }
     }
   }
 
   const current = grid.find(({ current }) => current)!;
-  const north = grid.find(({ north }) => north)!;
-  const northEast = grid.find(({ northEast }) => northEast)!;
-  const east = grid.find(({ east }) => east)!;
-  const southEast = grid.find(({ southEast }) => southEast)!;
-  const south = grid.find(({ south }) => south)!;
-  const southWest = grid.find(({ southWest }) => southWest)!;
-  const west = grid.find(({ west }) => west)!;
-  const northWest = grid.find(({ northWest }) => northWest)!;
 
   vertexData.attributes.isEdgeBlock = current.isEdge;
+  vertexData.attributes.block = current.block;
 
-  const distanceToNorthWall = (currentGrid[1] + 1) * gridSize - 0.5 * roadWidth - currentVertex.y;
-  const distanceToEastWall = (currentGrid[0] + 1) * gridSize - 0.5 * roadWidth - currentVertex.x;
-  const distanceToSouthWall = currentVertex.y - currentGrid[1] * gridSize + 0.5 * roadWidth;
-  const distanceToWestWall = currentVertex.x - currentGrid[0] * gridSize + 0.5 * roadWidth;
+  const distanceToNorthWall = (currentGrid[1] + 1) * gridSize - 0.5 * ROAD_WIDTH - currentVertex.y;
+  const distanceToEastWall = (currentGrid[0] + 1) * gridSize - 0.5 * ROAD_WIDTH - currentVertex.x;
+  const distanceToSouthWall = currentVertex.y - currentGrid[1] * gridSize + 0.5 * ROAD_WIDTH;
+  const distanceToWestWall = currentVertex.x - currentGrid[0] * gridSize + 0.5 * ROAD_WIDTH;
   const distanceToNorthEastCorner = Math.max(distanceToNorthWall, distanceToEastWall);
   const distanceToSouthEastCorner = Math.max(distanceToSouthWall, distanceToEastWall);
   const distanceToSouthWestCorner = Math.max(distanceToSouthWall, distanceToWestWall);
   const distanceToNorthWestCorner = Math.max(distanceToNorthWall, distanceToWestWall);
 
   const include = {
-    northWall: current.block !== north.block,
-    eastWall: current.block !== east.block,
-    southWall: current.block !== south.block,
-    westWall: current.block !== west.block,
-    northEastCorner: current.block !== northEast.block,
-    southEastCorner: current.block !== southEast.block,
-    southWestCorner: current.block !== southWest.block,
-    northWestCorner: current.block !== northWest.block,
+    northWall: current.block !== grid.find(({ neighbors }) => neighbors.north)?.block,
+    eastWall: current.block !== grid.find(({ neighbors }) => neighbors.east)?.block,
+    southWall: current.block !== grid.find(({ neighbors }) => neighbors.south)?.block,
+    westWall: current.block !== grid.find(({ neighbors }) => neighbors.west)?.block,
+    northEastCorner: current.block !== grid.find(({ neighbors }) => neighbors.northEast)?.block,
+    southEastCorner: current.block !== grid.find(({ neighbors }) => neighbors.southEast)?.block,
+    southWestCorner: current.block !== grid.find(({ neighbors }) => neighbors.southWest)?.block,
+    northWestCorner: current.block !== grid.find(({ neighbors }) => neighbors.northWest)?.block,
   };
 
   vertexData.attributes.distanceToRoadCenter = Math.min(
@@ -124,23 +104,11 @@ export const getVertexData = (vertexData: VertexData) => {
     vertexData.attributes.isEdgeBlock ? 0 : 999
   );
 
-  vertexData.attributes.debug = {
-    dist: vertexData.attributes.disterooni,
-  };
-
   vertexData.height = getHeight(vertexData);
 
-  if (
-    current.block === north.block &&
-    current.block === east.block &&
-    current.block === south.block &&
-    current.block === west.block &&
-    current.block === northEast.block &&
-    current.block === southEast.block &&
-    current.block === southWest.block &&
-    current.block === northWest.block
-  )
-    console.log("this is where a big arena or something could be", current.point); //TODO
+  // if (Object.values(include).every((inc) => !inc)) {
+  //   console.log("this is where a big arena or something could be", current.point); //TODO add big arena sized blocks
+  // }
 
   return vertexData;
 };
@@ -148,15 +116,13 @@ export const getVertexData = (vertexData: VertexData) => {
 const getHeight = (vertexData: VertexData) => {
   let height = 0;
 
-  if (vertexData.attributes.distanceToRoadCenter > roadWidth) {
+  if (vertexData.attributes.distanceToRoadCenter > ROAD_WIDTH) {
     height = 0.5;
   }
 
-  if (vertexData.attributes.distanceToRoadCenter > roadWidth + 10) {
-    height = 100.5;
-  }
+  // if (vertexData.attributes.distanceToRoadCenter > ROAD_WIDTH + 20) {
+  //   height = 100.5;
+  // }
 
   return height;
 };
-
-//TODO i have both isEdgeBlock and current.isEdge

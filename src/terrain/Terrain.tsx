@@ -5,8 +5,8 @@ import * as THREE from "three";
 import { Dimension } from "../types/Dimension";
 
 const CHUNK_SIZE = 160;
-const CHUNK_RESOLUTION = 25;
-const GRID_SIZE = 6; //TODO was 5
+const CHUNK_RESOLUTION = 20; //TODO was 25
+const GRID_SIZE = 5; //TODO was 5
 const NUM_STEPS = 200; //TODO make this vary based on FPS?
 
 interface Chunk {
