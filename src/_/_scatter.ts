@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { CHUNK_SIZE } from "../terrain/Terrain";
 
 export interface ScatterCreateParams {
   seed: string;
@@ -10,47 +11,31 @@ export interface ScatterCreateParams {
   filter: (point: THREE.Vector3) => boolean;
 }
 
-const DRAW_DISTANCE = 700;
-
-const caches: any = {};
-
 export namespace _scatter {
   export const create = (params: ScatterCreateParams): THREE.Vector3[] => {
     const { seed, currentVertex, gridSize, filter } = params;
 
-    const iterations = DRAW_DISTANCE / gridSize;
+    const iterations = Math.ceil(CHUNK_SIZE / 2 / gridSize); //TODO math.ceil aligns em correctly but sometimes leaves spawned objects where there is no terrain. i think this also double spawns certain objects
 
     const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
     const [x, y] = currentGrid;
 
-    if (!caches[seed]) caches[seed] = {};
-    const cache = caches[seed];
-
-    const gridKey = `${x},${y}`;
-    let grid: THREE.Vector3[] = cache[gridKey];
-    if (!grid) {
-      grid = [];
-      for (let ix = x - iterations; ix <= x + iterations; ix++) {
-        for (let iy = y - iterations; iy <= y + iterations; iy++) {
-          const pointX = gridSize * 0.5;
-          const pointY = gridSize * 0.5;
-          const point = new THREE.Vector3(ix * gridSize + pointX, 0, iy * gridSize + pointY);
-          // const element = //TODO grab element from a getSpawners function?
-          if (filter(point)) {
-            grid.push(point /*, element*/);
-          }
+    const grid = [];
+    for (let ix = x - iterations; ix <= x + iterations; ix++) {
+      for (let iy = y - iterations; iy <= y + iterations; iy++) {
+        const pointX = gridSize * 0.5;
+        const pointY = gridSize * 0.5;
+        const point = new THREE.Vector3(ix * gridSize + pointX, 0, iy * gridSize + pointY);
+        // const element = //TODO grab element from a getSpawners function?
+        if (filter(point)) {
+          //TODO instead of bool make this return component
+          grid.push(point);
         }
-      }
-      cache[gridKey] = grid;
-    }
-
-    for (const key in cache) {
-      const [cachedX, cachedY] = key.split(",").map(Number);
-      if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
-        delete cache[key];
       }
     }
 
     return grid;
   };
 }
+
+//TODO only calculate spawn points for new grid cells.
