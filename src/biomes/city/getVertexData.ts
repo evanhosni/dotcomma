@@ -120,9 +120,5 @@ const getHeight = (vertexData: VertexData) => {
     height = 0.5;
   }
 
-  // if (vertexData.attributes.distanceToRoadCenter > ROAD_WIDTH + 20) {
-  //   height = 100.5;
-  // }
-
   return height;
 };
