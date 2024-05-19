@@ -37,7 +37,7 @@ export const GlitchCityDimension: Dimension = {
 
 export const GlitchCity = () => {
   return (
-    <Canvas style={{ background: "#000" }}>
+    <Canvas style={{ background: "#555" }}>
       <Stats />
       <ambientLight intensity={0.5} />
       <directionalLight position={[10, 10, 5]} intensity={1} />
@@ -45,8 +45,9 @@ export const GlitchCity = () => {
         <Player />
       </Physics>
       <Physics>
+        {/* <Debug> */}
         <Terrain dimension={GlitchCityDimension} />
-        {/* <Spawners dimension={GlitchCityDimension} /> */}
+        {/* </Debug> */}
       </Physics>
     </Canvas>
   );

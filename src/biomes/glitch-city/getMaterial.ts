@@ -61,19 +61,19 @@ export const getMaterial = async (dimension: Dimension) => {
 
     void grass_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(grasstexture, adjustedUV), blendFactor);
     } 
 
     void dust_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(sandtexture, adjustedUV), blendFactor);
     }
 
     void pharmasea_frag() {
       vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(10.0, 11.0, vDistanceToRoadCenter);
+      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
       gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(bluemudtexture, adjustedUV), blendFactor);
     } 
     
