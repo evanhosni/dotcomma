@@ -2,7 +2,6 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
-import { Apartment } from "../biomes/city/blocks/apartment/Apartment";
 import { Dimension } from "../types/Dimension";
 import { Spawner } from "../types/Spawner";
 
@@ -251,12 +250,12 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const GenerateSpawners = (offset: THREE.Vector2) => {
     const points = dimension.getSpawners(dimension, offset.x, offset.y);
 
-    points.forEach((point) => {
+    points.forEach(({ point, element }) => {
       setSpawners((prev) => [
         ...prev,
         {
           chunkKey: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
-          component: Apartment,
+          component: element,
           coordinates: [point.x, dimension.getVertexData(point.x, point.z, dimension.regions).height, point.z],
         },
       ]);
@@ -265,8 +264,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
   return (
     <>
-      {colliders.map((collider: TerrainColliderProps, index) => {
-        return <TerrainCollider key={index} {...collider} />;
+      {colliders.map((collider: TerrainColliderProps) => {
+        return <TerrainCollider key={collider.chunkKey} {...collider} />; //TODO decide on key vs chunkKey situation. this kinda ugly
       })}
       {spawners.map(({ component: Component, coordinates }: Spawner, index) => {
         return <Component key={index} coordinates={coordinates} />;

@@ -103,7 +103,7 @@ export namespace _voronoi {
     const walls = _voronoi.getWalls({ seed: `${seed} - walls`, currentVertex, grid, gridSize });
     const distance = _voronoi.getDistanceToWall({ currentVertex, walls });
 
-    return { region, regionSite, biome, biomeSite, walls, distance };
+    return { grid, region, regionSite, biome, biomeSite, walls, distance }; //TODO if you dont need to pass grid, maybe remove it
   };
 
   export const getGrid = ({
