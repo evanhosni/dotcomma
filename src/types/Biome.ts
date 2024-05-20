@@ -1,11 +1,11 @@
-import { Dimension } from "./Dimension";
+import { Spawner } from "./Spawner";
 import { VertexData } from "./VertexData";
 
 export interface Biome {
   name: string;
   id: number;
   getVertexData: (vertexData: VertexData) => VertexData;
-  getSpawners: (dimension: Dimension, x: number, y: number) => { point: THREE.Vector3; element: any }[];
+  getSpawners: (x: number, y: number) => Spawner[];
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;

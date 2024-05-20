@@ -5,7 +5,7 @@ import { VertexData } from "../../types/VertexData";
 import { blocks } from "./blocks/[blocks]";
 
 interface Grid {
-  point: THREE.Vector3;
+  point: THREE.Vector2;
   block: any; //TODO add block type
   isEdge: boolean;
   current: boolean;
@@ -13,7 +13,7 @@ interface Grid {
 }
 
 const gridCache: Record<string, Grid[]> = {};
-const gridSize = 100; //TODO note with gridSize 100 and ROAD_WIDTH 10, blocks are 80x80 and buildings should be like...50x50
+export const GRID_SIZE = 100; //NOTE with GRID_SIZE 100 and ROAD_WIDTH 10, blocks are 80x80 and buildings should be like...50x50
 export const ROAD_WIDTH = 10;
 
 const edge = { name: "edge", joinable: true };
@@ -22,19 +22,21 @@ const getGridKey = (x: number, y: number) => `${x},${y}`;
 
 export const getVertexData = (vertexData: VertexData) => {
   const { x, y } = vertexData;
-  const currentVertex = new THREE.Vector3(x, y, 0);
+  const currentVertex = new THREE.Vector2(x, y);
 
-  const currentGrid = [Math.floor(x / gridSize), Math.floor(y / gridSize)];
+  const currentGrid = [Math.floor(x / GRID_SIZE), Math.floor(y / GRID_SIZE)];
   const gridKey = getGridKey(currentGrid[0], currentGrid[1]);
   let grid: Grid[] = gridCache[gridKey] || [];
 
   if (grid.length === 0) {
     for (let ix = currentGrid[0] - 2; ix <= currentGrid[0] + 2; ix++) {
       for (let iy = currentGrid[1] - 2; iy <= currentGrid[1] + 2; iy++) {
-        const point = new THREE.Vector3(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize, 0);
+        const point = new THREE.Vector2(ix * GRID_SIZE + 0.5 * GRID_SIZE, iy * GRID_SIZE + 0.5 * GRID_SIZE);
         const isEdge =
-          _voronoi.getDistanceToWall({ currentVertex: point, walls: vertexData.attributes.walls }) <
-          Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
+          _voronoi.getDistanceToWall({
+            currentVertex: new THREE.Vector2(point.x, point.y),
+            walls: vertexData.attributes.walls,
+          }) < Math.sqrt(GRID_SIZE * 0.5 * GRID_SIZE * 0.5 + GRID_SIZE * 0.5 * GRID_SIZE * 0.5);
         const block = isEdge ? edge : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];
 
         const neighbors = {
@@ -72,10 +74,10 @@ export const getVertexData = (vertexData: VertexData) => {
   vertexData.attributes.isEdgeBlock = current.isEdge;
   vertexData.attributes.block = current.block;
 
-  const distanceToNorthWall = (currentGrid[1] + 1) * gridSize - 0.5 * ROAD_WIDTH - currentVertex.y;
-  const distanceToEastWall = (currentGrid[0] + 1) * gridSize - 0.5 * ROAD_WIDTH - currentVertex.x;
-  const distanceToSouthWall = currentVertex.y - currentGrid[1] * gridSize + 0.5 * ROAD_WIDTH;
-  const distanceToWestWall = currentVertex.x - currentGrid[0] * gridSize + 0.5 * ROAD_WIDTH;
+  const distanceToNorthWall = (currentGrid[1] + 1) * GRID_SIZE - 0.5 * ROAD_WIDTH - currentVertex.y;
+  const distanceToEastWall = (currentGrid[0] + 1) * GRID_SIZE - 0.5 * ROAD_WIDTH - currentVertex.x;
+  const distanceToSouthWall = currentVertex.y - currentGrid[1] * GRID_SIZE + 0.5 * ROAD_WIDTH;
+  const distanceToWestWall = currentVertex.x - currentGrid[0] * GRID_SIZE + 0.5 * ROAD_WIDTH;
   const distanceToNorthEastCorner = Math.max(distanceToNorthWall, distanceToEastWall);
   const distanceToSouthEastCorner = Math.max(distanceToSouthWall, distanceToEastWall);
   const distanceToSouthWestCorner = Math.max(distanceToSouthWall, distanceToWestWall);
