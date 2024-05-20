@@ -14,7 +14,7 @@ const Dotcomma = () => {
       <PauseMenu />
       <Routes>
         <Route index element={<Home />} />
-        <Route path="/glitch-city" element={<GlitchCity />} />
+        <Route path="/glitch-city" element={<GlitchCity.component />} />
         <Route path="*" />
       </Routes>
     </BrowserRouter>

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { _scatter } from "../../_/_scatter";
 import { Spawner } from "../../types/Spawner";
-import { GlitchCityDimension } from "../glitch-city/GlitchCity";
+import { GlitchCity } from "../glitch-city/GlitchCity";
 import { City } from "./City";
 import { GRID_SIZE, ROAD_WIDTH } from "./getVertexData";
 
@@ -17,7 +17,7 @@ export const getSpawners = (x: number, y: number): Spawner[] => {
       z: 0,
     },
     filter: (point: THREE.Vector3) => {
-      const attributes = GlitchCityDimension.getVertexData(point.x, point.z).attributes;
+      const attributes = GlitchCity.getVertexData(point.x, point.z).attributes;
 
       if (attributes.biome !== City) return null;
       if (!attributes.block) return null;

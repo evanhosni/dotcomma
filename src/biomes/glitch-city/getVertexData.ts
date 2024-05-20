@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { TerrainNoiseParams, _noise } from "../../_/_noise";
 import { _voronoi } from "../../_/_voronoi";
 import { VertexData, vertexData_default } from "../../types/VertexData";
-import { GlitchCityDimension } from "./GlitchCity";
+import { GlitchCity } from "./GlitchCity";
 
 const regionGridSize = 2500; //TODO maybe make these dimension props?
 const gridSize = 500;
@@ -28,7 +28,7 @@ export const getVertexData = (x: number, y: number) => {
     currentVertex,
     gridSize,
     regionGridSize,
-    regions: GlitchCityDimension.regions,
+    regions: GlitchCity.regions,
   });
 
   const { biome, distance, walls } = voronoiData;
