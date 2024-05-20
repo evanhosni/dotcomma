@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Dimension } from "../types/Dimension";
 
-export const CHUNK_SIZE = 160;
-const CHUNK_RESOLUTION = 20; //NOTE was 25
+export const CHUNK_SIZE = 200; //NOTE was 160
+const CHUNK_RESOLUTION = 25; //NOTE was 25
 const GRID_SIZE = 5; //NOTE was 5
 const NUM_STEPS = 200; //TODO make this vary based on FPS?
 
