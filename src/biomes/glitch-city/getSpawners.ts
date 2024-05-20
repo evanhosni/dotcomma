@@ -1,25 +1,16 @@
+import { _utils } from "../../_/_utils";
 import { Biome } from "../../types/Biome";
-import { Dimension } from "../../types/Dimension";
-import { Region } from "../../types/Region";
+import { Spawner } from "../../types/Spawner";
+import { GlitchCityDimension } from "./GlitchCity";
 
-export const getSpawners = (dimension: Dimension, x: number, y: number): { point: THREE.Vector3; element: any }[] => {
-  const points: { point: THREE.Vector3; element: any }[] = [];
+export const getSpawners = (x: number, y: number): Spawner[] => {
+  const points: Spawner[] = [];
 
-  const biomes: Biome[] = Array.from(
-    new Set(
-      dimension.regions.reduce((acc: Biome[], curr: Region) => {
-        return acc.concat(curr.biomes);
-      }, [])
-    )
-  );
+  const biomes: Biome[] = _utils.getAllBiomes(GlitchCityDimension);
 
   biomes.forEach((biome) => {
-    // if (biome.getSpawners(dimension)) {
-    points.push(...biome.getSpawners(dimension, x, y));
-    // }
+    points.push(...biome.getSpawners(x, y));
   });
 
   return points;
 };
-
-//TODO maybe find a way to not run biome specific function in areas that are not same biome?? not sure if possible...

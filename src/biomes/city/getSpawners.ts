@@ -1,15 +1,15 @@
 import * as THREE from "three";
 import { _scatter } from "../../_/_scatter";
-import { Dimension } from "../../types/Dimension";
+import { Spawner } from "../../types/Spawner";
+import { GlitchCityDimension } from "../glitch-city/GlitchCity";
 import { City } from "./City";
 import { Apartment } from "./blocks/apartment/Apartment";
-import { ROAD_WIDTH } from "./getVertexData";
+import { GRID_SIZE, ROAD_WIDTH } from "./getVertexData";
 
-export const getSpawners = (dimension: Dimension, x: number, y: number): { point: THREE.Vector3; element: any }[] => {
-  //TODO type specifically for this or global type for { point, any }
+export const getSpawners = (x: number, y: number): Spawner[] => {
   const points = _scatter.create({
     seed: "city",
-    currentVertex: new THREE.Vector3(x, y, 0), //TODO re-order. another y vs z thing
+    currentVertex: new THREE.Vector2(x, y),
     gridSize: 100,
     density: 0,
     uniformity: 0,
@@ -18,17 +18,15 @@ export const getSpawners = (dimension: Dimension, x: number, y: number): { point
       z: 0,
     },
     filter: (point: THREE.Vector3) => {
-      const vertexData = dimension.getVertexData(point.x, point.z, dimension.regions);
+      const vertexData = GlitchCityDimension.getVertexData(point.x, point.z);
 
       if (vertexData.attributes.biome !== City) return null;
       if (!vertexData.attributes.block) return null;
-      if (vertexData.attributes.distanceToRoadCenter < ROAD_WIDTH) return null;
+      if (vertexData.attributes.distanceToRoadCenter < (GRID_SIZE - ROAD_WIDTH) / 2) return null;
       if (vertexData.attributes.block.name === "apartments") return Apartment;
       return null;
     },
   });
-
-  // console.log(points);
 
   return points;
 };

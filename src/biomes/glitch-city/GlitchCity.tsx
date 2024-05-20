@@ -13,17 +13,14 @@ import { getSpawners } from "./getSpawners";
 import { getVertexData } from "./getVertexData";
 
 export const CityRegion: Region = {
-  name: "city",
   biomes: [City, Grass],
 };
 
 export const GrassRegion: Region = {
-  name: "grass",
   biomes: [Grass],
 };
 
 export const DesertRegion: Region = {
-  name: "desert",
   biomes: [Dust],
 };
 

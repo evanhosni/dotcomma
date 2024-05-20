@@ -5,33 +5,33 @@ import { Region } from "../types/Region";
 import { _math } from "./_math";
 
 export interface VoronoiGrid {
-  point: THREE.Vector3;
+  point: THREE.Vector2;
   element: any;
 }
 
 interface VoronoiGetGridParams {
   seed: string;
-  currentVertex: THREE.Vector3;
+  currentVertex: THREE.Vector2;
   cellArray: any[];
   gridSize: number;
-  gridFunction: (point: THREE.Vector3, array: any[]) => any;
+  gridFunction: (point: THREE.Vector2, array: any[]) => any;
 }
 
 interface VoronoiGetWallsParams {
   seed: string;
-  currentVertex: THREE.Vector3;
-  grid: VoronoiGrid[]; //TODO must be already sorted
+  currentVertex: THREE.Vector2;
+  grid: VoronoiGrid[];
   gridSize: number;
 }
 
 interface VoronoiGetDistanceToWallParams {
-  currentVertex: THREE.Vector3;
+  currentVertex: THREE.Vector2;
   walls: THREE.Line3[];
 }
 
 interface VoronoiCreateParamsBase {
   seed: string;
-  currentVertex: THREE.Vector3;
+  currentVertex: THREE.Vector2;
   gridSize: number;
 }
 
@@ -62,7 +62,7 @@ export namespace _voronoi {
         currentVertex,
         cellArray: regions,
         gridSize: regionGridSize,
-        gridFunction: (point: THREE.Vector3, regions: Region[]): Region => {
+        gridFunction: (point: THREE.Vector2, regions: Region[]): Region => {
           let uuid = _math.seedRand(JSON.stringify(point));
           let region = regions[Math.floor(uuid * regions.length)];
           return region;
@@ -74,7 +74,7 @@ export namespace _voronoi {
         currentVertex,
         cellArray: regionGrid,
         gridSize: gridSize,
-        gridFunction: (point: THREE.Vector3, grid: VoronoiGrid[]): Biome => {
+        gridFunction: (point: THREE.Vector2, grid: VoronoiGrid[]): Biome => {
           grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
           const region: Region = grid[0].element;
           let uuid = _math.seedRand(JSON.stringify(point));
@@ -88,7 +88,7 @@ export namespace _voronoi {
         currentVertex,
         cellArray: biomes!,
         gridSize: gridSize,
-        gridFunction: (point: THREE.Vector3, biomes: Biome[]): Biome => {
+        gridFunction: (point: THREE.Vector2, biomes: Biome[]): Biome => {
           let uuid = _math.seedRand(JSON.stringify(point));
           let biome = biomes[Math.floor(uuid * biomes.length)];
           return biome;
@@ -103,7 +103,7 @@ export namespace _voronoi {
     const walls = _voronoi.getWalls({ seed: `${seed} - walls`, currentVertex, grid, gridSize });
     const distance = _voronoi.getDistanceToWall({ currentVertex, walls });
 
-    return { grid, region, regionSite, biome, biomeSite, walls, distance }; //TODO if you dont need to pass grid, maybe remove it
+    return { grid, region, regionSite, biome, biomeSite, walls, distance };
   };
 
   export const getGrid = ({
@@ -127,7 +127,7 @@ export namespace _voronoi {
         for (let iy = y - 2; iy <= y + 2; iy++) {
           const pointX = _math.seedRand(`${seed}${ix}X${iy}`);
           const pointY = _math.seedRand(`${seed}${ix}Y${iy}`);
-          const point = new THREE.Vector3((ix + pointX) * gridSize, (iy + pointY) * gridSize, 0);
+          const point = new THREE.Vector2((ix + pointX) * gridSize, (iy + pointY) * gridSize);
           const element = gridFunction(point, cellArray);
           grid.push({ point, element });
         }
@@ -145,22 +145,22 @@ export namespace _voronoi {
     return grid;
   };
 
-  export const getCurrentBiome = (point: THREE.Vector3, grid: VoronoiGrid[]): Biome => {
+  export const getCurrentBiome = (point: THREE.Vector2, grid: VoronoiGrid[]): Biome => {
     grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return grid[0].element;
   };
 
-  export const getCurrentBiomeSite = (point: THREE.Vector3, grid: VoronoiGrid[]): THREE.Vector3 => {
+  export const getCurrentBiomeSite = (point: THREE.Vector2, grid: VoronoiGrid[]): THREE.Vector2 => {
     grid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return grid[0].point;
   };
 
-  export const getCurrentRegion = (point: THREE.Vector3, regionGrid: VoronoiGrid[]): Region => {
+  export const getCurrentRegion = (point: THREE.Vector2, regionGrid: VoronoiGrid[]): Region => {
     regionGrid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return regionGrid[0].element;
   };
 
-  export const getCurrentRegionSite = (point: THREE.Vector3, regionGrid: VoronoiGrid[]): THREE.Vector3 => {
+  export const getCurrentRegionSite = (point: THREE.Vector2, regionGrid: VoronoiGrid[]): THREE.Vector2 => {
     regionGrid.sort((a, b) => point.distanceTo(a.point) - point.distanceTo(b.point));
     return regionGrid[0].point;
   };
@@ -185,7 +185,7 @@ export namespace _voronoi {
       const bd = b.x * b.x + b.y * b.y;
       const cd = c.x * c.x + c.y * c.y;
       const D = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
-      const circumcenter = new THREE.Vector3(
+      const circumcenter = new THREE.Vector3( //TODO any way to use vector2 instead?
         (1 / D) * (ad * (b.y - c.y) + bd * (c.y - a.y) + cd * (a.y - b.y)),
         (1 / D) * (ad * (c.x - b.x) + bd * (a.x - c.x) + cd * (b.x - a.x)),
         0
@@ -202,7 +202,7 @@ export namespace _voronoi {
         const v1 = circumcenters[Math.floor(i / 3)];
         const v2 = circumcenters[Math.floor(edge / 3)];
 
-        const mid = new THREE.Vector3((v1.x + v2.x) / 2, (v1.y + v2.y) / 2, 0);
+        const mid = new THREE.Vector2((v1.x + v2.x) / 2, (v1.y + v2.y) / 2);
         const label = `${Math.floor(mid.x)},${Math.floor(mid.y)}`;
 
         if (cache[label] === undefined) {
@@ -221,8 +221,6 @@ export namespace _voronoi {
           }
         }
 
-        //TODO somewhere around here, check if other side of wall is a diff (blendable) biome. if so, try one more time for biome blending
-
         if (!cache[label].joinable) {
           voronoiWalls.push(new THREE.Line3(v1, v2));
         }
@@ -232,14 +230,16 @@ export namespace _voronoi {
   };
 
   export const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
+    const vec3 = new THREE.Vector3(currentVertex.x, currentVertex.y, 0); //TODO any way to use vector2 instead?
+
     var closestPoints = [];
     for (let i = 0; i < walls.length; i++) {
       var closestPoint = new THREE.Vector3(0, 0, 0);
-      walls[i].closestPointToPoint(currentVertex, true, closestPoint);
+      walls[i].closestPointToPoint(vec3, true, closestPoint);
       closestPoints.push(closestPoint);
     }
-    closestPoints.sort((a, b) => a.distanceTo(currentVertex) - b.distanceTo(currentVertex));
+    closestPoints.sort((a, b) => a.distanceTo(vec3) - b.distanceTo(vec3));
 
-    return closestPoints[0] ? currentVertex.distanceTo(closestPoints[0]) : 9999; //TODO temp solution. closestPoints[0] doesnt exist for some vertices of joinable biomes
+    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : 9999; //NOTE closestPoints[0] doesnt exist for some vertices of joinable biomes. This ternary allows us to keep the nested for loop iterations low.
   };
 }

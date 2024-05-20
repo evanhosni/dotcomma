@@ -1,12 +1,12 @@
 import * as THREE from "three";
 import { _material } from "../../_/_material";
 import { Biome } from "../../types/Biome";
-import { Dimension } from "../../types/Dimension";
+import { GlitchCityDimension } from "./GlitchCity";
 
-export const getMaterial = async (dimension: Dimension) => {
+export const getMaterial = async () => {
   const biomes = Array.from(
-    dimension.regions.reduce((acc, val) => {
-      val.biomes.forEach((item) => acc.add(item));
+    GlitchCityDimension.regions.reduce((acc, region) => {
+      region.biomes.forEach((biome) => acc.add(biome));
       return acc;
     }, new Set<Biome>())
   );

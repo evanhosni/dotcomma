@@ -2,7 +2,7 @@ export interface VertexData {
   x: number;
   y: number;
   height: number;
-  attributes: any; //TODO save attributes for only shader related attributes?
+  attributes: any;
 }
 
 export const vertexData_default: VertexData = {

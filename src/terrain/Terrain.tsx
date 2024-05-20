@@ -3,17 +3,17 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { Dimension } from "../types/Dimension";
-import { Spawner } from "../types/Spawner";
 
 export const CHUNK_SIZE = 160;
-const CHUNK_RESOLUTION = 20; //TODO was 25
-const GRID_SIZE = 5; //TODO was 5
+const CHUNK_RESOLUTION = 20; //NOTE was 25
+const GRID_SIZE = 5; //NOTE was 5
 const NUM_STEPS = 200; //TODO make this vary based on FPS?
 
 interface Chunk {
-  offset: THREE.Vector3;
+  offset: THREE.Vector2;
   plane: THREE.Mesh;
   rebuildIterator: Iterator<any> | null;
+  //TODO maybe put colliders here instead of in terrain object?
 }
 
 interface Terrain {
@@ -22,6 +22,8 @@ interface Terrain {
   active_chunk: Chunk | null;
   queued_chunks: Chunk[];
   new_chunks: Chunk[];
+  colliders: { [key: string]: TerrainColliderProps };
+  spawners: { [key: string]: TerrainSpawnerProps[] };
 }
 
 const terrain: Terrain = {
@@ -30,15 +32,14 @@ const terrain: Terrain = {
   active_chunk: null,
   queued_chunks: [],
   new_chunks: [],
-  //TODO maybe put colliders here instead of useState?
+  colliders: {},
+  spawners: {},
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
-  const [colliders, setColliders] = useState<any[]>([]); //TODO typing
-  const [spawners, setSpawners] = useState<any[]>([]); //TODO typing
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
 
   scene.add(terrain.group);
@@ -55,7 +56,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   }, [remainingChunks]);
 
   useEffect(() => {
-    dimension.getMaterial(dimension).then(setTerrainMaterial);
+    dimension.getMaterial().then(setTerrainMaterial);
   }, []);
 
   useFrame(() => {
@@ -141,7 +142,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
     const chunk = {
-      offset: new THREE.Vector3(offset.x, offset.y, 0),
+      offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
       rebuildIterator: null,
     };
@@ -152,7 +153,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     return chunk;
   };
 
-  const BuildChunk = function* (chunk: any, material: THREE.Material) {
+  const BuildChunk = function* (chunk: Chunk, material: THREE.Material) {
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
     let count = 0;
@@ -160,7 +161,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = dimension.getVertexData(v.x + offset.x, -v.y + offset.y, dimension.regions);
+      const vertexData = dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
 
       pos.setXYZ(i, v.x, v.y, vertexData.height);
 
@@ -204,12 +205,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       terrain.group.remove(chunkData.chunk.plane);
     }
     delete terrain.chunks[chunkKey];
-    setColliders((prev) => prev.filter((collider) => collider.chunkKey !== chunkKey));
-    setSpawners((prev) => prev.filter((spawner) => spawner.chunkKey !== chunkKey));
+    delete terrain.colliders[chunkKey];
+    delete terrain.spawners[chunkKey];
   };
 
-  const GenerateColliders = (chunk: any, offset: THREE.Vector2) => {
-    //TODO chunk typing
+  const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
     const linearArray = chunk.plane.geometry.attributes.position.array;
     const gridSize = Math.sqrt(linearArray.length / 3);
     const heightfield = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
@@ -234,59 +234,63 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
-    const isDiff = !colliders.some((collider) => collider.pos[0] === offset.x && collider.pos[1] === offset.y);
-    isDiff &&
-      setColliders((prev) => [
-        ...prev,
-        {
-          chunkKey: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
-          vector3Array: heightfield,
-          pos: offset.toArray(),
-          elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
-        },
-      ]);
+    const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
+    if (!terrain.colliders[chunkKey]) {
+      terrain.colliders[chunkKey] = {
+        chunkKey: chunkKey,
+        heightfield,
+        position: offset.toArray(),
+        elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
+      };
+    }
   };
 
   const GenerateSpawners = (offset: THREE.Vector2) => {
-    const points = dimension.getSpawners(dimension, offset.x, offset.y);
+    const points = dimension.getSpawners(offset.x, offset.y);
+    const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
 
-    points.forEach(({ point, element }) => {
-      setSpawners((prev) => [
-        ...prev,
-        {
-          chunkKey: `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`,
-          component: element,
-          coordinates: [point.x, dimension.getVertexData(point.x, point.z, dimension.regions).height, point.z],
-        },
-      ]);
-    });
+    if (!terrain.spawners[chunkKey]) {
+      terrain.spawners[chunkKey] = points.map(({ point, element }) => ({
+        chunkKey: chunkKey,
+        component: element,
+        coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
+      }));
+    }
   };
 
   return (
     <>
-      {colliders.map((collider: TerrainColliderProps) => {
-        return <TerrainCollider key={collider.chunkKey} {...collider} />; //TODO decide on key vs chunkKey situation. this kinda ugly
+      {Object.values(terrain.colliders).map((collider: TerrainColliderProps) => {
+        return <TerrainCollider key={collider.chunkKey} {...collider} />;
       })}
-      {spawners.map(({ component: Component, coordinates }: Spawner, index) => {
-        return <Component key={index} coordinates={coordinates} />;
-      })}
+      {Object.values(terrain.spawners)
+        .flat()
+        .map(({ component: Component, coordinates }: TerrainSpawnerProps, index) => {
+          return <Component key={index} coordinates={coordinates} />;
+        })}
     </>
   );
 };
 
 export interface TerrainColliderProps {
   chunkKey: string;
-  vector3Array: number[][];
-  pos: number[];
+  heightfield: number[][];
+  position: number[];
   elementSize: number;
 }
 
-export const TerrainCollider: React.FC<TerrainColliderProps> = ({ vector3Array, pos, elementSize }) => {
+export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize }) => {
   const [ref] = useHeightfield(() => ({
-    args: [vector3Array, { elementSize }],
-    position: [pos[0] + CHUNK_SIZE / 2, 0, pos[1] + CHUNK_SIZE / 2],
+    args: [heightfield, { elementSize }],
+    position: [position[0] + CHUNK_SIZE / 2, 0, position[1] + CHUNK_SIZE / 2],
     rotation: [-Math.PI / 2, 0, Math.PI / 2],
   }));
 
   return <mesh ref={ref as any} />;
 };
+
+export interface TerrainSpawnerProps {
+  key?: string;
+  component?: any; //TODO get proper type
+  coordinates: number[];
+}
