@@ -24,28 +24,27 @@ export const DesertRegion: Region = {
   biomes: [Dust],
 };
 
-export const GlitchCityDimension: Dimension = {
+export const GlitchCity: Dimension = {
   name: "glitch-city",
   regions: [CityRegion, GrassRegion, DesertRegion],
   getVertexData: getVertexData,
   getMaterial: getMaterial,
   getSpawners: getSpawners,
-};
-
-export const GlitchCity = () => {
-  return (
-    <Canvas style={{ background: "#555" }}>
-      <Stats />
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[10, 10, 5]} intensity={1} />
-      <Physics>
-        <Player />
-      </Physics>
-      <Physics>
-        {/* <Debug> */}
-        <Terrain dimension={GlitchCityDimension} />
-        {/* </Debug> */}
-      </Physics>
-    </Canvas>
-  );
+  component: () => {
+    return (
+      <Canvas style={{ background: "#555" }}>
+        <Stats />
+        <ambientLight intensity={0.5} />
+        <directionalLight position={[10, 10, 5]} intensity={1} />
+        <Physics>
+          <Player />
+        </Physics>
+        <Physics>
+          {/* <Debug> */}
+          <Terrain dimension={GlitchCity} />
+          {/* </Debug> */}
+        </Physics>
+      </Canvas>
+    );
+  },
 };
