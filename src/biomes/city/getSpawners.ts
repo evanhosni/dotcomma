@@ -3,7 +3,7 @@ import { _scatter } from "../../_/_scatter";
 import { Spawner } from "../../types/Spawner";
 import { GlitchCity } from "../glitch-city/GlitchCity";
 import { City } from "./City";
-import { GRID_SIZE, ROAD_WIDTH } from "./getVertexData";
+import { gridSize, roadWidth } from "./getVertexData";
 
 export const getSpawners = (x: number, y: number): Spawner[] => {
   const points = _scatter.create({
@@ -21,7 +21,7 @@ export const getSpawners = (x: number, y: number): Spawner[] => {
 
       if (attributes.biome !== City) return null;
       if (!attributes.block) return null;
-      if (attributes.distanceToRoadCenter < (GRID_SIZE - ROAD_WIDTH) / 2) return null;
+      if (attributes.distanceToRoadCenter < (gridSize - roadWidth) / 2) return null;
 
       const component = attributes.block.components[Math.floor(attributes.block.components.length * Math.random())];
       if (!component) return null;

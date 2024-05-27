@@ -23,7 +23,7 @@ export const getVertexData = (x: number, y: number) => {
   var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector2(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0));
 
-  const voronoiData = _voronoi.create({
+  const { biome, distance, walls } = _voronoi.create({
     seed: "123",
     currentVertex,
     gridSize,
@@ -31,7 +31,6 @@ export const getVertexData = (x: number, y: number) => {
     regions: GlitchCity.regions,
   });
 
-  const { biome, distance, walls } = voronoiData;
   const blendWidth = biome.blendWidth || defaultBlendWidth;
 
   vertexData.attributes.biome = biome;

@@ -54,8 +54,8 @@ const caches: any = {};
 export namespace _voronoi {
   export const create = (params: VoronoiCreateParams) => {
     const { seed, currentVertex, regionGridSize, regions, gridSize, biomes } = params;
-    let grid: VoronoiGrid[] = [];
 
+    let grid: VoronoiGrid[] = [];
     if (regionGridSize && regions?.length) {
       const regionGrid = _voronoi.getGrid({
         seed: `${seed} - regionGrid`,
@@ -125,8 +125,8 @@ export namespace _voronoi {
       grid = [];
       for (let ix = x - 2; ix <= x + 2; ix++) {
         for (let iy = y - 2; iy <= y + 2; iy++) {
-          const pointX = _math.seedRand(`${seed}${ix}X${iy}`);
-          const pointY = _math.seedRand(`${seed}${ix}Y${iy}`);
+          const pointX = _math.seedRand(`${seed} - ${ix}X${iy}`);
+          const pointY = _math.seedRand(`${seed} - ${ix}Y${iy}`);
           const point = new THREE.Vector2((ix + pointX) * gridSize, (iy + pointY) * gridSize);
           const element = gridFunction(point, cellArray);
           grid.push({ point, element });
@@ -136,6 +136,7 @@ export namespace _voronoi {
     }
 
     for (const key in cache) {
+      //TODO maybe put this in above if statement to prevent it from happening so often?
       const [cachedX, cachedY] = key.split(",").map(Number);
       if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
         delete cache[key];
