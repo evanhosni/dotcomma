@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { getVertexData } from "../biomes/glitch-city/getVertexData";
 import { useInput } from "./useInput";
 
-const debug_sprint = true; //NOTE this is temp for testing
+const debug_sprint = true; // NOTE: this is temp for testing
 const debug_console_log = false;
 
 export const Player = () => {
@@ -14,22 +14,19 @@ export const Player = () => {
   const { camera } = useThree();
   const [distanceToGround, setDistanceToGround] = useState(0);
   const [canJump, setCanJump] = useState(true);
-  const [isJumping, setIsJumping] = useState(false);
-  const [jumpingPointHeight, setJumpingPointHeight] = useState(0);
 
   const vertexData = (x: number, y: number) => {
     if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
-
     return getVertexData(x, y);
   };
 
-  const walkSpeed = 102; //usually 12 i think
-  const sprintSpeed = debug_sprint ? 300 : 24;
+  const walkSpeed = 12;
+  const sprintSpeed = debug_sprint ? 304 : 12;
   const playerHeight = 2;
-  const jumpHeight = 12;
-  const gravity = -4; //TODO get gravity from context eventually
+  const jumpHeight = 4;
+  const gravity = -9.81; // Standard gravity
 
-  camera.far = 7200; //TODO better view distance
+  camera.far = 7200; // TODO: better view distance
   camera.updateProjectionMatrix();
 
   useEffect(() => {
@@ -39,18 +36,23 @@ export const Player = () => {
     if (distanceToGround > jumpHeight || (distanceToGround > 0.5 && !jump)) {
       setCanJump(false);
     }
-  }, [distanceToGround, jumpHeight]);
+  }, [distanceToGround, jumpHeight, jump]);
 
   const [ref, api] = useSphere(() => ({
-    mass: 20,
+    mass: 1,
     type: "Dynamic",
     position: [0, 1, 0],
-    fixedRotation: true,
     args: [0.5 * playerHeight],
+    linearDamping: 0.5,
+    fixedRotation: true,
   }));
 
-  const positionRef = useRef([0, 1, 0]);
+  const velocity = useRef([0, 0, 0]);
+  useEffect(() => {
+    api.velocity.subscribe((v) => (velocity.current = v));
+  }, [api]);
 
+  const positionRef = useRef([0, 1, 0]);
   useEffect(() => {
     const unsubscribe = api.position.subscribe((position) => {
       positionRef.current = position;
@@ -68,68 +70,41 @@ export const Player = () => {
     direction.normalize();
     sideDirection.crossVectors(upVector, direction).normalize();
 
-    const velocity = new THREE.Vector3(0, 0, 0);
+    const moveVelocity = new THREE.Vector3(0, 0, 0);
 
-    if (forward) velocity.add(direction);
-    if (backward) velocity.sub(direction);
-    if (left) velocity.add(sideDirection);
-    if (right) velocity.sub(sideDirection);
+    if (forward) moveVelocity.add(direction);
+    if (backward) moveVelocity.sub(direction);
+    if (left) moveVelocity.add(sideDirection);
+    if (right) moveVelocity.sub(sideDirection);
+
+    if (moveVelocity.length() > 0) {
+      moveVelocity.normalize();
+      const currentSpeed = sprint ? sprintSpeed : walkSpeed;
+      moveVelocity.multiplyScalar(currentSpeed);
+    }
 
     const terrainHeight = vertexData(positionRef.current[0], positionRef.current[2]).height;
     setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
 
-    if (forward || backward || left || right) {
-      const futurePosition = new THREE.Vector3().addVectors(
-        new THREE.Vector3(positionRef.current[0], positionRef.current[1], positionRef.current[2]),
-        velocity.normalize().multiplyScalar(0.1)
-      );
-      const stepPosition = new THREE.Vector3().addVectors(
-        new THREE.Vector3(positionRef.current[0], positionRef.current[1], positionRef.current[2]),
-        velocity.normalize().multiplyScalar(0.5)
-      );
-      const currentHeight = vertexData(positionRef.current[0], positionRef.current[2]).height;
-      const futureHeight = vertexData(futurePosition.x, futurePosition.z).height;
-      const stepHeight = vertexData(stepPosition.x, stepPosition.z).height;
-      const slope = Math.atan2(futureHeight - currentHeight, 0.1);
-
-      const maxSlope = 2.9;
-      const maxStepHeight = 3000;
-
-      if ((slope <= maxSlope && stepHeight - currentHeight <= maxStepHeight) || distanceToGround > 0.5) {
-        velocity.normalize();
-        const currentSpeed = sprint ? sprintSpeed : walkSpeed;
-        velocity.multiplyScalar(currentSpeed);
-        api.velocity.set(velocity.x, 0, velocity.z);
-      } else {
-        api.velocity.set(0, 0, 0);
-      }
-    } else {
-      api.velocity.set(0, 0, 0);
-    }
-
-    let jumpVelocity = gravity;
+    let jumpVelocity = velocity.current[1];
 
     if (jump && canJump) {
-      setJumpingPointHeight(terrainHeight);
-      setIsJumping(true);
+      jumpVelocity = Math.sqrt(-2 * jumpHeight * gravity);
+      setCanJump(false);
     }
 
-    if (isJumping) jumpVelocity += Math.sqrt(-gravity * jumpHeight);
+    const newVelocity = new THREE.Vector3(moveVelocity.x, jumpVelocity, moveVelocity.z);
 
-    if (Math.abs(positionRef.current[1] - 0.5 * playerHeight - jumpingPointHeight) > jumpHeight) setIsJumping(false); //TODO get distance to jumping point instead
+    api.velocity.set(newVelocity.x, newVelocity.y, newVelocity.z);
 
-    const newYPosition = Math.max(positionRef.current[1] + jumpVelocity * 0.08, terrainHeight + 0.5 * playerHeight);
+    const [x, y, z] = positionRef.current;
 
-    api.position.set(positionRef.current[0], newYPosition, positionRef.current[2]);
+    // Safety check to ensure player is above terrain height
+    if (y < terrainHeight + playerHeight + 10) {
+      api.position.set(x, terrainHeight + playerHeight + 10, z);
+    }
 
-    var [x, y, z] = positionRef.current;
-    camera.position.lerp(
-      new THREE.Vector3(x, Math.max(y, terrainHeight + playerHeight + (sprint && debug_sprint ? 1000 : 0)), z),
-      0.1
-    );
-
-    // const nearestVertex = new THREE.Vector2(Math.round(x / 4) * 4, Math.round(z / 4) * 4);
-    // console.log(nearestVertex); // TODO if needed
+    camera.position.lerp(new THREE.Vector3(x, y + playerHeight, z), 0.1);
   });
 
   return (
