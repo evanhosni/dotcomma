@@ -1,14 +1,13 @@
-import { useLoader } from "@react-three/fiber";
-import { Suspense, useMemo } from "react";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { SceneObject } from "../../../../objects/SceneObject";
 
-export const Apartment = ({ coordinates }: { coordinates: number[] }) => {
-  const gltf = useLoader(GLTFLoader, "/models/apartment.glb");
-  const scene = useMemo(() => gltf.scene.clone(true), [gltf]);
-
-  return (
-    <Suspense fallback={null}>
-      <primitive object={scene} position={[coordinates![0], coordinates![1], coordinates![2]]} />
-    </Suspense>
-  );
+export const Apartment = ({
+  coordinates,
+  scale,
+  rotation,
+}: {
+  coordinates: THREE.Vector3Tuple;
+  scale?: THREE.Vector3Tuple;
+  rotation?: THREE.Vector3Tuple;
+}) => {
+  return <SceneObject model="/models/apartment.glb" coordinates={coordinates} scale={scale} rotation={rotation} />;
 };

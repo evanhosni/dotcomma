@@ -6,7 +6,7 @@ export const gridSize = 100; //NOTE with GRID_SIZE 100 and ROAD_WIDTH 10, blocks
 export const roadWidth = 10;
 
 export const getVertexData = (vertexData: VertexData) => {
-  const { current, distanceToRoadCenter } = _city.create({
+  const { current, includedBlocks, distanceToRoadCenter } = _city.create({
     seed: "city1",
     vertexData,
     gridSize,
@@ -22,6 +22,8 @@ export const getVertexData = (vertexData: VertexData) => {
   // if (Object.values(include).every((inc) => !inc)) {
   //   console.log("this is where a big arena or something could be", current.point); //TODO add big arena sized blocks
   // }
+
+  //TODO in here or in _city.ts we need to determine if block is surrounded by like blocks, and if so, alter the block type from {name: 'apartment, size: '1x1'} to {name: 'apartment, size: '2x2'} or whatever. then, have another _scatter.ts that handles spawning for those blocks (because they will be aligned differently)
 
   return vertexData;
 };

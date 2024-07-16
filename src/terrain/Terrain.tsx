@@ -32,8 +32,8 @@ const terrain: Terrain = {
   active_chunk: null,
   queued_chunks: [],
   new_chunks: [],
-  colliders: {},
-  spawners: {},
+  colliders: {}, //TODO need a way to cleanup this object. Currently, we only add keys to it, not delete. Seems like no matter how we delete, it makes the spawning glitchy
+  spawners: {}, //TODO need a way to cleanup this object. Currently, we only add keys to it, not delete. Seems like no matter how we delete, it makes the spawning glitchy
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -205,8 +205,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       terrain.group.remove(chunkData.chunk.plane);
     }
     delete terrain.chunks[chunkKey];
-    delete terrain.colliders[chunkKey];
-    delete terrain.spawners[chunkKey];
   };
 
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
@@ -261,12 +259,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   return (
     <>
       {Object.values(terrain.colliders).map((collider: TerrainColliderProps) => {
-        return <TerrainCollider key={collider.chunkKey} {...collider} />;
+        if (!!terrain.chunks[collider.chunkKey]) return <TerrainCollider key={collider.chunkKey} {...collider} />;
       })}
       {Object.values(terrain.spawners)
         .flat()
-        .map(({ component: Component, coordinates }: TerrainSpawnerProps, index) => {
-          return <Component key={index} coordinates={coordinates} />;
+        .map(({ chunkKey, component: Component, coordinates, scale, rotation }: TerrainSpawnerProps, index) => {
+          if (!!terrain.chunks[chunkKey])
+            return <Component key={index} coordinates={coordinates} scale={scale} rotation={rotation} />;
         })}
     </>
   );
@@ -291,6 +290,9 @@ export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, p
 
 export interface TerrainSpawnerProps {
   key?: string;
+  chunkKey: string;
   component?: any; //TODO get proper type
-  coordinates: number[];
+  coordinates: THREE.Vector3Tuple;
+  scale?: THREE.Vector3Tuple;
+  rotation?: THREE.Vector3Tuple;
 }
