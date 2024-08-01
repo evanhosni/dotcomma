@@ -1,7 +1,8 @@
 import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import * as THREE from "three";
+import { ObjectPoolManager, spawnObject } from "../objects/ObjectPoolManager";
 import { Dimension } from "../types/Dimension";
 
 export const CHUNK_SIZE = 200; //NOTE was 160
@@ -13,7 +14,7 @@ interface Chunk {
   offset: THREE.Vector2;
   plane: THREE.Mesh;
   rebuildIterator: Iterator<any> | null;
-  //TODO maybe put colliders here instead of in terrain object?
+  collider: TerrainColliderProps | null;
 }
 
 interface Terrain {
@@ -22,8 +23,6 @@ interface Terrain {
   active_chunk: Chunk | null;
   queued_chunks: Chunk[];
   new_chunks: Chunk[];
-  colliders: { [key: string]: TerrainColliderProps };
-  spawners: { [key: string]: TerrainSpawnerProps[] };
 }
 
 const terrain: Terrain = {
@@ -32,8 +31,6 @@ const terrain: Terrain = {
   active_chunk: null,
   queued_chunks: [],
   new_chunks: [],
-  colliders: {}, //TODO need a way to cleanup this object. Currently, we only add keys to it, not delete. Seems like no matter how we delete, it makes the spawning glitchy
-  spawners: {}, //TODO need a way to cleanup this object. Currently, we only add keys to it, not delete. Seems like no matter how we delete, it makes the spawning glitchy
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -41,6 +38,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+  // const [spawners, setSpawners] = useState<{ [key: string]: TerrainSpawnerProps[] }>({}); //TODO move this to a context, handle object pooling etc from there. Or actually, you can put the chunkKey array in context and move all spawner logic there.
 
   scene.add(terrain.group);
 
@@ -49,6 +47,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       let totalChunks = 1;
       for (let i = 0; i <= GRID_SIZE; i++) {
         totalChunks += 8 * i;
+      }
+
+      if (remainingChunks) {
+        const progress = 1 - remainingChunks / totalChunks;
       }
 
       remainingChunks === 0 && setGameLoaded(true);
@@ -84,8 +86,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       for (const chunk of terrain.new_chunks) {
         setTimeout(() => {
           chunk.plane.visible = true;
-        }, 100);
-        //TODO potential solution to below "problemA". maybe make the material start fully transparent and here we can trigger it to fade in gradually? or hacky temp solution is to just use the setTimeout, like i am above
+        }, 100); //TODO potential solution to below "problemA". maybe make the material start fully transparent and here we can trigger it to fade in gradually? or hacky temp solution is to just use the setTimeout, like i am above
       }
 
       terrain.new_chunks = [];
@@ -145,6 +146,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
       rebuildIterator: null,
+      collider: null,
     };
 
     terrain.group.add(plane);
@@ -233,40 +235,49 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
-    if (!terrain.colliders[chunkKey]) {
-      terrain.colliders[chunkKey] = {
-        chunkKey: chunkKey,
-        heightfield,
-        position: offset.toArray(),
-        elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
-      };
-    }
+    chunk.collider = {
+      chunkKey: chunkKey,
+      heightfield,
+      position: offset.toArray(),
+      elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
+    };
   };
 
   const GenerateSpawners = (offset: THREE.Vector2) => {
     const points = dimension.getSpawners(offset.x, offset.y);
     const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
 
-    if (!terrain.spawners[chunkKey]) {
-      terrain.spawners[chunkKey] = points.map(({ point, element }) => ({
-        chunkKey: chunkKey,
+    points.forEach(({ point, element }, index) =>
+      spawnObject({
         component: element,
         coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
-      }));
-    }
+      })
+    );
+
+    // setSpawners((prevSpawners) => ({
+    //   ...prevSpawners,
+    //   [chunkKey]: points.map(({ point, element }) => ({
+    //     chunkKey: chunkKey,
+    //     component: element,
+    //     coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
+    //   })),
+    // }));
   };
 
   return (
     <>
-      {Object.values(terrain.colliders).map((collider: TerrainColliderProps) => {
-        if (!!terrain.chunks[collider.chunkKey]) return <TerrainCollider key={collider.chunkKey} {...collider} />;
+      <ObjectPoolManager />
+      {Object.values(terrain.chunks).map(({ chunk }) => {
+        if (chunk.collider) {
+          return <TerrainCollider key={chunk.collider.chunkKey} {...chunk.collider} />;
+        }
+        return null;
       })}
-      {Object.values(terrain.spawners)
+      {/* {Object.values(spawners)
         .flat()
         .map(({ chunkKey, component: Component, coordinates, scale, rotation }: TerrainSpawnerProps, index) => {
-          if (!!terrain.chunks[chunkKey])
-            return <Component key={index} coordinates={coordinates} scale={scale} rotation={rotation} />;
-        })}
+          return <Component key={index} coordinates={coordinates} scale={scale} rotation={rotation} />;
+        })} */}
     </>
   );
 };

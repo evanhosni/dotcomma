@@ -60,6 +60,7 @@ const useGLTFColliders = (gltf: GLTF) => {
     const colliders: any[] = [];
     gltf.scene.traverse((child) => {
       if (child instanceof Mesh && child.geometry) {
+        //TODO here (i think) check if properties includes collision: true
         const { vertices, faces } = createConvexPolyhedron(child.geometry, child.scale, child.rotation);
 
         colliders.push({

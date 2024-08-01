@@ -7,6 +7,7 @@ import { getVertexData } from "../biomes/glitch-city/getVertexData";
 import { useInput } from "./useInput";
 
 const debug_sprint = true; // NOTE: this is temp for testing
+const debug_jump = true; // NOTE: this is temp for testing
 const debug_console_log = false;
 
 export const Player = () => {
@@ -21,7 +22,7 @@ export const Player = () => {
   };
 
   const walkSpeed = 12;
-  const sprintSpeed = debug_sprint ? 304 : 12;
+  const sprintSpeed = debug_sprint ? 204 : 12;
   const playerHeight = 2;
   const jumpHeight = 4;
   const gravity = -9.81; // Standard gravity
@@ -98,6 +99,10 @@ export const Player = () => {
     api.velocity.set(newVelocity.x, newVelocity.y, newVelocity.z);
 
     const [x, y, z] = positionRef.current;
+
+    if (jump && debug_jump) {
+      api.position.set(x, terrainHeight + playerHeight + 420, z);
+    }
 
     // Safety check to ensure player is above terrain height
     if (y < terrainHeight + playerHeight + 10) {
