@@ -1,5 +1,5 @@
 import { useThree } from "@react-three/fiber";
-import { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
 interface ObjectPoolEntry {
@@ -17,7 +17,6 @@ const getObjectPool = (componentType: string): ObjectPoolEntry[] => {
   if (!objectPools[componentType]) {
     objectPools[componentType] = [];
   }
-  // console.log(`Pool size for ${componentType}: ${objectPools[componentType].length}`);
   return objectPools[componentType];
 };
 
@@ -27,12 +26,9 @@ const getObjectFromPool = (componentType: string, component: React.FC<any>): Obj
 
   if (inactiveObject) {
     inactiveObject.active = true;
-    // console.log(`Reusing object from pool: ${componentType}`);
     return inactiveObject;
   }
 
-  // if (pool.length < 50) {
-  //TODO maybe increase to like 100? this is OBJECT_COUNT so make a const
   const newObject: ObjectPoolEntry = {
     component,
     coordinates: [0, 0, 0],
@@ -40,12 +36,7 @@ const getObjectFromPool = (componentType: string, component: React.FC<any>): Obj
     id: `${componentType}_${pool.length}`,
   };
   pool.push(newObject);
-  // console.log(`Adding new object to pool: ${componentType}. New size: ${pool.length}`);
   return newObject;
-  // }
-
-  // console.log(`Pool is full for ${componentType}. Cannot add new object.`);
-  // return null;
 };
 
 export const spawnObject = ({
@@ -80,30 +71,32 @@ export const ObjectPoolManager = () => {
   const { camera } = useThree();
   const sceneObjectsRef = useRef<Map<string, ObjectPoolEntry>>(new Map());
 
-  useEffect(() => {
-    const updateRenderedObjects = () => {
-      const allObjects = Object.values(objectPools).flat();
-      const newActiveObjectIds = new Set<string>();
-      allObjects.forEach((entry) => {
-        if (entry.active) {
-          const objectPosition = new THREE.Vector3(...entry.coordinates);
-          const distance = camera.position.distanceTo(objectPosition);
-          if (distance > distanceThreshold) {
-            entry.active = false; // Return to pool
-            if (sceneObjectsRef.current.has(entry.id)) {
-              sceneObjectsRef.current.delete(entry.id);
-            }
-          } else {
-            newActiveObjectIds.add(entry.id);
-          }
-        }
-      });
-      setActiveObjectIds(newActiveObjectIds);
-    };
+  const updateRenderedObjects = useCallback(() => {
+    const allObjects = Object.values(objectPools).flat();
+    const newActiveObjectIds = new Set<string>();
+    const thresholdSquared = distanceThreshold * distanceThreshold;
 
-    const interval = setInterval(updateRenderedObjects, 1000 / 60); // Update at 60 FPS
+    allObjects.forEach((entry) => {
+      if (entry.active) {
+        const objectPosition = new THREE.Vector3(...entry.coordinates);
+        const distanceSquared = camera.position.distanceToSquared(objectPosition);
+        if (distanceSquared > thresholdSquared) {
+          entry.active = false;
+          if (sceneObjectsRef.current.has(entry.id)) {
+            sceneObjectsRef.current.delete(entry.id);
+          }
+        } else {
+          newActiveObjectIds.add(entry.id);
+        }
+      }
+    });
+    setActiveObjectIds(newActiveObjectIds);
+  }, [camera.position, distanceThreshold]);
+
+  useEffect(() => {
+    const interval = setInterval(updateRenderedObjects, 1000 / 30); // Update at 30 FPS
     return () => clearInterval(interval);
-  }, [camera]);
+  }, [updateRenderedObjects]);
 
   return (
     <>
@@ -113,17 +106,37 @@ export const ObjectPoolManager = () => {
           .find((e) => e.id === id);
         if (!entry) return null;
 
-        // Update the reference to ensure it's only rendered once
         if (!sceneObjectsRef.current.has(id)) {
           sceneObjectsRef.current.set(id, entry);
         }
 
         const Component = entry.component;
 
-        return <Component key={id} coordinates={entry.coordinates} scale={entry.scale} rotation={entry.rotation} />;
+        return (
+          <MemoizedComponent
+            key={id}
+            id={id}
+            component={Component}
+            coordinates={entry.coordinates}
+            scale={entry.scale}
+            rotation={entry.rotation}
+          />
+        );
       })}
     </>
   );
 };
 
-//maybe dont need object pool. instead, use this logic to separate the spawning and move that into terrain
+interface MemoizedComponentProps {
+  id: string;
+  component: React.FC<any>;
+  coordinates: THREE.Vector3Tuple;
+  scale?: THREE.Vector3Tuple;
+  rotation?: THREE.Vector3Tuple;
+}
+
+const MemoizedComponent: React.FC<MemoizedComponentProps> = React.memo(
+  ({ id, component: Component, coordinates, scale, rotation }) => (
+    <Component key={id} coordinates={coordinates} scale={scale} rotation={rotation} />
+  )
+);

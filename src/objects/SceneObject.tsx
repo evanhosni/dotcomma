@@ -1,108 +1,58 @@
-import { Debug, useConvexPolyhedron } from "@react-three/cannon";
+import { Debug } from "@react-three/cannon";
 import { useLoader } from "@react-three/fiber";
 import { Suspense, useMemo } from "react";
 import * as THREE from "three";
 import { Mesh } from "three";
 import { GLTF, GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { CapsuleCollider, createCapsuleCollider } from "./colliders/capsuleCollider";
+import { ConvexCollider, createConvexCollider } from "./colliders/convexCollider";
+import { createSphereCollider, SphereCollider } from "./colliders/sphereCollider";
+import { createTrimeshCollider, TrimeshCollider } from "./colliders/trimeshCollider";
 
-const createConvexPolyhedron = (geometry: THREE.BufferGeometry, scale: THREE.Vector3, rotation: THREE.Euler) => {
-  const position = geometry.attributes.position.array;
-  const index = geometry.index ? geometry.index.array : null;
+const createColliders = (gltf: GLTF, scale: THREE.Vector3Tuple, rotation: THREE.Vector3Tuple) => {
+  const capsuleColliders: any[] = [];
+  const sphereColliders: any[] = [];
+  const convexColliders: any[] = [];
+  const trimeshColliders: any[] = [];
 
-  const vertices: THREE.Vector3[] = [];
-  const faces: THREE.Vector3Tuple[] = [];
+  gltf.scene.traverse((child) => {
+    if (child instanceof Mesh && child.geometry) {
+      if (!child.userData.collision) return;
 
-  const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(rotation);
-  const scaleMatrix = new THREE.Matrix4().makeScale(scale.x, scale.y, scale.z);
+      const mesh = child.clone();
+      mesh.rotation.set(child.rotation.x, child.rotation.y, child.rotation.z);
+      mesh.scale.multiply(new THREE.Vector3(...scale));
 
-  // Collect vertices
-  for (let i = 0; i < position.length; i += 3) {
-    const vertex = new THREE.Vector3(position[i], position[i + 1], position[i + 2]);
-    vertex.applyMatrix4(scaleMatrix); // Apply scaling
-    vertex.applyMatrix4(rotationMatrix); // Apply rotation
-    vertices.push(vertex);
-  }
-
-  // Collect faces
-  if (index) {
-    for (let i = 0; i < index.length; i += 3) {
-      faces.push([index[i], index[i + 1], index[i + 2]]);
-    }
-  } else {
-    for (let i = 0; i < vertices.length; i += 3) {
-      faces.push([i, i + 1, i + 2]);
-    }
-  }
-
-  // Ensure correct winding order for faces
-  const orderedFaces: THREE.Vector3Tuple[] = [];
-  for (const face of faces) {
-    const normal = new THREE.Vector3();
-    const edge1 = vertices[face[1]].clone().sub(vertices[face[0]]);
-    const edge2 = vertices[face[2]].clone().sub(vertices[face[1]]);
-    normal.crossVectors(edge1, edge2).normalize();
-    if (normal.dot(vertices[face[0]]) < 0) {
-      // Reverse the face order if the normal points inward
-      orderedFaces.push([face[0], face[2], face[1]]);
-    } else {
-      orderedFaces.push(face);
-    }
-  }
-
-  return {
-    vertices,
-    faces: orderedFaces,
-  };
-};
-
-const useGLTFColliders = (gltf: GLTF) => {
-  const colliders = useMemo(() => {
-    const colliders: any[] = [];
-    gltf.scene.traverse((child) => {
-      if (child instanceof Mesh && child.geometry) {
-        //TODO here (i think) check if properties includes collision: true
-        const { vertices, faces } = createConvexPolyhedron(child.geometry, child.scale, child.rotation);
-
-        colliders.push({
-          vertices,
-          faces,
-          position: child.position.clone(),
-          rotation: child.rotation.clone(),
-        });
+      if (child.userData.capsule) {
+        const collider = createCapsuleCollider(mesh);
+        capsuleColliders.push(collider);
+        return;
       }
-    });
-    return colliders;
-  }, [gltf]);
 
-  return colliders;
-};
+      if (child.userData.sphere) {
+        const collider = createSphereCollider(mesh);
+        sphereColliders.push(collider);
+        return;
+      }
 
-const ConvexCollider = ({
-  vertices,
-  faces,
-  position,
-  rotation,
-  offset,
-}: {
-  vertices: any;
-  faces: any;
-  position: any;
-  rotation: any;
-  offset: any;
-}) => {
-  const [ref] = useConvexPolyhedron(() => ({
-    args: [vertices, faces],
-    position: [position.x + offset[0], position.y + offset[1], position.z + offset[2]],
-    rotation: rotation,
-  }));
+      if (child.userData.convex) {
+        const collider = createConvexCollider(mesh);
+        convexColliders.push(collider);
+        return;
+      }
 
-  return <mesh ref={ref as any} />;
+      const collider = createTrimeshCollider(mesh);
+      trimeshColliders.push(collider);
+    }
+  });
+
+  return { capsuleColliders, sphereColliders, convexColliders, trimeshColliders };
 };
 
 export const SceneObject = ({
   model,
   coordinates,
-  scale = [1, 1, 1],
+  scale = [1, 2, 1],
   rotation = [0, 0, 0],
 }: {
   model: string;
@@ -113,20 +63,32 @@ export const SceneObject = ({
   const gltf = useLoader(GLTFLoader, model);
   const scene = useMemo(() => gltf.scene.clone(true), [gltf]);
 
-  const colliders = useGLTFColliders(gltf);
+  const { capsuleColliders, sphereColliders, convexColliders, trimeshColliders } = useMemo(
+    () => createColliders(gltf, scale, rotation),
+    [gltf]
+  );
 
   return (
     <Debug>
       <Suspense fallback={null}>
-        {colliders.map((collider, index) => (
-          <ConvexCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
-        ))}
         <primitive
           object={scene}
           position={[coordinates[0], coordinates[1], coordinates[2]]}
           scale={scale as THREE.Vector3Tuple}
           rotation={new THREE.Euler(...rotation)}
         />
+        {capsuleColliders.map((collider, index) => (
+          <CapsuleCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+        ))}
+        {sphereColliders.map((collider, index) => (
+          <SphereCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+        ))}
+        {convexColliders.map((collider, index) => (
+          <ConvexCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+        ))}
+        {trimeshColliders.map((collider, index) => (
+          <TrimeshCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+        ))}
       </Suspense>
     </Debug>
   );

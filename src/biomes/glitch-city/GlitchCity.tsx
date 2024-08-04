@@ -26,7 +26,7 @@ export const DesertRegion: Region = {
 
 export const GlitchCity: Dimension = {
   name: "glitch-city",
-  regions: [CityRegion, GrassRegion, DesertRegion],
+  regions: [CityRegion /*, GrassRegion, DesertRegion*/],
   getVertexData: getVertexData,
   getMaterial: getMaterial,
   getSpawners: getSpawners,
