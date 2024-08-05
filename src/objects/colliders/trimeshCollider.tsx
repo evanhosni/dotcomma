@@ -1,57 +1,49 @@
 import { useTrimesh } from "@react-three/cannon";
 import * as THREE from "three";
+import { COLLIDER_TYPE } from "./colliderWorker";
 
-export const createTrimeshCollider = (mesh: THREE.Mesh) => {
-  const geometry = mesh.geometry;
-  const position = geometry.attributes.position.array;
-  const index = geometry.index ? geometry.index.array : null;
-  const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(mesh.rotation);
-  const scaleMatrix = new THREE.Matrix4().makeScale(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+export const trimeshColliderWorker = new Worker(new URL("./colliderWorker.ts", import.meta.url), {
+  type: "module",
+});
 
-  const vertices: number[] = [];
-  for (let i = 0; i < position.length; i += 3) {
-    const vertex = new THREE.Vector3(position[i], position[i + 1], position[i + 2]);
-    vertex.applyMatrix4(scaleMatrix);
-    vertex.applyMatrix4(rotationMatrix);
-    vertices.push(vertex.x, vertex.y, vertex.z);
-  }
+export const createTrimeshCollider = (mesh: THREE.Mesh): Promise<any> => {
+  return new Promise((resolve) => {
+    const position = mesh.geometry.attributes.position.array;
+    const index = mesh.geometry.index ? mesh.geometry.index.array : null;
 
-  const indices: number[] = [];
-  if (index) {
-    for (let i = 0; i < index.length; i += 3) {
-      indices.push(index[i], index[i + 1], index[i + 2]);
-    }
-  } else {
-    for (let i = 0; i < vertices.length / 3; i += 3) {
-      indices.push(i, i + 1, i + 2);
-    }
-  }
+    trimeshColliderWorker.onmessage = (event) => {
+      resolve(event.data);
+    };
 
-  return {
-    vertices,
-    indices,
-    position: mesh.position.clone(),
-    rotation: mesh.rotation.clone(),
-  };
+    const params = {
+      positions: Array.from(position),
+      index: index ? Array.from(index) : null,
+      position: [mesh.position.x, mesh.position.y, mesh.position.z],
+      rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
+      scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
+    };
+
+    trimeshColliderWorker.postMessage({ type: COLLIDER_TYPE.TRIMESH, params });
+  });
 };
 
 export const TrimeshCollider = ({
   vertices,
   indices,
   position,
-  offset,
   rotation,
+  offset,
 }: {
   vertices: number[];
   indices: number[];
-  position: THREE.Vector3;
-  offset: THREE.Vector3Tuple;
+  position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
+  offset: THREE.Vector3Tuple;
 }) => {
   const [ref] = useTrimesh(() => ({
     args: [vertices, indices],
-    position: [position.x + offset[0], position.y + offset[1], position.z + offset[2]],
-    rotation: rotation,
+    position: [position[0] + offset[0], position[1] + offset[1], position[2] + offset[2]],
+    rotation,
   }));
 
   return <mesh ref={ref as any} />;
