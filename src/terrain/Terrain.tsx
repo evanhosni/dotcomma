@@ -245,7 +245,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
   const GenerateSpawners = (offset: THREE.Vector2) => {
     const points = dimension.getSpawners(offset.x, offset.y);
-    const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
+    // const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
 
     points.forEach(({ point, element }, index) =>
       spawnObject({

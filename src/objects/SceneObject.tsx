@@ -1,58 +1,18 @@
 import { Debug } from "@react-three/cannon";
 import { useLoader } from "@react-three/fiber";
-import { Suspense, useMemo } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
-import { Mesh } from "three";
-import { GLTF, GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { CapsuleCollider, createCapsuleCollider } from "./colliders/capsuleCollider";
-import { ConvexCollider, createConvexCollider } from "./colliders/convexCollider";
-import { createSphereCollider, SphereCollider } from "./colliders/sphereCollider";
-import { createTrimeshCollider, TrimeshCollider } from "./colliders/trimeshCollider";
-
-const createColliders = (gltf: GLTF, scale: THREE.Vector3Tuple, rotation: THREE.Vector3Tuple) => {
-  const capsuleColliders: any[] = [];
-  const sphereColliders: any[] = [];
-  const convexColliders: any[] = [];
-  const trimeshColliders: any[] = [];
-
-  gltf.scene.traverse((child) => {
-    if (child instanceof Mesh && child.geometry) {
-      if (!child.userData.collision) return;
-
-      const mesh = child.clone();
-      mesh.rotation.set(child.rotation.x, child.rotation.y, child.rotation.z);
-      mesh.scale.multiply(new THREE.Vector3(...scale));
-
-      if (child.userData.capsule) {
-        const collider = createCapsuleCollider(mesh);
-        capsuleColliders.push(collider);
-        return;
-      }
-
-      if (child.userData.sphere) {
-        const collider = createSphereCollider(mesh);
-        sphereColliders.push(collider);
-        return;
-      }
-
-      if (child.userData.convex) {
-        const collider = createConvexCollider(mesh);
-        convexColliders.push(collider);
-        return;
-      }
-
-      const collider = createTrimeshCollider(mesh);
-      trimeshColliders.push(collider);
-    }
-  });
-
-  return { capsuleColliders, sphereColliders, convexColliders, trimeshColliders };
-};
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { BoxCollider } from "./colliders/boxCollider";
+import { CapsuleCollider } from "./colliders/capsuleCollider";
+import { createColliders } from "./colliders/createColliders";
+import { SphereCollider } from "./colliders/sphereCollider";
+import { TrimeshCollider } from "./colliders/trimeshCollider";
 
 export const SceneObject = ({
   model,
   coordinates,
-  scale = [1, 2, 1],
+  scale = [1, 1, 1],
   rotation = [0, 0, 0],
 }: {
   model: string;
@@ -63,10 +23,27 @@ export const SceneObject = ({
   const gltf = useLoader(GLTFLoader, model);
   const scene = useMemo(() => gltf.scene.clone(true), [gltf]);
 
-  const { capsuleColliders, sphereColliders, convexColliders, trimeshColliders } = useMemo(
-    () => createColliders(gltf, scale, rotation),
-    [gltf]
-  );
+  const [colliders, setColliders] = useState<{
+    capsuleColliders: any[];
+    sphereColliders: any[];
+    boxColliders: any[];
+    trimeshColliders: any[];
+  } | null>(null);
+
+  useEffect(() => {
+    const fetchColliders = async () => {
+      const colliders = await createColliders(gltf, scale, rotation);
+      setColliders(colliders);
+    };
+
+    fetchColliders();
+  }, [gltf, scale, rotation]);
+
+  if (!colliders) {
+    return null;
+  }
+
+  const { capsuleColliders, sphereColliders, boxColliders, trimeshColliders } = colliders;
 
   return (
     <Debug>
@@ -78,16 +55,16 @@ export const SceneObject = ({
           rotation={new THREE.Euler(...rotation)}
         />
         {capsuleColliders.map((collider, index) => (
-          <CapsuleCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+          <CapsuleCollider key={index} {...collider} offset={coordinates} />
         ))}
         {sphereColliders.map((collider, index) => (
-          <SphereCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+          <SphereCollider key={index} {...collider} offset={coordinates} />
         ))}
-        {convexColliders.map((collider, index) => (
-          <ConvexCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+        {boxColliders.map((collider, index) => (
+          <BoxCollider key={index} {...collider} offset={coordinates} />
         ))}
         {trimeshColliders.map((collider, index) => (
-          <TrimeshCollider key={index} {...collider} offset={coordinates} rotation={rotation} />
+          <TrimeshCollider key={index} {...collider} offset={coordinates} />
         ))}
       </Suspense>
     </Debug>

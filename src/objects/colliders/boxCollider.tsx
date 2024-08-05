@@ -1,14 +1,14 @@
-import { useSphere } from "@react-three/cannon";
+import { useBox } from "@react-three/cannon";
 import * as THREE from "three";
 import { COLLIDER_TYPE } from "./colliderWorker";
 
-export const sphereColliderWorker = new Worker(new URL("./colliderWorker.ts", import.meta.url), {
+export const boxColliderWorker = new Worker(new URL("./colliderWorker.ts", import.meta.url), {
   type: "module",
 });
 
-export const createSphereCollider = (mesh: THREE.Mesh): Promise<any> => {
+export const createBoxCollider = (mesh: THREE.Mesh): Promise<any> => {
   return new Promise((resolve) => {
-    sphereColliderWorker.onmessage = (event) => {
+    boxColliderWorker.onmessage = (event) => {
       resolve(event.data);
     };
 
@@ -19,22 +19,25 @@ export const createSphereCollider = (mesh: THREE.Mesh): Promise<any> => {
       rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
     };
 
-    sphereColliderWorker.postMessage({ type: COLLIDER_TYPE.SPHERE, params });
+    boxColliderWorker.postMessage({ type: COLLIDER_TYPE.BOX, params });
   });
 };
 
-export const SphereCollider = ({
-  radius,
+export const BoxCollider = ({
+  size,
   position,
+  rotation,
   offset,
 }: {
-  radius: number;
+  size: THREE.Vector3Tuple;
   position: THREE.Vector3Tuple;
+  rotation: THREE.Vector3Tuple;
   offset: THREE.Vector3Tuple;
 }) => {
-  const [ref] = useSphere(() => ({
-    args: [radius],
+  const [ref] = useBox(() => ({
+    args: size,
     position: [position[0] + offset[0], position[1] + offset[1], position[2] + offset[2]],
+    rotation,
   }));
 
   return <mesh ref={ref as any} />;
