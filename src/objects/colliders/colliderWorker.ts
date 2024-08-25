@@ -68,8 +68,29 @@ interface TrimeshColliderProps {
   rotation: THREE.Vector3Tuple;
 }
 
+const taskQueue: MessageData[] = [];
+let isProcessing = false;
+
 self.onmessage = function (event: MessageEvent<MessageData>) {
-  const { type, params } = event.data;
+  taskQueue.push(event.data);
+  if (!isProcessing) {
+    processNextTask();
+  }
+};
+
+function processNextTask() {
+  if (taskQueue.length === 0) {
+    isProcessing = false;
+    return;
+  }
+
+  isProcessing = true;
+  const task = taskQueue.shift()!;
+  handleTask(task);
+}
+
+function handleTask(task: MessageData) {
+  const { type, params } = task;
 
   if (type === COLLIDER_TYPE.CAPSULE) {
     const { geometry, scale, position, rotation } = params as CapsuleColliderParams;
@@ -187,6 +208,8 @@ self.onmessage = function (event: MessageEvent<MessageData>) {
 
     center.add(new THREE.Vector3(position[0], position[1], position[2]));
 
+    //TODO maybe rotation could be better. Currently it only matches rotation.y
+
     const colliderData: BoxColliderProps = {
       size: [size.x, size.y, size.z],
       position: [center.x, center.y, center.z],
@@ -229,4 +252,6 @@ self.onmessage = function (event: MessageEvent<MessageData>) {
 
     self.postMessage(colliderData);
   }
-};
+
+  processNextTask();
+}

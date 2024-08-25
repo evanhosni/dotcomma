@@ -40,14 +40,15 @@ export const SceneObject = ({
   }, [gltf, scale, rotation]);
 
   if (!colliders) {
+    //TODO handle this better. We want to allow !colliders
     return null;
   }
 
   const { capsuleColliders, sphereColliders, boxColliders, trimeshColliders } = colliders;
 
   return (
-    <Debug>
-      <Suspense fallback={null}>
+    <Suspense fallback={null}>
+      <Debug>
         <primitive
           object={scene}
           position={[coordinates[0], coordinates[1], coordinates[2]]}
@@ -66,7 +67,7 @@ export const SceneObject = ({
         {trimeshColliders.map((collider, index) => (
           <TrimeshCollider key={index} {...collider} offset={coordinates} />
         ))}
-      </Suspense>
-    </Debug>
+      </Debug>
+    </Suspense>
   );
 };
