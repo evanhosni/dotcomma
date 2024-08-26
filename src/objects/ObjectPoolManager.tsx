@@ -2,6 +2,8 @@ import { useThree } from "@react-three/fiber";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
+export const OBJECT_DELETE_DISTANCE = 1500;
+
 interface ObjectPoolEntry {
   component: React.FC<any>;
   coordinates: THREE.Vector3Tuple;
@@ -67,7 +69,7 @@ export const spawnObject = ({
 
 export const ObjectPoolManager = () => {
   const [activeObjectIds, setActiveObjectIds] = useState<Set<string>>(new Set());
-  const distanceThreshold = 1500;
+  const distanceThreshold = OBJECT_DELETE_DISTANCE;
   const { camera } = useThree();
   const sceneObjectsRef = useRef<Map<string, ObjectPoolEntry>>(new Map());
 
