@@ -68,28 +68,37 @@ interface TrimeshColliderProps {
   rotation: THREE.Vector3Tuple;
 }
 
-const taskQueue: MessageData[] = [];
-let isProcessing = false;
+type Task = () => Promise<void>; //TODO probably modularize this
 
-self.onmessage = function (event: MessageEvent<MessageData>) {
-  taskQueue.push(event.data);
-  if (!isProcessing) {
-    processNextTask();
-  }
-};
+class TaskQueue {
+  private queue: Task[] = [];
 
-function processNextTask() {
-  if (taskQueue.length === 0) {
-    isProcessing = false;
-    return;
+  public isProcessing = false;
+  public addTask(task: Task) {
+    this.queue.push(task);
+    this.processQueue();
   }
 
-  isProcessing = true;
-  const task = taskQueue.shift()!;
-  handleTask(task);
+  private async processQueue() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+
+    while (this.queue.length > 0) {
+      const task = this.queue.shift()!;
+      await task();
+    }
+
+    this.isProcessing = false;
+  }
 }
 
-function handleTask(task: MessageData) {
+const taskQueue = new TaskQueue();
+
+self.onmessage = function (event: MessageEvent<MessageData>) {
+  taskQueue.addTask(() => handleTask(event.data));
+};
+
+async function handleTask(task: MessageData) {
   const { type, params } = task;
 
   if (type === COLLIDER_TYPE.CAPSULE) {
@@ -252,6 +261,4 @@ function handleTask(task: MessageData) {
 
     self.postMessage(colliderData);
   }
-
-  processNextTask();
 }

@@ -21,8 +21,8 @@ export const Player = () => {
     return getVertexData(x, y);
   };
 
-  const walkSpeed = 12;
-  const sprintSpeed = debug_sprint ? 204 : 12;
+  const walkSpeed = 20;
+  const sprintSpeed = debug_sprint ? 304 : 50;
   const playerHeight = 2;
   const jumpHeight = 4;
   const gravity = -9.81; // Standard gravity
