@@ -1,6 +1,6 @@
 import { Debug } from "@react-three/cannon";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
@@ -61,29 +61,11 @@ export const SceneObject = ({
 
   const [shouldRenderColliders, setShouldRenderColliders] = useState(false);
 
-  // Use a ref to hold the current camera position
-  const cameraPositionRef = useRef(camera.position.clone());
-
   useFrame(() => {
-    // Update the camera position ref on every frame
-    cameraPositionRef.current.copy(camera.position);
+    const objectPosition = new THREE.Vector3(...coordinates);
+    const distance = camera.position.distanceTo(objectPosition);
+    setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE);
   });
-
-  useEffect(() => {
-    // Function to determine if colliders should be rendered
-    const updateColliderRenderState = () => {
-      const objectPosition = new THREE.Vector3(...coordinates);
-      const distance = cameraPositionRef.current.distanceTo(objectPosition);
-      setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE);
-    };
-
-    // Initial update and set an interval for periodic checks
-    updateColliderRenderState();
-    const interval = setInterval(updateColliderRenderState, 1000); // Check every second
-
-    // Cleanup interval on component unmount
-    return () => clearInterval(interval);
-  }, [coordinates]);
 
   useEffect(() => {
     const task = async () => {

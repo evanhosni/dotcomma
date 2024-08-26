@@ -89,7 +89,7 @@ export const TrimeshCollider = ({
   offset: THREE.Vector3Tuple;
 }) => {
   const [ref] = useTrimesh(() => ({
-    args: [vertices, indices],
+    args: [vertices || [], indices || []],
     position: [position[0] + offset[0], position[1] + offset[1], position[2] + offset[2]],
     rotation,
   }));
