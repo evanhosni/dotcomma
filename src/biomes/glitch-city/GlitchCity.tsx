@@ -1,4 +1,4 @@
-import { Physics } from "@react-three/cannon";
+import { Debug, Physics } from "@react-three/cannon";
 import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Player } from "../../player/Player";
@@ -37,10 +37,10 @@ export const GlitchCity: Dimension = {
         <ambientLight intensity={0.5} />
         <directionalLight position={[10, 10, 5]} intensity={1} />
         <Physics>
-          {/* <Debug> */}
-          <Player />
-          <Terrain dimension={GlitchCity} />
-          {/* </Debug> */}
+          <Debug>
+            <Player />
+            <Terrain dimension={GlitchCity} />
+          </Debug>
         </Physics>
       </Canvas>
     );

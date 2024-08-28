@@ -5,7 +5,7 @@ import { blocks } from "./blocks/[blocks]";
 export const gridSize = 100; //NOTE with GRID_SIZE 100 and ROAD_WIDTH 10, blocks are 80x80 and buildings should be like...50x50
 export const roadWidth = 10;
 
-export const getVertexData = (vertexData: VertexData) => {
+export const getVertexData = async (vertexData: VertexData) => {
   const { current, includedBlocks, distanceToRoadCenter } = _city.create({
     seed: "city1",
     vertexData,

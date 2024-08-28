@@ -1,5 +1,5 @@
-import * as THREE from "three";
 /* eslint no-restricted-globals: off */
+import * as THREE from "three";
 
 export enum COLLIDER_TYPE {
   CAPSULE = "capsule",

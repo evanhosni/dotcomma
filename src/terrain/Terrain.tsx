@@ -13,7 +13,7 @@ const NUM_STEPS = 200; //TODO make this vary based on FPS?
 interface Chunk {
   offset: THREE.Vector2;
   plane: THREE.Mesh;
-  rebuildIterator: Iterator<any> | null;
+  rebuildIterator: AsyncGenerator<void> | null;
   collider: TerrainColliderProps | null;
 }
 
@@ -38,7 +38,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
-  // const [spawners, setSpawners] = useState<{ [key: string]: TerrainSpawnerProps[] }>({}); //TODO move this to a context, handle object pooling etc from there. Or actually, you can put the chunkKey array in context and move all spawner logic there.
 
   scene.add(terrain.group);
 
@@ -67,9 +66,9 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
   });
 
-  const UpdateTerrain = (material: THREE.Material) => {
+  const UpdateTerrain = async (material: THREE.Material) => {
     if (terrain.active_chunk) {
-      const iteratorResult = terrain.active_chunk.rebuildIterator!.next();
+      const iteratorResult = await terrain.active_chunk.rebuildIterator!.next();
       if (iteratorResult.done) {
         terrain.active_chunk = null;
       }
@@ -155,7 +154,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     return chunk;
   };
 
-  const BuildChunk = function* (chunk: Chunk, material: THREE.Material) {
+  const BuildChunk = async function* (chunk: Chunk, material: THREE.Material) {
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
     let count = 0;
@@ -163,7 +162,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
+
+      const vertexData = await dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
 
       pos.setXYZ(i, v.x, v.y, vertexData.height);
 
@@ -243,25 +243,17 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     };
   };
 
-  const GenerateSpawners = (offset: THREE.Vector2) => {
-    const points = dimension.getSpawners(offset.x, offset.y);
-    // const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
+  const GenerateSpawners = async (offset: THREE.Vector2) => {
+    const points = await dimension.getSpawners(offset.x, offset.y);
 
-    points.forEach(({ point, element }, index) =>
-      spawnObject({
+    points.forEach(async ({ point, element }, index) => {
+      const vertexData = await dimension.getVertexData(point.x, point.z);
+
+      return spawnObject({
         component: element,
-        coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
-      })
-    );
-
-    // setSpawners((prevSpawners) => ({
-    //   ...prevSpawners,
-    //   [chunkKey]: points.map(({ point, element }) => ({
-    //     chunkKey: chunkKey,
-    //     component: element,
-    //     coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
-    //   })),
-    // }));
+        coordinates: [point.x, vertexData.height, point.z],
+      });
+    });
   };
 
   return (
@@ -273,11 +265,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         }
         return null;
       })}
-      {/* {Object.values(spawners)
-        .flat()
-        .map(({ chunkKey, component: Component, coordinates, scale, rotation }: TerrainSpawnerProps, index) => {
-          return <Component key={index} coordinates={coordinates} scale={scale} rotation={rotation} />;
-        })} */}
     </>
   );
 };

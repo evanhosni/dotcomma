@@ -17,7 +17,7 @@ export const Player = () => {
   const [canJump, setCanJump] = useState(true);
 
   const vertexData = (x: number, y: number) => {
-    if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
+    // if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
     return getVertexData(x, y);
   };
 
@@ -84,7 +84,7 @@ export const Player = () => {
       moveVelocity.multiplyScalar(currentSpeed);
     }
 
-    const terrainHeight = vertexData(positionRef.current[0], positionRef.current[2]).height;
+    const terrainHeight = 0; //vertexData(positionRef.current[0], positionRef.current[2]).height;
     setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
 
     let jumpVelocity = velocity.current[1];

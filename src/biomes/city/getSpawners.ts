@@ -5,7 +5,7 @@ import { GlitchCity } from "../glitch-city/GlitchCity";
 import { City } from "./City";
 import { gridSize, roadWidth } from "./getVertexData";
 
-export const getSpawners = (x: number, y: number): Spawner[] => {
+export const getSpawners = async (x: number, y: number): Promise<Spawner[]> => {
   const points = _scatter.create({
     seed: "city",
     currentVertex: new THREE.Vector2(x, y),
@@ -16,8 +16,8 @@ export const getSpawners = (x: number, y: number): Spawner[] => {
       x: 0,
       z: 0,
     },
-    filter: (point: THREE.Vector3) => {
-      const attributes = GlitchCity.getVertexData(point.x, point.z).attributes;
+    filter: async (point: THREE.Vector3) => {
+      const { attributes } = await GlitchCity.getVertexData(point.x, point.z);
 
       if (attributes.biome !== City) return null;
       if (!attributes.block) return null;

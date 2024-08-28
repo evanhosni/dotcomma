@@ -13,7 +13,7 @@ export interface ScatterCreateParams {
 }
 
 export namespace _scatter {
-  export const create = (params: ScatterCreateParams): Spawner[] => {
+  export const create = async (params: ScatterCreateParams): Promise<Spawner[]> => {
     const { seed, currentVertex, gridSize, filter } = params;
 
     const iterations = Math.ceil(CHUNK_SIZE / 2 / gridSize);
@@ -33,7 +33,7 @@ export namespace _scatter {
           point.z >= currentVertex.y - CHUNK_SIZE / 2 &&
           point.z < currentVertex.y + CHUNK_SIZE / 2
         ) {
-          const element = filter(point);
+          const element = await filter(point);
           if (!!element) {
             grid.push({ point, element });
           }

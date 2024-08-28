@@ -19,11 +19,11 @@ const roadNoise: TerrainNoiseParams = {
   scale: 250,
 };
 
-export const getVertexData = (x: number, y: number) => {
+export const getVertexData = async (x: number, y: number) => {
   var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector2(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0));
 
-  const { biome, distance, walls } = _voronoi.create({
+  const { biome, distance, walls } = await _voronoi.create({
     seed: "123",
     currentVertex,
     gridSize,
@@ -38,7 +38,7 @@ export const getVertexData = (x: number, y: number) => {
   vertexData.attributes.walls = walls;
   vertexData.attributes.distanceToRoadCenter = distance;
   vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
-  vertexData.height = getHeight(vertexData);
+  vertexData.height = await getHeight(vertexData);
 
   return vertexData;
 };
@@ -53,11 +53,12 @@ const baseNoise: TerrainNoiseParams = {
   scale: 5000,
 };
 
-const getHeight = (vertexData: VertexData) => {
+const getHeight = async (vertexData: VertexData) => {
   let height = 0;
+  const biomeVertexData = await vertexData.attributes.biome.getVertexData(vertexData);
 
   if (vertexData.attributes.distanceToRoadCenter > roadWidth)
-    height = vertexData.attributes.biome.getVertexData(vertexData).height * vertexData.attributes.blend;
+    height = biomeVertexData.height * vertexData.attributes.blend;
 
   return height + _noise.terrain(baseNoise, vertexData.x, vertexData.y);
 };

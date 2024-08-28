@@ -241,6 +241,6 @@ export namespace _voronoi {
     }
     closestPoints.sort((a, b) => a.distanceTo(vec3) - b.distanceTo(vec3));
 
-    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : 9999; //NOTE closestPoints[0] doesnt exist for some vertices of joinable biomes. This ternary allows us to keep the nested for loop iterations low.
+    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : 9999; //NOTE closestPoints[0] doesnt exist for some vertices of joinable biomes. This ternary allows us to keep the nested for loop iterations low. //TODO all 9999 instances => Infinity?
   };
 }
