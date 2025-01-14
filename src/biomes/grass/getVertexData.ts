@@ -11,7 +11,7 @@ const noise: TerrainNoiseParams = {
   scale: 100,
 };
 
-export const getVertexData = (biomeData: VertexData) => {
+export const getVertexData = async (biomeData: VertexData) => {
   const { x, y } = biomeData;
   var vertexData: VertexData = { ...vertexData_default, x, y };
 

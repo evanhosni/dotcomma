@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { TerrainNoiseParams, _noise } from "../../_/_noise";
-import { _voronoi } from "../../_/_voronoi";
 import { VertexData, vertexData_default } from "../../types/VertexData";
+import { voronoi } from "../../utils/voronoi/voronoi";
 import { GlitchCity } from "./GlitchCity";
 
 const regionGridSize = 2500; //TODO maybe make these dimension props?
@@ -19,17 +19,17 @@ const roadNoise: TerrainNoiseParams = {
   scale: 250,
 };
 
-export const getVertexData = (x: number, y: number) => {
+export const getVertexData = async (x: number, y: number) => {
   var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector2(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0));
 
-  const { biome, distance, walls } = _voronoi.create({
+  const { biome, distance, walls } = (await voronoi.create({
     seed: "123",
     currentVertex,
     gridSize,
     regionGridSize,
     regions: GlitchCity.regions,
-  });
+  })) as any; //TODO fix as any
 
   const blendWidth = biome.blendWidth || defaultBlendWidth;
 
@@ -38,7 +38,7 @@ export const getVertexData = (x: number, y: number) => {
   vertexData.attributes.walls = walls;
   vertexData.attributes.distanceToRoadCenter = distance;
   vertexData.attributes.blend = Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth;
-  vertexData.height = getHeight(vertexData);
+  vertexData.height = await getHeight(vertexData);
 
   return vertexData;
 };
@@ -53,11 +53,13 @@ const baseNoise: TerrainNoiseParams = {
   scale: 5000,
 };
 
-const getHeight = (vertexData: VertexData) => {
+const getHeight = async (vertexData: VertexData) => {
   let height = 0;
 
-  if (vertexData.attributes.distanceToRoadCenter > roadWidth)
-    height = vertexData.attributes.biome.getVertexData(vertexData).height * vertexData.attributes.blend;
+  if (vertexData.attributes.distanceToRoadCenter > roadWidth) {
+    const biome_vertexData = await vertexData.attributes.biome.getVertexData(vertexData);
+    height = biome_vertexData.height * vertexData.attributes.blend;
+  }
 
   return height + _noise.terrain(baseNoise, vertexData.x, vertexData.y);
 };

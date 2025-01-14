@@ -2,7 +2,7 @@ import { useThree } from "@react-three/fiber";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
-export const OBJECT_DELETE_DISTANCE = 1500;
+export const OBJECT_DELETE_DISTANCE = 2500 + 250; //TODO use one global variable for render distance (combine with terrain MAX_RENDER_DISTANCE)
 
 interface ObjectPoolEntry {
   component: React.FC<any>;

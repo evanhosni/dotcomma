@@ -16,13 +16,13 @@ export const Player = () => {
   const [distanceToGround, setDistanceToGround] = useState(0);
   const [canJump, setCanJump] = useState(true);
 
-  const vertexData = (x: number, y: number) => {
-    if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
-    return getVertexData(x, y);
+  const vertexData = async (x: number, y: number) => {
+    // if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
+    return await getVertexData(x, y);
   };
 
   const walkSpeed = 20;
-  const sprintSpeed = debug_sprint ? 304 : 50;
+  const sprintSpeed = debug_sprint ? 300 : 50;
   const playerHeight = 2;
   const jumpHeight = 4;
   const gravity = -9.81; // Standard gravity
@@ -61,7 +61,7 @@ export const Player = () => {
     return unsubscribe;
   }, [api.position]);
 
-  useFrame(() => {
+  useFrame(async () => {
     const direction = new THREE.Vector3();
     const sideDirection = new THREE.Vector3();
     const upVector = new THREE.Vector3(0, 1, 0);
@@ -84,7 +84,8 @@ export const Player = () => {
       moveVelocity.multiplyScalar(currentSpeed);
     }
 
-    const terrainHeight = vertexData(positionRef.current[0], positionRef.current[2]).height;
+    // const verts = await vertexData(positionRef.current[0], positionRef.current[2]);
+    const terrainHeight = 10; // verts.height;
     setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
 
     let jumpVelocity = velocity.current[1];

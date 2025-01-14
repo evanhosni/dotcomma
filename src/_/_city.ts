@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { Block, block_default } from "../types/Block";
 import { VertexData } from "../types/VertexData";
+import { voronoi } from "../utils/voronoi/voronoi";
 import { _math } from "./_math";
-import { _voronoi } from "./_voronoi";
 
 interface CityGrid {
   point: THREE.Vector2;
@@ -29,10 +29,10 @@ export interface CityCreateParams {
 const caches: any = {};
 
 export namespace _city {
-  export const create = (params: CityCreateParams) => {
+  export const create = async (params: CityCreateParams) => {
     const { seed, vertexData, gridSize, blocks } = params;
 
-    const grid = _city.getGrid({ seed, vertexData, gridSize, blocks });
+    const grid = await _city.getGrid({ seed, vertexData, gridSize, blocks });
     const current = _city.getCurrent(grid);
     const distances = _city.getDistances(vertexData, gridSize);
     const includedBlocks = _city.getIncludedBlocks(current, grid);
@@ -41,7 +41,7 @@ export namespace _city {
     return { grid, current, distances, includedBlocks, distanceToRoadCenter };
   };
 
-  export const getGrid = ({ seed, vertexData, gridSize, blocks }: CityGetGridParams) => {
+  export const getGrid = async ({ seed, vertexData, gridSize, blocks }: CityGetGridParams) => {
     const currentGrid = [Math.floor(vertexData.x / gridSize), Math.floor(vertexData.y / gridSize)];
     const [x, y] = currentGrid;
 
@@ -57,10 +57,10 @@ export namespace _city {
         for (let iy = y - 2; iy <= y + 2; iy++) {
           const point = new THREE.Vector2(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize);
           const isEdge =
-            _voronoi.getDistanceToWall({
+            (await voronoi.getDistanceToWall({
               currentVertex: new THREE.Vector2(point.x, point.y),
               walls: vertexData.attributes.walls,
-            }) < Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
+            })) < Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
           const block = isEdge
             ? block_default
             : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];

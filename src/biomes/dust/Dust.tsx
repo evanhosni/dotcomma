@@ -5,7 +5,7 @@ export const Dust: Biome = {
   name: "dust",
   id: 2,
   getVertexData: getVertexData,
-  getSpawners: (dimension) => {
+  getSpawners: async (dimension) => {
     return [];
   },
   joinable: true,
