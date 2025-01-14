@@ -5,15 +5,15 @@ import * as THREE from "three";
 import { ObjectPoolManager, spawnObject } from "../objects/ObjectPoolManager";
 import { Dimension } from "../types/Dimension";
 
-export const CHUNK_SIZE = 200; //NOTE was 160
-const CHUNK_RESOLUTION = 25; //NOTE was 25
-const GRID_SIZE = 5; //NOTE was 5
-const NUM_STEPS = 200; //TODO make this vary based on FPS?
+export const MAX_RENDER_DISTANCE = 2000;
+export const CHUNK_SIZE = 250;
+const CHUNK_RESOLUTION = 20;
+const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
 
 interface Chunk {
   offset: THREE.Vector2;
   plane: THREE.Mesh;
-  rebuildIterator: Iterator<any> | null;
+  rebuildIterator: AsyncIterator<any> | null;
   collider: TerrainColliderProps | null;
 }
 
@@ -22,7 +22,6 @@ interface Terrain {
   chunks: { [key: string]: { position: number[]; chunk: Chunk } };
   active_chunk: Chunk | null;
   queued_chunks: Chunk[];
-  new_chunks: Chunk[];
 }
 
 const terrain: Terrain = {
@@ -30,13 +29,13 @@ const terrain: Terrain = {
   chunks: {},
   active_chunk: null,
   queued_chunks: [],
-  new_chunks: [],
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
+  const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
   // const [spawners, setSpawners] = useState<{ [key: string]: TerrainSpawnerProps[] }>({}); //TODO move this to a context, handle object pooling etc from there. Or actually, you can put the chunkKey array in context and move all spawner logic there.
 
@@ -44,18 +43,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
   useEffect(() => {
     if (!gameLoaded) {
-      let totalChunks = 1;
-      for (let i = 0; i <= GRID_SIZE; i++) {
-        totalChunks += 8 * i;
-      }
-
-      if (remainingChunks) {
+      if (remainingChunks !== null) {
         const progress = 1 - remainingChunks / totalChunks;
+        console.log(`Loading progress: ${(progress * 100).toFixed(1)}%`);
       }
-
       remainingChunks === 0 && setGameLoaded(true);
     }
-  }, [remainingChunks]);
+  }, [remainingChunks, gameLoaded]);
 
   useEffect(() => {
     dimension.getMaterial().then(setTerrainMaterial);
@@ -67,51 +61,96 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
   });
 
-  const UpdateTerrain = (material: THREE.Material) => {
+  const UpdateTerrain = async (material: THREE.Material) => {
     if (terrain.active_chunk) {
-      const iteratorResult = terrain.active_chunk.rebuildIterator!.next();
-      if (iteratorResult.done) {
-        terrain.active_chunk = null;
+      const currentChunk = terrain.active_chunk;
+      try {
+        const iteratorResult = await terrain.active_chunk.rebuildIterator!.next();
+        if (iteratorResult.done) {
+          if (terrain.active_chunk === currentChunk) {
+            terrain.active_chunk = null;
+          }
+          if (currentChunk.plane) {
+            setTimeout(() => {
+              currentChunk.plane.visible = true;
+            }, 100);
+          }
+        }
+      } catch (error) {
+        console.error("Error updating terrain:", error);
+        if (terrain.active_chunk === currentChunk) {
+          terrain.active_chunk = null;
+        }
       }
     } else {
+      // Sort queued chunks by distance before popping
+      if (terrain.queued_chunks.length > 0) {
+        const playerX = camera.position.x;
+        const playerZ = camera.position.z;
+
+        // Filter out chunks that are too far away using actual distance
+        terrain.queued_chunks = terrain.queued_chunks.filter((chunk) => {
+          // Calculate actual distance to player for this chunk
+          const distToPlayer = Math.sqrt(
+            Math.pow(chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
+              Math.pow(chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+          );
+          return distToPlayer <= MAX_RENDER_DISTANCE * 2; //TODO dev note: multiplying by 2 prevents tiles within range from being deleted from queue
+        });
+
+        // Then sort remaining chunks by distance
+        terrain.queued_chunks.sort((a, b) => {
+          const distA = Math.sqrt(
+            Math.pow(a.offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(a.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+          );
+          const distB = Math.sqrt(
+            Math.pow(b.offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(b.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+          );
+          return distB - distA; // Changed to prioritize closest chunks
+        });
+      }
+
       const chunk = terrain.queued_chunks.pop();
       if (chunk) {
         terrain.active_chunk = chunk;
         terrain.active_chunk.rebuildIterator = BuildChunk(chunk, material);
-        terrain.new_chunks.push(chunk);
       }
-    }
-
-    if (!terrain.queued_chunks.length) {
-      for (const chunk of terrain.new_chunks) {
-        setTimeout(() => {
-          chunk.plane.visible = true;
-        }, 100); //TODO potential solution to below "problemA". maybe make the material start fully transparent and here we can trigger it to fade in gradually? or hacky temp solution is to just use the setTimeout, like i am above
-      }
-
-      terrain.new_chunks = [];
     }
 
     if (!terrain.active_chunk) {
-      const xp = camera.position.x + CHUNK_SIZE * 0.5;
-      const yp = camera.position.z + CHUNK_SIZE * 0.5;
-      const xc = Math.floor(xp / CHUNK_SIZE);
-      const zc = Math.floor(yp / CHUNK_SIZE);
+      const playerX = camera.position.x;
+      const playerZ = camera.position.z;
+      const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
+      const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+
+      // Calculate the maximum number of chunks in each direction
+      // const maxChunks = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
       const keys: { [key: string]: { position: number[] } } = {};
 
-      for (let x = -GRID_SIZE; x <= GRID_SIZE; x++) {
-        for (let z = -GRID_SIZE; z <= GRID_SIZE; z++) {
-          const k = `${x + xc}/${z + zc}`;
-          keys[k] = { position: [x + xc, z + zc] };
+      // Generate chunks in a circular pattern
+      for (let x = -CHUNK_RADIUS; x <= CHUNK_RADIUS; x++) {
+        for (let z = -CHUNK_RADIUS; z <= CHUNK_RADIUS; z++) {
+          // Calculate the distance from this chunk to the player's chunk //TODO dont think we need to do this
+          // const distanceToPlayer = Math.sqrt(x * x + z * z) * CHUNK_SIZE;
+
+          // Only include chunks within MAX_RENDER_DISTANCE //TODO dont think we need to do this
+          // if (distanceToPlayer <= MAX_RENDER_DISTANCE) {
+          const chunkX = playerChunkX + x;
+          const chunkZ = playerChunkZ + z;
+          const k = `${chunkX}/${chunkZ}`;
+          keys[k] = { position: [chunkX, chunkZ] };
+          // }
         }
       }
 
+      // Remove chunks that are too far away
       for (const chunkKey in terrain.chunks) {
         if (!keys[chunkKey]) {
           DestroyChunk(chunkKey);
         }
       }
 
+      // Add new chunks that are within range
       const difference = { ...keys };
       for (const chunkKey in terrain.chunks) {
         delete difference[chunkKey];
@@ -124,14 +163,24 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
         const [xp, zp] = difference[chunkKey].position;
         const offset = new THREE.Vector2(xp * CHUNK_SIZE, zp * CHUNK_SIZE);
+
+        // // Calculate actual distance to player for this new chunk //TODO dont think we need to do this
+        // const distToPlayer = Math.sqrt(
+        //   Math.pow(offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+        // );
+
+        // Double check we're within render distance before creating //TODO dont think we need to do this
+        // if (distToPlayer <= MAX_RENDER_DISTANCE) {
         const chunk = QueueChunk(offset, CHUNK_SIZE, material);
         terrain.chunks[chunkKey] = {
-          position: [xc, zc],
+          position: [playerChunkX, playerChunkZ],
           chunk: chunk,
+          // };
         };
       }
     }
 
+    if (remainingChunks === null) setTotalChunks(terrain.queued_chunks.length);
     setRemainingChunks(terrain.queued_chunks.length);
   };
 
@@ -155,15 +204,14 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     return chunk;
   };
 
-  const BuildChunk = function* (chunk: Chunk, material: THREE.Material) {
+  const BuildChunk = async function* (chunk: Chunk, material: THREE.Material) {
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
-    let count = 0;
     const attributeBuffers: any = {};
 
     for (let i = 0; i < pos.count; i++) {
       const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
+      const vertexData = await dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
 
       pos.setXYZ(i, v.x, v.y, vertexData.height);
 
@@ -176,11 +224,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       for (const attrName in vertexData.attributes) {
         if (attributeBuffers[attrName]) attributeBuffers[attrName][i] = vertexData.attributes[attrName];
       }
-
-      if (++count > NUM_STEPS && gameLoaded) {
-        count = 0;
-        yield;
-      }
     }
 
     for (const attrName in attributeBuffers) {
@@ -188,13 +231,15 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       chunk.plane.geometry.setAttribute(attrName, bufferAttribute);
     }
 
+    // Apply material and update geometry immediately
     chunk.plane.material = material;
     chunk.plane.geometry.attributes.position.needsUpdate = true;
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
 
+    // Generate spawners and colliders
+    await GenerateSpawners(offset);
     GenerateColliders(chunk, offset);
-    GenerateSpawners(offset);
 
     yield;
   };
@@ -243,26 +288,28 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     };
   };
 
-  const GenerateSpawners = (offset: THREE.Vector2) => {
-    const points = dimension.getSpawners(offset.x, offset.y);
-    // const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
+  const GenerateSpawners = async (offset: THREE.Vector2) => {
+    const points = await dimension.getSpawners(offset.x, offset.y);
 
-    points.forEach(({ point, element }, index) =>
-      spawnObject({
-        component: element,
-        coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
+    Promise.all(
+      points.map(async ({ point, element }) => {
+        const vertexData = await dimension.getVertexData(point.x, point.z);
+        return spawnObject({
+          component: element,
+          coordinates: [point.x, vertexData.height, point.z],
+        });
       })
     );
-
-    // setSpawners((prevSpawners) => ({
-    //   ...prevSpawners,
-    //   [chunkKey]: points.map(({ point, element }) => ({
-    //     chunkKey: chunkKey,
-    //     component: element,
-    //     coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
-    //   })),
-    // }));
   };
+
+  // setSpawners((prevSpawners) => ({
+  //   ...prevSpawners,
+  //   [chunkKey]: points.map(({ point, element }) => ({
+  //     chunkKey: chunkKey,
+  //     component: element,
+  //     coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
+  //   })),
+  // }));
 
   return (
     <>

@@ -5,7 +5,7 @@ export const Grass: Biome = {
   name: "grass",
   id: 3,
   getVertexData: getVertexData,
-  getSpawners: (dimension) => {
+  getSpawners: async (dimension) => {
     return [];
   },
   joinable: true,

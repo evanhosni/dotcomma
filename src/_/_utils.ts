@@ -12,4 +12,14 @@ export namespace _utils {
       )
     );
   };
+
+  export const getAllBiomesFromRegions = (regions: Region[]): Biome[] => {
+    return Array.from(
+      new Set(
+        regions.reduce((biomes: Biome[], region: Region) => {
+          return biomes.concat(region.biomes);
+        }, [])
+      )
+    );
+  };
 }

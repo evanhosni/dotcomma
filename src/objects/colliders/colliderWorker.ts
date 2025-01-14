@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { TaskQueue } from "../../_/TaskQueue";
 /* eslint no-restricted-globals: off */
 
 export enum COLLIDER_TYPE {
@@ -66,30 +67,6 @@ interface TrimeshColliderProps {
   indices: number[];
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
-}
-
-type Task = () => Promise<void>; //TODO probably modularize this
-
-class TaskQueue {
-  private queue: Task[] = [];
-
-  public isProcessing = false;
-  public addTask(task: Task) {
-    this.queue.push(task);
-    this.processQueue();
-  }
-
-  private async processQueue() {
-    if (this.isProcessing) return;
-    this.isProcessing = true;
-
-    while (this.queue.length > 0) {
-      const task = this.queue.shift()!;
-      await task();
-    }
-
-    this.isProcessing = false;
-  }
 }
 
 const taskQueue = new TaskQueue();

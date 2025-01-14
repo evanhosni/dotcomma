@@ -3,14 +3,10 @@ import { Biome } from "../../types/Biome";
 import { Spawner } from "../../types/Spawner";
 import { GlitchCity } from "./GlitchCity";
 
-export const getSpawners = (x: number, y: number): Spawner[] => {
-  const points: Spawner[] = [];
-
+export const getSpawners = async (x: number, y: number): Promise<Spawner[]> => {
   const biomes: Biome[] = _utils.getAllBiomes(GlitchCity);
 
-  biomes.forEach((biome) => {
-    points.push(...biome.getSpawners(x, y));
-  });
+  const points = await Promise.all(biomes.map((biome) => biome.getSpawners(x, y)));
 
-  return points;
+  return points.flat();
 };

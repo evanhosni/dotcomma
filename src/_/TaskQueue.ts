@@ -1,6 +1,6 @@
 type Task = () => Promise<void>;
 
-class TaskQueue {
+export class TaskQueue {
   private queue: Task[] = [];
   private isProcessing = false;
 
@@ -21,5 +21,3 @@ class TaskQueue {
     this.isProcessing = false;
   }
 }
-
-export const taskQueue = new TaskQueue();
