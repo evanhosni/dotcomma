@@ -22,7 +22,7 @@ export const Player = () => {
   };
 
   const walkSpeed = 20;
-  const sprintSpeed = debug_sprint ? 300 : 50;
+  const sprintSpeed = debug_sprint ? 200 : 50;
   const playerHeight = 2;
   const jumpHeight = 4;
   const gravity = -9.81; // Standard gravity

@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { ObjectPoolManager, spawnObject } from "../objects/ObjectPoolManager";
 import { Dimension } from "../types/Dimension";
 
-export const MAX_RENDER_DISTANCE = 2000;
+export const MAX_RENDER_DISTANCE = 2500;
 export const CHUNK_SIZE = 250;
 const CHUNK_RESOLUTION = 20;
 const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
@@ -37,7 +37,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
-  // const [spawners, setSpawners] = useState<{ [key: string]: TerrainSpawnerProps[] }>({}); //TODO move this to a context, handle object pooling etc from there. Or actually, you can put the chunkKey array in context and move all spawner logic there.
 
   scene.add(terrain.group);
 
@@ -45,7 +44,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     if (!gameLoaded) {
       if (remainingChunks !== null) {
         const progress = 1 - remainingChunks / totalChunks;
-        console.log(`Loading progress: ${(progress * 100).toFixed(1)}%`);
+        if (progress === 1) console.log("loaded");
+        // console.log(`Loading progress: ${(progress * 100).toFixed(1)}%`);
       }
       remainingChunks === 0 && setGameLoaded(true);
     }
@@ -237,8 +237,19 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
 
-    // Generate spawners and colliders
-    await GenerateSpawners(offset);
+    // Generate spawners
+    const points = await dimension.getSpawners(offset.x, offset.y);
+
+    // Spawn objects one at a time, yielding after each
+    for (const { point, element } of points) {
+      const vertexData = await dimension.getVertexData(point.x, point.z);
+      spawnObject({
+        component: element,
+        coordinates: [point.x, vertexData.height, point.z],
+      });
+      yield; // Yield after each spawn to prevent freezing
+    }
+
     GenerateColliders(chunk, offset);
 
     yield;
@@ -288,29 +299,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     };
   };
 
-  const GenerateSpawners = async (offset: THREE.Vector2) => {
-    const points = await dimension.getSpawners(offset.x, offset.y);
-
-    Promise.all(
-      points.map(async ({ point, element }) => {
-        const vertexData = await dimension.getVertexData(point.x, point.z);
-        return spawnObject({
-          component: element,
-          coordinates: [point.x, vertexData.height, point.z],
-        });
-      })
-    );
-  };
-
-  // setSpawners((prevSpawners) => ({
-  //   ...prevSpawners,
-  //   [chunkKey]: points.map(({ point, element }) => ({
-  //     chunkKey: chunkKey,
-  //     component: element,
-  //     coordinates: [point.x, dimension.getVertexData(point.x, point.z).height, point.z],
-  //   })),
-  // }));
-
   return (
     <>
       <ObjectPoolManager />
@@ -320,11 +308,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         }
         return null;
       })}
-      {/* {Object.values(spawners)
-        .flat()
-        .map(({ chunkKey, component: Component, coordinates, scale, rotation }: TerrainSpawnerProps, index) => {
-          return <Component key={index} coordinates={coordinates} scale={scale} rotation={rotation} />;
-        })} */}
     </>
   );
 };

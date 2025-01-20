@@ -214,7 +214,6 @@ async function handleTask(task: MessageData) {
         (1 / D) * (ad * (c.x - b.x) + bd * (a.x - c.x) + cd * (b.x - a.x)),
         0
       );
-
       circumcenters.push(circumcenter);
     }
 

@@ -78,7 +78,7 @@ export const SceneObject = ({
     };
 
     taskQueue.addTask(task);
-  }, [gltf, scale, rotation]);
+  }, []);
 
   return (
     <Suspense fallback={null}>
@@ -109,3 +109,27 @@ export const SceneObject = ({
     </Suspense>
   );
 };
+
+// <group position={coordinates} scale={scale} rotation={new THREE.Euler(...rotation)}>
+// <Suspense fallback={null}>
+//   <Debug>
+//     <primitive object={scene} />
+//     {shouldRenderColliders && colliders && (
+//       <>
+//         {colliders.capsuleColliders.map((collider, index) => (
+//           <CapsuleCollider key={index} {...collider} offset={[0, 0, 0]} />
+//         ))}
+//         {colliders.sphereColliders.map((collider, index) => (
+//           <SphereCollider key={index} {...collider} offset={[0, 0, 0]} />
+//         ))}
+//         {colliders.boxColliders.map((collider, index) => (
+//           <BoxCollider key={index} {...collider} offset={[0, 0, 0]} />
+//         ))}
+//         {colliders.trimeshColliders.map((collider, index) => (
+//           <TrimeshCollider key={index} {...collider} offset={[0, 0, 0]} />
+//         ))}
+//       </>
+//     )}
+//   </Debug>
+// </Suspense>
+// </group>
