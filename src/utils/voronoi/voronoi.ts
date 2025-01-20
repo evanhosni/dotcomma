@@ -49,21 +49,24 @@ interface VoronoiCreateParamsWithRegions extends VoronoiCreateParamsBase {
 
 export type VoronoiCreateParams = VoronoiCreateParamsWithBiomes | VoronoiCreateParamsWithRegions;
 
-export const voronoiWorker = new Worker(new URL("./voronoiWorker.ts", import.meta.url), {
+export const voronoiCreateWorker = new Worker(new URL("./voronoiWorker.ts", import.meta.url), {
+  type: "module",
+});
+
+export const voronoiGetDistanceToWallWorker = new Worker(new URL("./voronoiWorker.ts", import.meta.url), {
   type: "module",
 });
 
 export namespace voronoi {
   export const create = async (params: VoronoiCreateParams) => {
     return new Promise((resolve) => {
-      voronoiWorker.onmessage = (event) => {
+      voronoiCreateWorker.onmessage = (event) => {
         const biomes_in_use = params.regions?.length ? _utils.getAllBiomesFromRegions(params.regions) : params.biomes;
-        if (!event.data.biome) console.log(event); //TODO occassionally line 61 errors because event.data.biome is undefined. This is because for some reason it is returning the wrong promise from the worker, it is somehow getting out of order and returning the event.data from the below function, getDistanceToWall, which is just a number
         const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
         resolve({ ...event.data, biome });
       };
 
-      voronoiWorker.postMessage({
+      voronoiCreateWorker.postMessage({
         type: VORONOI_FUNCTION.CREATE,
         params: {
           seed: params.seed,
@@ -93,13 +96,11 @@ export namespace voronoi {
 
   export const getDistanceToWall = async (params: VoronoiGetDistanceToWallParams): Promise<number> => {
     return new Promise((resolve) => {
-      voronoiWorker.onmessage = (event) => {
+      voronoiGetDistanceToWallWorker.onmessage = (event) => {
         resolve(event.data);
       };
 
-      // console.log(params);
-
-      voronoiWorker.postMessage({
+      voronoiGetDistanceToWallWorker.postMessage({
         type: VORONOI_FUNCTION.GET_DISTANCE_TO_WALL,
         params,
       });
