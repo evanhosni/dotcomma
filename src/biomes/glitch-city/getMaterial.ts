@@ -1,10 +1,10 @@
 import * as THREE from "three";
-import { _material } from "../../_/_material";
-import { _utils } from "../../_/_utils";
+import { _material } from "../../utils/material/_material";
+import { utils } from "../../utils/utils";
 import { GlitchCity } from "./GlitchCity";
 
 export const getMaterial = async () => {
-  const biomes = _utils.getAllBiomes(GlitchCity);
+  const biomes = utils.getAllBiomes(GlitchCity);
 
   const [roadTexture, sidewalkTexture, grassTexture, sandTexture, bluemudTexture] = await _material.loadTextures([
     "road.jpg",

@@ -2,29 +2,16 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
-import { ObjectPoolManager, spawnObject } from "../objects/ObjectPoolManager";
-import { Dimension } from "../types/Dimension";
+import { ObjectPoolManager, spawnObject } from "../../objects/ObjectPoolManager";
+import { Dimension } from "../types";
+import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
 export const MAX_RENDER_DISTANCE = 2500;
 export const CHUNK_SIZE = 250;
 const CHUNK_RESOLUTION = 20;
 const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
 
-interface Chunk {
-  offset: THREE.Vector2;
-  plane: THREE.Mesh;
-  rebuildIterator: AsyncIterator<any> | null;
-  collider: TerrainColliderProps | null;
-}
-
-interface Terrain {
-  group: THREE.Group;
-  chunks: { [key: string]: { position: number[]; chunk: Chunk } };
-  active_chunk: Chunk | null;
-  queued_chunks: Chunk[];
-}
-
-const terrain: Terrain = {
+const terrain: TerrainProps = {
   group: new THREE.Group(),
   chunks: {},
   active_chunk: null,
@@ -62,6 +49,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   });
 
   const UpdateTerrain = async (material: THREE.Material) => {
+    const playerX = camera.position.x;
+    const playerZ = camera.position.z;
+    const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
+    const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+
     if (terrain.active_chunk) {
       const currentChunk = terrain.active_chunk;
       try {
@@ -85,17 +77,17 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     } else {
       // Sort queued chunks by distance before popping
       if (terrain.queued_chunks.length > 0) {
-        const playerX = camera.position.x;
-        const playerZ = camera.position.z;
-
-        // Filter out chunks that are too far away using actual distance
         terrain.queued_chunks = terrain.queued_chunks.filter((chunk) => {
-          // Calculate actual distance to player for this chunk
-          const distToPlayer = Math.sqrt(
-            Math.pow(chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
-              Math.pow(chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
-          );
-          return distToPlayer <= MAX_RENDER_DISTANCE * 2; //TODO dev note: multiplying by 2 prevents tiles within range from being deleted from queue
+          // Convert chunk position to chunk coordinates
+          const chunkX = Math.floor(chunk.offset.x / CHUNK_SIZE);
+          const chunkZ = Math.floor(chunk.offset.y / CHUNK_SIZE);
+
+          // Get player's current chunk coordinates
+          const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
+          const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+
+          // Check if chunk is within CHUNK_RADIUS of player's chunk
+          return Math.abs(chunkX - playerChunkX) <= CHUNK_RADIUS && Math.abs(chunkZ - playerChunkZ) <= CHUNK_RADIUS;
         });
 
         // Then sort remaining chunks by distance
@@ -118,11 +110,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     if (!terrain.active_chunk) {
-      const playerX = camera.position.x;
-      const playerZ = camera.position.z;
-      const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
-      const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
-
       // Calculate the maximum number of chunks in each direction
       // const maxChunks = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
       const keys: { [key: string]: { position: number[] } } = {};
@@ -130,20 +117,14 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       // Generate chunks in a circular pattern
       for (let x = -CHUNK_RADIUS; x <= CHUNK_RADIUS; x++) {
         for (let z = -CHUNK_RADIUS; z <= CHUNK_RADIUS; z++) {
-          // Calculate the distance from this chunk to the player's chunk //TODO dont think we need to do this
-          // const distanceToPlayer = Math.sqrt(x * x + z * z) * CHUNK_SIZE;
-
-          // Only include chunks within MAX_RENDER_DISTANCE //TODO dont think we need to do this
-          // if (distanceToPlayer <= MAX_RENDER_DISTANCE) {
           const chunkX = playerChunkX + x;
           const chunkZ = playerChunkZ + z;
           const k = `${chunkX}/${chunkZ}`;
           keys[k] = { position: [chunkX, chunkZ] };
-          // }
         }
       }
 
-      // Remove chunks that are too far away
+      // Remove chunks that are out of range
       for (const chunkKey in terrain.chunks) {
         if (!keys[chunkKey]) {
           DestroyChunk(chunkKey);
@@ -164,24 +145,18 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         const [xp, zp] = difference[chunkKey].position;
         const offset = new THREE.Vector2(xp * CHUNK_SIZE, zp * CHUNK_SIZE);
 
-        // // Calculate actual distance to player for this new chunk //TODO dont think we need to do this
-        // const distToPlayer = Math.sqrt(
-        //   Math.pow(offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(offset.y + CHUNK_SIZE / 2 - playerZ, 2)
-        // );
-
-        // Double check we're within render distance before creating //TODO dont think we need to do this
-        // if (distToPlayer <= MAX_RENDER_DISTANCE) {
         const chunk = QueueChunk(offset, CHUNK_SIZE, material);
         terrain.chunks[chunkKey] = {
           position: [playerChunkX, playerChunkZ],
           chunk: chunk,
-          // };
         };
       }
     }
 
     if (remainingChunks === null) setTotalChunks(terrain.queued_chunks.length);
     setRemainingChunks(terrain.queued_chunks.length);
+
+    // console.log(terrain.queued_chunks.length);
   };
 
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
@@ -312,13 +287,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   );
 };
 
-export interface TerrainColliderProps {
-  chunkKey: string;
-  heightfield: number[][];
-  position: number[];
-  elementSize: number;
-}
-
 export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize }) => {
   const [ref] = useHeightfield(() => ({
     args: [heightfield, { elementSize }],
@@ -328,12 +296,3 @@ export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, p
 
   return <mesh ref={ref as any} />;
 };
-
-export interface TerrainSpawnerProps {
-  key?: string;
-  chunkKey: string;
-  component?: any; //TODO get proper type
-  coordinates: THREE.Vector3Tuple;
-  scale?: THREE.Vector3Tuple;
-  rotation?: THREE.Vector3Tuple;
-}

@@ -1,10 +1,9 @@
-import { _utils } from "../../_/_utils";
-import { Biome } from "../../types/Biome";
-import { Spawner } from "../../types/Spawner";
+import { utils } from "../../utils/utils";
+import { Biome, Spawner } from "../../world/types";
 import { GlitchCity } from "./GlitchCity";
 
 export const getSpawners = async (x: number, y: number): Promise<Spawner[]> => {
-  const biomes: Biome[] = _utils.getAllBiomes(GlitchCity);
+  const biomes: Biome[] = utils.getAllBiomes(GlitchCity);
 
   const points = await Promise.all(biomes.map((biome) => biome.getSpawners(x, y)));
 

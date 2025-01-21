@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { CHUNK_SIZE } from "../terrain/Terrain";
-import { Spawner } from "../types/Spawner";
+import { CHUNK_SIZE } from "../../world/terrain/Terrain";
+import { Spawner } from "../../world/types";
 
 export interface ScatterCreateParams {
   seed: string;

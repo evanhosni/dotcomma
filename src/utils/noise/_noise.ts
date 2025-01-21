@@ -1,5 +1,5 @@
 import Noise from "noise-ts";
-import { _math } from "./_math";
+import { _math } from "../math/_math";
 
 export interface TerrainNoiseParams {
   type: "simplex" | "perlin";

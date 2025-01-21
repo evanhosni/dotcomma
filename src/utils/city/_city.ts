@@ -1,8 +1,7 @@
 import * as THREE from "three";
-import { Block, block_default } from "../types/Block";
-import { VertexData } from "../types/VertexData";
-import { voronoi } from "../utils/voronoi/voronoi";
-import { _math } from "./_math";
+import { Block, block_default, VertexData } from "../../world/types";
+import { _math } from "../math/_math";
+import { voronoi } from "../voronoi/voronoi";
 
 interface CityGrid {
   point: THREE.Vector2;

@@ -1,4 +1,4 @@
-import { Biome } from "../../types/Biome";
+import { Biome } from "../../world/types";
 import { getSpawners } from "./getSpawners";
 import { getVertexData } from "./getVertexData";
 
