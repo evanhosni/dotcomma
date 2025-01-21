@@ -1,59 +1,11 @@
-import * as THREE from "three";
-import { _utils } from "../../_/_utils";
-import { Biome } from "../../types/Biome";
-import { Region } from "../../types/Region";
-import { VORONOI_FUNCTION } from "./voronoiWorker";
+import { utils } from "../utils";
+import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams } from "./types";
 
-export interface VoronoiGrid {
-  point: THREE.Vector2;
-  element: any;
-}
-
-interface VoronoiGetGridParams {
-  seed: string;
-  currentVertex: THREE.Vector2;
-  cellArray: any[];
-  gridSize: number;
-  gridFunction: (point: THREE.Vector2, array: any[]) => any;
-}
-
-interface VoronoiGetWallsParams {
-  seed: string;
-  currentVertex: THREE.Vector2;
-  grid: VoronoiGrid[];
-  gridSize: number;
-}
-
-interface VoronoiGetDistanceToWallParams {
-  currentVertex: THREE.Vector2;
-  walls: THREE.Line3[];
-}
-
-interface VoronoiCreateParamsBase {
-  seed: string;
-  currentVertex: THREE.Vector2;
-  gridSize: number;
-}
-
-interface VoronoiCreateParamsWithBiomes extends VoronoiCreateParamsBase {
-  biomes: Biome[];
-  regionGridSize?: never;
-  regions?: never;
-}
-
-interface VoronoiCreateParamsWithRegions extends VoronoiCreateParamsBase {
-  biomes?: never;
-  regionGridSize: number;
-  regions: Region[];
-}
-
-export type VoronoiCreateParams = VoronoiCreateParamsWithBiomes | VoronoiCreateParamsWithRegions;
-
-export const voronoiCreateWorker = new Worker(new URL("./voronoiWorker.ts", import.meta.url), {
+export const voronoiCreateWorker = new Worker(new URL("./voronoi.worker.ts", import.meta.url), {
   type: "module",
 });
 
-export const voronoiGetDistanceToWallWorker = new Worker(new URL("./voronoiWorker.ts", import.meta.url), {
+export const voronoiGetDistanceToWallWorker = new Worker(new URL("./voronoi.worker.ts", import.meta.url), {
   type: "module",
 });
 
@@ -61,7 +13,7 @@ export namespace voronoi {
   export const create = async (params: VoronoiCreateParams) => {
     return new Promise((resolve) => {
       voronoiCreateWorker.onmessage = (event) => {
-        const biomes_in_use = params.regions?.length ? _utils.getAllBiomesFromRegions(params.regions) : params.biomes;
+        const biomes_in_use = params.regions?.length ? utils.getAllBiomesFromRegions(params.regions) : params.biomes;
         const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
         resolve({ ...event.data, biome });
       };

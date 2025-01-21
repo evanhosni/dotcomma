@@ -1,72 +1,20 @@
 import * as THREE from "three";
-import { TaskQueue } from "../../_/TaskQueue";
-/* eslint no-restricted-globals: off */
-
-export enum COLLIDER_TYPE {
-  CAPSULE = "capsule",
-  SPHERE = "sphere",
-  BOX = "box",
-  CONVEX = "convex",
-  TRIMESH = "trimesh",
-}
+import { TaskQueue } from "../../utils/task-queue/TaskQueue";
+import {
+  BoxColliderParams,
+  BoxColliderProps,
+  CapsuleColliderParams,
+  CapsuleColliderProps,
+  COLLIDER_TYPE,
+  SphereColliderParams,
+  SphereColliderProps,
+  TrimeshColliderParams,
+  TrimeshColliderProps,
+} from "./types";
 
 interface MessageData {
   type: COLLIDER_TYPE;
   params: CapsuleColliderParams | SphereColliderParams | BoxColliderParams | TrimeshColliderParams;
-}
-
-interface CapsuleColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-interface SphereColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-interface BoxColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-interface TrimeshColliderParams {
-  positions: number[];
-  index: number[] | null;
-  position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-}
-
-interface CapsuleColliderProps {
-  radius: number;
-  height: number;
-  position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-interface SphereColliderProps {
-  radius: number;
-  position: THREE.Vector3Tuple;
-}
-
-interface BoxColliderProps {
-  size: THREE.Vector3Tuple;
-  position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-interface TrimeshColliderProps {
-  vertices: number[];
-  indices: number[];
-  position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
 }
 
 const taskQueue = new TaskQueue();

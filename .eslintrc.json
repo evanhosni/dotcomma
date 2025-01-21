@@ -1,0 +1,10 @@
+{
+  "overrides": [
+    {
+      "files": ["*.worker.ts", "*.worker.js"],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    }
+  ]
+}

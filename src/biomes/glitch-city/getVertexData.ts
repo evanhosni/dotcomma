@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { TerrainNoiseParams, _noise } from "../../_/_noise";
-import { VertexData, vertexData_default } from "../../types/VertexData";
+import { TerrainNoiseParams, _noise } from "../../utils/noise/_noise";
 import { voronoi } from "../../utils/voronoi/voronoi";
+import { VertexData, vertexData_default } from "../../world/types";
 import { GlitchCity } from "./GlitchCity";
 
 const regionGridSize = 2500; //TODO maybe make these dimension props?

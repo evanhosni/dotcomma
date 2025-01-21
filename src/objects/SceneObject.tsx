@@ -3,37 +3,11 @@ import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
-import { createColliders } from "./colliders/createColliders";
+import { createColliders } from "./colliders/collider";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
-
-type Task = () => Promise<void>; // TODO probably modularize this
-
-class TaskQueue {
-  private queue: Task[] = [];
-  private isProcessing = false;
-  // private throttleDelay = 30; // Delay between task executions in ms
-
-  public addTask(task: Task) {
-    this.queue.push(task);
-    this.processQueue();
-  }
-
-  private async processQueue() {
-    if (this.isProcessing) return;
-    this.isProcessing = true;
-
-    while (this.queue.length > 0) {
-      const task = this.queue.shift()!;
-      await task();
-      // Throttle task execution to avoid spikes
-      // await new Promise((resolve) => setTimeout(resolve, this.throttleDelay));
-    }
-
-    this.isProcessing = false;
-  }
-}
 
 const taskQueue = new TaskQueue();
 

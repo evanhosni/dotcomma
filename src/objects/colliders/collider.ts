@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { GLTF } from "three/examples/jsm/loaders/GLTFLoader";
-import { COLLIDER_TYPE } from "./colliderWorker";
+import { COLLIDER_TYPE } from "./types";
 
-export const colliderWorker = new Worker(new URL("./colliderWorker.ts", import.meta.url), {
+export const colliderWorker = new Worker(new URL("./collider.worker.ts", import.meta.url), {
   type: "module",
 });
 

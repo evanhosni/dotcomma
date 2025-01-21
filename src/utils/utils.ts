@@ -1,8 +1,6 @@
-import { Biome } from "../types/Biome";
-import { Dimension } from "../types/Dimension";
-import { Region } from "../types/Region";
+import { Biome, Dimension, Region } from "../world/types";
 
-export namespace _utils {
+export namespace utils {
   export const getAllBiomes = (dimension: Dimension): Biome[] => {
     return Array.from(
       new Set(

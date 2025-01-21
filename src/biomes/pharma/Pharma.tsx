@@ -1,4 +1,4 @@
-import { Biome } from "../../types/Biome";
+import { Biome } from "../../world/types";
 import { getVertexData } from "./getVertexData";
 
 export const Pharmasea: Biome = {
