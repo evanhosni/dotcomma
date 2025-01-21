@@ -3,7 +3,7 @@ import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { getVertexData } from "../biomes/glitch-city/getVertexData";
+import { getVertexData } from "../dimensions/glitch-city/getVertexData";
 import { useInput } from "./useInput";
 
 const debug_sprint = true; // NOTE: this is temp for testing

@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { GlitchCity } from "./biomes/glitch-city/GlitchCity";
+import { GlitchCity } from "./dimensions/glitch-city/GlitchCity";
 import { Home } from "./menus/home/Home";
 import { PauseMenu } from "./menus/pause/Pause";
 import "./style.css";
