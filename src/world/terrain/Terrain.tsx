@@ -6,7 +6,7 @@ import { ObjectPoolManager, spawnObject } from "../../objects/ObjectPoolManager"
 import { Dimension } from "../types";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
-export const MAX_RENDER_DISTANCE = 2500;
+export const MAX_RENDER_DISTANCE = 2000;
 export const CHUNK_SIZE = 250;
 const CHUNK_RESOLUTION = 20;
 const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
@@ -157,7 +157,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     setRemainingChunks(terrain.queued_chunks.length);
 
     // console.log(terrain.queued_chunks.length);
-  };
+  }; //TODO would be nice if it rendered via radius and not a square of chunks
 
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
     const size = new THREE.Vector3(width, 0, width);
