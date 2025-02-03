@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { CHUNK_SIZE } from "../../world/terrain/Terrain";
 import { Spawner } from "../../world/types";
+import { utils } from "../utils";
 
 export interface ScatterCreateParams {
   seed: string;
@@ -12,11 +12,14 @@ export interface ScatterCreateParams {
   filter: (point: THREE.Vector3) => any | null; //TODO typing for component
 }
 
+export const OBJECT_RENDER_DISTANCE = 1000;
+
 export namespace _scatter {
   export const create = async (params: ScatterCreateParams): Promise<Spawner[]> => {
     const { seed, currentVertex, gridSize, filter } = params;
+    const render_distance = OBJECT_RENDER_DISTANCE - gridSize;
 
-    const iterations = Math.ceil(CHUNK_SIZE / 2 / gridSize);
+    const iterations = Math.ceil(render_distance / gridSize);
 
     const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
     const [x, y] = currentGrid;
@@ -28,10 +31,11 @@ export namespace _scatter {
         const pointY = gridSize / 2;
         const point = new THREE.Vector3(ix * gridSize + pointX, 0, iy * gridSize + pointY);
         if (
-          point.x >= currentVertex.x - CHUNK_SIZE / 2 &&
-          point.x < currentVertex.x + CHUNK_SIZE / 2 &&
-          point.z >= currentVertex.y - CHUNK_SIZE / 2 &&
-          point.z < currentVertex.y + CHUNK_SIZE / 2
+          // point.x >= currentVertex.x - render_distance &&
+          // point.x < currentVertex.x + render_distance &&
+          // point.z >= currentVertex.y - render_distance &&
+          // point.z < currentVertex.y + render_distance
+          utils.getDistance2D(point, new THREE.Vector3(currentVertex.x, 0, currentVertex.y)) < render_distance
         ) {
           const element = await filter(point);
           if (!!element) {

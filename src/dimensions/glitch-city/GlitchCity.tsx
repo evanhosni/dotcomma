@@ -1,6 +1,7 @@
 import { Physics } from "@react-three/cannon";
 import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
+import { ObjectPool } from "../../objects/ObjectPool";
 import { Player } from "../../player/Player";
 import { PostProcessing } from "../../vfx/PostProcessing";
 import { Terrain } from "../../world/terrain/Terrain";
@@ -53,6 +54,7 @@ export const GlitchCity: Dimension = {
           {/* <Debug> */}
           <Player />
           <Terrain dimension={GlitchCity} />
+          <ObjectPool dimension={GlitchCity} />
           {/* </Debug> */}
         </Physics>
       </Canvas>

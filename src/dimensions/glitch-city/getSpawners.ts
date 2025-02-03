@@ -7,5 +7,5 @@ export const getSpawners = async (x: number, y: number): Promise<Spawner[]> => {
 
   const points = await Promise.all(biomes.map((biome) => biome.getSpawners(x, y)));
 
-  return points.flat();
+  return [...points.flat()];
 };

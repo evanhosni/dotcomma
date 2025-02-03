@@ -17,8 +17,7 @@ export const getSpawners = async (x: number, y: number): Promise<Spawner[]> => {
       z: 0,
     },
     filter: async (point: THREE.Vector3) => {
-      const vertexData = await GlitchCity.getVertexData(point.x, point.z);
-      const attributes = vertexData.attributes;
+      const { attributes } = await GlitchCity.getVertexData(point.x, point.z);
 
       if (attributes.biome !== City) return null;
       if (!attributes.block) return null;

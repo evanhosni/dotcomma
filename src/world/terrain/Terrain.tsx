@@ -2,20 +2,20 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
-import { ObjectPoolManager, spawnObject } from "../../objects/ObjectPoolManager";
 import { Dimension } from "../types";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
-export const MAX_RENDER_DISTANCE = 2000;
-export const CHUNK_SIZE = 250;
+export const MAX_RENDER_DISTANCE = 1600;
+export const CHUNK_SIZE = 200;
+export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
 const CHUNK_RESOLUTION = 20;
-const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
   chunks: {},
   active_chunk: null,
   queued_chunks: [],
+  chunksToDelete: [],
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -49,6 +49,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   });
 
   const UpdateTerrain = async (material: THREE.Material) => {
+    DestroyChunk();
+
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
     const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
@@ -82,12 +84,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           const chunkX = Math.floor(chunk.offset.x / CHUNK_SIZE);
           const chunkZ = Math.floor(chunk.offset.y / CHUNK_SIZE);
 
-          // Get player's current chunk coordinates
-          const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
-          const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+          // Calculate distance in chunks
+          const dx = chunkX - playerChunkX;
+          const dz = chunkZ - playerChunkZ;
+          const distance = Math.sqrt(dx * dx + dz * dz);
 
-          // Check if chunk is within CHUNK_RADIUS of player's chunk
-          return Math.abs(chunkX - playerChunkX) <= CHUNK_RADIUS && Math.abs(chunkZ - playerChunkZ) <= CHUNK_RADIUS;
+          // Only keep chunks within the circular radius
+          return distance <= CHUNK_RADIUS;
         });
 
         // Then sort remaining chunks by distance
@@ -110,25 +113,47 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     if (!terrain.active_chunk) {
-      // Calculate the maximum number of chunks in each direction
-      // const maxChunks = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
       const keys: { [key: string]: { position: number[] } } = {};
 
       // Generate chunks in a circular pattern
       for (let x = -CHUNK_RADIUS; x <= CHUNK_RADIUS; x++) {
         for (let z = -CHUNK_RADIUS; z <= CHUNK_RADIUS; z++) {
-          const chunkX = playerChunkX + x;
-          const chunkZ = playerChunkZ + z;
-          const k = `${chunkX}/${chunkZ}`;
-          keys[k] = { position: [chunkX, chunkZ] };
+          // Calculate the distance from the center (player's chunk)
+          const distance = Math.sqrt(x * x + z * z);
+
+          // Only create chunks within the radius
+          if (distance <= CHUNK_RADIUS) {
+            const chunkX = playerChunkX + x;
+            const chunkZ = playerChunkZ + z;
+            const k = `${chunkX}/${chunkZ}`;
+            keys[k] = { position: [chunkX, chunkZ] };
+          }
         }
       }
 
       // Remove chunks that are out of range
       for (const chunkKey in terrain.chunks) {
-        if (!keys[chunkKey]) {
-          DestroyChunk(chunkKey);
+        if (!keys[chunkKey] && !terrain.chunksToDelete.includes(chunkKey)) {
+          terrain.chunksToDelete.push(chunkKey);
         }
+      }
+
+      if (terrain.chunksToDelete.length > 1) {
+        terrain.chunksToDelete.sort((a, b) => {
+          const chunkDataA = terrain.chunks[a];
+          const chunkDataB = terrain.chunks[b];
+
+          if (chunkDataA && chunkDataB) {
+            const [chunkXA, chunkZA] = chunkDataA.position;
+            const [chunkXB, chunkZB] = chunkDataB.position;
+
+            const distanceA = Math.pow(chunkXA * CHUNK_SIZE - playerX, 2) + Math.pow(chunkZA * CHUNK_SIZE - playerZ, 2);
+            const distanceB = Math.pow(chunkXB * CHUNK_SIZE - playerX, 2) + Math.pow(chunkZB * CHUNK_SIZE - playerZ, 2);
+
+            return distanceB - distanceA; // Sort ascending, so pop() will give us furthest chunks
+          }
+          return 0;
+        });
       }
 
       // Add new chunks that are within range
@@ -157,7 +182,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     setRemainingChunks(terrain.queued_chunks.length);
 
     // console.log(terrain.queued_chunks.length);
-  }; //TODO would be nice if it rendered via radius and not a square of chunks
+  };
 
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
     const size = new THREE.Vector3(width, 0, width);
@@ -212,32 +237,22 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
 
-    // Generate spawners
-    const points = await dimension.getSpawners(offset.x, offset.y);
-
-    // Spawn objects one at a time, yielding after each
-    for (const { point, element } of points) {
-      const vertexData = await dimension.getVertexData(point.x, point.z);
-      spawnObject({
-        component: element,
-        coordinates: [point.x, vertexData.height, point.z],
-      });
-      yield; // Yield after each spawn to prevent freezing
-    }
-
     GenerateColliders(chunk, offset);
 
     yield;
   };
 
-  const DestroyChunk = (chunkKey: string) => {
-    const chunkData = terrain.chunks[chunkKey];
-    if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
-      chunkData.chunk.plane.geometry.dispose();
-      (chunkData.chunk.plane.material as THREE.Material).dispose();
-      terrain.group.remove(chunkData.chunk.plane);
+  const DestroyChunk = () => {
+    const chunkKey = terrain.chunksToDelete.shift();
+    if (chunkKey && terrain.chunks[chunkKey]) {
+      const chunkData = terrain.chunks[chunkKey];
+      if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
+        chunkData.chunk.plane.geometry.dispose();
+        (chunkData.chunk.plane.material as THREE.Material).dispose();
+        terrain.group.remove(chunkData.chunk.plane);
+      }
+      delete terrain.chunks[chunkKey];
     }
-    delete terrain.chunks[chunkKey];
   };
 
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
@@ -276,7 +291,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
   return (
     <>
-      <ObjectPoolManager />
       {Object.values(terrain.chunks).map(({ chunk }) => {
         if (chunk.collider) {
           return <TerrainCollider key={chunk.collider.chunkKey} {...chunk.collider} />;
