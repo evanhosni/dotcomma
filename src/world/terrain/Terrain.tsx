@@ -14,8 +14,8 @@ const terrain: TerrainProps = {
   group: new THREE.Group(),
   chunks: {},
   active_chunk: null,
-  queued_chunks: [],
-  chunksToDelete: [],
+  queued_to_build: [],
+  queued_to_destroy: [],
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -49,7 +49,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   });
 
   const UpdateTerrain = async (material: THREE.Material) => {
-    DestroyChunk();
+    DestroyChunk(); //TODO still kinda taxing even though it only deletes 1 per frame. optimize deletion somehow
 
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
@@ -78,8 +78,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     } else {
       // Sort queued chunks by distance before popping
-      if (terrain.queued_chunks.length > 0) {
-        terrain.queued_chunks = terrain.queued_chunks.filter((chunk) => {
+      if (terrain.queued_to_build.length > 0) {
+        terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
           // Convert chunk position to chunk coordinates
           const chunkX = Math.floor(chunk.offset.x / CHUNK_SIZE);
           const chunkZ = Math.floor(chunk.offset.y / CHUNK_SIZE);
@@ -94,7 +94,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         });
 
         // Then sort remaining chunks by distance
-        terrain.queued_chunks.sort((a, b) => {
+        terrain.queued_to_build.sort((a, b) => {
           const distA = Math.sqrt(
             Math.pow(a.offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(a.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
           );
@@ -105,7 +105,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         });
       }
 
-      const chunk = terrain.queued_chunks.pop();
+      const chunk = terrain.queued_to_build.pop();
       if (chunk) {
         terrain.active_chunk = chunk;
         terrain.active_chunk.rebuildIterator = BuildChunk(chunk, material);
@@ -133,13 +133,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
       // Remove chunks that are out of range
       for (const chunkKey in terrain.chunks) {
-        if (!keys[chunkKey] && !terrain.chunksToDelete.includes(chunkKey)) {
-          terrain.chunksToDelete.push(chunkKey);
+        if (!keys[chunkKey] && !terrain.queued_to_destroy.includes(chunkKey)) {
+          terrain.queued_to_destroy.push(chunkKey);
         }
       }
 
-      if (terrain.chunksToDelete.length > 1) {
-        terrain.chunksToDelete.sort((a, b) => {
+      if (terrain.queued_to_destroy.length > 1) {
+        terrain.queued_to_destroy.sort((a, b) => {
           const chunkDataA = terrain.chunks[a];
           const chunkDataB = terrain.chunks[b];
 
@@ -178,10 +178,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
-    if (remainingChunks === null) setTotalChunks(terrain.queued_chunks.length);
-    setRemainingChunks(terrain.queued_chunks.length);
+    if (remainingChunks === null) setTotalChunks(terrain.queued_to_build.length);
+    setRemainingChunks(terrain.queued_to_build.length);
 
-    // console.log(terrain.queued_chunks.length);
+    // console.log(terrain.queued_to_build.length);
   };
 
   const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
@@ -199,7 +199,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     };
 
     terrain.group.add(plane);
-    terrain.queued_chunks.push(chunk);
+    terrain.queued_to_build.push(chunk);
 
     return chunk;
   };
@@ -243,7 +243,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   };
 
   const DestroyChunk = () => {
-    const chunkKey = terrain.chunksToDelete.shift();
+    const chunkKey = terrain.queued_to_destroy.shift();
     if (chunkKey && terrain.chunks[chunkKey]) {
       const chunkData = terrain.chunks[chunkKey];
       if (chunkData && chunkData.chunk && chunkData.chunk.plane) {

@@ -2,8 +2,8 @@ export interface TerrainProps {
   group: THREE.Group;
   chunks: { [key: string]: { position: number[]; chunk: Chunk } };
   active_chunk: Chunk | null;
-  queued_chunks: Chunk[];
-  chunksToDelete: string[];
+  queued_to_build: Chunk[];
+  queued_to_destroy: string[];
 }
 
 export interface Chunk {
