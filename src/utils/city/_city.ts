@@ -56,10 +56,10 @@ export namespace _city {
         for (let iy = y - 2; iy <= y + 2; iy++) {
           const point = new THREE.Vector2(ix * gridSize + 0.5 * gridSize, iy * gridSize + 0.5 * gridSize);
           const isEdge =
-            (await voronoi.getDistanceToWall({
+            voronoi.getDistanceToWall({
               currentVertex: new THREE.Vector2(point.x, point.y),
               walls: vertexData.attributes.walls,
-            })) < Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
+            }) < Math.sqrt(gridSize * 0.5 * gridSize * 0.5 + gridSize * 0.5 * gridSize * 0.5);
           const block = isEdge
             ? block_default
             : blocks[Math.floor(_math.seedRand(JSON.stringify(point)) * blocks.length)];

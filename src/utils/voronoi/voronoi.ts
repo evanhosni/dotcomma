@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { utils } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams } from "./types";
 
@@ -5,17 +6,41 @@ export const voronoiCreateWorker = new Worker(new URL("./voronoi.worker.ts", imp
   type: "module",
 });
 
-export const voronoiGetDistanceToWallWorker = new Worker(new URL("./voronoi.worker.ts", import.meta.url), {
-  type: "module",
-});
-
 export namespace voronoi {
-  export const create = async (params: VoronoiCreateParams) => {
-    return new Promise((resolve) => {
+  let isCreateWorkerBusy = false;
+  let createWorkQueue: Array<{
+    //TODO cleanup and modularize this queue system
+    params: VoronoiCreateParams;
+    resolve: (value: any) => void;
+    reject: (reason?: any) => void;
+  }> = [];
+
+  // Process the next item in the queue
+  const processNextCreateWork = async () => {
+    if (createWorkQueue.length === 0 || isCreateWorkerBusy) {
+      return;
+    }
+
+    const nextWork = createWorkQueue.shift();
+    if (!nextWork) return;
+
+    isCreateWorkerBusy = true;
+    const { params, resolve, reject } = nextWork;
+
+    try {
       voronoiCreateWorker.onmessage = (event) => {
         const biomes_in_use = params.regions?.length ? utils.getAllBiomesFromRegions(params.regions) : params.biomes;
         const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
+
         resolve({ ...event.data, biome });
+        isCreateWorkerBusy = false;
+        processNextCreateWork(); // Process next item in queue
+      };
+
+      voronoiCreateWorker.onerror = (error) => {
+        reject(error);
+        isCreateWorkerBusy = false;
+        processNextCreateWork(); // Process next item in queue even if there was an error
       };
 
       voronoiCreateWorker.postMessage({
@@ -43,19 +68,35 @@ export namespace voronoi {
           })),
         },
       });
+    } catch (error) {
+      console.log(error);
+      reject(error);
+      isCreateWorkerBusy = false;
+      processNextCreateWork(); // Process next item in queue even if there was an error
+    }
+  };
+
+  export const create = async (params: VoronoiCreateParams) => {
+    return new Promise((resolve, reject) => {
+      // Add the work to the queue
+      createWorkQueue.push({ params, resolve, reject });
+
+      // Try to process the queue
+      processNextCreateWork();
     });
   };
 
-  export const getDistanceToWall = async (params: VoronoiGetDistanceToWallParams): Promise<number> => {
-    return new Promise((resolve) => {
-      voronoiGetDistanceToWallWorker.onmessage = (event) => {
-        resolve(event.data);
-      };
+  export const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
+    const vec3 = new THREE.Vector3(currentVertex.x, currentVertex.y, 0); //TODO any way to use vector2 instead?
 
-      voronoiGetDistanceToWallWorker.postMessage({
-        type: VORONOI_FUNCTION.GET_DISTANCE_TO_WALL,
-        params,
-      });
-    });
+    var closestPoints = [];
+    for (let i = 0; i < walls.length; i++) {
+      var closestPoint = new THREE.Vector3(0, 0, 0);
+      new THREE.Line3(walls[i].start, walls[i].end).closestPointToPoint(vec3, true, closestPoint);
+      closestPoints.push(closestPoint);
+    }
+    closestPoints.sort((a, b) => a.distanceTo(vec3) - b.distanceTo(vec3));
+
+    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : 9999; //NOTE closestPoints[0] doesnt exist for some vertices of joinable biomes. This ternary allows us to keep the nested for loop iterations low. //TODO maybe replace all 9999 with Infinity
   };
 }
