@@ -9,13 +9,10 @@ export const voronoiCreateWorker = new Worker(new URL("./voronoi.worker.ts", imp
 export namespace voronoi {
   let isCreateWorkerBusy = false;
   let createWorkQueue: Array<{
-    //TODO cleanup and modularize this queue system
     params: VoronoiCreateParams;
     resolve: (value: any) => void;
-    reject: (reason?: any) => void;
   }> = [];
 
-  // Process the next item in the queue
   const processNextCreateWork = async () => {
     if (createWorkQueue.length === 0 || isCreateWorkerBusy) {
       return;
@@ -25,63 +22,47 @@ export namespace voronoi {
     if (!nextWork) return;
 
     isCreateWorkerBusy = true;
-    const { params, resolve, reject } = nextWork;
+    const { params, resolve } = nextWork;
 
-    try {
-      voronoiCreateWorker.onmessage = (event) => {
-        const biomes_in_use = params.regions?.length ? utils.getAllBiomesFromRegions(params.regions) : params.biomes;
-        const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
+    voronoiCreateWorker.onmessage = (event) => {
+      const biomes_in_use = params.regions?.length ? utils.getAllBiomesFromRegions(params.regions) : params.biomes;
+      const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
 
-        resolve({ ...event.data, biome });
-        isCreateWorkerBusy = false;
-        processNextCreateWork(); // Process next item in queue
-      };
+      resolve({ ...event.data, biome });
+      isCreateWorkerBusy = false;
+      processNextCreateWork();
+    };
 
-      voronoiCreateWorker.onerror = (error) => {
-        reject(error);
-        isCreateWorkerBusy = false;
-        processNextCreateWork(); // Process next item in queue even if there was an error
-      };
-
-      voronoiCreateWorker.postMessage({
-        type: VORONOI_FUNCTION.CREATE,
-        params: {
-          seed: params.seed,
-          currentVertex: params.currentVertex,
-          gridSize: params.gridSize,
-          regionGridSize: params.regionGridSize,
-          regions: params.regions?.map((region) => ({
-            biomes: region.biomes.map((biome) => ({
-              name: biome.name,
-              id: biome.id,
-              joinable: biome.joinable,
-              blendable: biome.blendable,
-              blendWidth: biome.blendWidth,
-            })),
-          })),
-          biomes: params.biomes?.map((biome) => ({
+    voronoiCreateWorker.postMessage({
+      type: VORONOI_FUNCTION.CREATE,
+      params: {
+        seed: params.seed,
+        currentVertex: params.currentVertex,
+        gridSize: params.gridSize,
+        regionGridSize: params.regionGridSize,
+        regions: params.regions?.map((region) => ({
+          biomes: region.biomes.map((biome) => ({
             name: biome.name,
             id: biome.id,
             joinable: biome.joinable,
             blendable: biome.blendable,
             blendWidth: biome.blendWidth,
           })),
-        },
-      });
-    } catch (error) {
-      console.log(error);
-      reject(error);
-      isCreateWorkerBusy = false;
-      processNextCreateWork(); // Process next item in queue even if there was an error
-    }
+        })),
+        biomes: params.biomes?.map((biome) => ({
+          name: biome.name,
+          id: biome.id,
+          joinable: biome.joinable,
+          blendable: biome.blendable,
+          blendWidth: biome.blendWidth,
+        })),
+      },
+    });
   };
 
   export const create = async (params: VoronoiCreateParams) => {
-    return new Promise((resolve, reject) => {
-      // Add the work to the queue
-      createWorkQueue.push({ params, resolve, reject });
-
-      // Try to process the queue
+    return new Promise((resolve) => {
+      createWorkQueue.push({ params, resolve });
       processNextCreateWork();
     });
   };
@@ -97,6 +78,6 @@ export namespace voronoi {
     }
     closestPoints.sort((a, b) => a.distanceTo(vec3) - b.distanceTo(vec3));
 
-    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : 9999; //NOTE closestPoints[0] doesnt exist for some vertices of joinable biomes. This ternary allows us to keep the nested for loop iterations low. //TODO maybe replace all 9999 with Infinity
+    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : Infinity;
   };
 }

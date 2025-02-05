@@ -208,12 +208,25 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
     const attributeBuffers: any = {};
+    const verts = [];
 
     for (let i = 0; i < pos.count; i++) {
-      const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const vertexData = await dimension.getVertexData(v.x + offset.x, -v.y + offset.y);
+      const vert = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+      verts.push(vert);
+    }
 
-      pos.setXYZ(i, v.x, v.y, vertexData.height);
+    const bulkVertexData = await Promise.all(
+      verts.map(async (vert) => {
+        const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y);
+        return { ...data, attributes: { ...data.attributes } };
+      })
+    );
+
+    for (let i = 0; i < pos.count; i++) {
+      const vert = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+      const vertexData = bulkVertexData[i];
+
+      pos.setXYZ(i, vert.x, vert.y, vertexData.height);
 
       if (i === 0) {
         for (const attrName in vertexData.attributes) {
@@ -222,7 +235,9 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
 
       for (const attrName in vertexData.attributes) {
-        if (attributeBuffers[attrName]) attributeBuffers[attrName][i] = vertexData.attributes[attrName];
+        if (attributeBuffers[attrName]) {
+          attributeBuffers[attrName][i] = vertexData.attributes[attrName];
+        }
       }
     }
 
