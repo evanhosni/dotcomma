@@ -5,10 +5,10 @@ import * as THREE from "three";
 import { Dimension } from "../types";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
-export const MAX_RENDER_DISTANCE = 1600;
-export const CHUNK_SIZE = 200;
+export const MAX_RENDER_DISTANCE = 2000;
+export const CHUNK_SIZE = 400;
 export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
-const CHUNK_RESOLUTION = 20;
+const CHUNK_RESOLUTION = 30;
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
