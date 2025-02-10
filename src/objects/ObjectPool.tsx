@@ -47,43 +47,43 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
     if (isGeneratingRef.current) return;
     isGeneratingRef.current = true;
 
-    try {
-      const points = await dimension.getSpawners(camera.position.x, camera.position.z);
+    // try {
+    const points = await dimension.getSpawners(camera.position.x, camera.position.z);
 
-      // For each destroyed object, check if player is out of range
-      destroyedObjectsRef.current.forEach((id) => {
-        // Parse the coordinates from the ID (since it's in format "x_z")
-        const [x, z] = id.split("_").map(Number);
-        const distance = Math.sqrt(Math.pow(camera.position.x - x, 2) + Math.pow(camera.position.z - z, 2));
+    // For each destroyed object, check if player is out of range
+    destroyedObjectsRef.current.forEach((id) => {
+      // Parse the coordinates from the ID (since it's in format "x_z")
+      const [x, z] = id.split("_").map(Number);
+      const distance = Math.sqrt(Math.pow(camera.position.x - x, 2) + Math.pow(camera.position.z - z, 2));
 
-        // If player is far enough away, remove from destroyed set
-        if (distance > OBJECT_RENDER_DISTANCE) {
-          // Use whatever distance threshold makes sense
-          destroyedObjectsRef.current.delete(id);
-        }
-      });
-
-      // Process all points in parallel
-      const newObjectPromises = points.map(({ element, point }) => createObjectEntry(element, point, dimension));
-      const newObjects = (await Promise.all(newObjectPromises)).filter((obj): obj is GameObjectProps => obj !== null);
-
-      if (newObjects.length > 0) {
-        setObjects((prevObjects) => {
-          const uniqueNewObjects = newObjects.filter(
-            (newObj) =>
-              // Don't spawn if it's in the destroyed set
-              !destroyedObjectsRef.current.has(newObj.id) &&
-              // Don't spawn if it already exists
-              !prevObjects.some((existingObj) => existingObj.id === newObj.id)
-          );
-          return [...prevObjects, ...uniqueNewObjects];
-        });
+      // If player is far enough away, remove from destroyed set
+      if (distance > OBJECT_RENDER_DISTANCE) {
+        // Use whatever distance threshold makes sense
+        destroyedObjectsRef.current.delete(id);
       }
-    } catch (error) {
-      console.error("Error in generateSpawners:", error);
-    } finally {
-      isGeneratingRef.current = false;
+    });
+
+    // Process all points in parallel
+    const newObjectPromises = points.map(({ element, point }) => createObjectEntry(element, point, dimension));
+    const newObjects = (await Promise.all(newObjectPromises)).filter((obj): obj is GameObjectProps => obj !== null);
+
+    if (newObjects.length > 0) {
+      setObjects((prevObjects) => {
+        const uniqueNewObjects = newObjects.filter(
+          (newObj) =>
+            // Don't spawn if it's in the destroyed set
+            !destroyedObjectsRef.current.has(newObj.id) &&
+            // Don't spawn if it already exists
+            !prevObjects.some((existingObj) => existingObj.id === newObj.id)
+        );
+        return [...prevObjects, ...uniqueNewObjects];
+      });
     }
+    // } catch (error) {
+    //   console.error("Error in generateSpawners:", error);
+    // } finally {
+    isGeneratingRef.current = false;
+    // }
   }, [camera.position.x, camera.position.z, dimension]);
 
   useEffect(() => {

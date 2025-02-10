@@ -19,17 +19,27 @@ const roadNoise: TerrainNoiseParams = {
   scale: 250,
 };
 
-export const getVertexData = async (x: number, y: number) => {
+export const getVertexData = async (x: number, y: number, isTerrain?: boolean) => {
   var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector2(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0));
 
-  const { biome, distance, walls } = (await voronoi.create({
-    seed: "123",
-    currentVertex,
-    gridSize,
-    regionGridSize,
-    regions: GlitchCity.regions,
-  })) as any; //TODO fix as any
+  const { biome, distance, walls } = (
+    isTerrain
+      ? await voronoi.createWithTerrainWorker({
+          seed: "123",
+          currentVertex,
+          gridSize,
+          regionGridSize,
+          regions: GlitchCity.regions,
+        })
+      : await voronoi.createWithWorker({
+          seed: "123",
+          currentVertex,
+          gridSize,
+          regionGridSize,
+          regions: GlitchCity.regions,
+        })
+  ) as any; //TODO fix as any
 
   const blendWidth = biome.blendWidth || defaultBlendWidth;
 

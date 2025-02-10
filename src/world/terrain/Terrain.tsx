@@ -217,7 +217,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     const bulkVertexData = await Promise.all(
       verts.map(async (vert) => {
-        const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y);
+        const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y, true);
         return { ...data, attributes: { ...data.attributes } };
       })
     );
