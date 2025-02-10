@@ -54,3 +54,8 @@ interface VoronoiCreateParamsWithRegions extends VoronoiCreateParamsBase {
 }
 
 export type VoronoiCreateParams = VoronoiCreateParamsWithBiomes | VoronoiCreateParamsWithRegions;
+
+export type VoronoiQueue = Array<{
+  params: VoronoiCreateParams;
+  resolve: (value: any) => void;
+}>;
