@@ -1,4 +1,4 @@
-import { useSphere } from "@react-three/cannon";
+import { useCylinder } from "@react-three/cannon";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
@@ -6,8 +6,8 @@ import * as THREE from "three";
 import { getVertexData } from "../dimensions/glitch-city/getVertexData";
 import { useInput } from "./useInput";
 
-const debug_sprint = true; // NOTE: this is temp for testing
-const debug_jump = true; // NOTE: this is temp for testing
+const debug_sprint = true;
+const debug_jump = true;
 const debug_console_log = false;
 
 export const Player = () => {
@@ -15,19 +15,20 @@ export const Player = () => {
   const { camera } = useThree();
   const [distanceToGround, setDistanceToGround] = useState(0);
   const [canJump, setCanJump] = useState(true);
+  const frameCount = useRef(0);
 
   const vertexData = async (x: number, y: number) => {
-    // if (debug_console_log) console.log(getVertexData(x, y).attributes.debug);
     return await getVertexData(x, y);
   };
 
-  const walkSpeed = 20;
-  const sprintSpeed = debug_sprint ? 200 : 50;
+  const walkSpeed = 15;
+  const sprintSpeed = debug_sprint ? 250 : 30;
   const playerHeight = 2;
+  const playerRadius = 0.5;
   const jumpHeight = 4;
-  const gravity = -9.81; // Standard gravity
+  const gravity = -9.81;
 
-  camera.far = 7200; // TODO: better view distance
+  camera.far = 7200;
   camera.updateProjectionMatrix();
 
   useEffect(() => {
@@ -39,13 +40,29 @@ export const Player = () => {
     }
   }, [distanceToGround, jumpHeight, jump]);
 
-  const [ref, api] = useSphere(() => ({
+  const [ref, api] = useCylinder(() => ({
     mass: 1,
     type: "Dynamic",
     position: [0, 1, 0],
-    args: [0.5 * playerHeight],
-    linearDamping: 0.5,
+    args: [playerRadius, playerRadius, playerHeight, 8],
+    material: {
+      friction: 0.1,
+      restitution: 0,
+    },
+    linearDamping: 0.75,
+    angularDamping: 0.99,
     fixedRotation: true,
+    // Physics settings optimized for performance
+    allowSleep: false,
+    sleepSpeedLimit: 1,
+    sleepTimeLimit: 0.1,
+    collisionFilterGroup: 1,
+    collisionFilterMask: 1,
+    linearFactor: [1, 1, 1],
+    angularFactor: [0, 0, 0],
+    // Important: These settings help prevent tunneling
+    contactEquationRelaxation: 4,
+    contactEquationStiffness: 1e6,
   }));
 
   const velocity = useRef([0, 0, 0]);
@@ -62,12 +79,14 @@ export const Player = () => {
   }, [api.position]);
 
   useFrame(async () => {
+    frameCount.current++;
+
     const direction = new THREE.Vector3();
     const sideDirection = new THREE.Vector3();
     const upVector = new THREE.Vector3(0, 1, 0);
 
     camera.getWorldDirection(direction);
-    direction.y = 0; // Ensure direction is only horizontal
+    direction.y = 0;
     direction.normalize();
     sideDirection.crossVectors(upVector, direction).normalize();
 
@@ -81,11 +100,15 @@ export const Player = () => {
     if (moveVelocity.length() > 0) {
       moveVelocity.normalize();
       const currentSpeed = sprint ? sprintSpeed : walkSpeed;
-      moveVelocity.multiplyScalar(currentSpeed);
+
+      // Apply smooth acceleration
+      const targetVelocity = moveVelocity.multiplyScalar(currentSpeed);
+      const currentVelocity = new THREE.Vector3(velocity.current[0], 0, velocity.current[2]);
+      currentVelocity.lerp(targetVelocity, 0.2);
+      moveVelocity.copy(currentVelocity);
     }
 
-    // const verts = await vertexData(positionRef.current[0], positionRef.current[2]);
-    const terrainHeight = 10; // verts.height;
+    const terrainHeight = 10;
     setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
 
     let jumpVelocity = velocity.current[1];
@@ -97,7 +120,10 @@ export const Player = () => {
 
     const newVelocity = new THREE.Vector3(moveVelocity.x, jumpVelocity, moveVelocity.z);
 
-    api.velocity.set(newVelocity.x, newVelocity.y, newVelocity.z);
+    // Apply velocity changes less frequently for better performance
+    if (frameCount.current % 5 === 0) {
+      api.velocity.set(newVelocity.x, newVelocity.y, newVelocity.z);
+    }
 
     const [x, y, z] = positionRef.current;
 
@@ -105,7 +131,6 @@ export const Player = () => {
       api.position.set(x, terrainHeight + playerHeight + 420, z);
     }
 
-    // Safety check to ensure player is above terrain height
     if (y < terrainHeight + playerHeight + 10) {
       api.position.set(x, terrainHeight + playerHeight + 10, z);
     }
