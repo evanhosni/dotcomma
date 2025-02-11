@@ -16,6 +16,7 @@ export namespace voronoi {
   let terrainWorkerBusy = false;
   let terrainWorkerQueue: VoronoiQueue = [];
 
+  //TODO maybe make an additional separate worker for object spawning?
   export const createWithWorker = async (params: VoronoiCreateParams) => {
     const processNextCreateWork = async () => {
       if (workerQueue.length === 0 || workerBusy) {
@@ -70,6 +71,7 @@ export namespace voronoi {
     });
   };
 
+  //TODO make this worker (or both workers, probably) send messages in bulk and receive bulk results
   export const createWithTerrainWorker = async (params: VoronoiCreateParams) => {
     const processNextCreateWork = async () => {
       if (terrainWorkerQueue.length === 0 || terrainWorkerBusy) {
