@@ -1,5 +1,5 @@
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { OBJECT_RENDER_DISTANCE } from "../utils/scatter/_scatter";
@@ -37,6 +37,8 @@ export const GameObject = ({
   const { camera } = useThree();
   const gltf = useLoader(GLTFLoader, model);
   const scene = useMemo(() => gltf.scene.clone(true), [gltf]);
+  const fadeStartTime = useRef(Date.now());
+  const [opacity, setOpacity] = useState(0);
 
   const true_render_distance = Math.max(OBJECT_RENDER_DISTANCE, render_distance);
 
@@ -50,20 +52,29 @@ export const GameObject = ({
   const [shouldRender, setShouldRender] = useState(false);
   const [shouldRenderColliders, setShouldRenderColliders] = useState(false);
 
-  // Initialize bounding sphere on first render
+  // Initialize materials and bounding sphere on first render
   useEffect(() => {
     if (scene) {
-      // Create a bounding box to help calculate the bounding sphere
+      // Set up materials for fade effect
+      scene.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          // Clone the material to avoid affecting other instances
+          child.material = child.material.clone();
+          child.material.transparent = true;
+          child.material.opacity = 0;
+        }
+      });
+
+      // Create bounding sphere
       const bbox = new THREE.Box3().setFromObject(scene);
       const center = bbox.getCenter(new THREE.Vector3());
       const size = bbox.getSize(new THREE.Vector3());
-
-      // Set the bounding sphere based on the bounding box
       const radius = Math.max(size.x, size.y, size.z) / 2;
-      bounds.set(center, radius * Math.max(...scale)); // Adjust for scale
+      bounds.set(center, radius * Math.max(...scale));
     }
   }, [scene, scale]);
 
+  // Handle fade-in effect
   useFrame(() => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = utils.getDistance2D(camera.position, objectPosition);
@@ -84,6 +95,19 @@ export const GameObject = ({
     const isVisible = frustum.intersectsSphere(bounds);
     setShouldRender(isVisible);
     setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible);
+
+    // Calculate fade progress
+    const elapsedTime = (Date.now() - fadeStartTime.current) / 1000;
+    const newOpacity = Math.min(elapsedTime, 1);
+
+    if (newOpacity !== opacity) {
+      setOpacity(newOpacity);
+      scene.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material) {
+          child.material.opacity = newOpacity;
+        }
+      });
+    }
   });
 
   useEffect(() => {
