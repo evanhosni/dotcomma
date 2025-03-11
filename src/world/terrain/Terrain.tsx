@@ -6,9 +6,9 @@ import { Dimension } from "../types";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
 export const MAX_RENDER_DISTANCE = 2000;
-export const CHUNK_SIZE = 400;
+export const CHUNK_SIZE = 420;
 export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
-const CHUNK_RESOLUTION = 30;
+const CHUNK_RESOLUTION = 32;
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
@@ -218,14 +218,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const bulkVertexData = await Promise.all(
       verts.map(async (vert) => {
         const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y, true);
-        return { ...data, attributes: { ...data.attributes } };
+        return data;
       })
     );
 
     for (let i = 0; i < pos.count; i++) {
-      const vert = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+      const vert = verts[i];
       const vertexData = bulkVertexData[i];
-
       pos.setXYZ(i, vert.x, vert.y, vertexData.height);
 
       if (i === 0) {
