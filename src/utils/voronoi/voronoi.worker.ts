@@ -14,7 +14,7 @@ import {
 
 interface MessageData {
   type: VORONOI_FUNCTION;
-  params: VoronoiCreateParams | VoronoiGetDistanceToWallParams;
+  params: VoronoiCreateParams | VoronoiCreateParams[] | VoronoiGetDistanceToWallParams;
 }
 
 const caches: any = {};
@@ -83,7 +83,7 @@ async function handleTask(task: MessageData) {
     });
     const distance = getDistanceToWall({ currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y), walls });
 
-    return { grid, region, regionSite, biome, biomeSite, walls, distance };
+    return { currentVertex, grid, region, regionSite, biome, biomeSite, walls, distance };
   };
 
   const getGrid = ({ seed, currentVertex, cellArray, gridSize, gridFunction }: VoronoiGetGridParams): VoronoiGrid[] => {
@@ -220,6 +220,11 @@ async function handleTask(task: MessageData) {
   if (type === VORONOI_FUNCTION.CREATE) {
     const voronoiData = create(params as VoronoiCreateParams);
     self.postMessage(voronoiData);
+  }
+
+  if (type === VORONOI_FUNCTION.CREATE_BULK) {
+    const results = (params as VoronoiCreateParams[]).map((param) => create(param));
+    self.postMessage({ type: VORONOI_FUNCTION.CREATE_BULK, results });
   }
 
   if (type === VORONOI_FUNCTION.GET_DISTANCE_TO_WALL) {
