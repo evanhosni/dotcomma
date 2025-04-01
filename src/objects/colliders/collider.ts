@@ -27,9 +27,10 @@ export const createColliders = async (gltf: GLTF, scale: THREE.Vector3Tuple, rot
         colliderPromise = createCollider(mesh, COLLIDER_TYPE.SPHERE);
         sphereColliders.push(await colliderPromise);
       } else if (child.userData.box) {
+        //TODO make box a bit more robust, make it able to detect and match object rotation OR make trimesh collision detection better
         colliderPromise = createCollider(mesh, COLLIDER_TYPE.BOX);
         boxColliders.push(await colliderPromise);
-      } else {
+      } else if (child.userData.trimesh) {
         colliderPromise = createCollider(mesh, COLLIDER_TYPE.TRIMESH);
         trimeshColliders.push(await colliderPromise);
       }

@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { City } from "../../dimensions/city/City";
-import { Grass } from "../../dimensions/grass/Grass";
+import { City } from "../../dimensions/glitch-city/biomes/city/City";
+import { Grass } from "../../dimensions/glitch-city/biomes/grass/Grass";
 import { utils } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 

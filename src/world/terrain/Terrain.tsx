@@ -8,7 +8,7 @@ import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 export const MAX_RENDER_DISTANCE = 2000;
 export const CHUNK_SIZE = 420;
 export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
-const CHUNK_RESOLUTION = 32;
+const CHUNK_RESOLUTION = 42;
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
@@ -122,7 +122,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           const distance = Math.sqrt(x * x + z * z);
 
           // Only create chunks within the radius
-          if (distance <= CHUNK_RADIUS) {
+          if (distance <= CHUNK_RADIUS - 0.1) {
             const chunkX = playerChunkX + x;
             const chunkZ = playerChunkZ + z;
             const k = `${chunkX}/${chunkZ}`;

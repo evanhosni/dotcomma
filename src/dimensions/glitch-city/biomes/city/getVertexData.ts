@@ -1,5 +1,5 @@
-import { _city } from "../../utils/city/_city";
-import { VertexData } from "../../world/types";
+import { _city } from "../../../../utils/city/_city";
+import { VertexData } from "../../../../world/types";
 import { blocks } from "./blocks/[blocks]";
 
 export const gridSize = 100; //NOTE with GRID_SIZE 100 and ROAD_WIDTH 10, blocks are 80x80 and buildings should be like...50x50

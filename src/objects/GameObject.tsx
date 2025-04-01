@@ -1,7 +1,7 @@
-import { useFrame, useLoader, useThree } from "@react-three/fiber";
+import { useGLTF } from "@react-three/drei";
+import { useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { OBJECT_RENDER_DISTANCE } from "../utils/scatter/_scatter";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { utils } from "../utils/utils";
@@ -15,6 +15,97 @@ const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
 const bounds = new THREE.Sphere();
 
+useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+
+// Helper function to properly clone a model with animations
+function cloneModelWithAnimations(gltf: any): {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+  nodes: Record<string, any>;
+  materials: Record<string, any>;
+} {
+  const clone = {
+    scene: gltf.scene.clone(true),
+    animations: gltf.animations,
+    nodes: { ...gltf.nodes },
+    materials: { ...gltf.materials },
+  };
+
+  // Clone the skeletons/bones properly
+  const skinnedMeshes: Record<string, THREE.SkinnedMesh> = {};
+
+  gltf.scene.traverse((node: any) => {
+    if (node.isSkinnedMesh) {
+      skinnedMeshes[node.name] = node as THREE.SkinnedMesh;
+    }
+  });
+
+  clone.scene.traverse((node: any) => {
+    if (node.isSkinnedMesh) {
+      const originalMesh = skinnedMeshes[node.name];
+      if (originalMesh && originalMesh.skeleton) {
+        node.skeleton = originalMesh.skeleton.clone();
+
+        // Update bone references
+        if (node.skeleton && node.skeleton.bones) {
+          const newBones: THREE.Bone[] = [];
+          node.skeleton.bones.forEach((originalBone: THREE.Bone) => {
+            // Find the corresponding bone in the cloned scene
+            let newBone: THREE.Bone | null = null;
+            clone.scene.traverse((clonedNode: any) => {
+              if (clonedNode.isBone && clonedNode.name === originalBone.name) {
+                newBone = clonedNode as THREE.Bone;
+              }
+            });
+            if (newBone) {
+              newBones.push(newBone);
+            }
+          });
+          // Replace the bones in the skeleton
+          node.skeleton.bones = newBones;
+        }
+
+        // Clone and assign material
+        if (originalMesh.material) {
+          node.material = (originalMesh.material as THREE.Material).clone();
+          // Make material visible immediately (removed opacity setting here)
+        }
+
+        // Ensure bind matrices are updated
+        if (node.skeleton.boneInverses) {
+          node.skeleton.boneInverses = node.skeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
+        }
+      }
+    } else if (node.isMesh) {
+      // For regular meshes, just clone the material
+      if (node.material) {
+        node.material = node.material.clone();
+        // Make material visible immediately (removed opacity setting here)
+      }
+    }
+  });
+
+  return clone;
+}
+
+interface GameObjectProps {
+  model: string;
+  coordinates: THREE.Vector3Tuple;
+  id: string;
+  scale?: THREE.Vector3Tuple;
+  rotation?: THREE.Vector3Tuple;
+  positionRef: React.MutableRefObject<THREE.Vector3>;
+  render_distance?: number;
+  onDestroy: (id: string) => void;
+}
+
+interface ColliderState {
+  capsuleColliders: any[];
+  sphereColliders: any[];
+  boxColliders: any[];
+  trimeshColliders: any[];
+}
+
 export const GameObject = ({
   model,
   coordinates,
@@ -24,46 +115,59 @@ export const GameObject = ({
   positionRef,
   render_distance = OBJECT_RENDER_DISTANCE,
   onDestroy,
-}: {
-  model: string;
-  coordinates: THREE.Vector3Tuple;
-  id: string;
-  scale?: THREE.Vector3Tuple;
-  rotation?: THREE.Vector3Tuple;
-  positionRef: React.MutableRefObject<THREE.Vector3>;
-  render_distance?: number;
-  onDestroy: (id: string) => void;
-}) => {
+}: GameObjectProps) => {
   const { camera } = useThree();
-  const gltf = useLoader(GLTFLoader, model);
-  const scene = useMemo(() => gltf.scene.clone(true), [gltf]);
-  const fadeStartTime = useRef(Date.now());
-  const [opacity, setOpacity] = useState(0);
+  const gltf = useGLTF(model);
+  const sceneRef = useRef<THREE.Group | null>(null);
+
+  // Use our custom cloning function instead of simple clone
+  const clonedModel = useMemo(() => cloneModelWithAnimations(gltf), [gltf]);
+  const scene = clonedModel.scene;
+
+  // Set creation timestamp to use for randomizing animation start times
+  const creationTimestamp = useRef<number>(Date.now());
+
+  // Remove fade opacity state and keep materials visible
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const actionsRef = useRef<THREE.AnimationAction[]>([]);
 
   const true_render_distance = Math.max(OBJECT_RENDER_DISTANCE, render_distance);
 
-  const [colliders, setColliders] = useState<{
-    capsuleColliders: any[];
-    sphereColliders: any[];
-    boxColliders: any[];
-    trimeshColliders: any[];
-  } | null>(null);
+  const [colliders, setColliders] = useState<ColliderState | null>(null);
+  const [shouldRender, setShouldRender] = useState<boolean>(false);
+  const [shouldRenderColliders, setShouldRenderColliders] = useState<boolean>(false);
 
-  const [shouldRender, setShouldRender] = useState(false);
-  const [shouldRenderColliders, setShouldRenderColliders] = useState(false);
-
-  // Initialize materials and bounding sphere on first render
+  // Initialize materials, animations, and bounding sphere on first render
   useEffect(() => {
     if (scene) {
-      // Set up materials for fade effect
-      scene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          // Clone the material to avoid affecting other instances
-          child.material = child.material.clone();
-          child.material.transparent = true;
-          child.material.opacity = 0;
+      sceneRef.current = scene;
+
+      // Make all materials visible immediately
+      scene.traverse((child: any) => {
+        if (((child as any).isMesh || (child as any).isSkinnedMesh) && child.material) {
+          child.material.transparent = false; // No need for transparency
+          // Remove opacity settings to show immediately
         }
       });
+
+      // Set up animations if they exist
+      if (scene && clonedModel.animations && clonedModel.animations.length > 0) {
+        const mixer = new THREE.AnimationMixer(scene);
+        mixerRef.current = mixer;
+
+        // Start each animation immediately with a random offset
+        clonedModel.animations.forEach((clip: THREE.AnimationClip) => {
+          const action = mixer.clipAction(clip);
+
+          // Each animation should start immediately but at a different time offset
+          // to create variation between instances
+          const randomOffset = Math.random() * clip.duration;
+          action.time = randomOffset;
+          action.play();
+
+          actionsRef.current.push(action);
+        });
+      }
 
       // Create bounding sphere
       const bbox = new THREE.Box3().setFromObject(scene);
@@ -72,10 +176,10 @@ export const GameObject = ({
       const radius = Math.max(size.x, size.y, size.z) / 2;
       bounds.set(center, radius * Math.max(...scale));
     }
-  }, [scene, scale]);
+  }, [scene, scale, clonedModel.animations]);
 
-  // Handle fade-in effect
-  useFrame(() => {
+  // Handle animations and frustum culling
+  useFrame((_, delta) => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = utils.getDistance2D(camera.position, objectPosition);
 
@@ -93,20 +197,12 @@ export const GameObject = ({
 
     // Check if object is within frustum
     const isVisible = frustum.intersectsSphere(bounds);
-    setShouldRender(isVisible);
+    setShouldRender(true); //TODO set this to isVisible once you fix the check. maybe make bounds visible for debugging
     setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible);
 
-    // Calculate fade progress
-    const elapsedTime = (Date.now() - fadeStartTime.current) / 1000;
-    const newOpacity = Math.min(elapsedTime, 1);
-
-    if (newOpacity !== opacity) {
-      setOpacity(newOpacity);
-      scene.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.material) {
-          child.material.opacity = newOpacity;
-        }
-      });
+    // Update animations
+    if (mixerRef.current) {
+      mixerRef.current.update(delta);
     }
   });
 
@@ -114,14 +210,21 @@ export const GameObject = ({
     const task = async () => {
       try {
         const colliders = await createColliders(gltf, scale, rotation);
-        setColliders(colliders);
+        setColliders(colliders as ColliderState);
       } catch (error) {
         console.error("Error creating colliders:", error);
       }
     };
 
     taskQueue.addTask(task);
-  }, []);
+
+    // Clean up animations when component unmounts
+    return () => {
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction();
+      }
+    };
+  }, [gltf, scale, rotation]);
 
   if (!shouldRender) {
     return null;

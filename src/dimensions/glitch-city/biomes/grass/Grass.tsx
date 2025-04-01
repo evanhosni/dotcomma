@@ -1,4 +1,4 @@
-import { Biome } from "../../world/types";
+import { Biome } from "../../../../world/types";
 import { getVertexData } from "./getVertexData";
 
 export const Grass: Biome = {

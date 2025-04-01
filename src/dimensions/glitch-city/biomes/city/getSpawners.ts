@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { _scatter } from "../../utils/scatter/_scatter";
-import { Spawner } from "../../world/types";
-import { GlitchCity } from "../glitch-city/GlitchCity";
+import { _scatter } from "../../../../utils/scatter/_scatter";
+import { Spawner } from "../../../../world/types";
+import { GlitchCity } from "../../../glitch-city/GlitchCity";
 import { City } from "./City";
 import { gridSize, roadWidth } from "./getVertexData";
 

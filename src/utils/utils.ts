@@ -24,4 +24,11 @@ export namespace utils {
   export const getDistance2D = (pos1: THREE.Vector3, pos2: THREE.Vector3): number => {
     return Math.sqrt(Math.pow(pos1.x - pos2.x, 2) + Math.pow(pos1.z - pos2.z, 2));
   };
+
+  // export const getCurrentChunk = () => { //TODO
+  //   const playerX = camera.position.x;
+  //   const playerZ = camera.position.z;
+  //   const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
+  //   const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+  // };
 }
