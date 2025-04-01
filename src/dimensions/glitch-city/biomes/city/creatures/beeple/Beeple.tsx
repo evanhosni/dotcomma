@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { GameObject } from "../../../../../../objects/GameObject";
 import { GameObjectProps } from "../../../../../../objects/types";
 
-export const Tenant = (props: GameObjectProps) => {
+export const Beeple = (props: GameObjectProps) => {
   const ref = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
   const speed = 1;
@@ -20,7 +20,7 @@ export const Tenant = (props: GameObjectProps) => {
   return (
     <Debug>
       <group ref={ref as any}>
-        <GameObject model="/models/tenant.glb" positionRef={positionRef} {...props} scale={[10, 10, 10]} />
+        <GameObject model="/models/beeple.glb" positionRef={positionRef} {...props} scale={[10, 10, 10]} />
       </group>
     </Debug>
   );
