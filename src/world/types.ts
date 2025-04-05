@@ -17,7 +17,6 @@ export interface Dimension {
   regions: Region[];
   getVertexData: (x: number, y: number, isTerrain?: boolean) => Promise<VertexData>;
   getMaterial: () => Promise<THREE.ShaderMaterial>;
-  getSpawners: (x: number, y: number) => Promise<Spawner[]>;
   component: () => JSX.Element;
 }
 
@@ -29,7 +28,6 @@ export interface Biome {
   name: string;
   id: number;
   getVertexData: (vertexData: VertexData) => Promise<VertexData>;
-  getSpawners: (x: number, y: number) => Promise<Spawner[]>;
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;

@@ -130,6 +130,7 @@ export const Player = () => {
     if (jump && debug_jump) {
       api.position.set(x, terrainHeight + playerHeight + 420, z);
     }
+    // api.position.set(x, terrainHeight + playerHeight + 420, z);
 
     if (y < terrainHeight + playerHeight + 10) {
       api.position.set(x, terrainHeight + playerHeight + 10, z);
