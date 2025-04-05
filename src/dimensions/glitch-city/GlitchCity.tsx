@@ -4,7 +4,6 @@ import { Dust } from "../dust/Dust";
 import { City } from "./biomes/city/City";
 import { Grass } from "./biomes/grass/Grass";
 import { getMaterial } from "./getMaterial";
-import { getSpawners } from "./getSpawners";
 import { getVertexData } from "./getVertexData";
 
 export const CityRegion: Region = {
@@ -24,7 +23,6 @@ export const GlitchCity: Dimension = {
   regions: [CityRegion /*, GrassRegion, DesertRegion*/],
   getVertexData: getVertexData,
   getMaterial: getMaterial,
-  getSpawners: getSpawners,
   component: () => {
     return (
       <CustomCanvas dimension={GlitchCity}>

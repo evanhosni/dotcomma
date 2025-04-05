@@ -1,12 +1,11 @@
 import { Block } from "../../../../../world/types";
-import { Beeple } from "../creatures/beeple/Beeple";
 import { Apartment } from "./apartment/Apartment";
 
 export const blocks: Block[] = [
   {
     name: "apartments",
     joinable: true,
-    components: [Apartment, Beeple],
+    components: [Apartment],
   },
   {
     name: "theater",
