@@ -569,12 +569,19 @@ async function generateChunkSpawners(dimension: Dimension, chunkKey: string): Pr
 
 // Main function for getting spawn points - optimized
 export async function getSpawnPoints(dimension: Dimension, playerX: number, playerY: number): Promise<Spawner[]> {
+  cleanupDistantChunks(playerX, playerY);
   // Get nearby chunk keys
   const chunkKeys = getNearbyChunkKeys(playerX, playerY);
 
   // Sort chunk keys by distance for deterministic ordering and better performance
   const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
   const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
+
+  // // TODO cleanup caches (fix mem leak)
+  // console.log("globalSpawnerCache size:", globalSpawnerCache.size);
+  // console.log("spatialIndex size:", spatialIndex.size);
+  // console.log("seedResultCache size:", seedResultCache.size);
+  // console.log("vertexDataCache size:", vertexDataCache.size);
 
   chunkKeys.sort((a, b) => {
     const [ax, ay] = a.split("_").map(Number);
@@ -627,6 +634,7 @@ export function cleanupDistantChunks(
   const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
   const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
   const cleanupRadiusInChunks = Math.ceil(cleanupRadius / CHUNK_SIZE);
+  const cleanupRadiusSquared = Math.pow(cleanupRadius, 2);
 
   // Clean spawner cache and spatial index
   for (const chunkKey of [...(globalSpawnerCache.keys() as any), ...(spatialIndex.keys() as any)]) {
@@ -639,11 +647,39 @@ export function cleanupDistantChunks(
     }
   }
 
-  // Limit vertex data cache size (keep most recent 1000 entries)
-  if (vertexDataCache.size > 1000) {
-    const keys = [...(vertexDataCache.keys() as any)];
-    for (let i = 0; i < keys.length - 1000; i++) {
-      vertexDataCache.delete(keys[i]);
+  // Clean seedResultCache based on distance
+  for (const key of seedResultCache.keys() as any) {
+    // Parse the key to extract type and coordinates
+    // Key format is "{type}_{x}_{y}"
+    const parts = key.split("_");
+    if (parts.length >= 3) {
+      const gridX = parseFloat(parts[1]) * GRID_SIZE;
+      const gridY = parseFloat(parts[2]) * GRID_SIZE;
+
+      // Calculate distance from player
+      const dx = gridX - playerX;
+      const dy = gridY - playerY;
+      const distanceSquared = dx * dx + dy * dy;
+
+      if (distanceSquared > cleanupRadiusSquared) {
+        seedResultCache.delete(key);
+      }
+    }
+  }
+
+  // Clean vertexDataCache based on distance instead of just limiting size
+  for (const key of vertexDataCache.keys() as any) {
+    // Parse the vertex position from the key
+    // Key format is "{x}_{y}"
+    const [x, y] = key.split("_").map(Number);
+
+    // Calculate distance from player
+    const dx = x - playerX;
+    const dy = y - playerY;
+    const distanceSquared = dx * dx + dy * dy;
+
+    if (distanceSquared > cleanupRadiusSquared) {
+      vertexDataCache.delete(key);
     }
   }
 }
