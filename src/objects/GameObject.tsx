@@ -218,7 +218,7 @@ GameObjectProps) => {
 
     // Check if object is within frustum
     const isVisible = frustum.intersectsSphere(bounds);
-    setShouldRender(true); //TODO set this to isVisible once you fix the check. maybe make bounds visible for debugging
+    setShouldRender(isVisible); //TODO set this to isVisible once you fix the check. maybe make bounds visible for debugging
     setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible);
 
     // Update animations only if playing
