@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { Apartment } from "../dimensions/glitch-city/biomes/city/blocks/apartment/Apartment";
-import { Beeple } from "../dimensions/glitch-city/biomes/city/creatures/beeple/Beeple";
-import { BigBeeple } from "../dimensions/glitch-city/biomes/city/creatures/big-beeple/BigBeeple";
+import { Beeble } from "../dimensions/glitch-city/biomes/city/creatures/beeble/Beeble";
+import { BigBeeble } from "../dimensions/glitch-city/biomes/city/creatures/big-beeble/BigBeeble";
 import { XLElement } from "../dimensions/glitch-city/biomes/city/creatures/xl-element/XLElement";
 import { XXLElement } from "../dimensions/glitch-city/biomes/city/creatures/xxl-element/XXLElement";
 import { _math } from "../utils/math/_math";
@@ -17,22 +17,22 @@ const CHUNK_SIZE = 5 * GRID_SIZE; // Each chunk is 5x5 grid cells
 
 // Spawner type definitions
 type SpawnerType = "small" | "medium" | "large" | "xl" | "xxl";
-type SpawnerElement = typeof Beeple | typeof Apartment | typeof BigBeeple | typeof XLElement | typeof XXLElement;
+type SpawnerElement = typeof Beeble | typeof Apartment | typeof BigBeeble | typeof XLElement | typeof XXLElement;
 
 // Element constructors mapped to their type for faster lookup
 const ELEMENT_TO_TYPE = new Map<SpawnerElement, SpawnerType>([
-  [Beeple, "small"],
+  [Beeble, "small"],
   [Apartment, "medium"],
-  [BigBeeple, "large"],
+  [BigBeeble, "large"],
   [XLElement, "xl"],
   [XXLElement, "xxl"],
 ]);
 
 // Reverse mapping for faster instantiation
 const TYPE_TO_ELEMENT = new Map<SpawnerType, SpawnerElement>([
-  ["small", Beeple],
+  ["small", Beeble],
   ["medium", Apartment],
-  ["large", BigBeeple],
+  ["large", BigBeeble],
   ["xl", XLElement],
   ["xxl", XXLElement],
 ]);
@@ -494,7 +494,7 @@ async function generateChunkSpawners(dimension: Dimension, chunkKey: string): Pr
 
       const spawner: Spawner = {
         point: new THREE.Vector3(x, 0, y),
-        element: BigBeeple,
+        element: BigBeeble,
       };
 
       chunkSpawners.push(spawner);
@@ -553,7 +553,7 @@ async function generateChunkSpawners(dimension: Dimension, chunkKey: string): Pr
 
       const spawner: Spawner = {
         point: new THREE.Vector3(x, 0, y),
-        element: Beeple,
+        element: Beeble,
       };
 
       chunkSpawners.push(spawner);
@@ -578,10 +578,10 @@ export async function getSpawnPoints(dimension: Dimension, playerX: number, play
   const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
 
   // // TODO cleanup caches (fix mem leak)
-  // console.log("globalSpawnerCache size:", globalSpawnerCache.size);
-  // console.log("spatialIndex size:", spatialIndex.size);
-  // console.log("seedResultCache size:", seedResultCache.size);
-  // console.log("vertexDataCache size:", vertexDataCache.size);
+  // console.log(globalSpawnerCache.size);
+  // console.log(spatialIndex.size);
+  // console.log(seedResultCache.size);
+  // console.log(vertexDataCache.size);
 
   chunkKeys.sort((a, b) => {
     const [ax, ay] = a.split("_").map(Number);

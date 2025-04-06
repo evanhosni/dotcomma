@@ -15,6 +15,8 @@ interface GameContextProviderProps {
 export const GameContextProvider: React.FC<GameContextProviderProps> = ({ children }) => {
   const [playerPosition, setPlayerPosition] = useState<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
   const [chunks, setChunks] = useState<{ [key: string]: { position: number[]; chunk: Chunk } }>({});
+  const [progress, setProgress] = useState(0);
+  const [terrain_loaded, setTerrainLoaded] = useState(false);
 
   // Value object to be provided to consumers
   const value: GameContextType = {
@@ -22,6 +24,10 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
     setPlayerPosition,
     chunks,
     setChunks,
+    progress,
+    setProgress,
+    terrain_loaded,
+    setTerrainLoaded,
   };
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;

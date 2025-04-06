@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { GameObject } from "../../../../../../objects/GameObject";
 import { GameObjectProps } from "../../../../../../objects/types";
 
-export const BigBeeple = (props: GameObjectProps) => {
+export const BigBeeble = (props: GameObjectProps) => {
   const ref = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
   const speed = 0;
