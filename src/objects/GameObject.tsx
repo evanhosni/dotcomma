@@ -9,6 +9,7 @@ import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from ".
 import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
+export const FRUSTUM_PADDING = 2;
 
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
@@ -120,53 +121,86 @@ GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
   const sceneRef = useRef<THREE.Group | null>(null);
+  const boundsRef = useRef<THREE.Sphere>(new THREE.Sphere());
+  const mountedRef = useRef<boolean>(true);
   const clonedModel = useMemo(() => cloneModelWithAnimations(gltf), [gltf]);
-  const scene = clonedModel.scene;
-
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionsRef = useRef<THREE.AnimationAction[]>([]);
+  const scene = clonedModel.scene;
+
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-
-  const true_render_distance = Math.max(OBJECT_RENDER_DISTANCE, render_distance) + 200; //TODO find a better buffer maybe?
-
   const [colliders, setColliders] = useState<ColliderState | null>(null);
   const [shouldRender, setShouldRender] = useState<boolean>(false);
   const [shouldRenderColliders, setShouldRenderColliders] = useState<boolean>(false);
 
-  // Initialize materials, animations, and bounding sphere on first render
+  const true_render_distance = Math.max(OBJECT_RENDER_DISTANCE, render_distance) + 200; //TODO find a better buffer maybe?
+
   useEffect(() => {
-    if (scene) {
-      sceneRef.current = scene;
+    if (!scene) return;
 
-      // Make all materials visible immediately
-      scene.traverse((child: any) => {
-        if (((child as any).isMesh || (child as any).isSkinnedMesh) && child.material) {
-          child.material.transparent = false; // No need for transparency
+    sceneRef.current = scene;
+
+    // Optimize materials - make sure they're not transparent
+    scene.traverse((child: THREE.Object3D) => {
+      if ((child as THREE.Mesh).isMesh || (child as THREE.SkinnedMesh).isSkinnedMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.material) {
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+
+          materials.forEach((mat) => {
+            // Set properties that affect rendering performance
+            mat.transparent = false;
+            (mat as any).fog = false; // Disable fog calculations if not needed
+          });
+
+          mesh.frustumCulled = true; // Enable frustum culling
+          mesh.castShadow = false; // Disable shadow casting if not needed
+          mesh.receiveShadow = false; // Disable shadow receiving if not needed
         }
+      }
+    });
+
+    // Set up animations efficiently
+    if (clonedModel.animations && clonedModel.animations.length > 0) {
+      const mixer = new THREE.AnimationMixer(scene);
+      mixerRef.current = mixer;
+
+      // Create actions once
+      actionsRef.current = clonedModel.animations.map((clip) => {
+        const action = mixer.clipAction(clip);
+        action.paused = true;
+        action.time = 0;
+        action.play();
+        return action;
       });
+    }
 
-      // Set up animations if they exist, but don't play them yet
-      if (scene && clonedModel.animations && clonedModel.animations.length > 0) {
-        const mixer = new THREE.AnimationMixer(scene);
-        mixerRef.current = mixer;
+    // Calculate bounding sphere efficiently
+    const bbox = new THREE.Box3().setFromObject(scene);
+    const center = new THREE.Vector3();
+    bbox.getCenter(center);
 
-        // Create actions but don't play them yet
-        clonedModel.animations.forEach((clip: THREE.AnimationClip) => {
-          const action = mixer.clipAction(clip);
-          action.paused = true; // Initialize as paused
-          action.time = 0; // Start from beginning
-          action.play(); // Need to call play even though it's paused to register the action
-          actionsRef.current.push(action);
-        });
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    const radius = Math.max(size.x, size.y, size.z) / 2;
+    boundsRef.current.set(center, radius * Math.max(...scale));
+
+    // Return cleanup function
+    return () => {
+      // Mark component as unmounted to prevent state updates
+      mountedRef.current = false;
+
+      // Stop animations
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction();
       }
 
-      // Create bounding sphere
-      const bbox = new THREE.Box3().setFromObject(scene);
-      const center = bbox.getCenter(new THREE.Vector3());
-      const size = bbox.getSize(new THREE.Vector3());
-      const radius = Math.max(size.x, size.y, size.z) / 2;
-      bounds.set(center, radius * Math.max(...scale));
-    }
+      // Clear references to help garbage collection
+      actionsRef.current = [];
+      mixerRef.current = null;
+      sceneRef.current = null;
+    };
   }, [scene, scale, clonedModel.animations]);
 
   // Add event listener for E key
@@ -216,9 +250,22 @@ GameObjectProps) => {
     // Update bounding sphere position
     bounds.center.copy(objectPosition);
 
-    // Check if object is within frustum
-    const isVisible = frustum.intersectsSphere(bounds);
-    setShouldRender(isVisible); //TODO set this to isVisible once you fix the check. maybe make bounds visible for debugging
+    // Create a padded bounding sphere for more forgiving visibility checks
+    const paddedBounds = bounds.clone();
+    paddedBounds.radius *= FRUSTUM_PADDING;
+
+    // For very large objects, we can add an additional check
+    // based on distance to camera rather than just frustum
+    const objectRadiusWithScale = bounds.radius;
+    const distanceToCamera = camera.position.distanceTo(objectPosition);
+    const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3;
+
+    // An object is visible if:
+    // 1. It intersects with the padded frustum, OR
+    // 2. It's very close to the camera (large objects might be partially visible even when center is outside frustum)
+    const isVisible = frustum.intersectsSphere(paddedBounds) || isCloseToCamera;
+
+    setShouldRender(isVisible);
     setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible);
 
     // Update animations only if playing
@@ -247,9 +294,9 @@ GameObjectProps) => {
     };
   }, [gltf, scale, rotation]);
 
-  if (!shouldRender) {
-    return null;
-  }
+  // if (!shouldRender) { //TODO currently frustum does nothing because i am commenting this out. seems to run smoother
+  //   return null;
+  // }
 
   return (
     <Suspense fallback={null}>
