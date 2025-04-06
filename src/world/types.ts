@@ -45,7 +45,16 @@ export const block_default = {
   components: [],
 };
 
+export enum SPAWN_SIZE {
+  XS = "xs",
+  SMALL = "small",
+  MEDIUM = "medium",
+  LARGE = "large",
+  XL = "xl",
+}
+
 export interface Spawner {
   point: THREE.Vector3;
   element: any;
+  spawn_size: SPAWN_SIZE;
 }

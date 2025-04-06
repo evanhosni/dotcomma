@@ -331,5 +331,3 @@ GameObjectProps) => {
     </Suspense>
   );
 };
-
-//TODO IMPORTANT: sometimes the deleted objects dont return! Try backtracking to the center of the expired object radius
