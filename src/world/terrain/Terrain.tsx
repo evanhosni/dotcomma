@@ -2,10 +2,11 @@ import { useHeightfield } from "@react-three/cannon";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
+import { useGameContext } from "../../context/GameContext";
 import { Dimension } from "../types";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
-export const MAX_RENDER_DISTANCE = 2000;
+export const MAX_RENDER_DISTANCE = 1300;
 export const CHUNK_SIZE = 420;
 export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
 const CHUNK_RESOLUTION = 42;
@@ -24,19 +25,18 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+  const { terrain_loaded, setProgress, setTerrainLoaded } = useGameContext();
 
   scene.add(terrain.group);
 
   useEffect(() => {
-    if (!gameLoaded) {
+    if (!terrain_loaded) {
       if (remainingChunks !== null) {
-        const progress = 1 - remainingChunks / totalChunks;
-        if (progress === 1) console.log("loaded");
-        // console.log(`Loading progress: ${(progress * 100).toFixed(1)}%`);
+        setProgress(1 - remainingChunks / totalChunks);
       }
-      remainingChunks === 0 && setGameLoaded(true);
+      remainingChunks === 0 && setTerrainLoaded(true);
     }
-  }, [remainingChunks, gameLoaded]);
+  }, [remainingChunks, terrain_loaded]);
 
   useEffect(() => {
     dimension.getMaterial().then(setTerrainMaterial);

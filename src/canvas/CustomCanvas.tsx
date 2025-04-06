@@ -1,14 +1,18 @@
 import { Physics } from "@react-three/cannon";
 import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { GameContextProvider } from "../context/GameContext";
+import { GameContextProvider, useGameContext } from "../context/GameContext";
 import { ObjectPool } from "../objects/ObjectPool";
 import { Player } from "../player/Player";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
 import { CustomCanvasProps } from "./types";
 
-export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
+const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low for testing
+
+const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
+  const { terrain_loaded, progress } = useGameContext();
+
   // Default physics properties
   const defaultPhysicsProps = {
     gravity: [0, -9.81, 0],
@@ -27,6 +31,23 @@ export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   // Merge default and user-provided physics props
   const mergedPhysicsProps = { ...defaultPhysicsProps };
 
+  return (
+    <>
+      <Stats />
+      <PostProcessing />
+      <Physics {...(mergedPhysicsProps as any)}>
+        {children}
+        <Terrain dimension={dimension} />
+        <ObjectPool dimension={dimension} />
+        {/* {(terrain_loaded || progress >= OBJECT_LOAD_THRESHOLD) && <ObjectPool dimension={dimension} />} */}
+        {/* //TODO either dont allow player to move until terrain_loaded or remove this check altogether. progress can go down again so dont make that the only check */}
+        <Player />
+      </Physics>
+    </>
+  );
+};
+
+export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   // Default canvas properties
   const defaultCanvasProps = {
     style: { background: "#555" },
@@ -38,14 +59,7 @@ export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   return (
     <Canvas {...mergedCanvasProps}>
       <GameContextProvider>
-        <Stats />
-        <PostProcessing />
-        <Physics {...(mergedPhysicsProps as any)}>
-          {children}
-          <Terrain dimension={dimension} />
-          <ObjectPool dimension={dimension} />
-          <Player />
-        </Physics>
+        <PreCustomCanvas dimension={dimension}>{children}</PreCustomCanvas>
       </GameContextProvider>
     </Canvas>
   );

@@ -234,6 +234,7 @@ GameObjectProps) => {
   }, []);
 
   // Handle animations and frustum culling
+  // Handle animations and frustum culling
   useFrame((_, delta) => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = utils.getDistance2D(camera.position, objectPosition);
@@ -247,28 +248,38 @@ GameObjectProps) => {
     projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(projScreenMatrix);
 
-    // Update bounding sphere position
-    bounds.center.copy(objectPosition);
+    // Update bounding sphere position - using boundsRef instead of global bounds
+    boundsRef.current.center.copy(objectPosition);
 
     // Create a padded bounding sphere for more forgiving visibility checks
-    const paddedBounds = bounds.clone();
-    paddedBounds.radius *= FRUSTUM_PADDING;
+    // Avoid creating a new object with clone() every frame
+    const paddedRadius = boundsRef.current.radius * FRUSTUM_PADDING;
 
     // For very large objects, we can add an additional check
     // based on distance to camera rather than just frustum
-    const objectRadiusWithScale = bounds.radius;
+    const objectRadiusWithScale = boundsRef.current.radius;
     const distanceToCamera = camera.position.distanceTo(objectPosition);
     const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3;
 
     // An object is visible if:
-    // 1. It intersects with the padded frustum, OR
-    // 2. It's very close to the camera (large objects might be partially visible even when center is outside frustum)
-    const isVisible = frustum.intersectsSphere(paddedBounds) || isCloseToCamera;
+    // 1. It intersects with the padded frustum (using temporary larger radius), OR
+    // 2. It's very close to the camera
+    const originalRadius = boundsRef.current.radius;
+    boundsRef.current.radius = paddedRadius; // Temporarily increase radius for check
+    const isVisible = frustum.intersectsSphere(boundsRef.current) || isCloseToCamera;
+    boundsRef.current.radius = originalRadius; // Restore original radius
 
-    setShouldRender(isVisible);
-    setShouldRenderColliders(distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible);
+    // Only update states when value changes to minimize renders
+    if (shouldRender !== isVisible) {
+      setShouldRender(isVisible);
+    }
 
-    // Update animations only if playing
+    const shouldShowColliders = distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible;
+    if (shouldRenderColliders !== shouldShowColliders) {
+      setShouldRenderColliders(shouldShowColliders);
+    }
+
+    // Always update animations when playing, regardless of visibility
     if (isPlaying && mixerRef.current) {
       mixerRef.current.update(delta);
     }
@@ -320,3 +331,5 @@ GameObjectProps) => {
     </Suspense>
   );
 };
+
+//TODO IMPORTANT: sometimes the deleted objects dont return! Try backtracking to the center of the expired object radius
