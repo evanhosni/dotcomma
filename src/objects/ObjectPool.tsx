@@ -1,4 +1,4 @@
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { EMPTY_FUNCTION } from "../utils/constants";
@@ -38,24 +38,17 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
   // Cache of all object data and component instances
   const objectsMapRef = useRef(new Map<string, GameObjectProps>());
   const componentsMapRef = useRef(new Map<string, React.ReactNode>());
+  const destroyedObjectsRef = useRef(new Set<string>());
+
+  // useEffect(() => {
+  //   console.log("Objects Map size:", objectsMapRef.current.size);
+  //   console.log("Components Map size:", componentsMapRef.current.size);
+  //   console.log("Destroyed Objects Set size:", destroyedObjectsRef.current.size);
+  // }, [objectsMapRef.current.size, componentsMapRef.current.size, destroyedObjectsRef.current.size]);
 
   const isGeneratingRef = useRef(false);
   // const lastPositionRef = useRef(new THREE.Vector3());
   const { camera } = useThree();
-
-  // Track destroyed objects that shouldn't respawn while in range
-  const destroyedObjectsRef = useRef(new Set<string>());
-
-  // Check if camera has moved significantly
-  // const hasCameraMoved = useCallback(() => {
-  //   const minMovementThreshold = 1; // Distance in world units
-  //   const dist = lastPositionRef.current.distanceToSquared(camera.position);
-  //   if (dist > minMovementThreshold * minMovementThreshold) {
-  //     lastPositionRef.current.copy(camera.position);
-  //     return true;
-  //   }
-  //   return false;
-  // }, [camera.position]);
 
   // Clean up destroyed objects that are now out of range
   const cleanupDestroyedObjects = useCallback(() => {
@@ -153,12 +146,13 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
 
   // Initialize and set up interval
   useEffect(() => {
-    // Initialize position tracking
-    // lastPositionRef.current.copy(camera.position);
-
     setInterval(generateSpawners, 500);
-    // return () => clearInterval(intervalId);
   }, [generateSpawners]);
+
+  useFrame(() => {
+    //TODO not robust enough. If moving quickly (and easiest if far away from spawn) and player changes direction quickly and goes backwards, some objects directly under player may disappear and not come back
+    cleanupDestroyedObjects();
+  });
 
   // Simply render the stable components
   return <>{stableComponents}</>;
