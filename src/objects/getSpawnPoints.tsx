@@ -2,9 +2,8 @@ import * as THREE from "three";
 import { Apartment } from "../dimensions/glitch-city/biomes/city/blocks/apartment/Apartment";
 import { Beeple } from "../dimensions/glitch-city/biomes/city/creatures/beeple/Beeple";
 import { BigBeeple } from "../dimensions/glitch-city/biomes/city/creatures/big-beeple/BigBeeple";
-// Import the new XL and XXL elements (you'll need to create these)
-import { XLElement } from "../dimensions/glitch-city/biomes/city/creatures/xl-element/XLElement"; // Create this
-import { XXLElement } from "../dimensions/glitch-city/biomes/city/creatures/xxl-element/XXLElement"; // Create this
+import { XLElement } from "../dimensions/glitch-city/biomes/city/creatures/xl-element/XLElement";
+import { XXLElement } from "../dimensions/glitch-city/biomes/city/creatures/xxl-element/XXLElement";
 import { _math } from "../utils/math/_math";
 import { Dimension, Spawner } from "../world/types";
 import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
@@ -12,7 +11,6 @@ import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
 // Static grid configurations
 const GRID_SIZE = 50;
 const OFFSET_GRID = 0.5 * GRID_SIZE;
-const BUFFER = 2 * GRID_SIZE;
 
 // Define a fixed chunk size for the world - always aligned to grid
 const CHUNK_SIZE = 5 * GRID_SIZE; // Each chunk is 5x5 grid cells
@@ -20,56 +18,59 @@ const CHUNK_SIZE = 5 * GRID_SIZE; // Each chunk is 5x5 grid cells
 // Spawner type definitions
 type SpawnerType = "small" | "medium" | "large" | "xl" | "xxl";
 
-// Spacing requirements for each spawner type
+// Reverse map for element to type lookup (for efficient type determination)
+const ELEMENT_TO_TYPE = new Map([
+  [Beeple, "small"],
+  [Apartment, "medium"],
+  [BigBeeple, "large"],
+  [XLElement, "xl"],
+  [XXLElement, "xxl"],
+]);
+
+// Spacing requirements for each spawner type - stored squared to avoid costly sqrt operations
 const SPACING_REQUIREMENTS: Record<SpawnerType, Record<SpawnerType, number>> = {
   small: {
-    small: GRID_SIZE / 2,
-    medium: GRID_SIZE,
-    large: 2 * GRID_SIZE,
-    xl: 2.5 * GRID_SIZE,
-    xxl: 3 * GRID_SIZE,
+    small: Math.pow(GRID_SIZE / 2, 2),
+    medium: Math.pow(GRID_SIZE, 2),
+    large: Math.pow(2 * GRID_SIZE, 2),
+    xl: Math.pow(2.5 * GRID_SIZE, 2),
+    xxl: Math.pow(3 * GRID_SIZE, 2),
   },
   medium: {
-    small: GRID_SIZE,
-    medium: 2 * GRID_SIZE,
-    large: 2.5 * GRID_SIZE,
-    xl: 3 * GRID_SIZE,
-    xxl: 3.5 * GRID_SIZE,
+    small: Math.pow(GRID_SIZE, 2),
+    medium: Math.pow(2 * GRID_SIZE, 2),
+    large: Math.pow(2.5 * GRID_SIZE, 2),
+    xl: Math.pow(3 * GRID_SIZE, 2),
+    xxl: Math.pow(3.5 * GRID_SIZE, 2),
   },
   large: {
-    small: 2 * GRID_SIZE,
-    medium: 2.5 * GRID_SIZE,
-    large: 3 * GRID_SIZE,
-    xl: 3.5 * GRID_SIZE,
-    xxl: 4 * GRID_SIZE,
+    small: Math.pow(2 * GRID_SIZE, 2),
+    medium: Math.pow(2.5 * GRID_SIZE, 2),
+    large: Math.pow(3 * GRID_SIZE, 2),
+    xl: Math.pow(3.5 * GRID_SIZE, 2),
+    xxl: Math.pow(4 * GRID_SIZE, 2),
   },
   xl: {
-    small: 2.5 * GRID_SIZE,
-    medium: 3 * GRID_SIZE,
-    large: 3.5 * GRID_SIZE,
-    xl: 4 * GRID_SIZE,
-    xxl: 4.5 * GRID_SIZE,
+    small: Math.pow(2.5 * GRID_SIZE, 2),
+    medium: Math.pow(3 * GRID_SIZE, 2),
+    large: Math.pow(3.5 * GRID_SIZE, 2),
+    xl: Math.pow(4 * GRID_SIZE, 2),
+    xxl: Math.pow(4.5 * GRID_SIZE, 2),
   },
   xxl: {
-    small: 3 * GRID_SIZE,
-    medium: 3.5 * GRID_SIZE,
-    large: 4 * GRID_SIZE,
-    xl: 4.5 * GRID_SIZE,
-    xxl: 5 * GRID_SIZE,
+    small: Math.pow(3 * GRID_SIZE, 2),
+    medium: Math.pow(3.5 * GRID_SIZE, 2),
+    large: Math.pow(4 * GRID_SIZE, 2),
+    xl: Math.pow(4.5 * GRID_SIZE, 2),
+    xxl: Math.pow(5 * GRID_SIZE, 2),
   },
-};
-
-// Map spawner types to their element classes
-const SPAWNER_ELEMENTS: Record<SpawnerType, any> = {
-  small: Beeple,
-  medium: Apartment,
-  large: BigBeeple,
-  xl: XLElement,
-  xxl: XXLElement,
 };
 
 // Global cache of determined spawners - permanent for the session
 const globalSpawnerCache = new Map<string, Spawner[]>();
+
+// Spatial index for quick distance queries - maps chunk keys to spawners
+const spatialIndex = new Map<string, Map<SpawnerType, Set<Spawner>>>();
 
 interface GridPoint {
   id: string;
@@ -89,68 +90,100 @@ interface GridPoint {
   spawnerType?: SpawnerType;
 }
 
-// Deterministic random functions with position-based seeds
+// Deterministic seed and result cache to avoid recalculating
+const seedResultCache = new Map<string, boolean>();
+
+// Optimized random functions with caching of results
 const isXXLAtPosition = (x: number, y: number): boolean => {
+  const key = `xxl_${Math.floor(x / GRID_SIZE)}_${Math.floor(y / GRID_SIZE)}`;
+
+  if (seedResultCache.has(key)) {
+    return seedResultCache.get(key)!;
+  }
+
   // Create a position-based seed
-  const positionSeed = _math.seedRand(`xxl_${Math.floor(x / GRID_SIZE)}_${Math.floor(y / GRID_SIZE)}`);
+  const positionSeed = _math.seedRand(key);
   // Even rarer than large - 1/80 probability
-  return Math.floor(positionSeed * 80) === 0;
+  const result = Math.floor(positionSeed * 40) === 0;
+
+  seedResultCache.set(key, result);
+  return result;
 };
 
 const isLargeAtPosition = (x: number, y: number): boolean => {
-  // Check if this position is taken by XXL first
+  // Check if this position is taken by XXL first - use cached XXL result if available
   if (isXXLAtPosition(x, y)) return false;
 
+  const key = `large_${Math.floor(x / GRID_SIZE)}_${Math.floor(y / GRID_SIZE)}`;
+
+  if (seedResultCache.has(key)) {
+    return seedResultCache.get(key)!;
+  }
+
   // Create a position-based seed that's consistent regardless of player approach
-  const positionSeed = _math.seedRand(`large_${Math.floor(x / GRID_SIZE)}_${Math.floor(y / GRID_SIZE)}`);
+  const positionSeed = _math.seedRand(key);
   // 1/40 probability of being large
-  return Math.floor(positionSeed * 40) === 0;
+  const result = Math.floor(positionSeed * 40) === 0;
+
+  seedResultCache.set(key, result);
+  return result;
 };
 
 const isXLAtPosition = (x: number, y: number): boolean => {
+  const key = `xl_${Math.floor(x / OFFSET_GRID)}_${Math.floor(y / OFFSET_GRID)}`;
+
+  if (seedResultCache.has(key)) {
+    return seedResultCache.get(key)!;
+  }
+
   // Position-based seed for XL spawners
-  const positionSeed = _math.seedRand(`xl_${Math.floor(x / OFFSET_GRID)}_${Math.floor(y / OFFSET_GRID)}`);
+  const positionSeed = _math.seedRand(key);
   // 1/10 probability of being XL (less common than medium, more common than large)
-  return Math.floor(positionSeed * 10) === 0;
+  const result = Math.floor(positionSeed * 10) === 0;
+
+  seedResultCache.set(key, result);
+  return result;
 };
 
 const isMedAtPosition = (x: number, y: number): boolean => {
-  // Don't allow medium where XL already exists
+  // Don't allow medium where XL already exists - use cached XL result if available
   if (isXLAtPosition(x, y)) return false;
 
+  const key = `medium_${Math.floor(x / OFFSET_GRID)}_${Math.floor(y / OFFSET_GRID)}`;
+
+  if (seedResultCache.has(key)) {
+    return seedResultCache.get(key)!;
+  }
+
   // Position-based seed for medium spawners
-  const positionSeed = _math.seedRand(`medium_${Math.floor(x / OFFSET_GRID)}_${Math.floor(y / OFFSET_GRID)}`);
+  const positionSeed = _math.seedRand(key);
   // 1/3 probability of being medium
-  return Math.floor(positionSeed * 3) === 0;
+  const result = Math.floor(positionSeed * 3) === 0;
+
+  seedResultCache.set(key, result);
+  return result;
 };
 
-// Helper function to get deterministic chunk key from world coordinates
-const getChunkKey = (x: number, y: number): string => {
-  // Align to chunk boundaries for consistent keys regardless of player position
-  const chunkX = Math.floor(x / CHUNK_SIZE);
-  const chunkY = Math.floor(y / CHUNK_SIZE);
-  return `${chunkX}_${chunkY}`;
-};
-
-// Get nearby chunk keys from player position
+// Get nearby chunk keys from player position - optimized with distance squared
 const getNearbyChunkKeys = (playerX: number, playerY: number): string[] => {
   const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
   const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
   const viewDistance = Math.ceil(OBJECT_RENDER_DISTANCE / CHUNK_SIZE) + 1;
 
   const chunkKeys: string[] = [];
+  const renderDistanceSquared = Math.pow(OBJECT_RENDER_DISTANCE + CHUNK_SIZE, 2);
 
   for (let dx = -viewDistance; dx <= viewDistance; dx++) {
     for (let dy = -viewDistance; dy <= viewDistance; dy++) {
       const chunkX = centerChunkX + dx;
       const chunkY = centerChunkY + dy;
 
-      // Calculate distance to chunk center to skip far chunks
+      // Calculate distance to chunk center to skip far chunks - use squared distance
       const chunkCenterX = (chunkX + 0.5) * CHUNK_SIZE;
       const chunkCenterY = (chunkY + 0.5) * CHUNK_SIZE;
-      const distToChunk = Math.sqrt(Math.pow(playerX - chunkCenterX, 2) + Math.pow(playerY - chunkCenterY, 2));
+      const distSquared = Math.pow(playerX - chunkCenterX, 2) + Math.pow(playerY - chunkCenterY, 2);
 
-      if (distToChunk <= OBJECT_RENDER_DISTANCE + CHUNK_SIZE) {
+      if (distSquared <= renderDistanceSquared) {
         chunkKeys.push(`${chunkX}_${chunkY}`);
       }
     }
@@ -159,69 +192,128 @@ const getNearbyChunkKeys = (playerX: number, playerY: number): string[] => {
   return chunkKeys;
 };
 
-// Direct distance calculation helper for safety checks
-const checkDistanceDirectly = (x1: number, y1: number, x2: number, z2: number): number => {
-  return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - z2, 2));
+// Add a spawner to the spatial index
+const addToSpatialIndex = (spawner: Spawner, chunkKey: string): void => {
+  if (!spatialIndex.has(chunkKey)) {
+    spatialIndex.set(chunkKey, new Map());
+  }
+
+  const chunkIndex = spatialIndex.get(chunkKey)!;
+  const elementType = ELEMENT_TO_TYPE.get(spawner.element);
+
+  if (!elementType) return;
+
+  if (!chunkIndex.has(elementType as any)) {
+    chunkIndex.set(elementType as any, new Set());
+  }
+
+  chunkIndex.get(elementType as any)!.add(spawner);
 };
 
-// Improved check for neighboring spawners across chunks
-const checkNeighboringChunks = async (
-  dimension: Dimension,
-  pointX: number,
-  pointY: number,
-  spawnerType: SpawnerType
-): Promise<boolean> => {
-  // Calculate which chunks could contain spawners that are too close
-  // Add extra padding to ensure we catch everything
-  const maxSpacing = Math.max(...Object.values(SPACING_REQUIREMENTS[spawnerType]).map((val) => val));
-
-  const chunkRadius = Math.ceil((maxSpacing + GRID_SIZE) / CHUNK_SIZE) + 1;
-  const centerChunkX = Math.floor(pointX / CHUNK_SIZE);
-  const centerChunkY = Math.floor(pointY / CHUNK_SIZE);
-
-  // Check all potentially overlapping chunks
+// Quick proximity check using the spatial index
+const isSpawnerTooClose = (
+  x: number,
+  y: number,
+  spawnerType: SpawnerType,
+  chunkRadius: number,
+  centerChunkX: number,
+  centerChunkY: number
+): boolean => {
+  // Check all neighboring chunks
   for (let dx = -chunkRadius; dx <= chunkRadius; dx++) {
     for (let dy = -chunkRadius; dy <= chunkRadius; dy++) {
       const neighborChunkX = centerChunkX + dx;
       const neighborChunkY = centerChunkY + dy;
       const neighborChunkKey = `${neighborChunkX}_${neighborChunkY}`;
 
-      // Skip if this is a chunk we haven't processed yet
-      if (!globalSpawnerCache.has(neighborChunkKey)) continue;
+      // Skip if this chunk has no spatial index
+      if (!spatialIndex.has(neighborChunkKey)) continue;
 
-      // Check against existing spawners in this chunk
-      const chunkSpawners = globalSpawnerCache.get(neighborChunkKey)!;
+      const chunkIndex = spatialIndex.get(neighborChunkKey)!;
 
-      for (const spawner of chunkSpawners) {
-        // Determine the type of existing spawner
-        let existingType: SpawnerType;
-        if (spawner.element === Beeple) existingType = "small";
-        else if (spawner.element === Apartment) existingType = "medium";
-        else if (spawner.element === BigBeeple) existingType = "large";
-        else if (spawner.element === XLElement) existingType = "xl";
-        else if (spawner.element === XXLElement) existingType = "xxl";
-        else continue; // Skip if not one of our managed types
+      // For each spawner type, check distance constraints
+      for (const [existingTypeKey, spawners] of chunkIndex.entries() as any) {
+        // Make sure existingType is a valid SpawnerType
+        const existingType = existingTypeKey as SpawnerType;
 
-        // Get required minimum distance between these two types
-        const minDistance = SPACING_REQUIREMENTS[spawnerType][existingType];
-        const minDistanceSquared = minDistance * minDistance;
+        // Get minimum squared distance
+        const minDistanceSquared = SPACING_REQUIREMENTS[spawnerType][existingType];
 
-        // Compare coordinates with correct mapping
-        const distanceSquared = Math.pow(pointX - spawner.point.x, 2) + Math.pow(pointY - spawner.point.z, 2);
+        // Check all spawners of this type
+        for (const spawner of spawners) {
+          const distSquared = Math.pow(x - spawner.point.x, 2) + Math.pow(y - spawner.point.z, 2);
 
-        // If too close, return false
-        if (distanceSquared < minDistanceSquared) {
-          return false;
+          if (distSquared < minDistanceSquared) {
+            return true; // Too close to an existing spawner
+          }
         }
       }
     }
   }
 
-  // If we get here, point is far enough from all existing spawners
-  return true;
+  return false; // Not too close to any existing spawner
 };
 
-// Primary function to generate spawners for a specific chunk
+// Improved check for neighboring spawners across chunks with spatial indexing
+const checkNeighboringChunks = (pointX: number, pointY: number, spawnerType: SpawnerType): boolean => {
+  // Calculate which chunks could contain spawners that are too close
+  const maxSpacing = Math.max(...Object.values(SPACING_REQUIREMENTS[spawnerType]).map(Math.sqrt));
+  const chunkRadius = Math.ceil((maxSpacing + GRID_SIZE) / CHUNK_SIZE) + 1;
+  const centerChunkX = Math.floor(pointX / CHUNK_SIZE);
+  const centerChunkY = Math.floor(pointY / CHUNK_SIZE);
+
+  return !isSpawnerTooClose(pointX, pointY, spawnerType, chunkRadius, centerChunkX, centerChunkY);
+};
+
+// Optimized check for local grid proximity
+const isPointTooCloseToGridSpawners = (
+  point: GridPoint,
+  spawnerType: SpawnerType,
+  grid: Record<string, GridPoint>
+): boolean => {
+  for (const existingPoint of Object.values(grid)) {
+    // Only check against points marked as actual spawners
+    if (!existingPoint.spawnerType) continue;
+
+    // Calculate exact distance squared
+    const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
+
+    // Get minimum required squared distance
+    const minDistanceSquared = SPACING_REQUIREMENTS[spawnerType][existingPoint.spawnerType];
+
+    // Check against minimum distance
+    if (distanceSquared < minDistanceSquared) {
+      return true; // Too close
+    }
+  }
+
+  return false; // Not too close
+};
+
+// Helper for checking if a small point has any spawner of a specific type nearby
+const hasNearbySpawnerType = (
+  point: GridPoint,
+  spawnerType: SpawnerType,
+  checkRadiusSquared: number,
+  grid: Record<string, GridPoint>
+): boolean => {
+  for (const existingPoint of Object.values(grid)) {
+    // Only check against points marked as the specified spawner type
+    if (existingPoint.spawnerType !== spawnerType) continue;
+
+    // Calculate exact distance squared
+    const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
+
+    // Check against radius
+    if (distanceSquared < checkRadiusSquared) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+// Primary function to generate spawners for a specific chunk - optimization focus
 const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Promise<Spawner[]> => {
   // Check if we've already processed this chunk
   if (globalSpawnerCache.has(chunkKey)) {
@@ -237,79 +329,111 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
   const chunkMinY = chunkY * CHUNK_SIZE - OFFSET_GRID;
   const chunkMaxY = (chunkY + 1) * CHUNK_SIZE + OFFSET_GRID;
 
-  // Create expanded grid for proper neighbor checking
-  const maxSpacing = Math.max(...Object.values(SPACING_REQUIREMENTS.xxl).map((val) => val));
-  const expansionBuffer = maxSpacing; // Use the maximum spacing requirement
+  // Calculate expansion buffer based on maximum spacing requirement
+  const maxSpacing = Math.max(...Object.values(SPACING_REQUIREMENTS.xxl).map(Math.sqrt));
+  const expansionBuffer = maxSpacing;
   const expandedMinX = chunkMinX - expansionBuffer;
   const expandedMaxX = chunkMaxX + expansionBuffer;
   const expandedMinY = chunkMinY - expansionBuffer;
   const expandedMaxY = chunkMaxY + expansionBuffer;
 
-  // Generate all grid points in expanded chunk
-  const grid: Record<string, GridPoint> = {};
-  const promises: Promise<void>[] = [];
+  // Pre-filter points for candidates before getting vertex data
+  interface GridCandidate {
+    x: number;
+    y: number;
+    main_grid: boolean;
+    offset_grid: boolean;
+    isLarge: boolean;
+    isMed: boolean;
+    isXL: boolean;
+    isXXL: boolean;
+  }
 
-  // Generate main grid points (for large and XXL)
+  // Generate all grid candidate points in expanded chunk
+  const gridCandidates: GridCandidate[] = [];
+
+  // Generate main grid points (for large, xxl, and small)
   for (let x = expandedMinX; x <= expandedMaxX; x += GRID_SIZE) {
     for (let y = expandedMinY; y <= expandedMaxY; y += GRID_SIZE) {
-      const id = `${x}_${y}`;
+      // First check XXL (highest priority)
       const isXXL = isXXLAtPosition(x, y);
-      const isLarge = isLargeAtPosition(x, y);
 
-      // Fetch vertex data for all points in buffer zone
-      const promise = dimension.getVertexData(x, y).then((vertexData) => {
-        grid[id] = {
-          id,
-          x,
-          y,
-          vertexData,
-          main_grid: true,
-          offset_grid: false,
-          isLarge,
-          isXXL,
-          isMed: false,
-          isXL: false,
-        };
+      // Only check for large if not an XXL position
+      const isLarge = !isXXL && isLargeAtPosition(x, y);
+
+      gridCandidates.push({
+        x,
+        y,
+        main_grid: true,
+        offset_grid: false,
+        isLarge,
+        isXXL,
+        isMed: false,
+        isXL: false,
       });
-
-      promises.push(promise);
     }
   }
 
-  // Generate offset grid points (for medium and XL)
+  // Generate offset grid points (for medium and xl)
   for (let x = expandedMinX + OFFSET_GRID; x < expandedMaxX; x += GRID_SIZE) {
     for (let y = expandedMinY + OFFSET_GRID; y < expandedMaxY; y += GRID_SIZE) {
-      const id = `${x}_${y}`;
+      // First check XL (higher priority)
       const isXL = isXLAtPosition(x, y);
-      const isMed = isMedAtPosition(x, y);
 
-      // Fetch vertex data for all points in buffer zone
-      const promise = dimension.getVertexData(x, y).then((vertexData) => {
-        grid[id] = {
-          id,
-          x,
-          y,
-          vertexData,
-          main_grid: false,
-          offset_grid: true,
-          isLarge: false,
-          isXXL: false,
-          isMed,
-          isXL,
-        };
+      // Only check for medium if not an XL position
+      const isMed = !isXL && isMedAtPosition(x, y);
+
+      gridCandidates.push({
+        x,
+        y,
+        main_grid: false,
+        offset_grid: true,
+        isLarge: false,
+        isXXL: false,
+        isMed,
+        isXL,
       });
-
-      promises.push(promise);
     }
+  }
+
+  // First filter candidates to those that might become actual spawners
+  const potentialCandidates = gridCandidates.filter(
+    (c) =>
+      c.isXXL ||
+      c.isLarge ||
+      c.isXL ||
+      c.isMed ||
+      (c.main_grid && c.x >= chunkMinX && c.x < chunkMaxX && c.y >= chunkMinY && c.y < chunkMaxY)
+  );
+
+  // Only fetch vertex data for potential candidates
+  const grid: Record<string, GridPoint> = {};
+  const promises: Promise<void>[] = [];
+
+  for (const candidate of potentialCandidates) {
+    const id = `${candidate.x}_${candidate.y}`;
+
+    // Fetch vertex data only for potential spawners
+    const promise = dimension.getVertexData(candidate.x, candidate.y).then((vertexData) => {
+      grid[id] = {
+        id,
+        x: candidate.x,
+        y: candidate.y,
+        vertexData,
+        main_grid: candidate.main_grid,
+        offset_grid: candidate.offset_grid,
+        isLarge: candidate.isLarge,
+        isXXL: candidate.isXXL,
+        isMed: candidate.isMed,
+        isXL: candidate.isXL,
+      };
+    });
+
+    promises.push(promise);
   }
 
   // Wait for all vertex data to be fetched
   await Promise.all(promises);
-
-  // Get quick lookup function
-  const getGridPoint = (x: number, y: number): GridPoint | undefined => {
-    return grid[`${x}_${y}`];
-  };
 
   // Filter grid to points inside the actual chunk (without buffer)
   const chunkPoints = Object.values(grid).filter(
@@ -319,16 +443,18 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
   // The actual spawners for this chunk
   const chunkSpawners: Spawner[] = [];
 
-  // Process order: XXL (biggest) -> XL -> Large -> Medium -> Small (smallest)
-  // This ensures that bigger and rarer elements get priority
+  // Create a spatial index for this chunk if it doesn't exist
+  if (!spatialIndex.has(chunkKey)) {
+    spatialIndex.set(chunkKey, new Map());
+  }
 
-  // Phase 1: Process XXL spawners (biggest, rarest, highest priority)
+  // OPTIMIZATION: Process spawners in order of rarity/priority
+  // This reduces the number of checks needed for common spawners
+
+  // Phase 1: Process XXL spawners (rarest, highest priority)
   const xxlPoints = Object.values(grid)
     .filter((point) => point.main_grid && point.isXXL)
-    .sort((a, b) => {
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
-    });
+    .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
 
   for (const point of xxlPoints) {
     // Skip if outside this chunk
@@ -336,27 +462,29 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
       continue;
     }
 
-    // Check neighboring chunks for any spawners that would conflict
-    const canPlace = await checkNeighboringChunks(dimension, point.x, point.y, "xxl");
+    // Check neighboring chunks for any spawners that would conflict - use optimized check
+    const canPlace = checkNeighboringChunks(point.x, point.y, "xxl");
 
     if (canPlace) {
       point.isActuallyXXL = true;
       point.spawnerType = "xxl";
 
-      chunkSpawners.push({
+      const spawner = {
         point: new THREE.Vector3(point.x, 0, point.y),
         element: XXLElement,
-      });
+      };
+
+      chunkSpawners.push(spawner);
+
+      // Add to spatial index for efficient proximity checks
+      addToSpatialIndex(spawner, chunkKey);
     }
   }
 
   // Phase 2: Process XL spawners
   const xlPoints = Object.values(grid)
     .filter((point) => point.offset_grid && point.isXL)
-    .sort((a, b) => {
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
-    });
+    .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
 
   for (const point of xlPoints) {
     // Skip if outside this chunk
@@ -364,51 +492,32 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
       continue;
     }
 
-    // Check spacing against all existing spawners in this chunk
-    let tooClose = false;
+    // Check spacing against existing grid spawners - optimized check
+    if (isPointTooCloseToGridSpawners(point, "xl", grid)) continue;
 
-    // Check against existing spawners in the grid
-    for (const existingPoint of Object.values(grid)) {
-      // Only check against points marked as actual spawners
-      if (!existingPoint.spawnerType) continue;
-
-      // Calculate exact distance
-      const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
-
-      // Get minimum required distance
-      const minDistance = SPACING_REQUIREMENTS["xl"][existingPoint.spawnerType];
-
-      // Check against minimum distance
-      if (distanceSquared < minDistance * minDistance) {
-        tooClose = true;
-        break;
-      }
-    }
-
-    // Skip if too close to existing spawners
-    if (tooClose) continue;
-
-    // Check neighboring chunks
-    const canPlace = await checkNeighboringChunks(dimension, point.x, point.y, "xl");
+    // Check neighboring chunks - use optimized spatial index
+    const canPlace = checkNeighboringChunks(point.x, point.y, "xl");
 
     if (canPlace) {
       point.isActuallyXL = true;
       point.spawnerType = "xl";
 
-      chunkSpawners.push({
+      const spawner = {
         point: new THREE.Vector3(point.x, 0, point.y),
         element: XLElement,
-      });
+      };
+
+      chunkSpawners.push(spawner);
+
+      // Add to spatial index
+      addToSpatialIndex(spawner, chunkKey);
     }
   }
 
   // Phase 3: Process large spawners
   const largePoints = Object.values(grid)
     .filter((point) => point.main_grid && point.isLarge)
-    .sort((a, b) => {
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
-    });
+    .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
 
   for (const point of largePoints) {
     // Skip if outside this chunk
@@ -416,51 +525,32 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
       continue;
     }
 
-    // Check spacing against all existing spawners in this chunk
-    let tooClose = false;
+    // Check spacing against existing grid spawners - optimized check
+    if (isPointTooCloseToGridSpawners(point, "large", grid)) continue;
 
-    // Check against existing spawners in the grid
-    for (const existingPoint of Object.values(grid)) {
-      // Only check against points marked as actual spawners
-      if (!existingPoint.spawnerType) continue;
-
-      // Calculate exact distance
-      const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
-
-      // Get minimum required distance
-      const minDistance = SPACING_REQUIREMENTS["large"][existingPoint.spawnerType];
-
-      // Check against minimum distance
-      if (distanceSquared < minDistance * minDistance) {
-        tooClose = true;
-        break;
-      }
-    }
-
-    // Skip if too close to existing spawners
-    if (tooClose) continue;
-
-    // Check neighboring chunks
-    const canPlace = await checkNeighboringChunks(dimension, point.x, point.y, "large");
+    // Check neighboring chunks - use optimized spatial index
+    const canPlace = checkNeighboringChunks(point.x, point.y, "large");
 
     if (canPlace) {
       point.isActuallyLarge = true;
       point.spawnerType = "large";
 
-      chunkSpawners.push({
+      const spawner = {
         point: new THREE.Vector3(point.x, 0, point.y),
         element: BigBeeple,
-      });
+      };
+
+      chunkSpawners.push(spawner);
+
+      // Add to spatial index
+      addToSpatialIndex(spawner, chunkKey);
     }
   }
 
   // Phase 4: Process medium spawners
   const mediumPoints = Object.values(grid)
     .filter((point) => point.offset_grid && point.isMed)
-    .sort((a, b) => {
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
-    });
+    .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
 
   for (const point of mediumPoints) {
     // Skip if outside this chunk
@@ -468,158 +558,63 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
       continue;
     }
 
-    // Check spacing against all existing spawners in this chunk
-    let tooClose = false;
-
-    // Check against existing spawners in the grid
-    for (const existingPoint of Object.values(grid)) {
-      // Only check against points marked as actual spawners
-      if (!existingPoint.spawnerType) continue;
-
-      // Calculate exact distance
-      const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
-
-      // Get minimum required distance
-      const minDistance = SPACING_REQUIREMENTS["medium"][existingPoint.spawnerType];
-
-      // Check against minimum distance
-      if (distanceSquared < minDistance * minDistance) {
-        tooClose = true;
-        break;
-      }
-    }
-
-    // Skip if too close to existing spawners
-    if (tooClose) continue;
+    // Check spacing against existing grid spawners - optimized check
+    if (isPointTooCloseToGridSpawners(point, "medium", grid)) continue;
 
     // Check neighboring chunks
-    const canPlace = await checkNeighboringChunks(dimension, point.x, point.y, "medium");
+    const canPlace = checkNeighboringChunks(point.x, point.y, "medium");
 
     if (canPlace) {
       point.isActuallyMed = true;
       point.spawnerType = "medium";
 
-      chunkSpawners.push({
+      const spawner = {
         point: new THREE.Vector3(point.x, 0, point.y),
         element: Apartment,
-      });
+      };
+
+      chunkSpawners.push(spawner);
+
+      // Add to spatial index
+      addToSpatialIndex(spawner, chunkKey);
     }
   }
 
-  // Phase 5: Process small spawners (lowest priority)
+  // Phase 5: Process small spawners (most numerous, lowest priority)
+  // Small spawners only need to be processed for the actual chunk
   const smallPoints = chunkPoints
-    .filter(
-      (point) =>
-        point.main_grid &&
-        !point.isXXL &&
-        !point.isLarge &&
-        !point.spawnerType &&
-        point.x >= chunkMinX &&
-        point.x < chunkMaxX &&
-        point.y >= chunkMinY &&
-        point.y < chunkMaxY
-    )
-    .sort((a, b) => {
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
-    });
+    .filter((point) => point.main_grid && !point.isXXL && !point.isLarge && !point.spawnerType)
+    .sort((a, b) => (a.x !== b.x ? a.x - b.x : a.y - b.y));
 
-  // Helper function to check if a point has a spawner of specified type nearby
-  const hasNearbySpawnerType = (point: GridPoint, spawnerType: SpawnerType, checkRadius: number): boolean => {
-    const checkRadiusSquared = checkRadius * checkRadius;
-
-    for (const existingPoint of Object.values(grid)) {
-      // Only check against points marked as the specified spawner type
-      if (existingPoint.spawnerType !== spawnerType) continue;
-
-      // Calculate exact distance
-      const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
-
-      // Check against radius
-      if (distanceSquared < checkRadiusSquared) {
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  // Check direct neighbors in global cache for safety (similar to original script)
-  const hasNearbySpawnerInCache = (point: GridPoint, spawnerType: SpawnerType, checkRadius: number): boolean => {
-    const checkRadiusSquared = checkRadius * checkRadius;
-
-    // Get all cached spawners
-    for (const [cachedChunkKey, cachedSpawners] of globalSpawnerCache.entries() as any) {
-      for (const spawner of cachedSpawners) {
-        // Only check against the relevant spawner type
-        const isRelevantType = spawner.element === SPAWNER_ELEMENTS[spawnerType];
-        if (!isRelevantType) continue;
-
-        // Direct distance check with correct coordinates
-        const distanceSquared = Math.pow(point.x - spawner.point.x, 2) + Math.pow(point.y - spawner.point.z, 2);
-
-        if (distanceSquared < checkRadiusSquared) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  };
-
+  // Batch process small spawners for better performance
   for (const point of smallPoints) {
-    // First check for large and larger neighbors (similar to original script)
-    if (hasNearbySpawnerType(point, "xxl", SPACING_REQUIREMENTS["small"]["xxl"])) continue;
-    if (hasNearbySpawnerType(point, "xl", SPACING_REQUIREMENTS["small"]["xl"])) continue;
-    if (hasNearbySpawnerType(point, "large", SPACING_REQUIREMENTS["small"]["large"])) continue;
-
-    // Extra safety: Check in global cache too
-    if (hasNearbySpawnerInCache(point, "xxl", SPACING_REQUIREMENTS["small"]["xxl"])) continue;
-    if (hasNearbySpawnerInCache(point, "xl", SPACING_REQUIREMENTS["small"]["xl"])) continue;
-    if (hasNearbySpawnerInCache(point, "large", SPACING_REQUIREMENTS["small"]["large"])) continue;
-
-    // Then check medium spawners
-    if (hasNearbySpawnerType(point, "medium", SPACING_REQUIREMENTS["small"]["medium"])) continue;
-    if (hasNearbySpawnerInCache(point, "medium", SPACING_REQUIREMENTS["small"]["medium"])) continue;
-
-    // Check other small spawners too
-    if (hasNearbySpawnerType(point, "small", SPACING_REQUIREMENTS["small"]["small"])) continue;
-
-    // Additional comprehensive check
-    let tooClose = false;
-
-    // Check against existing spawners in the grid
-    for (const existingPoint of Object.values(grid)) {
-      // Only check against points marked as actual spawners
-      if (!existingPoint.spawnerType) continue;
-
-      // Calculate exact distance
-      const distanceSquared = Math.pow(point.x - existingPoint.x, 2) + Math.pow(point.y - existingPoint.y, 2);
-
-      // Get minimum required distance
-      const minDistance = SPACING_REQUIREMENTS["small"][existingPoint.spawnerType];
-
-      // Check against minimum distance
-      if (distanceSquared < minDistance * minDistance) {
-        tooClose = true;
-        break;
-      }
+    // Quick check against all larger spawner types
+    if (
+      hasNearbySpawnerType(point, "xxl", SPACING_REQUIREMENTS["small"]["xxl"], grid) ||
+      hasNearbySpawnerType(point, "xl", SPACING_REQUIREMENTS["small"]["xl"], grid) ||
+      hasNearbySpawnerType(point, "large", SPACING_REQUIREMENTS["small"]["large"], grid) ||
+      hasNearbySpawnerType(point, "medium", SPACING_REQUIREMENTS["small"]["medium"], grid) ||
+      hasNearbySpawnerType(point, "small", SPACING_REQUIREMENTS["small"]["small"], grid)
+    ) {
+      continue;
     }
 
-    // Skip if too close to existing spawners
-    if (tooClose) continue;
-
-    // Final check with neighboring chunks (similar to medium spawners in original)
-    const canPlace = await checkNeighboringChunks(dimension, point.x, point.y, "small");
+    // Final cross-chunk check
+    const canPlace = checkNeighboringChunks(point.x, point.y, "small");
     if (!canPlace) continue;
 
     // If it passes all checks, add the small spawner
     point.spawnerType = "small";
 
-    chunkSpawners.push({
+    const spawner = {
       point: new THREE.Vector3(point.x, 0, point.y),
       element: Beeple,
-    });
+    };
+
+    chunkSpawners.push(spawner);
+
+    // Add to spatial index - optional for small since they're lowest priority
+    addToSpatialIndex(spawner, chunkKey);
   }
 
   // Cache the results for this chunk
@@ -628,20 +623,21 @@ const generateChunkSpawners = async (dimension: Dimension, chunkKey: string): Pr
   return chunkSpawners;
 };
 
-// Main function that returns spawners for the player's current position
+// Main function that returns spawners for the player's current position - optimized
 export const getSpawnPoints = async (dimension: Dimension, playerX: number, playerY: number): Promise<Spawner[]> => {
   // Get nearby chunk keys based on player position
   const chunkKeys = getNearbyChunkKeys(playerX, playerY);
 
   // Sort chunk keys by distance from player for deterministic ordering
+  const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
+  const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
+
   chunkKeys.sort((a, b) => {
     const [ax, ay] = a.split("_").map(Number);
     const [bx, by] = b.split("_").map(Number);
 
-    const distA =
-      Math.pow(ax - Math.floor(playerX / CHUNK_SIZE), 2) + Math.pow(ay - Math.floor(playerY / CHUNK_SIZE), 2);
-    const distB =
-      Math.pow(bx - Math.floor(playerX / CHUNK_SIZE), 2) + Math.pow(by - Math.floor(playerY / CHUNK_SIZE), 2);
+    const distA = Math.pow(ax - centerChunkX, 2) + Math.pow(ay - centerChunkY, 2);
+    const distB = Math.pow(bx - centerChunkX, 2) + Math.pow(by - centerChunkY, 2);
 
     return distA - distB;
   });
@@ -654,7 +650,7 @@ export const getSpawnPoints = async (dimension: Dimension, playerX: number, play
     allSpawners.push(...spawners);
   }
 
-  // Filter to show only spawners within render distance
+  // Filter to show only spawners within render distance - use squared distance
   const renderDistanceSquared = OBJECT_RENDER_DISTANCE * OBJECT_RENDER_DISTANCE;
   const visibleSpawners = allSpawners.filter((spawner) => {
     const dx = spawner.point.x - playerX;
@@ -664,26 +660,4 @@ export const getSpawnPoints = async (dimension: Dimension, playerX: number, play
   });
 
   return visibleSpawners;
-};
-
-// For debugging and testing
-export const _testing = {
-  clearCache: () => {
-    globalSpawnerCache.clear();
-  },
-  getCacheStats: () => ({
-    chunks: globalSpawnerCache.size,
-    totalSpawners: Array.from(globalSpawnerCache.values()).reduce((acc, spawners) => acc + spawners.length, 0),
-    spawnerCounts: Array.from(globalSpawnerCache.values())
-      .flat()
-      .reduce((counts, spawner) => {
-        if (spawner.element === Beeple) counts.small = (counts.small || 0) + 1;
-        else if (spawner.element === Apartment) counts.medium = (counts.medium || 0) + 1;
-        else if (spawner.element === BigBeeple) counts.large = (counts.large || 0) + 1;
-        else if (spawner.element === XLElement) counts.xl = (counts.xl || 0) + 1;
-        else if (spawner.element === XXLElement) counts.xxl = (counts.xxl || 0) + 1;
-        return counts;
-      }, {} as Record<string, number>),
-  }),
-  getChunkSpawners: (chunkKey: string) => globalSpawnerCache.get(chunkKey) || [],
 };
