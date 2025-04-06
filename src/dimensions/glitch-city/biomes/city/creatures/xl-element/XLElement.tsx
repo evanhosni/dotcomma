@@ -5,14 +5,14 @@ import * as THREE from "three";
 import { GameObject } from "../../../../../../objects/GameObject";
 import { GameObjectProps } from "../../../../../../objects/types";
 
-export const BigBeeple = (props: GameObjectProps) => {
+export const XLElement = (props: GameObjectProps) => {
   const ref = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
   const speed = 0;
 
   useFrame((state, delta) => {
     if (ref.current) {
-      positionRef.current.z += speed * delta;
+      positionRef.current.x -= speed * delta;
       ref.current.position.copy(positionRef.current);
     }
   });
@@ -20,7 +20,7 @@ export const BigBeeple = (props: GameObjectProps) => {
   return (
     <Debug>
       <group ref={ref as any}>
-        <GameObject model="/models/apartment.glb" positionRef={positionRef} {...props} scale={[1.5, 1.5, 1.5]} />
+        <GameObject model="/models/apartment.glb" positionRef={positionRef} {...props} scale={[2, 2, 2]} />
       </group>
     </Debug>
   );
