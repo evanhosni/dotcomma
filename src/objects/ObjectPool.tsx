@@ -32,20 +32,34 @@ const createObjectEntry = async (
 export const OBJECT_RENDER_DISTANCE = 500;
 
 export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
-  // Use a Map for better object tracking
-  const objectsMapRef = useRef(new Map<string, GameObjectProps>());
+  // Split tracking between stable objects and new/removed objects
+  const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
+  const [dynamicObjectIds, setDynamicObjectIds] = useState<Set<string>>(new Set());
 
-  // Track active object IDs only (minimizes state updates)
-  const [activeObjectIds, setActiveObjectIds] = useState<Set<string>>(new Set());
+  // Cache of all instantiated components for lookup
+  const objectsMapRef = useRef(new Map<string, GameObjectProps>());
+  // Cache of rendered components to maintain stability
+  const componentsMapRef = useRef(new Map<string, React.ReactNode>());
 
   const isGeneratingRef = useRef(false);
+  const lastPositionRef = useRef(new THREE.Vector3());
   const { camera } = useThree();
 
   // Track destroyed objects that shouldn't respawn while in range
   const destroyedObjectsRef = useRef(new Set<string>());
 
-  // This function now only cleans up entries from destroyedObjectsRef that are out of range,
-  // but NEVER removes objects from objectsMapRef
+  // Check if camera has moved significantly
+  const hasCameraMoved = useCallback(() => {
+    const minMovementThreshold = 1; // Distance in world units
+    const dist = lastPositionRef.current.distanceToSquared(camera.position);
+    if (dist > minMovementThreshold * minMovementThreshold) {
+      lastPositionRef.current.copy(camera.position);
+      return true;
+    }
+    return false;
+  }, [camera.position]);
+
+  // This function only cleans up entries from destroyedObjectsRef that are out of range
   const cleanupDestroyedObjects = useCallback(() => {
     let hasChanges = false;
 
@@ -57,62 +71,65 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
       if (distance > OBJECT_RENDER_DISTANCE / 2) {
         destroyedObjectsRef.current.delete(id);
         hasChanges = true;
-        return;
       }
     });
 
     return hasChanges;
   }, [camera.position]);
 
-  // Optimized object generation with Map-based tracking
+  // Generate and manage spawners
   const generateSpawners = useCallback(async () => {
-    if (isGeneratingRef.current) return;
+    if (isGeneratingRef.current || !hasCameraMoved()) return;
 
     isGeneratingRef.current = true;
 
     try {
-      // Only clean up the destroyedObjectsRef, not the actual objects
       cleanupDestroyedObjects();
 
       // Get new potential spawners
       const spawners = await getSpawnPoints(dimension, camera.position.x, camera.position.z);
 
-      // Track current active objects to update state only once
-      const currentActiveIds = new Set<string>(activeObjectIds);
+      // Track new IDs to be rendered
+      const newIds = new Set<string>();
+      const objectsToAdd: Array<{ id: string; element: React.FC<any>; point: THREE.Vector3 }> = [];
 
-      // Process spawners in batches for better performance
-      const batchSize = 20;
-      for (let i = 0; i < spawners.length; i += batchSize) {
-        const batch = spawners.slice(i, i + batchSize);
+      // First pass - identify which spawners are truly new
+      for (const { element, point } of spawners) {
+        const id = `${point.x}_${point.z}`;
 
-        // Process each batch in parallel
-        await Promise.all(
-          batch.map(async ({ element, point }) => {
-            const id = `${point.x}_${point.z}`;
+        // Skip destroyed objects
+        if (destroyedObjectsRef.current.has(id)) continue;
 
-            // if (!element) return//TODO if nullable, we can escape early
+        newIds.add(id);
 
-            // Skip destroyed objects
-            if (destroyedObjectsRef.current.has(id)) return;
+        // Skip if we already have this object
+        if (objectsMapRef.current.has(id) || componentsMapRef.current.has(id)) continue;
 
-            // Skip if already in the object map
-            if (objectsMapRef.current.has(id)) {
-              currentActiveIds.add(id);
-              return;
-            }
+        // This is a new object we need to create
+        objectsToAdd.push({ id, element, point });
+      }
 
-            // Create new object
-            const objProps = await createObjectEntry(element, point, dimension);
-            if (objProps) {
-              // Create custom onDestroy function for each object
+      // Create new objects in batches
+      if (objectsToAdd.length > 0) {
+        const batchSize = 10;
+        for (let i = 0; i < objectsToAdd.length; i += batchSize) {
+          const batch = objectsToAdd.slice(i, i + batchSize);
+
+          await Promise.all(
+            batch.map(async ({ id, element, point }) => {
+              const objProps = await createObjectEntry(element, point, dimension);
+              if (!objProps) return;
+
+              // Create enhanced props with onDestroy
               const enhancedProps = {
                 ...objProps,
                 onDestroy: () => {
-                  // This is the ONLY place where objects are removed from objectsMapRef
-                  // It's called from the GameObject component when the object is too far from the player
                   destroyedObjectsRef.current.add(id);
+                  componentsMapRef.current.delete(id);
                   objectsMapRef.current.delete(id);
-                  setActiveObjectIds((prev) => {
+
+                  // Remove from dynamic IDs if present
+                  setDynamicObjectIds((prev) => {
                     const newSet = new Set(prev);
                     newSet.delete(id);
                     return newSet;
@@ -120,41 +137,93 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
                 },
               };
 
-              // Add to map and mark as active
+              // Store object data
               objectsMapRef.current.set(id, enhancedProps);
-              currentActiveIds.add(id);
-            }
-          })
-        );
+
+              // Create actual component instance
+              const { component: Component, ...props } = enhancedProps;
+              componentsMapRef.current.set(id, <Component key={id} {...props} />);
+
+              // Add to dynamic IDs for render
+              setDynamicObjectIds((prev) => {
+                const newSet = new Set(prev);
+                newSet.add(id);
+                return newSet;
+              });
+            })
+          );
+        }
       }
 
-      // Update active objects state once at the end
-      setActiveObjectIds(currentActiveIds);
+      // Find objects to remove (they exist in our maps but aren't in newIds)
+      const idsToRemove: string[] = [];
+      componentsMapRef.current.forEach((_, id) => {
+        if (!newIds.has(id) && !destroyedObjectsRef.current.has(id)) {
+          idsToRemove.push(id);
+        }
+      });
+
+      // Process removals if needed
+      if (idsToRemove.length > 0) {
+        // Remove objects cleanly
+        idsToRemove.forEach((id) => {
+          const obj = objectsMapRef.current.get(id);
+          if (obj && typeof obj.onDestroy === "function") {
+            // Call existing onDestroy to clean up properly
+            obj.onDestroy(id);
+          } else {
+            // Fall back to manual cleanup if onDestroy isn't available
+            destroyedObjectsRef.current.add(id);
+            componentsMapRef.current.delete(id);
+            objectsMapRef.current.delete(id);
+          }
+        });
+
+        // Update dynamic IDs by removing these IDs
+        setDynamicObjectIds((prev) => {
+          const newSet = new Set(prev);
+          idsToRemove.forEach((id) => newSet.delete(id));
+          return newSet;
+        });
+      }
+
+      // Stabilize components after a complete update cycle
+      if (objectsToAdd.length > 0 || idsToRemove.length > 0) {
+        // Schedule a stabilization in the next tick
+        setTimeout(() => {
+          const stableArray = Array.from(componentsMapRef.current.values());
+          setStableComponents(stableArray);
+          setDynamicObjectIds(new Set()); // Clear dynamic objects as they're now stable
+        }, 100);
+      }
     } catch (error) {
       console.error("Error in generateSpawners:", error);
     } finally {
       isGeneratingRef.current = false;
     }
-  }, [camera.position.x, camera.position.z, dimension, cleanupDestroyedObjects, activeObjectIds]);
+  }, [camera.position.x, camera.position.z, dimension, cleanupDestroyedObjects, hasCameraMoved]);
 
-  // Run generator on interval, but only if we've moved to a new grid cell
+  // Initialize and set up interval
   useEffect(() => {
-    const intervalId = setInterval(generateSpawners, 100);
+    // Initialize position tracking
+    lastPositionRef.current.copy(camera.position);
+
+    const intervalId = setInterval(generateSpawners, 250); // Reduced frequency
     return () => clearInterval(intervalId);
   }, [generateSpawners]);
 
-  // Memoize rendered objects to prevent unnecessary re-renders
-  const renderedObjects = useMemo(() => {
-    return Array.from(activeObjectIds)
-      .map((id) => {
-        const obj = objectsMapRef.current.get(id);
-        if (!obj) return null;
-
-        const { component: Component, ...props } = obj;
-        return <Component key={id} {...props} />;
-      })
+  // Render dynamic objects separate from stable ones
+  const dynamicObjects = useMemo(() => {
+    return Array.from(dynamicObjectIds)
+      .map((id) => componentsMapRef.current.get(id))
       .filter(Boolean);
-  }, [activeObjectIds]);
+  }, [dynamicObjectIds]);
 
-  return <>{renderedObjects}</>;
+  // Combine stable and dynamic objects
+  return (
+    <>
+      {stableComponents}
+      {dynamicObjects}
+    </>
+  );
 };
