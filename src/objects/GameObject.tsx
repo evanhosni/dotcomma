@@ -4,12 +4,20 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { utils } from "../utils/utils";
+import { SPAWN_SIZE } from "../world/types";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
-export const FRUSTUM_PADDING = 2;
+
+export const SIZE_BASED_FRUSTUM_PADDING: Record<SPAWN_SIZE, number> = {
+  [SPAWN_SIZE.XS]: 1,
+  [SPAWN_SIZE.SMALL]: 1.25,
+  [SPAWN_SIZE.MEDIUM]: 1.5,
+  [SPAWN_SIZE.LARGE]: 1.75,
+  [SPAWN_SIZE.XL]: 2,
+};
 
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
@@ -97,6 +105,7 @@ interface GameObjectProps {
   rotation?: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
   render_distance?: number;
+  spawn_size: SPAWN_SIZE;
   onDestroy: (id: string) => void;
 }
 
@@ -114,7 +123,8 @@ export const GameObject = ({
   scale = [1, 1, 1],
   rotation = [0, 0, 0],
   positionRef,
-  render_distance = OBJECT_RENDER_DISTANCE,
+  render_distance = OBJECT_RENDER_DISTANCE, //TODO do i need to be passing this?
+  spawn_size,
   onDestroy,
 }: //TODO: add onClick, onApproach, onPlayAnimation, onPauseAnimation, onStopAnimation, onPlaySound, onStopSound, etc...
 GameObjectProps) => {
@@ -234,12 +244,14 @@ GameObjectProps) => {
   }, []);
 
   // Handle animations and frustum culling
-  // Handle animations and frustum culling
   useFrame((_, delta) => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = utils.getDistance2D(camera.position, objectPosition);
 
-    if (distance > true_render_distance) {
+    // Use the specific render distance for this object type
+    const objectRenderDistance = render_distance || OBJECT_RENDER_DISTANCE;
+
+    if (distance > objectRenderDistance) {
       onDestroy(id);
       return;
     }
@@ -251,15 +263,21 @@ GameObjectProps) => {
     // Update bounding sphere position - using boundsRef instead of global bounds
     boundsRef.current.center.copy(objectPosition);
 
-    // Create a padded bounding sphere for more forgiving visibility checks
-    // Avoid creating a new object with clone() every frame
-    const paddedRadius = boundsRef.current.radius * FRUSTUM_PADDING;
+    // Use a larger padding factor for larger objects
+    // This makes larger objects more likely to be visible at greater distances
+    const paddingFactor = SIZE_BASED_FRUSTUM_PADDING[spawn_size];
+
+    const paddedRadius = boundsRef.current.radius * paddingFactor;
 
     // For very large objects, we can add an additional check
     // based on distance to camera rather than just frustum
     const objectRadiusWithScale = boundsRef.current.radius;
     const distanceToCamera = camera.position.distanceTo(objectPosition);
-    const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3;
+
+    // Scale the "close to camera" threshold by the object's render distance
+    const proximityFactor = render_distance ? render_distance / OBJECT_RENDER_DISTANCE : 1;
+
+    const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3 * proximityFactor;
 
     // An object is visible if:
     // 1. It intersects with the padded frustum (using temporary larger radius), OR
@@ -274,7 +292,10 @@ GameObjectProps) => {
       setShouldRender(isVisible);
     }
 
-    const shouldShowColliders = distance < MAX_COLLIDER_RENDER_DISTANCE && isVisible;
+    // Also scale collider render distance based on object size
+    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, objectRenderDistance / 2);
+
+    const shouldShowColliders = distance < colliderRenderDistance && isVisible;
     if (shouldRenderColliders !== shouldShowColliders) {
       setShouldRenderColliders(shouldShowColliders);
     }
@@ -305,9 +326,10 @@ GameObjectProps) => {
     };
   }, [gltf, scale, rotation]);
 
-  // if (!shouldRender) { //TODO currently frustum does nothing because i am commenting this out. seems to run smoother
-  //   return null;
-  // }
+  if (!shouldRender) {
+    //TODO might run smoother without
+    return null;
+  }
 
   return (
     <Suspense fallback={null}>

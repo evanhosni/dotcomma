@@ -3,18 +3,23 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { EMPTY_FUNCTION } from "../utils/constants";
 import { utils } from "../utils/utils";
-import { Dimension } from "../world/types";
-import { getSpawnPoints } from "./getSpawnPoints";
+import { Dimension, SPAWN_SIZE } from "../world/types";
+import { SIZE_BASED_RENDER_DISTANCES, getSpawnPoints } from "./getSpawnPoints";
 import { GameObjectProps } from "./types";
 
 const createObjectEntry = async (
   element: React.FC<any>,
   point: THREE.Vector3,
-  dimension: Dimension
+  dimension: Dimension,
+  spawn_size: SPAWN_SIZE // Add spawn_size parameter
 ): Promise<GameObjectProps | null> => {
   const id = `${point.x}_${point.z}`;
   try {
-    const vertexData = await dimension.getVertexData(point.x, point.z);
+    const vertexData = await dimension.getVertexData(point.x, point.z); //TODO pass vertexData through spawner instead to half the amount of times we getVertexData
+
+    // Get the appropriate render distance for this spawn size
+    const renderDistance = SIZE_BASED_RENDER_DISTANCES[spawn_size];
+
     return {
       component: element,
       coordinates: [point.x, vertexData.height, point.z],
@@ -22,6 +27,8 @@ const createObjectEntry = async (
       rotation: [0, 0, 0],
       onDestroy: EMPTY_FUNCTION,
       id,
+      render_distance: renderDistance, // Add the render_distance property
+      spawn_size,
     };
   } catch (error) {
     console.error(`Error getting vertex data for point ${id}:`, error);
@@ -79,7 +86,7 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
       let hasChanges = false;
 
       // Process spawners
-      for (const { element, point } of spawners) {
+      for (const { element, point, spawn_size } of spawners) {
         const id = `${point.x}_${point.z}`;
 
         // Skip destroyed objects
@@ -90,8 +97,8 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
         // Skip if we already have this object
         if (componentsMapRef.current.has(id)) continue;
 
-        // Create new object
-        const objProps = await createObjectEntry(element, point, dimension);
+        // Create new object - now passing the spawn_size parameter
+        const objProps = await createObjectEntry(element, point, dimension, spawn_size);
         if (!objProps) continue;
 
         // Create enhanced props with onDestroy
