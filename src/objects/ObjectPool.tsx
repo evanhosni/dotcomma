@@ -36,7 +36,7 @@ const createObjectEntry = async (
   }
 };
 
-export const OBJECT_RENDER_DISTANCE = 500;
+export const OBJECT_RENDER_DISTANCE = 500; //TODO there are two of these now
 
 export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
   // Single state for stable components
@@ -60,10 +60,12 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
   // Clean up destroyed objects that are now out of range
   const cleanupDestroyedObjects = useCallback(() => {
     destroyedObjectsRef.current.forEach((id) => {
-      const [x, z] = id.split("_").map(Number);
-      const distance = utils.getDistance2D(camera.position, new THREE.Vector3(x, 0, z));
+      const [x, z, spawn_size] = id.split("_");
+      const distance = utils.getDistance2D(camera.position, new THREE.Vector3(Number(x), 0, Number(z)));
+      const render_distance = SIZE_BASED_RENDER_DISTANCES[spawn_size as SPAWN_SIZE];
 
-      if (distance > OBJECT_RENDER_DISTANCE / 2) {
+      if (distance > render_distance / 2) {
+        //TODO use variable OBJECT_RENDER DISTANCE
         destroyedObjectsRef.current.delete(id);
       }
     });
@@ -90,7 +92,7 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
         const id = `${point.x}_${point.z}`;
 
         // Skip destroyed objects
-        if (destroyedObjectsRef.current.has(id)) continue;
+        if (destroyedObjectsRef.current.has(`${id}_${spawn_size}`)) continue;
 
         newObjectIds.add(id);
 
@@ -105,7 +107,7 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
         const enhancedProps = {
           ...objProps,
           onDestroy: () => {
-            destroyedObjectsRef.current.add(id);
+            destroyedObjectsRef.current.add(`${id}_${spawn_size}`);
             componentsMapRef.current.delete(id);
             objectsMapRef.current.delete(id);
             hasChanges = true;
@@ -123,15 +125,16 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
       }
 
       // Find objects to remove (they exist in our maps but aren't in newObjectIds)
-      componentsMapRef.current.forEach((_, id) => {
-        if (!newObjectIds.has(id) && !destroyedObjectsRef.current.has(id)) {
+      componentsMapRef.current.forEach((component: any, id) => {
+        if (!component) return;
+        if (!newObjectIds.has(id) && !destroyedObjectsRef.current.has(`${id}_${component.props.spawn_size}`)) {
           // Call onDestroy to clean up properly
           const obj = objectsMapRef.current.get(id);
           if (obj && typeof obj.onDestroy === "function") {
             obj.onDestroy(id);
           } else {
             // Fall back to manual cleanup
-            destroyedObjectsRef.current.add(id);
+            destroyedObjectsRef.current.add(`${id}_${component.props.spawn_size}`);
             componentsMapRef.current.delete(id);
             objectsMapRef.current.delete(id);
             hasChanges = true;

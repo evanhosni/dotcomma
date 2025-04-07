@@ -19,10 +19,10 @@ const CHUNK_SIZE = 5 * GRID_SIZE; // Each chunk is 5x5 grid cells
 // Define size-based render distances
 export const SIZE_BASED_RENDER_DISTANCES: Record<SPAWN_SIZE, number> = {
   [SPAWN_SIZE.XS]: OBJECT_RENDER_DISTANCE, // Default distance for smallest objects
-  [SPAWN_SIZE.SMALL]: OBJECT_RENDER_DISTANCE * 1.25, // 1.5x for small objects
-  [SPAWN_SIZE.MEDIUM]: OBJECT_RENDER_DISTANCE * 1.5, // 2x for medium objects
-  [SPAWN_SIZE.LARGE]: OBJECT_RENDER_DISTANCE * 1.75, // 2.5x for large objects
-  [SPAWN_SIZE.XL]: OBJECT_RENDER_DISTANCE * 2, // 3x for extra large objects
+  [SPAWN_SIZE.SMALL]: OBJECT_RENDER_DISTANCE * 1.25, // 1.25x for small objects
+  [SPAWN_SIZE.MEDIUM]: OBJECT_RENDER_DISTANCE * 1.5, // 1.5x for medium objects
+  [SPAWN_SIZE.LARGE]: OBJECT_RENDER_DISTANCE * 1.75, // 1.75x for large objects
+  [SPAWN_SIZE.XL]: OBJECT_RENDER_DISTANCE * 2, // 2x for extra large objects
 };
 
 // Spawner type definitions
