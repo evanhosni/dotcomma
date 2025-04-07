@@ -156,7 +156,12 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
 
   // Initialize and set up interval
   useEffect(() => {
-    setInterval(generateSpawners, 500);
+    // Set up spawner interval
+    const spawnerInterval = setInterval(generateSpawners, 500);
+
+    return () => {
+      clearInterval(spawnerInterval);
+    };
   }, [generateSpawners]);
 
   useFrame(() => {
