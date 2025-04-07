@@ -10,6 +10,7 @@ import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from ".
 import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
+const DELETE_OBJECT_BUFFER = 1.2;
 
 export const SIZE_BASED_FRUSTUM_PADDING: Record<SPAWN_SIZE, number> = {
   [SPAWN_SIZE.XS]: 1,
@@ -22,7 +23,6 @@ export const SIZE_BASED_FRUSTUM_PADDING: Record<SPAWN_SIZE, number> = {
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
-const bounds = new THREE.Sphere();
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
@@ -143,8 +143,6 @@ GameObjectProps) => {
   const [shouldRender, setShouldRender] = useState<boolean>(false);
   const [shouldRenderColliders, setShouldRenderColliders] = useState<boolean>(false);
 
-  const true_render_distance = Math.max(OBJECT_RENDER_DISTANCE, render_distance) + 200; //TODO find a better buffer maybe?
-
   useEffect(() => {
     if (!scene) return;
 
@@ -249,9 +247,9 @@ GameObjectProps) => {
     const distance = utils.getDistance2D(camera.position, objectPosition);
 
     // Use the specific render distance for this object type
-    const objectRenderDistance = render_distance || OBJECT_RENDER_DISTANCE;
+    // const objectRenderDistance = render_distance;
 
-    if (distance > objectRenderDistance) {
+    if (distance > render_distance * DELETE_OBJECT_BUFFER) {
       onDestroy(id);
       return;
     }
@@ -293,7 +291,7 @@ GameObjectProps) => {
     }
 
     // Also scale collider render distance based on object size
-    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, objectRenderDistance / 2);
+    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, render_distance / 2);
 
     const shouldShowColliders = distance < colliderRenderDistance && isVisible;
     if (shouldRenderColliders !== shouldShowColliders) {
