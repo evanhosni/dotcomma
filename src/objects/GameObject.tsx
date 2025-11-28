@@ -13,11 +13,12 @@ export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
 
 export const SIZE_BASED_FRUSTUM_PADDING: Record<SPAWN_SIZE, number> = {
-  [SPAWN_SIZE.XS]: 1,
-  [SPAWN_SIZE.SMALL]: 1.25,
-  [SPAWN_SIZE.MEDIUM]: 1.5,
-  [SPAWN_SIZE.LARGE]: 1.75,
-  [SPAWN_SIZE.XL]: 2,
+  //TODO hmm not great. maybe remove frustum all together
+  [SPAWN_SIZE.XS]: 3,
+  [SPAWN_SIZE.SMALL]: 3.25,
+  [SPAWN_SIZE.MEDIUM]: 3.5,
+  [SPAWN_SIZE.LARGE]: 3.75,
+  [SPAWN_SIZE.XL]: 4,
 };
 
 const taskQueue = new TaskQueue();
