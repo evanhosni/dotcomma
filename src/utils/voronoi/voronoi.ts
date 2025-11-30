@@ -1,6 +1,8 @@
 import * as THREE from "three";
+import { Dust } from "../../dimensions/dust/Dust";
 import { City } from "../../dimensions/glitch-city/biomes/city/City";
 import { Grass } from "../../dimensions/glitch-city/biomes/grass/Grass";
+import { Pharmasea } from "../../dimensions/pharma/Pharma";
 import { utils } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 
@@ -39,7 +41,7 @@ export namespace voronoi {
             //TODO keeping this check temporarily.
             event.data.results.forEach((result: any, index: number) => {
               if (index < resolves.length) {
-                const biomes_in_use = [City, Grass]; // TODO const somewhere else or other solution, maybe context
+                const biomes_in_use = [City, Grass, Dust, Pharmasea]; // TODO const somewhere else or other solution, maybe context
                 const biome = biomes_in_use.find((b) => b.id === result.biome.id);
                 resolves[index]({ ...result, biome });
               }
