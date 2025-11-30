@@ -5,6 +5,11 @@ export interface VertexData {
   attributes: any;
 }
 
+export interface MaterialData {
+  uniforms: any;
+  fragmentShader: string;
+}
+
 export const vertexData_default: VertexData = {
   x: 0,
   y: 0,
@@ -28,6 +33,7 @@ export interface Biome {
   name: string;
   id: number;
   getVertexData: (vertexData: VertexData) => Promise<VertexData>;
+  getMaterial?: () => Promise<MaterialData>;
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;

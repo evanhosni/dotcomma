@@ -1,87 +1,67 @@
 import * as THREE from "three";
-import { _material } from "../../utils/material/_material";
 import { utils } from "../../utils/utils";
 import { GlitchCity } from "./GlitchCity";
+import vertexShader from "./shaders/vertex.glsl";
 
 export const getMaterial = async () => {
   const biomes = utils.getAllBiomes(GlitchCity);
 
-  const [roadTexture, sidewalkTexture, grassTexture, sandTexture, bluemudTexture] = await _material.loadTextures([
-    "road.jpg",
-    "road.png",
-    "moss.png",
-    "potato_sack.jpg",
-    "blue_mud.jpg",
-  ]);
+  // Collect all uniforms and fragment shaders from biomes
+  const combinedUniforms: any = {};
+  const fragmentFunctions: string[] = [];
 
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      roadtexture: { value: roadTexture },
-      sidewalktexture: { value: sidewalkTexture },
-      grasstexture: { value: grassTexture },
-      sandtexture: { value: sandTexture },
-      bluemudtexture: { value: bluemudTexture },
-    },
-    vertexShader: `
-    attribute float distanceToRoadCenter;
+  for (const biome of biomes) {
+    if (biome.getMaterial) {
+      const biomeMaterial = await biome.getMaterial();
+
+      // Merge uniforms
+      Object.assign(combinedUniforms, biomeMaterial.uniforms);
+
+      // Strip out all declarations (varying, uniform) and extract only the main function
+      let cleanShader = biomeMaterial.fragmentShader
+        // Remove varying declarations
+        .replace(/varying\s+\w+\s+\w+;/g, '')
+        // Remove uniform declarations
+        .replace(/uniform\s+sampler2D\s+\w+;/g, '')
+        // Remove extra whitespace/newlines
+        .replace(/^\s*[\r\n]/gm, '');
+
+      // Extract the main function body and rename it to biome_frag
+      const fragmentBody = cleanShader
+        .replace(/void main\(\) \{/, `void ${biome.name}_frag() {`)
+        .trim();
+
+      fragmentFunctions.push(fragmentBody);
+    }
+  }
+
+  // Build the combined fragment shader
+  const fragmentShader = `
     varying float vDistanceToRoadCenter;
-    attribute float biomeId;
     flat varying int vBiomeId;
     varying vec2 vUv;
 
-    void main() {
-      vDistanceToRoadCenter = distanceToRoadCenter;
-      vBiomeId = int(biomeId);
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-    fragmentShader: `
-    varying float vDistanceToRoadCenter;
-    flat varying int vBiomeId;
-    uniform sampler2D roadtexture;
-    uniform sampler2D sidewalktexture;
-    uniform sampler2D sandtexture;
-    uniform sampler2D grasstexture;
-    uniform sampler2D bluemudtexture;
-    varying vec2 vUv;
-    
-    void city_frag() {
-      vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactorRoad = smoothstep(14.0, 16.0, vDistanceToRoadCenter);
+    ${Object.keys(combinedUniforms)
+      .map((uniformName) => `uniform sampler2D ${uniformName};`)
+      .join("\n    ")}
 
-      vec4 blockTexture = mix(texture2D(roadtexture, adjustedUV), texture2D(sidewalktexture, adjustedUV), 0.5);
-      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), blockTexture, blendFactorRoad);
-    }
+    ${fragmentFunctions.join("\n\n    ")}
 
-    void grass_frag() {
-      vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
-      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(grasstexture, adjustedUV), blendFactor);
-    } 
-
-    void dust_frag() {
-      vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
-      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(sandtexture, adjustedUV), blendFactor);
-    }
-
-    void pharmasea_frag() {
-      vec2 adjustedUV = fract(vUv * 16.0);
-      float blendFactor = smoothstep(12.0, 14.0, vDistanceToRoadCenter);
-      gl_FragColor = mix(texture2D(roadtexture, adjustedUV), texture2D(bluemudtexture, adjustedUV), blendFactor);
-    } 
-    
     void main() {
       ${biomes
         .map((biome) => {
           return `if (vBiomeId == ${biome.id}) {
-          ${biome.name}_frag();
-        }`;
+        ${biome.name}_frag();
+      }`;
         })
-        .join("\n")}
+        .join("\n      ")}
     }
-  `,
+  `;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: combinedUniforms,
+    vertexShader,
+    fragmentShader,
   });
 
   return material;
