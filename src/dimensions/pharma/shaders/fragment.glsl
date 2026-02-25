@@ -4,9 +4,10 @@ uniform sampler2D regiontexture;
 uniform sampler2D biometexture;
 uniform sampler2D bluemudtexture;
 varying vec2 vUv;
+varying vec2 vWorldUv;
 
 void main() {
-  vec2 adjustedUV = fract(vUv * 16.0);
+  vec2 adjustedUV = fract(vWorldUv);
 
   // Use region boundary texture if near region boundary, else biome boundary texture, else bluemud
   vec4 baseColor;

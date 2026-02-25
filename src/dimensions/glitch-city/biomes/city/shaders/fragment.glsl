@@ -6,9 +6,10 @@ uniform sampler2D biometexture;
 uniform sampler2D roadtexture;
 uniform sampler2D sidewalktexture;
 varying vec2 vUv;
+varying vec2 vWorldUv;
 
 void main() {
-  vec2 adjustedUV = fract(vUv * 16.0);
+  vec2 adjustedUV = fract(vWorldUv);
 
   // Determine which texture to use based on distances
   vec4 baseTexture;
