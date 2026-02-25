@@ -28,6 +28,7 @@ export const getMaterial = async () => {
       "varying float vDistanceToRoadCenter;",
       "flat varying int vBiomeId;",
       "varying vec2 vUv;",
+      "varying vec2 vWorldUv;",
     ],
   });
 };

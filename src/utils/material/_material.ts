@@ -84,6 +84,7 @@ export namespace _material {
   `;
 
     return new THREE.ShaderMaterial({
+      wireframe: true,
       uniforms: combinedUniforms,
       vertexShader,
       fragmentShader,

@@ -11,6 +11,7 @@ export interface Chunk {
   plane: THREE.Mesh;
   rebuildIterator: AsyncIterator<any> | null;
   collider: TerrainColliderProps | null;
+  lod: import("./lodConfig").LODLevel;
 }
 
 export interface TerrainColliderProps {

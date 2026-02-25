@@ -4,12 +4,10 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { Dimension } from "../types";
+import { LOD_LEVELS, LODLevel } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
-export const MAX_RENDER_DISTANCE = 1300;
 export const CHUNK_SIZE = 420;
-export const CHUNK_RADIUS = Math.ceil(MAX_RENDER_DISTANCE / CHUNK_SIZE);
-const CHUNK_RESOLUTION = 42;
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
@@ -17,6 +15,69 @@ const terrain: TerrainProps = {
   active_chunk: null,
   queued_to_build: [],
   queued_to_destroy: [],
+};
+
+const computeDesiredChunks = (playerX: number, playerZ: number) => {
+  const desired: { [key: string]: { position: number[]; lod: LODLevel } } = {};
+
+  // Single grid — every cell is CHUNK_SIZE. Each cell gets the finest LOD whose
+  // maxDistance covers it. LOD level is part of the key so that a resolution
+  // change triggers a rebuild.
+
+  const coarsest = LOD_LEVELS[LOD_LEVELS.length - 1];
+  const radius = Math.ceil(coarsest.maxDistance / CHUNK_SIZE);
+
+  const playerGridX = Math.floor(playerX / CHUNK_SIZE);
+  const playerGridZ = Math.floor(playerZ / CHUNK_SIZE);
+
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dz = -radius; dz <= radius; dz++) {
+      const cx = playerGridX + dx;
+      const cz = playerGridZ + dz;
+
+      // Distance from player to the center of this cell
+      const cellCenterX = (cx + 0.5) * CHUNK_SIZE;
+      const cellCenterZ = (cz + 0.5) * CHUNK_SIZE;
+      const dist = Math.sqrt(
+        (cellCenterX - playerX) ** 2 + (cellCenterZ - playerZ) ** 2
+      );
+
+      // Find the finest LOD that covers this distance
+      let bestLod: LODLevel | null = null;
+      for (const lod of LOD_LEVELS) {
+        if (dist <= lod.maxDistance) {
+          bestLod = lod;
+          break; // LOD_LEVELS is sorted finest-first (level 0, 1, 2)
+        }
+      }
+
+      if (!bestLod) continue; // beyond all LOD ranges
+
+      desired[`${bestLod.level}/${cx}/${cz}`] = {
+        position: [cx, cz],
+        lod: bestLod,
+      };
+    }
+  }
+
+  return desired;
+};
+
+// Check if any unbuilt chunk shares the same grid position (same x/z)
+const hasUnbuiltOverlap = (targetChunk: Chunk): boolean => {
+  const tx = targetChunk.offset.x;
+  const tz = targetChunk.offset.y;
+
+  for (const key in terrain.chunks) {
+    const other = terrain.chunks[key].chunk;
+    if (other === targetChunk || other.plane.visible) continue;
+
+    // Same grid position = same offset (all chunks are CHUNK_SIZE)
+    if (other.offset.x === tx && other.offset.y === tz) {
+      return true;
+    }
+  }
+  return false;
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -53,8 +114,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
-    const playerChunkX = Math.floor(playerX / CHUNK_SIZE);
-    const playerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
 
     if (terrain.active_chunk) {
       const currentChunk = terrain.active_chunk;
@@ -77,31 +136,32 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         }
       }
     } else {
-      // Sort queued chunks by distance before popping
+      // Filter out chunks that have been destroyed, and sort by LOD priority then distance
       if (terrain.queued_to_build.length > 0) {
         terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
-          // Convert chunk position to chunk coordinates
-          const chunkX = Math.floor(chunk.offset.x / CHUNK_SIZE);
-          const chunkZ = Math.floor(chunk.offset.y / CHUNK_SIZE);
-
-          // Calculate distance in chunks
-          const dx = chunkX - playerChunkX;
-          const dz = chunkZ - playerChunkZ;
-          const distance = Math.sqrt(dx * dx + dz * dz);
-
-          // Only keep chunks within the circular radius
-          return distance <= CHUNK_RADIUS;
+          // Check if this chunk is still tracked (not destroyed while queued)
+          const gridX = Math.round(chunk.offset.x / CHUNK_SIZE);
+          const gridZ = Math.round(chunk.offset.y / CHUNK_SIZE);
+          const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
+          return key in terrain.chunks;
         });
 
-        // Then sort remaining chunks by distance
+        // Sort so pop() grabs highest priority: LOD 0 first, closest first
+        // Array end = highest priority (popped first)
+        // So: higher LOD levels earlier in array, furthest earlier in array
         terrain.queued_to_build.sort((a, b) => {
+          if (a.lod.level !== b.lod.level) {
+            return b.lod.level - a.lod.level;
+          }
           const distA = Math.sqrt(
-            Math.pow(a.offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(a.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+            Math.pow(a.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
+              Math.pow(a.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
           );
           const distB = Math.sqrt(
-            Math.pow(b.offset.x + CHUNK_SIZE / 2 - playerX, 2) + Math.pow(b.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
+            Math.pow(b.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
+              Math.pow(b.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
           );
-          return distB - distA; // Changed to prioritize closest chunks
+          return distB - distA;
         });
       }
 
@@ -113,28 +173,15 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     if (!terrain.active_chunk) {
-      const keys: { [key: string]: { position: number[] } } = {};
+      const desiredChunks = computeDesiredChunks(playerX, playerZ);
 
-      // Generate chunks in a circular pattern
-      for (let x = -CHUNK_RADIUS; x <= CHUNK_RADIUS; x++) {
-        for (let z = -CHUNK_RADIUS; z <= CHUNK_RADIUS; z++) {
-          // Calculate the distance from the center (player's chunk)
-          const distance = Math.sqrt(x * x + z * z);
-
-          // Only create chunks within the radius
-          if (distance <= CHUNK_RADIUS - 0.1) {
-            const chunkX = playerChunkX + x;
-            const chunkZ = playerChunkZ + z;
-            const k = `${chunkX}/${chunkZ}`;
-            keys[k] = { position: [chunkX, chunkZ] };
-          }
-        }
-      }
-
-      // Remove chunks that are out of range
+      // Remove chunks that are out of range, but only if replacements are visible
       for (const chunkKey in terrain.chunks) {
-        if (!keys[chunkKey] && !terrain.queued_to_destroy.includes(chunkKey)) {
-          terrain.queued_to_destroy.push(chunkKey);
+        if (!desiredChunks[chunkKey] && !terrain.queued_to_destroy.includes(chunkKey)) {
+          // Don't destroy if unbuilt replacement chunks overlap this area
+          if (!hasUnbuiltOverlap(terrain.chunks[chunkKey].chunk)) {
+            terrain.queued_to_destroy.push(chunkKey);
+          }
         }
       }
 
@@ -144,35 +191,38 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           const chunkDataB = terrain.chunks[b];
 
           if (chunkDataA && chunkDataB) {
-            const [chunkXA, chunkZA] = chunkDataA.position;
-            const [chunkXB, chunkZB] = chunkDataB.position;
+            // Higher LOD level (less detail) destroyed first
+            if (chunkDataA.chunk.lod.level !== chunkDataB.chunk.lod.level) {
+              return chunkDataB.chunk.lod.level - chunkDataA.chunk.lod.level;
+            }
 
-            const distanceA = Math.pow(chunkXA * CHUNK_SIZE - playerX, 2) + Math.pow(chunkZA * CHUNK_SIZE - playerZ, 2);
-            const distanceB = Math.pow(chunkXB * CHUNK_SIZE - playerX, 2) + Math.pow(chunkZB * CHUNK_SIZE - playerZ, 2);
+            // Within same LOD, furthest destroyed first (shift takes from front)
+            const distanceA =
+              Math.pow(chunkDataA.chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
+              Math.pow(chunkDataA.chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2);
+            const distanceB =
+              Math.pow(chunkDataB.chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
+              Math.pow(chunkDataB.chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2);
 
-            return distanceB - distanceA; // Sort ascending, so pop() will give us furthest chunks
+            return distanceB - distanceA;
           }
           return 0;
         });
       }
 
       // Add new chunks that are within range
-      const difference = { ...keys };
-      for (const chunkKey in terrain.chunks) {
-        delete difference[chunkKey];
-      }
-
-      for (const chunkKey in difference) {
+      for (const chunkKey in desiredChunks) {
         if (chunkKey in terrain.chunks) {
           continue;
         }
 
-        const [xp, zp] = difference[chunkKey].position;
+        const { position, lod } = desiredChunks[chunkKey];
+        const [xp, zp] = position;
         const offset = new THREE.Vector2(xp * CHUNK_SIZE, zp * CHUNK_SIZE);
 
-        const chunk = QueueChunk(offset, CHUNK_SIZE, material);
+        const chunk = QueueChunk(offset, lod, material);
         terrain.chunks[chunkKey] = {
-          position: [playerChunkX, playerChunkZ],
+          position: [xp, zp],
           chunk: chunk,
         };
       }
@@ -180,22 +230,23 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     if (remainingChunks === null) setTotalChunks(terrain.queued_to_build.length);
     setRemainingChunks(terrain.queued_to_build.length);
-
-    // console.log(terrain.queued_to_build.length);
   };
 
-  const QueueChunk = (offset: THREE.Vector2, width: number, material: THREE.Material) => {
-    const size = new THREE.Vector3(width, 0, width);
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(size.x, size.z, CHUNK_RESOLUTION, CHUNK_RESOLUTION), material);
+  const QueueChunk = (offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, lod.segments, lod.segments),
+      material
+    );
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
-    const chunk = {
+    const chunk: Chunk = {
       offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
       rebuildIterator: null,
       collider: null,
+      lod: lod,
     };
 
     terrain.group.add(plane);
@@ -251,25 +302,46 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     chunk.plane.geometry.computeVertexNormals();
     chunk.plane.position.set(offset.x, 0, offset.y);
 
-    GenerateColliders(chunk, offset);
+    if (chunk.lod.hasCollider) {
+      GenerateColliders(chunk, offset);
+    }
 
     yield;
   };
 
   const DestroyChunk = () => {
-    const chunkKey = terrain.queued_to_destroy.shift();
-    if (chunkKey && terrain.chunks[chunkKey]) {
-      const chunkData = terrain.chunks[chunkKey];
-      if (chunkData && chunkData.chunk && chunkData.chunk.plane) {
-        chunkData.chunk.plane.geometry.dispose();
-        (chunkData.chunk.plane.material as THREE.Material).dispose();
-        terrain.group.remove(chunkData.chunk.plane);
-      }
-      delete terrain.chunks[chunkKey];
+    const chunkKey = terrain.queued_to_destroy[0];
+    if (!chunkKey) return;
+
+    if (!terrain.chunks[chunkKey]) {
+      // Already gone, just remove from queue
+      terrain.queued_to_destroy.shift();
+      return;
     }
+
+    const chunkData = terrain.chunks[chunkKey];
+    const tx = chunkData.chunk.offset.x;
+    const tz = chunkData.chunk.offset.y;
+
+    // Don't destroy if a replacement at the same grid position is still building
+    for (const otherKey in terrain.chunks) {
+      if (otherKey === chunkKey) continue;
+      const other = terrain.chunks[otherKey].chunk;
+      if (other.offset.x === tx && other.offset.y === tz && !other.plane.visible) {
+        return; // replacement exists but isn't ready yet — keep old chunk visible
+      }
+    }
+
+    terrain.queued_to_destroy.shift();
+    if (chunkData.chunk.plane) {
+      chunkData.chunk.plane.geometry.dispose();
+      terrain.group.remove(chunkData.chunk.plane);
+    }
+    delete terrain.chunks[chunkKey];
   };
 
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
+    const segments = chunk.lod.segments;
     const linearArray = chunk.plane.geometry.attributes.position.array;
     const gridSize = Math.sqrt(linearArray.length / 3);
     const heightfield = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
@@ -279,16 +351,16 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       const z = linearArray[i + 1];
       const height = linearArray[i + 2];
 
-      const xIndex = Math.round((x - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / CHUNK_RESOLUTION));
-      const zIndex = Math.round((z - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / CHUNK_RESOLUTION));
+      const xIndex = Math.round((x - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / segments));
+      const zIndex = Math.round((z - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / segments));
 
-      const transformedXIndex = CHUNK_RESOLUTION - xIndex;
+      const transformedXIndex = segments - xIndex;
 
       if (
         zIndex >= 0 &&
-        zIndex < CHUNK_RESOLUTION + 1 &&
+        zIndex < segments + 1 &&
         transformedXIndex >= 0 &&
-        transformedXIndex < CHUNK_RESOLUTION + 1
+        transformedXIndex < segments + 1
       ) {
         heightfield[zIndex][transformedXIndex] = height;
       }
@@ -299,7 +371,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       chunkKey: chunkKey,
       heightfield,
       position: offset.toArray(),
-      elementSize: CHUNK_SIZE / CHUNK_RESOLUTION,
+      elementSize: CHUNK_SIZE / segments,
     };
   };
 
