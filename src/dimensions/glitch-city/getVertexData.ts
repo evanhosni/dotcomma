@@ -6,7 +6,7 @@ import { GlitchCity } from "./GlitchCity";
 
 const regionGridSize = 2500; //TODO maybe make these dimension props?
 const gridSize = 500;
-const roadWidth = 14; //NOTE was 12
+const boundaryWidth = 14; //NOTE was 12 - width of region boundary (road in GlitchCity)
 const defaultBlendWidth = 200; //TODO add noise to blendwidth and make biome dependent
 
 const roadNoise: TerrainNoiseParams = {
@@ -23,7 +23,7 @@ export const getVertexData = async (x: number, y: number, isTerrain?: boolean) =
   var vertexData: VertexData = { ...vertexData_default, x, y };
   var currentVertex = new THREE.Vector2(x + _noise.terrain(roadNoise, y, 0), y + _noise.terrain(roadNoise, x, 0));
 
-  const { biome, distance, walls } = (await voronoi.create({
+  const { biome, distanceToBiomeBoundary, distanceToRegionBoundary, walls } = (await voronoi.create({
     seed: "123",
     currentVertex,
     gridSize,
@@ -39,8 +39,10 @@ export const getVertexData = async (x: number, y: number, isTerrain?: boolean) =
     biome,
     biomeId: biome.id,
     walls,
-    distanceToRoadCenter: distance,
-    blend: Math.min(blendWidth, Math.max(distance - roadWidth, 0)) / blendWidth,
+    distanceToBiomeBoundaryCenter: distanceToBiomeBoundary, // Distance to nearest biome boundary
+    distanceToRegionBoundaryCenter: distanceToRegionBoundary, // Distance to nearest region boundary
+    distanceToRoadCenter: distanceToBiomeBoundary, // Initialize to biome boundary (City will override)
+    blend: Math.min(blendWidth, Math.max(distanceToBiomeBoundary - boundaryWidth, 0)) / blendWidth,
   };
   vertexData.height = await getHeight(vertexData);
 
@@ -60,7 +62,7 @@ const baseNoise: TerrainNoiseParams = {
 const getHeight = async (vertexData: VertexData) => {
   let height = 0;
 
-  if (vertexData.attributes.distanceToRoadCenter > roadWidth) {
+  if (vertexData.attributes.distanceToRegionBoundaryCenter > boundaryWidth) {
     const biome_vertexData = await vertexData.attributes.biome.getVertexData(vertexData);
     height = biome_vertexData.height * vertexData.attributes.blend;
   }

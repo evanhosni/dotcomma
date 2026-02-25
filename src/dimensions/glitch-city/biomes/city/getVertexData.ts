@@ -6,7 +6,11 @@ export const gridSize = 100; //NOTE with GRID_SIZE 100 and ROAD_WIDTH 10, blocks
 export const roadWidth = 10;
 
 export const getVertexData = async (vertexData: VertexData) => {
-  const { current, includedBlocks, distanceToRoadCenter } = await _city.create({
+  const {
+    current,
+    includedBlocks,
+    distanceToRoadCenter: distanceToInternalRoad,
+  } = await _city.create({
     seed: "city1",
     vertexData,
     gridSize,
@@ -15,7 +19,13 @@ export const getVertexData = async (vertexData: VertexData) => {
 
   vertexData.attributes.isEdgeBlock = current.isEdge;
   vertexData.attributes.block = current.block;
-  vertexData.attributes.distanceToRoadCenter = distanceToRoadCenter;
+
+  // Combine region boundary distance with internal city road distance
+  // distanceToRoadCenter represents the final distance to nearest road (boundary OR internal)
+  vertexData.attributes.distanceToRoadCenter = Math.min(
+    distanceToInternalRoad,
+    vertexData.attributes.distanceToRegionBoundaryCenter
+  );
 
   vertexData.height = getHeight(vertexData);
 
@@ -32,7 +42,7 @@ const getHeight = (vertexData: VertexData) => {
   let height = 0;
 
   if (vertexData.attributes.distanceToRoadCenter > roadWidth) {
-    height = 1;
+    height = 10;
   }
 
   return height;

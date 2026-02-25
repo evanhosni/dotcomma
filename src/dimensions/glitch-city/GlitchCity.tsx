@@ -1,22 +1,10 @@
 import { CustomCanvas } from "../../canvas/CustomCanvas";
-import { Dimension, Region } from "../../world/types";
-import { Dust } from "../dust/Dust";
-import { City } from "./biomes/city/City";
-import { Grass } from "./biomes/grass/Grass";
+import { Dimension } from "../../world/types";
 import { getMaterial } from "./getMaterial";
 import { getVertexData } from "./getVertexData";
-
-export const CityRegion: Region = {
-  biomes: [City, Grass],
-};
-
-export const GrassRegion: Region = {
-  biomes: [Grass],
-};
-
-export const DesertRegion: Region = {
-  biomes: [Dust],
-};
+import { CityRegion } from "./regions/CityRegion";
+import { DesertRegion } from "./regions/DesertRegion";
+import { GrassRegion } from "./regions/GrassRegion";
 
 export const GlitchCity: Dimension = {
   name: "glitch-city",

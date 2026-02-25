@@ -10,6 +10,10 @@ export interface MaterialData {
   fragmentShader: string;
 }
 
+export interface RegionMaterialData {
+  biomeTexture: THREE.Texture;
+}
+
 export const vertexData_default: VertexData = {
   x: 0,
   y: 0,
@@ -24,11 +28,12 @@ export interface Dimension {
   getMaterial: () => Promise<THREE.ShaderMaterial>;
   component: () => JSX.Element;
 }
-
 export interface Region {
+  name: string;
+  id: number;
   biomes: Biome[];
+  getMaterial?: () => Promise<RegionMaterialData>;
 }
-
 export interface Biome {
   name: string;
   id: number;
