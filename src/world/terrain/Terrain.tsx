@@ -4,8 +4,17 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { Dimension } from "../types";
-import { CHUNK_SIZE, CHUNK_VISIBILITY_DELAY, LOD_LEVELS, LODLevel } from "./lodConfig";
+import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
+
+/** Check if two chunks' AABBs overlap (works across different chunk sizes). */
+const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
+  const aHalf = a.lod.chunkSize / 2;
+  const bHalf = b.lod.chunkSize / 2;
+  const overlapX = a.offset.x + aHalf > b.offset.x - bHalf && a.offset.x - aHalf < b.offset.x + bHalf;
+  const overlapZ = a.offset.y + aHalf > b.offset.y - bHalf && a.offset.y - aHalf < b.offset.y + bHalf;
+  return overlapX && overlapZ;
+};
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
@@ -15,67 +24,194 @@ const terrain: TerrainProps = {
   queued_to_destroy: [],
 };
 
+// LOD lookup by chunk size for quadtree subdivision
+const lodBySize: { [size: number]: LODLevel } = {};
+for (const lod of LOD_LEVELS) {
+  lodBySize[lod.chunkSize] = lod;
+}
+
+// Subdivision thresholds: a node of this size subdivides when player is closer than threshold
+const subdivideThreshold: { [size: number]: number } = {
+  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (10080)
+  [LOD5_CHUNK_SIZE / 2]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
+  [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
+};
+
 const computeDesiredChunks = (playerX: number, playerZ: number) => {
   const desired: { [key: string]: { position: number[]; lod: LODLevel } } = {};
 
-  // Single grid — every cell is CHUNK_SIZE. Each cell gets the finest LOD whose
-  // maxDistance covers it. LOD level is part of the key so that a resolution
-  // change triggers a rebuild.
+  const visitNode = (ox: number, oz: number, size: number) => {
+    // Distance from player to nearest point on this node's AABB
+    const clampedX = Math.max(ox, Math.min(playerX, ox + size));
+    const clampedZ = Math.max(oz, Math.min(playerZ, oz + size));
+    const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
 
-  const coarsest = LOD_LEVELS[LOD_LEVELS.length - 1];
-  const radius = Math.ceil(coarsest.maxDistance / CHUNK_SIZE);
+    // Try to subdivide if this node is larger than the base chunk size
+    if (size > CHUNK_SIZE) {
+      const threshold = subdivideThreshold[size];
+      if (threshold !== undefined && dist < threshold) {
+        const half = size / 2;
+        visitNode(ox, oz, half);
+        visitNode(ox + half, oz, half);
+        visitNode(ox, oz + half, half);
+        visitNode(ox + half, oz + half, half);
+        return;
+      }
+    }
 
-  const playerGridX = Math.floor(playerX / CHUNK_SIZE);
-  const playerGridZ = Math.floor(playerZ / CHUNK_SIZE);
+    // Leaf node: determine the LOD to use
+    let lod = lodBySize[size];
+    if (!lod) {
+      // Fallback for base chunk size - should not happen normally
+      lod = LOD_LEVELS[0];
+    }
+
+    // At base chunk size (420), pick LOD1 if close, else LOD2
+    if (size === CHUNK_SIZE) {
+      lod = dist < LOD_LEVELS[0].maxDistance ? LOD_LEVELS[0] : LOD_LEVELS[1];
+    }
+
+    // Store world-space center so mesh covers exactly [ox, ox+size]
+    const cx = ox + lod.chunkSize / 2;
+    const cz = oz + lod.chunkSize / 2;
+    const gx = Math.round(cx / lod.chunkSize);
+    const gz = Math.round(cz / lod.chunkSize);
+    desired[`${lod.level}/${gx}/${gz}`] = {
+      position: [cx, cz],
+      lod,
+    };
+  };
+
+  // Root grid: tiles of LOD5 size covering the render area
+  const rootSize = LOD5_CHUNK_SIZE;
+  const radius = Math.ceil(MAX_RENDER_DISTANCE / rootSize);
+  const rootGX = Math.floor(playerX / rootSize);
+  const rootGZ = Math.floor(playerZ / rootSize);
 
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dz = -radius; dz <= radius; dz++) {
-      const cx = playerGridX + dx;
-      const cz = playerGridZ + dz;
+      const ox = (rootGX + dx) * rootSize;
+      const oz = (rootGZ + dz) * rootSize;
 
-      // Distance from player to the center of this cell
-      const cellCenterX = (cx + 0.5) * CHUNK_SIZE;
-      const cellCenterZ = (cz + 0.5) * CHUNK_SIZE;
-      const dist = Math.sqrt(
-        (cellCenterX - playerX) ** 2 + (cellCenterZ - playerZ) ** 2
-      );
+      // Cull root tiles entirely outside render distance
+      const clampedX = Math.max(ox, Math.min(playerX, ox + rootSize));
+      const clampedZ = Math.max(oz, Math.min(playerZ, oz + rootSize));
+      const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
+      if (dist > MAX_RENDER_DISTANCE) continue;
 
-      // Find the finest LOD that covers this distance
-      let bestLod: LODLevel | null = null;
-      for (const lod of LOD_LEVELS) {
-        if (dist <= lod.maxDistance) {
-          bestLod = lod;
-          break; // LOD_LEVELS is sorted finest-first (level 0, 1, 2)
-        }
-      }
-
-      if (!bestLod) continue; // beyond all LOD ranges
-
-      desired[`${bestLod.level}/${cx}/${cz}`] = {
-        position: [cx, cz],
-        lod: bestLod,
-      };
+      visitNode(ox, oz, rootSize);
     }
   }
 
   return desired;
 };
 
-// Check if any unbuilt chunk shares the same grid position (same x/z)
-const hasUnbuiltOverlap = (targetChunk: Chunk): boolean => {
-  const tx = targetChunk.offset.x;
-  const tz = targetChunk.offset.y;
+/** Returns clockwise loop of main-grid edge vertex indices (4×segments total). */
+const getPerimeterIndices = (segments: number): number[] => {
+  const n = segments + 1; // vertices per row/col
+  const indices: number[] = [];
+  // Top edge: left to right
+  for (let i = 0; i < segments; i++) indices.push(i);
+  // Right edge: top to bottom
+  for (let i = 0; i < segments; i++) indices.push(i * n + segments);
+  // Bottom edge: right to left
+  for (let i = segments; i > 0; i--) indices.push(segments * n + i);
+  // Left edge: bottom to top
+  for (let i = segments; i > 0; i--) indices.push(i * n);
+  return indices;
+};
 
-  for (const key in terrain.chunks) {
-    const other = terrain.chunks[key].chunk;
-    if (other === targetChunk || other.plane.visible) continue;
+/** Creates a BufferGeometry with a standard grid + skirt ring around the perimeter. */
+const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferGeometry => {
+  const n = segments + 1;
+  const mainVertCount = n * n;
+  const perimeterIndices = getPerimeterIndices(segments);
+  const perimCount = perimeterIndices.length; // 4 * segments
+  const totalVerts = mainVertCount + perimCount * 2; // main + skirt top + skirt bottom
 
-    // Same grid position = same offset (all chunks are CHUNK_SIZE)
-    if (other.offset.x === tx && other.offset.y === tz) {
-      return true;
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  const uvs = new Float32Array(totalVerts * 2);
+
+  // Main grid vertices (same layout as PlaneGeometry)
+  const halfSize = chunkSize / 2;
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      const idx = iz * n + ix;
+      const x = (ix / segments) * chunkSize - halfSize;
+      const y = -(iz / segments) * chunkSize + halfSize; // PlaneGeometry Y convention (flipped Z)
+      positions[idx * 3] = x;
+      positions[idx * 3 + 1] = y;
+      positions[idx * 3 + 2] = 0;
+      normals[idx * 3 + 2] = 1; // face +Z (will be rotated to +Y)
+      uvs[idx * 2] = ix / segments;
+      uvs[idx * 2 + 1] = 1 - iz / segments;
     }
   }
-  return false;
+
+  // Main grid indices
+  const mainIndexCount = segments * segments * 6;
+  const skirtIndexCount = perimCount * 6;
+  const indexArray = new Uint32Array(mainIndexCount + skirtIndexCount);
+  let ii = 0;
+  for (let iz = 0; iz < segments; iz++) {
+    for (let ix = 0; ix < segments; ix++) {
+      const a = iz * n + ix;
+      const b = iz * n + ix + 1;
+      const c = (iz + 1) * n + ix + 1;
+      const d = (iz + 1) * n + ix;
+      indexArray[ii++] = a;
+      indexArray[ii++] = d;
+      indexArray[ii++] = b;
+      indexArray[ii++] = d;
+      indexArray[ii++] = c;
+      indexArray[ii++] = b;
+    }
+  }
+
+  // Skirt top and bottom vertices (placeholders — positions set in BuildChunk)
+  const skirtTopStart = mainVertCount;
+  const skirtBotStart = mainVertCount + perimCount;
+  for (let i = 0; i < perimCount; i++) {
+    const srcIdx = perimeterIndices[i];
+    // Copy position from main grid as default
+    positions[(skirtTopStart + i) * 3] = positions[srcIdx * 3];
+    positions[(skirtTopStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
+    positions[(skirtTopStart + i) * 3 + 2] = 0;
+    positions[(skirtBotStart + i) * 3] = positions[srcIdx * 3];
+    positions[(skirtBotStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
+    positions[(skirtBotStart + i) * 3 + 2] = -SKIRT_DEPTH;
+    // Normals pointing outward (will be recalculated)
+    normals[(skirtTopStart + i) * 3 + 2] = 1;
+    normals[(skirtBotStart + i) * 3 + 2] = 1;
+    // UVs from source
+    uvs[(skirtTopStart + i) * 2] = uvs[srcIdx * 2];
+    uvs[(skirtTopStart + i) * 2 + 1] = uvs[srcIdx * 2 + 1];
+    uvs[(skirtBotStart + i) * 2] = uvs[srcIdx * 2];
+    uvs[(skirtBotStart + i) * 2 + 1] = uvs[srcIdx * 2 + 1];
+  }
+
+  // Skirt indices: 2 triangles per perimeter edge
+  for (let i = 0; i < perimCount; i++) {
+    const next = (i + 1) % perimCount;
+    const t0 = skirtTopStart + i;
+    const t1 = skirtTopStart + next;
+    const b0 = skirtBotStart + i;
+    const b1 = skirtBotStart + next;
+    indexArray[ii++] = t0;
+    indexArray[ii++] = b0;
+    indexArray[ii++] = t1;
+    indexArray[ii++] = t1;
+    indexArray[ii++] = b0;
+    indexArray[ii++] = b1;
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  geom.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geom.setIndex(new THREE.BufferAttribute(indexArray, 1));
+  return geom;
 };
 
 export const Terrain = ({ dimension }: { dimension: Dimension }) => {
@@ -107,8 +243,88 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
   });
 
+  /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
+   *  are built, then hide+destroy the old chunk in the same frame. */
+  const ProcessSwaps = () => {
+    // Set of chunks still pending build (queued or actively building)
+    const pendingChunks: { [id: number]: boolean } = {};
+    for (let i = 0; i < terrain.queued_to_build.length; i++) {
+      (terrain.queued_to_build[i] as any).__pending = true;
+    }
+    if (terrain.active_chunk) (terrain.active_chunk as any).__pending = true;
+
+    // Pass 1: determine which old chunks have ALL their replacements built
+    const swappable: { [key: string]: boolean } = {};
+    const gone: { [key: string]: boolean } = {};
+
+    for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
+      const oldKey = terrain.queued_to_destroy[i];
+      if (!terrain.chunks[oldKey]) {
+        gone[oldKey] = true;
+        continue;
+      }
+      const oldChunk = terrain.chunks[oldKey].chunk;
+      let allReady = true;
+
+      for (const otherKey in terrain.chunks) {
+        if (otherKey === oldKey) continue;
+        const other = terrain.chunks[otherKey].chunk;
+        if (!other.plane.visible && chunksOverlap(oldChunk, other)) {
+          if ((other as any).__pending) {
+            allReady = false;
+            break;
+          }
+        }
+      }
+
+      if (allReady) {
+        swappable[oldKey] = true;
+      }
+    }
+
+    // Pass 2: show built-but-invisible chunks only if every old chunk they
+    // overlap is swappable (prevents showing over a still-visible old chunk
+    // whose OTHER replacements aren't ready yet)
+    for (const key in terrain.chunks) {
+      const chunk = terrain.chunks[key].chunk;
+      if (chunk.plane.visible || (chunk as any).__pending) continue;
+
+      let canShow = true;
+      for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
+        const oldKey = terrain.queued_to_destroy[i];
+        if (terrain.chunks[oldKey] && !swappable[oldKey] && chunksOverlap(chunk, terrain.chunks[oldKey].chunk)) {
+          canShow = false;
+          break;
+        }
+      }
+
+      if (canShow) {
+        chunk.plane.visible = true;
+      }
+    }
+
+    // Pass 3: destroy swappable old chunks
+    for (const oldKey in swappable) {
+      if (terrain.chunks[oldKey]) {
+        const oldChunk = terrain.chunks[oldKey].chunk;
+        oldChunk.plane.geometry.dispose();
+        terrain.group.remove(oldChunk.plane);
+        delete terrain.chunks[oldKey];
+      }
+    }
+
+    // Clean processed entries from the destroy queue
+    terrain.queued_to_destroy = terrain.queued_to_destroy.filter((k) => !swappable[k] && !gone[k]);
+
+    // Clean up __pending markers
+    for (let i = 0; i < terrain.queued_to_build.length; i++) {
+      delete (terrain.queued_to_build[i] as any).__pending;
+    }
+    if (terrain.active_chunk) delete (terrain.active_chunk as any).__pending;
+  };
+
   const UpdateTerrain = async (material: THREE.Material) => {
-    DestroyChunk(); //TODO still kinda taxing even though it only deletes 1 per frame. optimize deletion somehow
+    ProcessSwaps();
 
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
@@ -121,11 +337,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           if (terrain.active_chunk === currentChunk) {
             terrain.active_chunk = null;
           }
-          if (currentChunk.plane) {
-            setTimeout(() => {
-              currentChunk.plane.visible = true;
-            }, CHUNK_VISIBILITY_DELAY);
-          }
+          // Don't show yet — ProcessSwaps will handle visibility
+          // once all overlapping replacements are ready
         }
       } catch (error) {
         console.error("Error updating terrain:", error);
@@ -138,8 +351,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       if (terrain.queued_to_build.length > 0) {
         terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
           // Check if this chunk is still tracked (not destroyed while queued)
-          const gridX = Math.round(chunk.offset.x / CHUNK_SIZE);
-          const gridZ = Math.round(chunk.offset.y / CHUNK_SIZE);
+          const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
+          const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
           const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
           return key in terrain.chunks;
         });
@@ -151,14 +364,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           if (a.lod.level !== b.lod.level) {
             return b.lod.level - a.lod.level;
           }
-          const distA = Math.sqrt(
-            Math.pow(a.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
-              Math.pow(a.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
-          );
-          const distB = Math.sqrt(
-            Math.pow(b.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
-              Math.pow(b.offset.y + CHUNK_SIZE / 2 - playerZ, 2)
-          );
+          const distA = Math.sqrt(Math.pow(a.offset.x - playerX, 2) + Math.pow(a.offset.y - playerZ, 2));
+          const distB = Math.sqrt(Math.pow(b.offset.x - playerX, 2) + Math.pow(b.offset.y - playerZ, 2));
           return distB - distA;
         });
       }
@@ -173,39 +380,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     if (!terrain.active_chunk) {
       const desiredChunks = computeDesiredChunks(playerX, playerZ);
 
-      // Remove chunks that are out of range, but only if replacements are visible
+      // Queue undesired chunks for destruction (ProcessSwaps handles safety)
       for (const chunkKey in terrain.chunks) {
         if (!desiredChunks[chunkKey] && !terrain.queued_to_destroy.includes(chunkKey)) {
-          // Don't destroy if unbuilt replacement chunks overlap this area
-          if (!hasUnbuiltOverlap(terrain.chunks[chunkKey].chunk)) {
-            terrain.queued_to_destroy.push(chunkKey);
-          }
+          terrain.queued_to_destroy.push(chunkKey);
         }
-      }
-
-      if (terrain.queued_to_destroy.length > 1) {
-        terrain.queued_to_destroy.sort((a, b) => {
-          const chunkDataA = terrain.chunks[a];
-          const chunkDataB = terrain.chunks[b];
-
-          if (chunkDataA && chunkDataB) {
-            // Higher LOD level (less detail) destroyed first
-            if (chunkDataA.chunk.lod.level !== chunkDataB.chunk.lod.level) {
-              return chunkDataB.chunk.lod.level - chunkDataA.chunk.lod.level;
-            }
-
-            // Within same LOD, furthest destroyed first (shift takes from front)
-            const distanceA =
-              Math.pow(chunkDataA.chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
-              Math.pow(chunkDataA.chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2);
-            const distanceB =
-              Math.pow(chunkDataB.chunk.offset.x + CHUNK_SIZE / 2 - playerX, 2) +
-              Math.pow(chunkDataB.chunk.offset.y + CHUNK_SIZE / 2 - playerZ, 2);
-
-            return distanceB - distanceA;
-          }
-          return 0;
-        });
       }
 
       // Add new chunks that are within range
@@ -215,12 +394,12 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         }
 
         const { position, lod } = desiredChunks[chunkKey];
-        const [xp, zp] = position;
-        const offset = new THREE.Vector2(xp * CHUNK_SIZE, zp * CHUNK_SIZE);
+        const [cx, cz] = position;
+        const offset = new THREE.Vector2(cx, cz);
 
         const chunk = QueueChunk(offset, lod, material);
         terrain.chunks[chunkKey] = {
-          position: [xp, zp],
+          position: [cx, cz],
           chunk: chunk,
         };
       }
@@ -231,10 +410,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   };
 
   const QueueChunk = (offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, lod.segments, lod.segments),
-      material
-    );
+    const plane = new THREE.Mesh(createChunkGeometry(lod.chunkSize, lod.segments), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
     plane.receiveShadow = true;
@@ -256,10 +432,16 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const BuildChunk = async function* (chunk: Chunk, material: THREE.Material) {
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;
+    const segments = chunk.lod.segments;
+    const n = segments + 1;
+    const mainVertCount = n * n;
+    const perimeterIndices = getPerimeterIndices(segments);
+    const perimCount = perimeterIndices.length;
     const attributeBuffers: any = {};
     const verts = [];
 
-    for (let i = 0; i < pos.count; i++) {
+    // Only sample terrain data for main grid vertices
+    for (let i = 0; i < mainVertCount; i++) {
       const vert = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
       verts.push(vert);
     }
@@ -268,10 +450,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       verts.map(async (vert) => {
         const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y, true);
         return data;
-      })
+      }),
     );
 
-    for (let i = 0; i < pos.count; i++) {
+    // Initialize attribute buffers for ALL vertices (main + skirt)
+    for (let i = 0; i < mainVertCount; i++) {
       const vert = verts[i];
       const vertexData = bulkVertexData[i];
       pos.setXYZ(i, vert.x, vert.y, vertexData.height);
@@ -286,6 +469,28 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         if (attributeBuffers[attrName]) {
           attributeBuffers[attrName][i] = vertexData.attributes[attrName];
         }
+      }
+    }
+
+    // Update skirt vertices: copy from corresponding main edge vertices
+    const skirtTopStart = mainVertCount;
+    const skirtBotStart = mainVertCount + perimCount;
+    for (let i = 0; i < perimCount; i++) {
+      const srcIdx = perimeterIndices[i];
+      const sx = pos.getX(srcIdx);
+      const sy = pos.getY(srcIdx);
+      const sh = pos.getZ(srcIdx);
+
+      // Skirt top: same position as edge vertex
+      pos.setXYZ(skirtTopStart + i, sx, sy, sh);
+      // Skirt bottom: same X/Y, lowered height
+      pos.setXYZ(skirtBotStart + i, sx, sy, sh - SKIRT_DEPTH);
+
+      // Copy custom attributes from main edge vertex to skirt vertices
+      for (const attrName in attributeBuffers) {
+        const val = attributeBuffers[attrName][srcIdx];
+        attributeBuffers[attrName][skirtTopStart + i] = val;
+        attributeBuffers[attrName][skirtBotStart + i] = val;
       }
     }
 
@@ -307,69 +512,37 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     yield;
   };
 
-  const DestroyChunk = () => {
-    const chunkKey = terrain.queued_to_destroy[0];
-    if (!chunkKey) return;
-
-    if (!terrain.chunks[chunkKey]) {
-      // Already gone, just remove from queue
-      terrain.queued_to_destroy.shift();
-      return;
-    }
-
-    const chunkData = terrain.chunks[chunkKey];
-    const tx = chunkData.chunk.offset.x;
-    const tz = chunkData.chunk.offset.y;
-
-    // Don't destroy if a replacement at the same grid position is still building
-    for (const otherKey in terrain.chunks) {
-      if (otherKey === chunkKey) continue;
-      const other = terrain.chunks[otherKey].chunk;
-      if (other.offset.x === tx && other.offset.y === tz && !other.plane.visible) {
-        return; // replacement exists but isn't ready yet — keep old chunk visible
-      }
-    }
-
-    terrain.queued_to_destroy.shift();
-    if (chunkData.chunk.plane) {
-      chunkData.chunk.plane.geometry.dispose();
-      terrain.group.remove(chunkData.chunk.plane);
-    }
-    delete terrain.chunks[chunkKey];
-  };
-
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
     const segments = chunk.lod.segments;
+    const cs = chunk.lod.chunkSize;
     const linearArray = chunk.plane.geometry.attributes.position.array;
-    const gridSize = Math.sqrt(linearArray.length / 3);
-    const heightfield = Array.from({ length: gridSize }, () => Array(gridSize).fill(0));
+    const n = segments + 1;
+    const mainVertCount = n * n;
+    const heightfield = Array.from({ length: n }, () => Array(n).fill(0));
 
-    for (let i = 0; i < linearArray.length; i += 3) {
+    // Only iterate main grid vertices, not skirt vertices
+    for (let i = 0; i < mainVertCount * 3; i += 3) {
       const x = linearArray[i];
       const z = linearArray[i + 1];
       const height = linearArray[i + 2];
 
-      const xIndex = Math.round((x - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / segments));
-      const zIndex = Math.round((z - -(CHUNK_SIZE / 2)) / (CHUNK_SIZE / segments));
+      const xIndex = Math.round((x - -(cs / 2)) / (cs / segments));
+      const zIndex = Math.round((z - -(cs / 2)) / (cs / segments));
 
       const transformedXIndex = segments - xIndex;
 
-      if (
-        zIndex >= 0 &&
-        zIndex < segments + 1 &&
-        transformedXIndex >= 0 &&
-        transformedXIndex < segments + 1
-      ) {
+      if (zIndex >= 0 && zIndex < n && transformedXIndex >= 0 && transformedXIndex < n) {
         heightfield[zIndex][transformedXIndex] = height;
       }
     }
 
-    const chunkKey = `${offset.x / CHUNK_SIZE}/${offset.y / CHUNK_SIZE}`;
+    const chunkKey = `${offset.x / cs}/${offset.y / cs}`;
     chunk.collider = {
       chunkKey: chunkKey,
       heightfield,
       position: offset.toArray(),
-      elementSize: CHUNK_SIZE / segments,
+      elementSize: cs / segments,
+      chunkSize: cs,
     };
   };
 
@@ -385,10 +558,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   );
 };
 
-export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize }) => {
+export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize, chunkSize }) => {
   const [ref] = useHeightfield(() => ({
     args: [heightfield, { elementSize }],
-    position: [position[0] + CHUNK_SIZE / 2, 0, position[1] + CHUNK_SIZE / 2],
+    position: [position[0], 0, position[1]],
     rotation: [-Math.PI / 2, 0, Math.PI / 2],
   }));
 

@@ -3,7 +3,6 @@ import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
 import { Player } from "../player/Player";
-import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
 import { CustomCanvasProps } from "./types";
 
@@ -33,7 +32,7 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   return (
     <>
       <Stats />
-      <PostProcessing />
+      {/* <PostProcessing /> */}
       <Physics {...(mergedPhysicsProps as any)}>
         {children}
         <Terrain dimension={dimension} />
