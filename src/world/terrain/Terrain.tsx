@@ -4,10 +4,8 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { Dimension } from "../types";
-import { LOD_LEVELS, LODLevel } from "./lodConfig";
+import { CHUNK_SIZE, CHUNK_VISIBILITY_DELAY, LOD_LEVELS, LODLevel } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
-
-export const CHUNK_SIZE = 420;
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
@@ -126,7 +124,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           if (currentChunk.plane) {
             setTimeout(() => {
               currentChunk.plane.visible = true;
-            }, 100);
+            }, CHUNK_VISIBILITY_DELAY);
           }
         }
       } catch (error) {
