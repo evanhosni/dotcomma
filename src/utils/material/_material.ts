@@ -8,9 +8,9 @@ export namespace _material {
       filenames.map(
         (filename) =>
           new Promise<THREE.Texture>((resolve, reject) =>
-            textureLoader.load(process.env.PUBLIC_URL + "/textures/" + filename, resolve, undefined, reject)
-          )
-      )
+            textureLoader.load(process.env.PUBLIC_URL + "/textures/" + filename, resolve, undefined, reject),
+          ),
+      ),
     );
   };
 
@@ -21,7 +21,7 @@ export namespace _material {
       regionTexture?: THREE.Texture;
       biomeTexture?: THREE.Texture;
       varyingDeclarations?: string[];
-    } = {}
+    } = {},
   ): Promise<THREE.ShaderMaterial> => {
     const { regionTexture, biomeTexture, varyingDeclarations = [] } = options;
     // Collect all uniforms and fragment shaders from biomes
@@ -84,7 +84,7 @@ export namespace _material {
   `;
 
     return new THREE.ShaderMaterial({
-      wireframe: true,
+      // wireframe: true,
       uniforms: combinedUniforms,
       vertexShader,
       fragmentShader,

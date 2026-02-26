@@ -19,4 +19,5 @@ export interface TerrainColliderProps {
   heightfield: number[][];
   position: number[];
   elementSize: number;
+  chunkSize: number;
 }
