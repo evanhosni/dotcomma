@@ -199,10 +199,10 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
     const b0 = skirtBotStart + i;
     const b1 = skirtBotStart + next;
     indexArray[ii++] = t0;
-    indexArray[ii++] = b0;
-    indexArray[ii++] = t1;
     indexArray[ii++] = t1;
     indexArray[ii++] = b0;
+    indexArray[ii++] = b0;
+    indexArray[ii++] = t1;
     indexArray[ii++] = b1;
   }
 
