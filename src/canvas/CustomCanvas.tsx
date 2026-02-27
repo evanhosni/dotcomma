@@ -2,6 +2,7 @@ import { Physics } from "@react-three/cannon";
 import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
+import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
 import { Terrain } from "../world/terrain/Terrain";
 import { CustomCanvasProps } from "./types";
@@ -36,7 +37,7 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
       <Physics {...(mergedPhysicsProps as any)}>
         {children}
         <Terrain dimension={dimension} />
-        {/* <ObjectPool dimension={dimension} /> */}
+        <ObjectPool dimension={dimension} />
         {/* {(terrain_loaded || progress >= OBJECT_LOAD_THRESHOLD) && <ObjectPool dimension={dimension} />} */}
         {/* //TODO either dont allow player to move until terrain_loaded or remove this check altogether. progress can go down again so dont make that the only check */}
         <Player />

@@ -27,6 +27,7 @@ export interface Dimension {
   getVertexData: (x: number, y: number, isTerrain?: boolean) => Promise<VertexData>;
   getMaterial: () => Promise<THREE.ShaderMaterial>;
   component: () => JSX.Element;
+  spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
 }
 export interface Region {
   name: string;
@@ -42,6 +43,7 @@ export interface Biome {
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;
+  spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
 }
 
 export interface Block {
@@ -56,16 +58,3 @@ export const block_default = {
   components: [],
 };
 
-export enum SPAWN_SIZE {
-  XS = "xs",
-  SMALL = "small",
-  MEDIUM = "medium",
-  LARGE = "large",
-  XL = "xl",
-}
-
-export interface Spawner {
-  point: THREE.Vector3;
-  element: any;
-  spawn_size: SPAWN_SIZE;
-}
