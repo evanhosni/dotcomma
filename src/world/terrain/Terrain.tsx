@@ -245,9 +245,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
   /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
    *  are built, then hide+destroy the old chunk in the same frame. */
-  const ProcessSwaps = () => {
-    // Set of chunks still pending build (queued or actively building)
-    const pendingChunks: { [id: number]: boolean } = {};
+  const ProcessSwaps = (desiredChunks: { [key: string]: { position: number[]; lod: LODLevel } }) => {
+    // Mark chunks still pending build (queued or actively building)
     for (let i = 0; i < terrain.queued_to_build.length; i++) {
       (terrain.queued_to_build[i] as any).__pending = true;
     }
@@ -255,14 +254,21 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     // Pass 1: determine which old chunks have ALL their replacements built
     const swappable: { [key: string]: boolean } = {};
-    const gone: { [key: string]: boolean } = {};
+    const cancelled: { [key: string]: boolean } = {};
 
     for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
       const oldKey = terrain.queued_to_destroy[i];
       if (!terrain.chunks[oldKey]) {
-        gone[oldKey] = true;
+        cancelled[oldKey] = true;
         continue;
       }
+
+      // If the old chunk is desired again (player reversed), cancel destruction
+      if (desiredChunks[oldKey]) {
+        cancelled[oldKey] = true;
+        continue;
+      }
+
       const oldChunk = terrain.chunks[oldKey].chunk;
       let allReady = true;
 
@@ -292,7 +298,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       let canShow = true;
       for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
         const oldKey = terrain.queued_to_destroy[i];
-        if (terrain.chunks[oldKey] && !swappable[oldKey] && chunksOverlap(chunk, terrain.chunks[oldKey].chunk)) {
+        if (terrain.chunks[oldKey] && !swappable[oldKey] && !cancelled[oldKey] &&
+            chunksOverlap(chunk, terrain.chunks[oldKey].chunk)) {
           canShow = false;
           break;
         }
@@ -313,8 +320,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
-    // Clean processed entries from the destroy queue
-    terrain.queued_to_destroy = terrain.queued_to_destroy.filter((k) => !swappable[k] && !gone[k]);
+    // Clean processed/cancelled entries from the destroy queue
+    terrain.queued_to_destroy = terrain.queued_to_destroy.filter(
+      (k) => !swappable[k] && !cancelled[k]
+    );
 
     // Clean up __pending markers
     for (let i = 0; i < terrain.queued_to_build.length; i++) {
@@ -324,11 +333,76 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   };
 
   const UpdateTerrain = async (material: THREE.Material) => {
-    ProcessSwaps();
-
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
 
+    // ── 1. Recompute desired chunks every frame ──────────────────────────
+    const desiredChunks = computeDesiredChunks(playerX, playerZ);
+
+    // ── 2. Cancel active build if no longer desired ──────────────────────
+    if (terrain.active_chunk) {
+      const ac = terrain.active_chunk;
+      const gridX = Math.round(ac.offset.x / ac.lod.chunkSize);
+      const gridZ = Math.round(ac.offset.y / ac.lod.chunkSize);
+      const acKey = `${ac.lod.level}/${gridX}/${gridZ}`;
+      if (!desiredChunks[acKey]) {
+        ac.plane.geometry.dispose();
+        terrain.group.remove(ac.plane);
+        delete terrain.chunks[acKey];
+        terrain.active_chunk = null;
+      }
+    }
+
+    // ── 3. Prune stale chunks ────────────────────────────────────────────
+    for (const chunkKey in terrain.chunks) {
+      if (desiredChunks[chunkKey]) continue;
+      const chunk = terrain.chunks[chunkKey].chunk;
+
+      if (chunk.plane.visible) {
+        // Visible — queue for atomic swap via ProcessSwaps
+        if (terrain.queued_to_destroy.indexOf(chunkKey) === -1) {
+          terrain.queued_to_destroy.push(chunkKey);
+        }
+      } else if (terrain.active_chunk !== chunk) {
+        // Invisible and not actively building — safe to remove UNLESS
+        // it overlaps a visible chunk queued for destruction (that chunk
+        // still needs this as cover until a new replacement is ready)
+        let neededAsCover = false;
+        for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
+          const oldKey = terrain.queued_to_destroy[i];
+          const oldData = terrain.chunks[oldKey];
+          if (oldData && oldData.chunk.plane.visible && chunksOverlap(chunk, oldData.chunk)) {
+            neededAsCover = true;
+            break;
+          }
+        }
+        if (!neededAsCover) {
+          chunk.plane.geometry.dispose();
+          terrain.group.remove(chunk.plane);
+          delete terrain.chunks[chunkKey];
+        }
+      }
+    }
+
+    // ── 4. Add new desired chunks ────────────────────────────────────────
+    for (const chunkKey in desiredChunks) {
+      if (chunkKey in terrain.chunks) continue;
+
+      const { position, lod } = desiredChunks[chunkKey];
+      const [cx, cz] = position;
+      const offset = new THREE.Vector2(cx, cz);
+
+      const chunk = QueueChunk(offset, lod, material);
+      terrain.chunks[chunkKey] = {
+        position: [cx, cz],
+        chunk: chunk,
+      };
+    }
+
+    // ── 5. Atomic visibility swaps ───────────────────────────────────────
+    ProcessSwaps(desiredChunks);
+
+    // ── 6. Build next chunk ──────────────────────────────────────────────
     if (terrain.active_chunk) {
       const currentChunk = terrain.active_chunk;
       try {
@@ -337,8 +411,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           if (terrain.active_chunk === currentChunk) {
             terrain.active_chunk = null;
           }
-          // Don't show yet — ProcessSwaps will handle visibility
-          // once all overlapping replacements are ready
         }
       } catch (error) {
         console.error("Error updating terrain:", error);
@@ -347,25 +419,19 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         }
       }
     } else {
-      // Filter out chunks that have been destroyed, and sort by LOD priority then distance
+      // Filter out chunks that have been pruned, sort by priority
       if (terrain.queued_to_build.length > 0) {
         terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
-          // Check if this chunk is still tracked (not destroyed while queued)
           const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
           const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
           const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
           return key in terrain.chunks;
         });
 
-        // Sort so pop() grabs highest priority: LOD 0 first, closest first
-        // Array end = highest priority (popped first)
-        // So: higher LOD levels earlier in array, furthest earlier in array
         terrain.queued_to_build.sort((a, b) => {
-          if (a.lod.level !== b.lod.level) {
-            return b.lod.level - a.lod.level;
-          }
-          const distA = Math.sqrt(Math.pow(a.offset.x - playerX, 2) + Math.pow(a.offset.y - playerZ, 2));
-          const distB = Math.sqrt(Math.pow(b.offset.x - playerX, 2) + Math.pow(b.offset.y - playerZ, 2));
+          if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
+          const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
+          const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
           return distB - distA;
         });
       }
@@ -374,34 +440,6 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       if (chunk) {
         terrain.active_chunk = chunk;
         terrain.active_chunk.rebuildIterator = BuildChunk(chunk, material);
-      }
-    }
-
-    if (!terrain.active_chunk) {
-      const desiredChunks = computeDesiredChunks(playerX, playerZ);
-
-      // Queue undesired chunks for destruction (ProcessSwaps handles safety)
-      for (const chunkKey in terrain.chunks) {
-        if (!desiredChunks[chunkKey] && !terrain.queued_to_destroy.includes(chunkKey)) {
-          terrain.queued_to_destroy.push(chunkKey);
-        }
-      }
-
-      // Add new chunks that are within range
-      for (const chunkKey in desiredChunks) {
-        if (chunkKey in terrain.chunks) {
-          continue;
-        }
-
-        const { position, lod } = desiredChunks[chunkKey];
-        const [cx, cz] = position;
-        const offset = new THREE.Vector2(cx, cz);
-
-        const chunk = QueueChunk(offset, lod, material);
-        terrain.chunks[chunkKey] = {
-          position: [cx, cz],
-          chunk: chunk,
-        };
       }
     }
 
