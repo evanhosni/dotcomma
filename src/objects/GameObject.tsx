@@ -4,22 +4,13 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { utils } from "../utils/utils";
-import { SPAWN_SIZE } from "../world/types";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
-import { OBJECT_RENDER_DISTANCE } from "./ObjectPool";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
-
-export const SIZE_BASED_FRUSTUM_PADDING: Record<SPAWN_SIZE, number> = {
-  //TODO hmm not great. maybe remove frustum all together
-  [SPAWN_SIZE.XS]: 3,
-  [SPAWN_SIZE.SMALL]: 3.25,
-  [SPAWN_SIZE.MEDIUM]: 3.5,
-  [SPAWN_SIZE.LARGE]: 3.75,
-  [SPAWN_SIZE.XL]: 4,
-};
+const DEFAULT_RENDER_DISTANCE = 500;
+const DEFAULT_FRUSTUM_PADDING = 3;
 
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
@@ -105,8 +96,8 @@ interface GameObjectProps {
   scale?: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  render_distance?: number;
-  spawn_size: SPAWN_SIZE;
+  renderDistance?: number;
+  frustumPadding?: number;
   onDestroy: (id: string) => void;
 }
 
@@ -124,11 +115,10 @@ export const GameObject = ({
   scale = [1, 1, 1],
   rotation = [0, 0, 0],
   positionRef,
-  render_distance = OBJECT_RENDER_DISTANCE, //TODO do i need to be passing this?
-  spawn_size,
+  renderDistance = DEFAULT_RENDER_DISTANCE,
+  frustumPadding = DEFAULT_FRUSTUM_PADDING,
   onDestroy,
-}: //TODO: add onClick, onApproach, onPlayAnimation, onPauseAnimation, onStopAnimation, onPlaySound, onStopSound, etc...
-GameObjectProps) => {
+}: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
   const sceneRef = useRef<THREE.Group | null>(null);
@@ -250,7 +240,7 @@ GameObjectProps) => {
     // Use the specific render distance for this object type
     // const objectRenderDistance = render_distance;
 
-    if (distance > render_distance * DELETE_OBJECT_BUFFER) {
+    if (distance > renderDistance * DELETE_OBJECT_BUFFER) {
       onDestroy(id);
       return;
     }
@@ -262,11 +252,7 @@ GameObjectProps) => {
     // Update bounding sphere position - using boundsRef instead of global bounds
     boundsRef.current.center.copy(objectPosition);
 
-    // Use a larger padding factor for larger objects
-    // This makes larger objects more likely to be visible at greater distances
-    const paddingFactor = SIZE_BASED_FRUSTUM_PADDING[spawn_size];
-
-    const paddedRadius = boundsRef.current.radius * paddingFactor;
+    const paddedRadius = boundsRef.current.radius * frustumPadding;
 
     // For very large objects, we can add an additional check
     // based on distance to camera rather than just frustum
@@ -274,7 +260,7 @@ GameObjectProps) => {
     const distanceToCamera = camera.position.distanceTo(objectPosition);
 
     // Scale the "close to camera" threshold by the object's render distance
-    const proximityFactor = render_distance ? render_distance / OBJECT_RENDER_DISTANCE : 1;
+    const proximityFactor = renderDistance / DEFAULT_RENDER_DISTANCE;
 
     const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3 * proximityFactor;
 
@@ -292,7 +278,7 @@ GameObjectProps) => {
     }
 
     // Also scale collider render distance based on object size
-    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, render_distance / 2);
+    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2);
 
     const shouldShowColliders = distance < colliderRenderDistance && isVisible;
     if (shouldRenderColliders !== shouldShowColliders) {

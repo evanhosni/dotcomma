@@ -1,4 +1,4 @@
-import React, { createContext, ReactNode, useContext, useState } from "react";
+import React, { createContext, ReactNode, useContext, useRef, useState } from "react";
 import * as THREE from "three";
 import { Chunk } from "../world/terrain/types";
 import { GameContextType } from "./types";
@@ -17,6 +17,8 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
   const [chunks, setChunks] = useState<{ [key: string]: { position: number[]; chunk: Chunk } }>({});
   const [progress, setProgress] = useState(0);
   const [terrain_loaded, setTerrainLoaded] = useState(false);
+  const terrainHighLODPending = useRef(false);
+  const spawnPending = useRef(false);
 
   // Value object to be provided to consumers
   const value: GameContextType = {
@@ -28,6 +30,8 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
     setProgress,
     terrain_loaded,
     setTerrainLoaded,
+    terrainHighLODPending,
+    spawnPending,
   };
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
