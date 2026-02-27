@@ -3,9 +3,9 @@ import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import * as THREE from "three";
 import { GameObject } from "../../../../../../objects/GameObject";
-import { GameObjectProps } from "../../../../../../objects/types";
+import { SpawnedObjectProps } from "../../../../../../objects/spawning/types";
 
-export const XLElement = (props: GameObjectProps) => {
+export const XLElement = (props: SpawnedObjectProps) => {
   const ref = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
   const speed = 0;
