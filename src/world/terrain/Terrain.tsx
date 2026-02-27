@@ -24,6 +24,26 @@ const terrain: TerrainProps = {
   queued_to_destroy: [],
 };
 
+// Geometry pool keyed by LOD level — recycles BufferGeometry to avoid GC churn
+const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
+
+const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
+  const pool = geometryPool.get(lod.level);
+  if (pool && pool.length > 0) {
+    return pool.pop()!;
+  }
+  return createChunkGeometry(lod.chunkSize, lod.segments);
+};
+
+const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
+  let pool = geometryPool.get(lod.level);
+  if (!pool) {
+    pool = [];
+    geometryPool.set(lod.level, pool);
+  }
+  pool.push(geom);
+};
+
 // LOD lookup by chunk size for quadtree subdivision
 const lodBySize: { [size: number]: LODLevel } = {};
 for (const lod of LOD_LEVELS) {
@@ -314,7 +334,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     for (const oldKey in swappable) {
       if (terrain.chunks[oldKey]) {
         const oldChunk = terrain.chunks[oldKey].chunk;
-        oldChunk.plane.geometry.dispose();
+        releaseGeometry(oldChunk.lod, oldChunk.plane.geometry);
         terrain.group.remove(oldChunk.plane);
         delete terrain.chunks[oldKey];
       }
@@ -346,7 +366,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       const gridZ = Math.round(ac.offset.y / ac.lod.chunkSize);
       const acKey = `${ac.lod.level}/${gridX}/${gridZ}`;
       if (!desiredChunks[acKey]) {
-        ac.plane.geometry.dispose();
+        releaseGeometry(ac.lod, ac.plane.geometry);
         terrain.group.remove(ac.plane);
         delete terrain.chunks[acKey];
         terrain.active_chunk = null;
@@ -377,7 +397,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           }
         }
         if (!neededAsCover) {
-          chunk.plane.geometry.dispose();
+          releaseGeometry(chunk.lod, chunk.plane.geometry);
           terrain.group.remove(chunk.plane);
           delete terrain.chunks[chunkKey];
         }
@@ -402,7 +422,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     // ── 5. Atomic visibility swaps ───────────────────────────────────────
     ProcessSwaps(desiredChunks);
 
-    // ── 6. Build next chunk ──────────────────────────────────────────────
+    // ── 6. Build chunks (vertex budget) ─────────────────────────────────
+    const MAX_VERTS_PER_FRAME = 2500;
+    let budget = MAX_VERTS_PER_FRAME;
+
+    // Continue any active build first
     if (terrain.active_chunk) {
       const currentChunk = terrain.active_chunk;
       try {
@@ -411,6 +435,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           if (terrain.active_chunk === currentChunk) {
             terrain.active_chunk = null;
           }
+        } else {
+          budget = 0; // active build still in progress, don't start new ones
         }
       } catch (error) {
         console.error("Error updating terrain:", error);
@@ -418,28 +444,45 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           terrain.active_chunk = null;
         }
       }
-    } else {
-      // Filter out chunks that have been pruned, sort by priority
-      if (terrain.queued_to_build.length > 0) {
-        terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
-          const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
-          const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
-          const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
-          return key in terrain.chunks;
-        });
+    }
 
-        terrain.queued_to_build.sort((a, b) => {
-          if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-          const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-          const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
-          return distB - distA;
-        });
-      }
+    // Start new chunks within vertex budget
+    while (budget > 0 && !terrain.active_chunk && terrain.queued_to_build.length > 0) {
+      // Filter out chunks that have been pruned, sort by priority
+      terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
+        const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
+        const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
+        const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
+        return key in terrain.chunks;
+      });
+
+      terrain.queued_to_build.sort((a, b) => {
+        if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
+        const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
+        const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+        return distB - distA;
+      });
 
       const chunk = terrain.queued_to_build.pop();
-      if (chunk) {
-        terrain.active_chunk = chunk;
-        terrain.active_chunk.rebuildIterator = BuildChunk(chunk, material);
+      if (!chunk) break;
+
+      const vertCount = (chunk.lod.segments + 1) ** 2;
+      budget -= vertCount;
+
+      terrain.active_chunk = chunk;
+      chunk.rebuildIterator = BuildChunk(chunk, material);
+
+      try {
+        const iteratorResult = await chunk.rebuildIterator.next();
+        if (iteratorResult.done) {
+          terrain.active_chunk = null;
+        } else {
+          // Generator yielded — chunk build complete
+          terrain.active_chunk = null;
+        }
+      } catch (error) {
+        console.error("Error updating terrain:", error);
+        terrain.active_chunk = null;
       }
     }
 
@@ -448,7 +491,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   };
 
   const QueueChunk = (offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
-    const plane = new THREE.Mesh(createChunkGeometry(lod.chunkSize, lod.segments), material);
+    const plane = new THREE.Mesh(acquireGeometry(lod), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
     plane.receiveShadow = true;
@@ -476,26 +519,26 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const perimeterIndices = getPerimeterIndices(segments);
     const perimCount = perimeterIndices.length;
     const attributeBuffers: any = {};
-    const verts = [];
+    const posArray = (pos.array as Float32Array);
 
-    // Only sample terrain data for main grid vertices
+    // Read vertex positions directly from buffer (avoid Vector3 allocation per vertex)
+    const vertX = new Float32Array(mainVertCount);
+    const vertY = new Float32Array(mainVertCount);
     for (let i = 0; i < mainVertCount; i++) {
-      const vert = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-      verts.push(vert);
+      vertX[i] = posArray[i * 3];
+      vertY[i] = posArray[i * 3 + 1];
     }
 
     const bulkVertexData = await Promise.all(
-      verts.map(async (vert) => {
-        const data = await dimension.getVertexData(vert.x + offset.x, -vert.y + offset.y, true);
-        return data;
-      }),
+      Array.from({ length: mainVertCount }, (_, i) =>
+        dimension.getVertexData(vertX[i] + offset.x, -vertY[i] + offset.y, true)
+      ),
     );
 
     // Initialize attribute buffers for ALL vertices (main + skirt)
     for (let i = 0; i < mainVertCount; i++) {
-      const vert = verts[i];
       const vertexData = bulkVertexData[i];
-      pos.setXYZ(i, vert.x, vert.y, vertexData.height);
+      pos.setXYZ(i, vertX[i], vertY[i], vertexData.height);
 
       if (i === 0) {
         for (const attrName in vertexData.attributes) {
