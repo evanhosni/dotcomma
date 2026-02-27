@@ -1,4 +1,3 @@
-import * as THREE from "three";
 import { Dust } from "../../dimensions/dust/Dust";
 import { City } from "../../dimensions/glitch-city/biomes/city/City";
 import { Grass } from "../../dimensions/glitch-city/biomes/grass/Grass";
@@ -144,16 +143,30 @@ export namespace voronoi {
   };
 
   export const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
-    const vec3 = new THREE.Vector3(currentVertex.x, currentVertex.y, 0); //TODO any way to use vector2 instead?
+    const px = currentVertex.x,
+      py = currentVertex.y;
+    let minDist = Infinity;
 
-    var closestPoints = [];
     for (let i = 0; i < walls.length; i++) {
-      var closestPoint = new THREE.Vector3(0, 0, 0);
-      new THREE.Line3(walls[i].start, walls[i].end).closestPointToPoint(vec3, true, closestPoint);
-      closestPoints.push(closestPoint);
-    }
-    closestPoints.sort((a, b) => a.distanceTo(vec3) - b.distanceTo(vec3));
+      const wall = walls[i];
+      const ax = wall.start.x,
+        ay = wall.start.y;
+      const bx = wall.end.x,
+        by = wall.end.y;
 
-    return closestPoints[0] ? vec3.distanceTo(closestPoints[0]) : Infinity;
+      const dx = bx - ax,
+        dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+      let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+
+      const cx = ax + t * dx,
+        cy = ay + t * dy;
+      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+      if (dist < minDist) minDist = dist;
+    }
+
+    return minDist;
   };
 }
