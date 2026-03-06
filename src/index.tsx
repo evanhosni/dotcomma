@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { UrlParametersProvider } from "./context/UrlParametersContext";
 import { GlitchCity } from "./dimensions/glitch-city/GlitchCity";
+import { CommandPalette } from "./menus/command-palette/CommandPalette";
 import { Home } from "./menus/home/Home";
 import { PauseMenu } from "./menus/pause/Pause";
 import "./style.css";
@@ -11,12 +13,15 @@ const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElem
 const Dotcomma = () => {
   return (
     <BrowserRouter>
-      <PauseMenu />
-      <Routes>
-        <Route index element={<Home />} />
-        <Route path="/glitch-city" element={<GlitchCity.component />} />
-        <Route path="*" />
-      </Routes>
+      <UrlParametersProvider>
+        <PauseMenu />
+        <CommandPalette />
+        <Routes>
+          <Route index element={<Home />} />
+          <Route path="/glitch-city" element={<GlitchCity.component />} />
+          <Route path="*" />
+        </Routes>
+      </UrlParametersProvider>
     </BrowserRouter>
   );
 };

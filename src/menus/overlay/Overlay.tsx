@@ -3,9 +3,8 @@ import { useRef, useEffect } from "react";
 import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
+import { useUrlParameters } from "../../context/UrlParametersContext";
 import { Dimension } from "../../world/types";
-
-const ENABLED = new URLSearchParams(window.location.search).has("overlay");
 const BIOME_POLL_INTERVAL = 1; // seconds
 
 const GRAPH_WIDTH = 120;
@@ -175,6 +174,7 @@ const OverlayHUD = ({ dimension }: OverlayProps) => {
 };
 
 export const Overlay = ({ dimension }: OverlayProps) => {
-  if (!ENABLED) return null;
+  const { params } = useUrlParameters();
+  if (!params.overlay) return null;
   return <OverlayHUD dimension={dimension} />;
 };

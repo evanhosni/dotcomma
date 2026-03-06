@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useUrlParameters } from "../context/UrlParametersContext";
 
 enum KeyAction {
   KeyW = "forward",
@@ -21,16 +22,19 @@ export interface InputState {
   control: boolean;
 }
 
+const EMPTY_INPUT: InputState = {
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  sprint: false,
+  jump: false,
+  control: false,
+};
+
 export const useInput = (): InputState => {
-  const [input, setInput] = useState<InputState>({
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    sprint: false,
-    jump: false,
-    control: false,
-  });
+  const { paletteOpen } = useUrlParameters();
+  const [input, setInput] = useState<InputState>(EMPTY_INPUT);
 
   const findKey = (key: string): KeyAction | undefined => {
     return KeyAction[key as keyof typeof KeyAction];
@@ -58,5 +62,6 @@ export const useInput = (): InputState => {
     };
   }, []);
 
+  if (paletteOpen) return EMPTY_INPUT;
   return input;
 };

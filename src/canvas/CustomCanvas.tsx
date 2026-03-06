@@ -1,6 +1,7 @@
-import { Physics } from "@react-three/cannon";
+import { Debug, Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
+import { useUrlParameters } from "../context/UrlParametersContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
@@ -11,6 +12,7 @@ const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low f
 
 const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   const { terrain_loaded, progress } = useGameContext();
+  const { params } = useUrlParameters();
 
   // Default physics properties
   const defaultPhysicsProps = {
@@ -35,14 +37,20 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
       <Overlay dimension={dimension} />
       {/* <PostProcessing /> */}
       <Physics {...(mergedPhysicsProps as any)}>
-        {/* <Debug color="red"> */}
-        {children}
-        <Terrain dimension={dimension} />
-        <ObjectPool dimension={dimension} />
-        {/* {(terrain_loaded || progress >= OBJECT_LOAD_THRESHOLD) && <ObjectPool dimension={dimension} />} */}
-        {/* //TODO either dont allow player to move until terrain_loaded or remove this check altogether. progress can go down again so dont make that the only check */}
+        {params.debug ? (
+          <Debug color="red">
+            {children}
+            <Terrain dimension={dimension} />
+            <ObjectPool dimension={dimension} />
+          </Debug>
+        ) : (
+          <>
+            {children}
+            <Terrain dimension={dimension} />
+            <ObjectPool dimension={dimension} />
+          </>
+        )}
         <Player />
-        {/* </Debug> */}
       </Physics>
     </>
   );
