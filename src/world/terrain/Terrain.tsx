@@ -4,7 +4,6 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { buildDimensionConfig } from "../../workers/buildDimensionConfig";
-import { DimensionConfig } from "../../workers/vertexCompute";
 import { Dimension } from "../types";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
@@ -57,10 +56,7 @@ const ensureTerrainWorker = (dimension: Dimension): Promise<void> => {
   if (terrainWorkerInitPromise) return terrainWorkerInitPromise;
 
   terrainWorkerInitPromise = new Promise((resolve) => {
-    terrainWorker = new Worker(
-      new URL("../../workers/terrain.worker.ts", import.meta.url),
-      { type: "module" }
-    );
+    terrainWorker = new Worker(new URL("../../workers/terrain.worker.ts", import.meta.url), { type: "module" });
 
     terrainWorker.onmessage = (e: MessageEvent) => {
       if (e.data.type === "INIT_DONE") {
@@ -88,7 +84,7 @@ const buildChunkInWorker = (
   vertexX: Float32Array,
   vertexY: Float32Array,
   offsetX: number,
-  offsetZ: number
+  offsetZ: number,
 ): Promise<{
   heights: Float32Array;
   biomeIds: Float32Array;
@@ -192,7 +188,10 @@ const computeDesiredChunks = (playerX: number, playerZ: number) => {
 };
 
 /** Returns clockwise loop of main-grid edge vertex indices (4×segments total). */
+const perimeterCache = new Map<number, number[]>();
 const getPerimeterIndices = (segments: number): number[] => {
+  let cached = perimeterCache.get(segments);
+  if (cached) return cached;
   const n = segments + 1; // vertices per row/col
   const indices: number[] = [];
   // Top edge: left to right
@@ -203,6 +202,7 @@ const getPerimeterIndices = (segments: number): number[] => {
   for (let i = segments; i > 0; i--) indices.push(segments * n + i);
   // Left edge: bottom to top
   for (let i = segments; i > 0; i--) indices.push(i * n);
+  perimeterCache.set(segments, indices);
   return indices;
 };
 
@@ -307,8 +307,23 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
   const [colliderVersion, setColliderVersion] = useState(0);
   const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending, spawnPending } = useGameContext();
+  const collidersChanged = React.useRef(false);
+  const lastRemainingRef = React.useRef<number>(-1);
 
-  scene.add(terrain.group);
+  useEffect(() => {
+    scene.add(terrain.group);
+    return () => { scene.remove(terrain.group); };
+  }, []);
+
+  const destroyChunk = (chunkKey: string) => {
+    const entry = terrain.chunks[chunkKey];
+    if (!entry) return;
+    const chunk = entry.chunk;
+    if (chunk.collider !== null) collidersChanged.current = true;
+    releaseGeometry(chunk.lod, chunk.plane.geometry);
+    terrain.group.remove(chunk.plane);
+    delete terrain.chunks[chunkKey];
+  };
 
   useEffect(() => {
     if (!terrain_loaded) {
@@ -332,11 +347,9 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
    *  are built, then hide+destroy the old chunk in the same frame. */
   const ProcessSwaps = (desiredChunks: { [key: string]: { position: number[]; lod: LODLevel } }) => {
-    // Mark chunks still pending build (queued or actively building)
-    for (let i = 0; i < terrain.queued_to_build.length; i++) {
-      (terrain.queued_to_build[i] as any).__pending = true;
-    }
-    if (terrain.active_chunk) (terrain.active_chunk as any).__pending = true;
+    // Collect chunks still pending build (queued or actively building)
+    const pending = new Set<Chunk>(terrain.queued_to_build);
+    if (terrain.active_chunk) pending.add(terrain.active_chunk);
 
     // Pass 1: determine which old chunks have ALL their replacements built
     const swappable: { [key: string]: boolean } = {};
@@ -362,7 +375,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
         if (otherKey === oldKey) continue;
         const other = terrain.chunks[otherKey].chunk;
         if (!other.plane.visible && chunksOverlap(oldChunk, other)) {
-          if ((other as any).__pending) {
+          if (pending.has(other)) {
             allReady = false;
             break;
           }
@@ -379,13 +392,17 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     // whose OTHER replacements aren't ready yet)
     for (const key in terrain.chunks) {
       const chunk = terrain.chunks[key].chunk;
-      if (chunk.plane.visible || (chunk as any).__pending) continue;
+      if (chunk.plane.visible || pending.has(chunk)) continue;
 
       let canShow = true;
       for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
         const oldKey = terrain.queued_to_destroy[i];
-        if (terrain.chunks[oldKey] && !swappable[oldKey] && !cancelled[oldKey] &&
-            chunksOverlap(chunk, terrain.chunks[oldKey].chunk)) {
+        if (
+          terrain.chunks[oldKey] &&
+          !swappable[oldKey] &&
+          !cancelled[oldKey] &&
+          chunksOverlap(chunk, terrain.chunks[oldKey].chunk)
+        ) {
           canShow = false;
           break;
         }
@@ -398,24 +415,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     // Pass 3: destroy swappable old chunks
     for (const oldKey in swappable) {
-      if (terrain.chunks[oldKey]) {
-        const oldChunk = terrain.chunks[oldKey].chunk;
-        releaseGeometry(oldChunk.lod, oldChunk.plane.geometry);
-        terrain.group.remove(oldChunk.plane);
-        delete terrain.chunks[oldKey];
-      }
+      destroyChunk(oldKey);
     }
 
     // Clean processed/cancelled entries from the destroy queue
-    terrain.queued_to_destroy = terrain.queued_to_destroy.filter(
-      (k) => !swappable[k] && !cancelled[k]
-    );
-
-    // Clean up __pending markers
-    for (let i = 0; i < terrain.queued_to_build.length; i++) {
-      delete (terrain.queued_to_build[i] as any).__pending;
-    }
-    if (terrain.active_chunk) delete (terrain.active_chunk as any).__pending;
+    terrain.queued_to_destroy = terrain.queued_to_destroy.filter((k) => !swappable[k] && !cancelled[k]);
   };
 
   const UpdateTerrain = async (material: THREE.Material) => {
@@ -432,14 +436,13 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       const gridZ = Math.round(ac.offset.y / ac.lod.chunkSize);
       const acKey = `${ac.lod.level}/${gridX}/${gridZ}`;
       if (!desiredChunks[acKey]) {
-        releaseGeometry(ac.lod, ac.plane.geometry);
-        terrain.group.remove(ac.plane);
-        delete terrain.chunks[acKey];
+        destroyChunk(acKey);
         terrain.active_chunk = null;
       }
     }
 
     // ── 3. Prune stale chunks ────────────────────────────────────────────
+    const toPrune: string[] = [];
     for (const chunkKey in terrain.chunks) {
       if (desiredChunks[chunkKey]) continue;
       const chunk = terrain.chunks[chunkKey].chunk;
@@ -463,11 +466,12 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
           }
         }
         if (!neededAsCover) {
-          releaseGeometry(chunk.lod, chunk.plane.geometry);
-          terrain.group.remove(chunk.plane);
-          delete terrain.chunks[chunkKey];
+          toPrune.push(chunkKey);
         }
       }
+    }
+    for (const key of toPrune) {
+      destroyChunk(key);
     }
 
     // ── 4. Add new desired chunks ────────────────────────────────────────
@@ -513,23 +517,23 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
+    // Filter out chunks that have been pruned, sort by priority (once per frame)
+    terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
+      const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
+      const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
+      const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
+      return key in terrain.chunks;
+    });
+
+    terrain.queued_to_build.sort((a, b) => {
+      if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
+      const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
+      const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+      return distB - distA;
+    });
+
     // Start new chunks within vertex budget
     while (budget > 0 && !terrain.active_chunk && terrain.queued_to_build.length > 0) {
-      // Filter out chunks that have been pruned, sort by priority
-      terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
-        const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
-        const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
-        const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
-        return key in terrain.chunks;
-      });
-
-      terrain.queued_to_build.sort((a, b) => {
-        if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-        const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-        const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
-        return distB - distA;
-      });
-
       // Peek at the next chunk (last element after sort = highest priority)
       const nextChunk = terrain.queued_to_build[terrain.queued_to_build.length - 1];
       if (!nextChunk) break;
@@ -561,12 +565,23 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     // Signal whether high-res (LOD1/2) terrain is still pending
-    const hasHighLOD = terrain.queued_to_build.some((c) => c.lod.level <= 2)
-      || (terrain.active_chunk !== null && terrain.active_chunk.lod.level <= 2);
+    const hasHighLOD =
+      terrain.queued_to_build.some((c) => c.lod.level <= 2) ||
+      (terrain.active_chunk !== null && terrain.active_chunk.lod.level <= 2);
     terrainHighLODPending.current = hasHighLOD;
 
-    if (remainingChunks === null) setTotalChunks(terrain.queued_to_build.length);
-    setRemainingChunks(terrain.queued_to_build.length);
+    const newRemaining = terrain.queued_to_build.length;
+    if (newRemaining !== lastRemainingRef.current) {
+      lastRemainingRef.current = newRemaining;
+      if (remainingChunks === null) setTotalChunks(newRemaining);
+      setRemainingChunks(newRemaining);
+    }
+
+    // Single batched collider re-render per frame
+    if (collidersChanged.current) {
+      collidersChanged.current = false;
+      setColliderVersion((v) => v + 1);
+    }
   };
 
   const QueueChunk = (offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
@@ -613,32 +628,51 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const workerResult = await buildChunkInWorker(vertX, vertY, offset.x, offset.y);
     const { heights, biomeIds, distBiome, distRegion, distRoad } = workerResult;
 
-    // Build attribute buffers (only the 4 attributes the shader actually uses)
+    // Reuse attribute arrays from pooled geometry when available, else allocate
     const totalVerts = pos.count;
-    const attrBiomeId = new Float32Array(totalVerts);
-    const attrDistBiome = new Float32Array(totalVerts);
-    const attrDistRegion = new Float32Array(totalVerts);
-    const attrDistRoad = new Float32Array(totalVerts);
+    const geom = chunk.plane.geometry;
+    const ensureAttr = (name: string): Float32Array => {
+      const existing = geom.getAttribute(name) as THREE.BufferAttribute | undefined;
+      if (existing && existing.count === totalVerts) return existing.array as Float32Array;
+      const arr = new Float32Array(totalVerts);
+      geom.setAttribute(name, new THREE.BufferAttribute(arr, 1));
+      return arr;
+    };
+    const attrBiomeId = ensureAttr("biomeId");
+    const attrDistBiome = ensureAttr("distanceToBiomeBoundaryCenter");
+    const attrDistRegion = ensureAttr("distanceToRegionBoundaryCenter");
+    const attrDistRoad = ensureAttr("distanceToRoadCenter");
 
+    // Write main grid vertices + attributes via direct array access
     for (let i = 0; i < mainVertCount; i++) {
-      pos.setXYZ(i, vertX[i], vertY[i], heights[i]);
+      const i3 = i * 3;
+      posArray[i3] = vertX[i];
+      posArray[i3 + 1] = vertY[i];
+      posArray[i3 + 2] = heights[i];
       attrBiomeId[i] = biomeIds[i];
       attrDistBiome[i] = distBiome[i];
       attrDistRegion[i] = distRegion[i];
       attrDistRoad[i] = distRoad[i];
     }
 
-    // Update skirt vertices: copy from corresponding main edge vertices
+    // Update skirt vertices via direct array access
     const skirtTopStart = mainVertCount;
     const skirtBotStart = mainVertCount + perimCount;
     for (let i = 0; i < perimCount; i++) {
       const srcIdx = perimeterIndices[i];
-      const sx = pos.getX(srcIdx);
-      const sy = pos.getY(srcIdx);
-      const sh = pos.getZ(srcIdx);
+      const src3 = srcIdx * 3;
+      const sx = posArray[src3];
+      const sy = posArray[src3 + 1];
+      const sh = posArray[src3 + 2];
 
-      pos.setXYZ(skirtTopStart + i, sx, sy, sh);
-      pos.setXYZ(skirtBotStart + i, sx, sy, sh - SKIRT_DEPTH);
+      const top3 = (skirtTopStart + i) * 3;
+      posArray[top3] = sx;
+      posArray[top3 + 1] = sy;
+      posArray[top3 + 2] = sh;
+      const bot3 = (skirtBotStart + i) * 3;
+      posArray[bot3] = sx;
+      posArray[bot3 + 1] = sy;
+      posArray[bot3 + 2] = sh - SKIRT_DEPTH;
 
       attrBiomeId[skirtTopStart + i] = attrBiomeId[srcIdx];
       attrBiomeId[skirtBotStart + i] = attrBiomeId[srcIdx];
@@ -650,10 +684,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       attrDistRoad[skirtBotStart + i] = attrDistRoad[srcIdx];
     }
 
-    chunk.plane.geometry.setAttribute("biomeId", new THREE.BufferAttribute(attrBiomeId, 1));
-    chunk.plane.geometry.setAttribute("distanceToBiomeBoundaryCenter", new THREE.BufferAttribute(attrDistBiome, 1));
-    chunk.plane.geometry.setAttribute("distanceToRegionBoundaryCenter", new THREE.BufferAttribute(attrDistRegion, 1));
-    chunk.plane.geometry.setAttribute("distanceToRoadCenter", new THREE.BufferAttribute(attrDistRoad, 1));
+    // Mark reused attributes for GPU upload
+    (geom.getAttribute("biomeId") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("distanceToBiomeBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("distanceToRegionBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("distanceToRoadCenter") as THREE.BufferAttribute).needsUpdate = true;
 
     // Apply material and update geometry immediately
     chunk.plane.material = material;
@@ -663,7 +698,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     if (chunk.lod.hasCollider) {
       GenerateColliders(chunk, offset);
-      setColliderVersion((v) => v + 1);
+      collidersChanged.current = true;
     }
 
     yield;
@@ -687,7 +722,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
-    const chunkKey = `${offset.x / cs}/${offset.y / cs}`;
+    const chunkKey = `${chunk.lod.level}/${offset.x / cs}/${offset.y / cs}`;
     chunk.collider = {
       chunkKey,
       heightfield,
