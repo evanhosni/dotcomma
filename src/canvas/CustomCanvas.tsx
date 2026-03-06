@@ -1,7 +1,7 @@
 import { Physics } from "@react-three/cannon";
-import { Stats } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
+import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
 import { Terrain } from "../world/terrain/Terrain";
@@ -32,7 +32,7 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
 
   return (
     <>
-      <Stats />
+      <Overlay dimension={dimension} />
       {/* <PostProcessing /> */}
       <Physics {...(mergedPhysicsProps as any)}>
         {/* <Debug color="red"> */}
