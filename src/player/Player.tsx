@@ -4,9 +4,8 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../context/GameContext";
+import { useUrlParameters } from "../context/UrlParametersContext";
 import { useInput } from "./useInput";
-
-const dev_mode_enabled = new URLSearchParams(window.location.search).get("dev_mode") === "true";
 
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
 const FALL_RESET_Y = -500;
@@ -43,6 +42,7 @@ export const Player = () => {
   const { forward, backward, left, right, sprint, jump, control } = useInput();
   const { camera } = useThree();
   const { terrain_loaded } = useGameContext();
+  const { params } = useUrlParameters();
 
   const velocity = useRef([0, 0, 0]);
   const position = useRef([...SPAWN_POSITION] as [number, number, number]);
@@ -106,7 +106,7 @@ export const Player = () => {
     if (right) _moveVec.sub(_side);
 
     // Hold player in place until terrain colliders are loaded
-    if (!terrain_loaded && !dev_mode_enabled) {
+    if (!terrain_loaded && !params.dev) {
       api.velocity.set(0, 0, 0);
       api.position.set(...SPAWN_POSITION);
       const [x, y, z] = SPAWN_POSITION;
@@ -116,7 +116,7 @@ export const Player = () => {
       return;
     }
 
-    if (dev_mode_enabled) {
+    if (params.dev) {
       // --- DEV MODE ---
       const hSpeed = sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
       const vSpeed = sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;
