@@ -6,9 +6,9 @@ export const BeebleDescriptor: SpawnDescriptor = {
   component: Beeble,
   model: "/models/beeble.glb",
   footprint: 5,
-  density: 40,
+  density: 200,
   clustering: 0,
-  renderDistance: 500,
+  renderDistance: 200,
   frustumPadding: 3,
   priority: 80,
 };
