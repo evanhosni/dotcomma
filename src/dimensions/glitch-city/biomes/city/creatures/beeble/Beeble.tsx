@@ -20,7 +20,7 @@ export const Beeble = (props: SpawnedObjectProps) => {
   return (
     <Debug>
       <group ref={ref as any}>
-        <GameObject model="/models/beeble.glb" positionRef={positionRef} {...props} scale={[10, 10, 10]} />
+        <GameObject model="/models/beeble.glb" positionRef={positionRef} {...props} scale={[1.2, 1.2, 1.2]} />
       </group>
     </Debug>
   );
