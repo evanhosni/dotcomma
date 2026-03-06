@@ -7,16 +7,29 @@ enum KeyAction {
   KeyD = "right",
   ShiftLeft = "sprint",
   Space = "jump",
+  ControlLeft = "control",
+  ControlRight = "control",
 }
 
-export const useInput = () => {
-  const [input, setInput] = useState({
+export interface InputState {
+  forward: boolean;
+  backward: boolean;
+  left: boolean;
+  right: boolean;
+  sprint: boolean;
+  jump: boolean;
+  control: boolean;
+}
+
+export const useInput = (): InputState => {
+  const [input, setInput] = useState<InputState>({
     forward: false,
     backward: false,
     left: false,
     right: false,
     sprint: false,
     jump: false,
+    control: false,
   });
 
   const findKey = (key: string): KeyAction | undefined => {
