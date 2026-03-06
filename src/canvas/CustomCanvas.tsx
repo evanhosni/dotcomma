@@ -14,10 +14,10 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
 
   // Default physics properties
   const defaultPhysicsProps = {
-    gravity: [0, -90.81, 0],
+    gravity: [0, -100, 0],
     defaultContactMaterial: {
-      friction: 0.5,
-      restitution: 0.7,
+      friction: 0,
+      restitution: 0,
       contactEquationStiffness: 1e6,
       contactEquationRelaxation: 3,
     },
@@ -35,12 +35,14 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
       <Stats />
       {/* <PostProcessing /> */}
       <Physics {...(mergedPhysicsProps as any)}>
+        {/* <Debug color="red"> */}
         {children}
         <Terrain dimension={dimension} />
         <ObjectPool dimension={dimension} />
         {/* {(terrain_loaded || progress >= OBJECT_LOAD_THRESHOLD) && <ObjectPool dimension={dimension} />} */}
         {/* //TODO either dont allow player to move until terrain_loaded or remove this check altogether. progress can go down again so dont make that the only check */}
         <Player />
+        {/* </Debug> */}
       </Physics>
     </>
   );

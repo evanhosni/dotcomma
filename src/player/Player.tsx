@@ -1,142 +1,185 @@
 import { useCylinder } from "@react-three/cannon";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { getVertexData } from "../dimensions/glitch-city/getVertexData";
+import { useGameContext } from "../context/GameContext";
 import { useInput } from "./useInput";
 
-const debug_sprint = true;
-const debug_jump = true;
-const debug_console_log = false;
+const dev_mode_enabled = new URLSearchParams(window.location.search).get("dev_mode") === "true";
+
+const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
+const FALL_RESET_Y = -500;
+
+// Normal mode speeds
+const WALK_SPEED = 15;
+const SPRINT_SPEED = 30;
+const JUMP_IMPULSE = 40;
+const GROUND_THRESHOLD = 0.3;
+
+// Dev mode speeds
+const DEV_SPEED = 60;
+const DEV_SPRINT_SPEED = 300;
+const DEV_VERTICAL_SPEED = 60;
+const DEV_VERTICAL_SPRINT_SPEED = 300;
+
+// Player dimensions
+const PLAYER_HEIGHT = 2;
+const PLAYER_RADIUS = 0.5;
+
+// Camera
+const CAMERA_FAR = 7200;
+const CAMERA_LERP = 0.3;
+
+// Reusable vectors (avoid per-frame allocations)
+const _direction = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _moveVec = new THREE.Vector3();
+const _targetVel = new THREE.Vector3();
+const _camTarget = new THREE.Vector3();
 
 export const Player = () => {
-  const { forward, backward, left, right, sprint, jump } = useInput();
+  const { forward, backward, left, right, sprint, jump, control } = useInput();
   const { camera } = useThree();
-  const [distanceToGround, setDistanceToGround] = useState(0);
-  const [canJump, setCanJump] = useState(true);
-  const frameCount = useRef(0);
+  const { terrain_loaded } = useGameContext();
 
-  const vertexData = async (x: number, y: number) => {
-    return await getVertexData(x, y);
-  };
+  const velocity = useRef([0, 0, 0]);
+  const position = useRef([...SPAWN_POSITION] as [number, number, number]);
+  const grounded = useRef(false);
+  const cameraReady = useRef(false);
 
-  const walkSpeed = 15;
-  const sprintSpeed = debug_sprint ? 250 : 30;
-  const playerHeight = 2;
-  const playerRadius = 0.5;
-  const jumpHeight = 4;
-  const gravity = -9.81;
-
-  camera.far = 7200;
-  camera.updateProjectionMatrix();
-
+  // Set camera far plane once
   useEffect(() => {
-    if (distanceToGround < 0.5 && !jump) {
-      setCanJump(true);
-    }
-    if (distanceToGround > jumpHeight || (distanceToGround > 0.5 && !jump)) {
-      setCanJump(false);
-    }
-  }, [distanceToGround, jumpHeight, jump]);
+    camera.far = CAMERA_FAR;
+    camera.updateProjectionMatrix();
+  }, [camera]);
 
   const [ref, api] = useCylinder(() => ({
     mass: 1,
     type: "Dynamic",
-    position: [0, 1, 0],
-    args: [playerRadius, playerRadius, playerHeight, 8],
+    position: [...SPAWN_POSITION],
+    args: [PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT, 8],
     material: {
-      friction: 0.1,
+      friction: 0,
       restitution: 0,
     },
-    linearDamping: 0.75,
-    angularDamping: 0.99,
+    linearDamping: 0.1,
+    angularDamping: 1,
     fixedRotation: true,
-    // Physics settings optimized for performance
     allowSleep: false,
-    sleepSpeedLimit: 1,
-    sleepTimeLimit: 0.1,
     collisionFilterGroup: 1,
     collisionFilterMask: 1,
     linearFactor: [1, 1, 1],
     angularFactor: [0, 0, 0],
-    // Important: These settings help prevent tunneling
-    contactEquationRelaxation: 4,
     contactEquationStiffness: 1e6,
+    contactEquationRelaxation: 4,
+    ccdSpeedThreshold: 1,
+    ccdIterations: 10,
   }));
 
-  const velocity = useRef([0, 0, 0]);
+  // Subscribe to physics state
   useEffect(() => {
-    api.velocity.subscribe((v) => (velocity.current = v));
+    const unsubVel = api.velocity.subscribe((v) => (velocity.current = v));
+    const unsubPos = api.position.subscribe((p) => (position.current = p));
+    return () => {
+      unsubVel();
+      unsubPos();
+    };
   }, [api]);
 
-  const positionRef = useRef([0, 1, 0]);
-  useEffect(() => {
-    const unsubscribe = api.position.subscribe((position) => {
-      positionRef.current = position;
-    });
-    return unsubscribe;
-  }, [api.position]);
+  useFrame((_, delta) => {
+    // Clamp delta to prevent huge jumps after tab-switch
+    const dt = Math.min(delta, 0.1);
 
-  useFrame(async () => {
-    frameCount.current++;
+    // Get camera forward (horizontal only) and side vectors
+    camera.getWorldDirection(_direction);
+    _direction.y = 0;
+    _direction.normalize();
+    _side.crossVectors(_up, _direction).normalize();
 
-    const direction = new THREE.Vector3();
-    const sideDirection = new THREE.Vector3();
-    const upVector = new THREE.Vector3(0, 1, 0);
+    // Build horizontal movement vector
+    _moveVec.set(0, 0, 0);
+    if (forward) _moveVec.add(_direction);
+    if (backward) _moveVec.sub(_direction);
+    if (left) _moveVec.add(_side);
+    if (right) _moveVec.sub(_side);
 
-    camera.getWorldDirection(direction);
-    direction.y = 0;
-    direction.normalize();
-    sideDirection.crossVectors(upVector, direction).normalize();
-
-    const moveVelocity = new THREE.Vector3(0, 0, 0);
-
-    if (forward) moveVelocity.add(direction);
-    if (backward) moveVelocity.sub(direction);
-    if (left) moveVelocity.add(sideDirection);
-    if (right) moveVelocity.sub(sideDirection);
-
-    if (moveVelocity.length() > 0) {
-      moveVelocity.normalize();
-      const currentSpeed = sprint ? sprintSpeed : walkSpeed;
-
-      // Apply smooth acceleration
-      const targetVelocity = moveVelocity.multiplyScalar(currentSpeed);
-      const currentVelocity = new THREE.Vector3(velocity.current[0], 0, velocity.current[2]);
-      currentVelocity.lerp(targetVelocity, 0.2);
-      moveVelocity.copy(currentVelocity);
+    // Hold player in place until terrain colliders are loaded
+    if (!terrain_loaded && !dev_mode_enabled) {
+      api.velocity.set(0, 0, 0);
+      api.position.set(...SPAWN_POSITION);
+      const [x, y, z] = SPAWN_POSITION;
+      _camTarget.set(x, y + PLAYER_HEIGHT * 0.5, z);
+      camera.position.copy(_camTarget);
+      cameraReady.current = false;
+      return;
     }
 
-    const terrainHeight = 10;
-    setDistanceToGround(Math.abs(positionRef.current[1] - 0.5 * playerHeight - terrainHeight));
+    if (dev_mode_enabled) {
+      // --- DEV MODE ---
+      const hSpeed = sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
+      const vSpeed = sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;
 
-    let jumpVelocity = velocity.current[1];
+      // Horizontal
+      if (_moveVec.lengthSq() > 0) {
+        _moveVec.normalize().multiplyScalar(hSpeed);
+      }
 
-    if (jump && canJump) {
-      jumpVelocity = Math.sqrt(-2 * jumpHeight * gravity);
-      setCanJump(false);
+      // Vertical
+      let vy = 0;
+      if (jump) vy += vSpeed;
+      if (control) vy -= vSpeed;
+
+      // In dev mode, directly set position for zero-gravity feel
+      const [px, py, pz] = position.current;
+      api.position.set(px + _moveVec.x * dt, py + vy * dt, pz + _moveVec.z * dt);
+      api.velocity.set(0, 0, 0);
+    } else {
+      // --- NORMAL MODE ---
+      const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
+
+      if (_moveVec.lengthSq() > 0) {
+        _moveVec.normalize().multiplyScalar(speed);
+      }
+
+      // Smooth horizontal velocity
+      _targetVel.set(_moveVec.x, velocity.current[1], _moveVec.z);
+      const lerpFactor = grounded.current ? 0.25 : 0.08;
+      const vx = THREE.MathUtils.lerp(velocity.current[0], _targetVel.x, lerpFactor);
+      const vz = THREE.MathUtils.lerp(velocity.current[2], _targetVel.z, lerpFactor);
+
+      // Velocity-based ground detection: grounded when vertical velocity is near zero
+      grounded.current = Math.abs(velocity.current[1]) < GROUND_THRESHOLD;
+
+      // Jump
+      let vy = velocity.current[1];
+      if (jump && grounded.current) {
+        vy = JUMP_IMPULSE;
+        grounded.current = false;
+      }
+
+      api.velocity.set(vx, vy, vz);
     }
 
-    const newVelocity = new THREE.Vector3(moveVelocity.x, jumpVelocity, moveVelocity.z);
-
-    // Apply velocity changes less frequently for better performance
-    if (frameCount.current % 5 === 0) {
-      api.velocity.set(newVelocity.x, newVelocity.y, newVelocity.z);
+    // Safety net: reset if player falls through the world
+    if (position.current[1] < FALL_RESET_Y) {
+      api.position.set(...SPAWN_POSITION);
+      api.velocity.set(0, 0, 0);
+      grounded.current = false;
     }
 
-    const [x, y, z] = positionRef.current;
+    // Update camera position
+    const [x, y, z] = position.current;
+    _camTarget.set(x, y + PLAYER_HEIGHT * 0.5, z);
 
-    if (jump && debug_jump) {
-      api.position.set(x, terrainHeight + playerHeight + 420, z);
+    if (!cameraReady.current) {
+      // Snap camera on first frame so there's no lerp-in from origin
+      camera.position.copy(_camTarget);
+      cameraReady.current = true;
+    } else {
+      camera.position.lerp(_camTarget, CAMERA_LERP);
     }
-    // api.position.set(x, terrainHeight + playerHeight + 420, z);
-
-    if (y < terrainHeight + playerHeight + 10) {
-      api.position.set(x, terrainHeight + playerHeight + 10, z);
-    }
-
-    camera.position.lerp(new THREE.Vector3(x, y + playerHeight, z), 0.1);
   });
 
   return (

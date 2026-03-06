@@ -305,6 +305,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+  const [colliderVersion, setColliderVersion] = useState(0);
   const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending, spawnPending } = useGameContext();
 
   scene.add(terrain.group);
@@ -662,6 +663,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     if (chunk.lod.hasCollider) {
       GenerateColliders(chunk, offset);
+      setColliderVersion((v) => v + 1);
     }
 
     yield;
@@ -670,30 +672,24 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
     const segments = chunk.lod.segments;
     const cs = chunk.lod.chunkSize;
-    const linearArray = chunk.plane.geometry.attributes.position.array;
+    const posArray = chunk.plane.geometry.attributes.position.array as Float32Array;
     const n = segments + 1;
-    const mainVertCount = n * n;
-    const heightfield = Array.from({ length: n }, () => Array(n).fill(0));
 
-    // Only iterate main grid vertices, not skirt vertices
-    for (let i = 0; i < mainVertCount * 3; i += 3) {
-      const x = linearArray[i];
-      const z = linearArray[i + 1];
-      const height = linearArray[i + 2];
+    // Cannon heightfield: data[xi][yi] in local XY, height along local Z.
+    // With Rx(-π/2), local Z maps to world Y (height), local Y maps to world -Z.
+    // So data[ix][segments - iz] = mesh height at grid (ix, iz).
+    const heightfield: number[][] = Array.from({ length: n }, () => new Array(n));
 
-      const xIndex = Math.round((x - -(cs / 2)) / (cs / segments));
-      const zIndex = Math.round((z - -(cs / 2)) / (cs / segments));
-
-      const transformedXIndex = segments - xIndex;
-
-      if (zIndex >= 0 && zIndex < n && transformedXIndex >= 0 && transformedXIndex < n) {
-        heightfield[zIndex][transformedXIndex] = height;
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const height = posArray[(iz * n + ix) * 3 + 2];
+        heightfield[ix][segments - iz] = height;
       }
     }
 
     const chunkKey = `${offset.x / cs}/${offset.y / cs}`;
     chunk.collider = {
-      chunkKey: chunkKey,
+      chunkKey,
       heightfield,
       position: offset.toArray(),
       elementSize: cs / segments,
@@ -714,10 +710,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 };
 
 export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize, chunkSize }) => {
+  const half = chunkSize / 2;
   const [ref] = useHeightfield(() => ({
     args: [heightfield, { elementSize }],
-    position: [position[0], 0, position[1]],
-    rotation: [-Math.PI / 2, 0, Math.PI / 2],
+    position: [position[0] - half, 0, position[1] + half],
+    rotation: [-Math.PI / 2, 0, 0],
   }));
 
   return <mesh ref={ref as any} />;
