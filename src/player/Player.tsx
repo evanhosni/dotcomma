@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../context/GameContext";
 import { useUrlParameters } from "../context/UrlParametersContext";
+import { Dimension } from "../world/types";
 import { useInput } from "./useInput";
 
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
@@ -38,7 +39,7 @@ const _moveVec = new THREE.Vector3();
 const _targetVel = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 
-export const Player = () => {
+export const Player = ({ dimension }: { dimension?: Dimension }) => {
   const { forward, backward, left, right, sprint, jump, control } = useInput();
   const { camera } = useThree();
   const { terrain_loaded } = useGameContext();
@@ -48,6 +49,7 @@ export const Player = () => {
   const position = useRef([...SPAWN_POSITION] as [number, number, number]);
   const grounded = useRef(false);
   const cameraReady = useRef(false);
+  const respawning = useRef(false);
 
   // Set camera far plane once
   useEffect(() => {
@@ -87,6 +89,11 @@ export const Player = () => {
       unsubPos();
     };
   }, [api]);
+
+  // Disable gravity in dev mode by zeroing mass
+  useEffect(() => {
+    api.mass.set(params.dev ? 0 : 1);
+  }, [params.dev, api]);
 
   useFrame((_, delta) => {
     // Clamp delta to prevent huge jumps after tab-switch
@@ -162,11 +169,23 @@ export const Player = () => {
       api.velocity.set(vx, vy, vz);
     }
 
-    // Safety net: reset if player falls through the world
-    if (position.current[1] < FALL_RESET_Y) {
-      api.position.set(...SPAWN_POSITION);
+    // Safety net: if player falls through terrain, respawn at ground height + 10
+    if (position.current[1] < FALL_RESET_Y && !respawning.current) {
+      respawning.current = true;
+      const [px, , pz] = position.current;
       api.velocity.set(0, 0, 0);
-      grounded.current = false;
+      if (dimension) {
+        dimension.getVertexData(px, pz, true).then((vd) => {
+          api.position.set(px, vd.height + 10, pz);
+          api.velocity.set(0, 0, 0);
+          grounded.current = false;
+          respawning.current = false;
+        });
+      } else {
+        api.position.set(...SPAWN_POSITION);
+        grounded.current = false;
+        respawning.current = false;
+      }
     }
 
     // Update camera position

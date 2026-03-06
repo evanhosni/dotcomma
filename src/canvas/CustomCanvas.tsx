@@ -50,7 +50,7 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
             <ObjectPool dimension={dimension} />
           </>
         )}
-        <Player />
+        <Player dimension={dimension} />
       </Physics>
     </>
   );
