@@ -10,7 +10,7 @@ export const LOD4_CHUNK_SIZE = CHUNK_SIZE * 4; // 1680
 export const LOD5_CHUNK_SIZE = CHUNK_SIZE * 8; // 3360
 
 /** Mesh segment counts per LOD level (higher = more detail). */
-export const LOD1_SEGMENTS = 48;
+export const LOD1_SEGMENTS = 64;
 export const LOD2_SEGMENTS = 12;
 export const LOD3_SEGMENTS = 4;
 export const LOD4_SEGMENTS = 2;
