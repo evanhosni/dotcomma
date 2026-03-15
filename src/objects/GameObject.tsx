@@ -15,6 +15,7 @@ const DEFAULT_FRUSTUM_PADDING = 3;
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
+let frustumUpdatedAt = -1;
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
@@ -129,9 +130,10 @@ export const GameObject = ({
   const actionsRef = useRef<THREE.AnimationAction[]>([]);
   const scene = clonedModel.scene;
 
+  const groupRef = useRef<THREE.Group>(null);
+  const shouldRenderCollidersRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
-  const [shouldRender, setShouldRender] = useState<boolean>(false);
   const [shouldRenderColliders, setShouldRenderColliders] = useState<boolean>(false);
 
   useEffect(() => {
@@ -233,21 +235,24 @@ export const GameObject = ({
   }, []);
 
   // Handle animations and frustum culling
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = utils.getDistance2D(camera.position, objectPosition);
-
-    // Use the specific render distance for this object type
-    // const objectRenderDistance = render_distance;
 
     if (distance > renderDistance * DELETE_OBJECT_BUFFER) {
       onDestroy(id);
       return;
     }
 
-    // Update frustum for culling check
-    projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    frustum.setFromProjectionMatrix(projScreenMatrix);
+    // Update shared frustum once per frame (first GameObject instance wins)
+    if (state.clock.elapsedTime !== frustumUpdatedAt) {
+      frustumUpdatedAt = state.clock.elapsedTime;
+      projScreenMatrix.multiplyMatrices(
+        state.camera.projectionMatrix,
+        state.camera.matrixWorldInverse
+      );
+      frustum.setFromProjectionMatrix(projScreenMatrix);
+    }
 
     // Update bounding sphere position - using boundsRef instead of global bounds
     boundsRef.current.center.copy(objectPosition);
@@ -272,16 +277,17 @@ export const GameObject = ({
     const isVisible = frustum.intersectsSphere(boundsRef.current) || isCloseToCamera;
     boundsRef.current.radius = originalRadius; // Restore original radius
 
-    // Only update states when value changes to minimize renders
-    if (shouldRender !== isVisible) {
-      setShouldRender(isVisible);
+    // Set visibility directly on the group ref — no React re-render
+    if (groupRef.current) {
+      groupRef.current.visible = isVisible;
     }
 
     // Also scale collider render distance based on object size
     const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2);
 
     const shouldShowColliders = distance < colliderRenderDistance && isVisible;
-    if (shouldRenderColliders !== shouldShowColliders) {
+    if (shouldRenderCollidersRef.current !== shouldShowColliders) {
+      shouldRenderCollidersRef.current = shouldShowColliders;
       setShouldRenderColliders(shouldShowColliders);
     }
 
@@ -311,14 +317,11 @@ export const GameObject = ({
     };
   }, [gltf, scale, rotation]);
 
-  if (!shouldRender) {
-    //TODO might run smoother without
-    return null;
-  }
-
   return (
     <Suspense fallback={null}>
-      <primitive object={scene} scale={scale} rotation={rotation} />
+      <group ref={groupRef} visible={false}>
+        <primitive object={scene} scale={scale} rotation={rotation} />
+      </group>
       {shouldRenderColliders && colliders && (
         <>
           {colliders.capsuleColliders.map((collider, index) => (

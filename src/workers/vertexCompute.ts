@@ -322,7 +322,7 @@ const getWalls = (
 };
 
 const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
-  let minDist = Infinity;
+  let minDistSq = Infinity;
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
     const dx = w.ex - w.sx;
@@ -333,10 +333,11 @@ const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
     else if (t > 1) t = 1;
     const cx = w.sx + t * dx;
     const cy = w.sy + t * dy;
-    const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-    if (dist < minDist) minDist = dist;
+    const ddx = px - cx, ddy = py - cy;
+    const distSq = ddx * ddx + ddy * ddy;
+    if (distSq < minDistSq) minDistSq = distSq;
   }
-  return minDist;
+  return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -391,8 +392,7 @@ const getCityGrid = (
 
         const isEdge = distanceToWall(px, py, walls) < diagThreshold;
         // Match _city.ts: JSON.stringify of {x, y} point for seed
-        const pointStr = JSON.stringify({ x: px, y: py });
-        const blockIndex = isEdge ? -1 : Math.floor(seedRand(pointStr) * blockCount);
+        const blockIndex = isEdge ? -1 : Math.floor(seedRand(`${px},${py}`) * blockCount);
 
         grid.push({
           pointX: px,
@@ -434,9 +434,25 @@ const getCityDistanceToRoad = (
   citySeed: string
 ): number => {
   const grid = getCityGrid(citySeed, vx, vy, cityGridSize, blockCount, walls);
-  const current = grid.find((c) => c.isCurrent)!;
 
-  if (current.isEdge) return 0;
+  let current: CityCell | undefined;
+  let nBlock: number | undefined, eBlock: number | undefined, sBlock: number | undefined,
+      wBlock: number | undefined, neBlock: number | undefined, seBlock: number | undefined,
+      swBlock: number | undefined, nwBlock: number | undefined;
+
+  for (let i = 0; i < grid.length; i++) {
+    const c = grid[i];
+    if (c.isCurrent)     current = c;
+    else if (c.isNorth)  nBlock  = c.blockIndex;
+    else if (c.isEast)   eBlock  = c.blockIndex;
+    else if (c.isSouth)  sBlock  = c.blockIndex;
+    else if (c.isWest)   wBlock  = c.blockIndex;
+    else if (c.isNE)     neBlock = c.blockIndex;
+    else if (c.isSE)     seBlock = c.blockIndex;
+    else if (c.isSW)     swBlock = c.blockIndex;
+    else if (c.isNW)     nwBlock = c.blockIndex;
+  }
+  if (!current || current.isEdge) return 0;
 
   const x = Math.floor(vx / cityGridSize);
   const y = Math.floor(vy / cityGridSize);
@@ -450,17 +466,6 @@ const getCityDistanceToRoad = (
   const toSE = Math.max(toS, toE);
   const toSW = Math.max(toS, toW);
   const toNW = Math.max(toN, toW);
-
-  // Check which neighbors have different blocks (= road between them)
-  const findNeighbor = (pred: (c: CityCell) => boolean) => grid.find(pred);
-  const nBlock = findNeighbor((c) => c.isNorth)?.blockIndex;
-  const eBlock = findNeighbor((c) => c.isEast)?.blockIndex;
-  const sBlock = findNeighbor((c) => c.isSouth)?.blockIndex;
-  const wBlock = findNeighbor((c) => c.isWest)?.blockIndex;
-  const neBlock = findNeighbor((c) => c.isNE)?.blockIndex;
-  const seBlock = findNeighbor((c) => c.isSE)?.blockIndex;
-  const swBlock = findNeighbor((c) => c.isSW)?.blockIndex;
-  const nwBlock = findNeighbor((c) => c.isNW)?.blockIndex;
 
   const bi = current.blockIndex;
   return Math.min(
@@ -500,7 +505,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     cfg.regions,
     cfg.regionGridSize,
     (point: Vec2, regions: SerializedRegion[]) => {
-      const uuid = seedRand(JSON.stringify(point));
+      const uuid = seedRand(`${point.x},${point.y}`);
       return regions[Math.floor(uuid * regions.length)];
     }
   );
@@ -514,7 +519,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     (point: Vec2, rGrid: VGrid[]) => {
       const nearest = getNearestEntry(point, rGrid);
       const region: SerializedRegion = nearest.element;
-      const uuid = seedRand(JSON.stringify(point));
+      const uuid = seedRand(`${point.x},${point.y}`);
       return region.biomes[Math.floor(uuid * region.biomes.length)];
     }
   );

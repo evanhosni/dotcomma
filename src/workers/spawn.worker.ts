@@ -112,6 +112,7 @@ class SpatialHash {
 let initialized = false;
 let spatialHash: SpatialHash | null = null;
 const chunkCache = new Map<string, SpawnPoint[]>();
+const hashPopulatedChunks = new Set<string>();
 
 // ── Spawn Generation ──
 
@@ -121,8 +122,11 @@ const generateForChunk = (
 ): SpawnPoint[] => {
   if (chunkCache.has(chunkKey)) {
     const cached = chunkCache.get(chunkKey)!;
-    // Re-insert into spatial hash in case cells were recreated
-    for (const p of cached) spatialHash!.insert(p);
+    // Re-insert into spatial hash only if not already populated
+    if (!hashPopulatedChunks.has(chunkKey)) {
+      for (const p of cached) spatialHash!.insert(p);
+      hashPopulatedChunks.add(chunkKey);
+    }
     return cached;
   }
 
@@ -218,6 +222,7 @@ const generateForChunk = (
   }
 
   chunkCache.set(chunkKey, chunkPoints);
+  hashPopulatedChunks.add(chunkKey);
   return chunkPoints;
 };
 
@@ -272,6 +277,7 @@ self.onmessage = (e: MessageEvent) => {
 
   if (type === "UPDATE_FOOTPRINT") {
     spatialHash = new SpatialHash(e.data.maxFootprint);
+    hashPopulatedChunks.clear();
     return;
   }
 };
