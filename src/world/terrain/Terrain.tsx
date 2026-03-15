@@ -22,8 +22,10 @@ const terrain: TerrainProps = {
   chunks: {},
   active_chunk: null,
   queued_to_build: [],
-  queued_to_destroy: [],
+  queued_to_destroy: new Set<string>(),
 };
+
+let queueDirty = false;
 
 // Geometry pool keyed by LOD level — recycles BufferGeometry to avoid GC churn
 const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
@@ -94,14 +96,10 @@ const buildChunkInWorker = (
 }> => {
   return new Promise((resolve) => {
     pendingChunkResolve = resolve;
-    terrainWorker!.postMessage({
-      type: "BUILD_CHUNK",
-      id: 0,
-      vertexX,
-      vertexY,
-      offsetX,
-      offsetZ,
-    });
+    terrainWorker!.postMessage(
+      { type: "BUILD_CHUNK", id: 0, vertexX, vertexY, offsetX, offsetZ },
+      [vertexX.buffer, vertexY.buffer]
+    );
   });
 };
 
@@ -309,6 +307,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending, spawnPending } = useGameContext();
   const collidersChanged = React.useRef(false);
   const lastRemainingRef = React.useRef<number>(-1);
+  const isUpdatingTerrain = React.useRef(false);
 
   useEffect(() => {
     scene.add(terrain.group);
@@ -339,8 +338,11 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   }, []);
 
   useFrame(() => {
-    if (terrainMaterial) {
-      UpdateTerrain(terrainMaterial);
+    if (terrainMaterial && !isUpdatingTerrain.current) {
+      isUpdatingTerrain.current = true;
+      UpdateTerrain(terrainMaterial).finally(() => {
+        isUpdatingTerrain.current = false;
+      });
     }
   });
 
@@ -355,8 +357,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const swappable: { [key: string]: boolean } = {};
     const cancelled: { [key: string]: boolean } = {};
 
-    for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
-      const oldKey = terrain.queued_to_destroy[i];
+    for (const oldKey of terrain.queued_to_destroy) {
       if (!terrain.chunks[oldKey]) {
         cancelled[oldKey] = true;
         continue;
@@ -395,8 +396,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       if (chunk.plane.visible || pending.has(chunk)) continue;
 
       let canShow = true;
-      for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
-        const oldKey = terrain.queued_to_destroy[i];
+      for (const oldKey of terrain.queued_to_destroy) {
         if (
           terrain.chunks[oldKey] &&
           !swappable[oldKey] &&
@@ -419,7 +419,8 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     }
 
     // Clean processed/cancelled entries from the destroy queue
-    terrain.queued_to_destroy = terrain.queued_to_destroy.filter((k) => !swappable[k] && !cancelled[k]);
+    for (const k in swappable) terrain.queued_to_destroy.delete(k);
+    for (const k in cancelled) terrain.queued_to_destroy.delete(k);
   };
 
   const UpdateTerrain = async (material: THREE.Material) => {
@@ -449,16 +450,15 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
       if (chunk.plane.visible) {
         // Visible — queue for atomic swap via ProcessSwaps
-        if (terrain.queued_to_destroy.indexOf(chunkKey) === -1) {
-          terrain.queued_to_destroy.push(chunkKey);
+        if (!terrain.queued_to_destroy.has(chunkKey)) {
+          terrain.queued_to_destroy.add(chunkKey);
         }
       } else if (terrain.active_chunk !== chunk) {
         // Invisible and not actively building — safe to remove UNLESS
         // it overlaps a visible chunk queued for destruction (that chunk
         // still needs this as cover until a new replacement is ready)
         let neededAsCover = false;
-        for (let i = 0; i < terrain.queued_to_destroy.length; i++) {
-          const oldKey = terrain.queued_to_destroy[i];
+        for (const oldKey of terrain.queued_to_destroy) {
           const oldData = terrain.chunks[oldKey];
           if (oldData && oldData.chunk.plane.visible && chunksOverlap(chunk, oldData.chunk)) {
             neededAsCover = true;
@@ -517,20 +517,25 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
       }
     }
 
-    // Filter out chunks that have been pruned, sort by priority (once per frame)
+    // Filter out chunks that have been pruned, sort by priority (only when queue changed)
+    const beforeLen = terrain.queued_to_build.length;
     terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
       const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
       const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
       const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
       return key in terrain.chunks;
     });
+    if (terrain.queued_to_build.length !== beforeLen) queueDirty = true;
 
-    terrain.queued_to_build.sort((a, b) => {
-      if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-      const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-      const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
-      return distB - distA;
-    });
+    if (queueDirty) {
+      queueDirty = false;
+      terrain.queued_to_build.sort((a, b) => {
+        if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
+        const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
+        const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+        return distB - distA;
+      });
+    }
 
     // Start new chunks within vertex budget
     while (budget > 0 && !terrain.active_chunk && terrain.queued_to_build.length > 0) {
@@ -600,6 +605,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
 
     terrain.group.add(plane);
     terrain.queued_to_build.push(chunk);
+    queueDirty = true;
 
     return chunk;
   };
@@ -643,12 +649,10 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
     const attrDistRegion = ensureAttr("distanceToRegionBoundaryCenter");
     const attrDistRoad = ensureAttr("distanceToRoadCenter");
 
-    // Write main grid vertices + attributes via direct array access
+    // Write main grid heights + attributes via direct array access
+    // (X/Y positions remain from geometry creation; vertX/vertY were transferred to worker)
     for (let i = 0; i < mainVertCount; i++) {
-      const i3 = i * 3;
-      posArray[i3] = vertX[i];
-      posArray[i3 + 1] = vertY[i];
-      posArray[i3 + 2] = heights[i];
+      posArray[i * 3 + 2] = heights[i];
       attrBiomeId[i] = biomeIds[i];
       attrDistBiome[i] = distBiome[i];
       attrDistRegion[i] = distRegion[i];

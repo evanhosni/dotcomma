@@ -39,7 +39,7 @@ async function handleTask(task: MessageData) {
         cellArray: regions,
         gridSize: regionGridSize,
         gridFunction: (point: THREE.Vector2, regions: Region[]): Region => {
-          let uuid = _math.seedRand(JSON.stringify(point));
+          let uuid = _math.seedRand(`${point.x},${point.y}`);
           let region = regions[Math.floor(uuid * regions.length)];
           return region;
         },
@@ -53,7 +53,7 @@ async function handleTask(task: MessageData) {
         gridFunction: (point: THREE.Vector2, grid: VoronoiGrid[]): Biome => {
           const nearest = getNearestEntry(point, grid);
           const region: Region = nearest.element;
-          let uuid = _math.seedRand(JSON.stringify(point));
+          let uuid = _math.seedRand(`${point.x},${point.y}`);
           let biome = region.biomes[Math.floor(uuid * region.biomes.length)];
           return biome;
         },
@@ -65,7 +65,7 @@ async function handleTask(task: MessageData) {
         cellArray: biomes!,
         gridSize: gridSize,
         gridFunction: (point: THREE.Vector2, biomes: Biome[]): Biome => {
-          let uuid = _math.seedRand(JSON.stringify(point));
+          let uuid = _math.seedRand(`${point.x},${point.y}`);
           let biome = biomes[Math.floor(uuid * biomes.length)];
           return biome;
         },
@@ -364,7 +364,7 @@ async function handleTask(task: MessageData) {
 
   const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
     const px = currentVertex.x, py = currentVertex.y;
-    let minDist = Infinity;
+    let minDistSq = Infinity;
 
     for (let i = 0; i < walls.length; i++) {
       const wall = walls[i];
@@ -378,11 +378,12 @@ async function handleTask(task: MessageData) {
       if (t < 0) t = 0; else if (t > 1) t = 1;
 
       const cx = ax + t * dx, cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      if (dist < minDist) minDist = dist;
+      const ddx = px - cx, ddy = py - cy;
+      const distSq = ddx * ddx + ddy * ddy;
+      if (distSq < minDistSq) minDistSq = distSq;
     }
 
-    return minDist;
+    return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
   };
 
   if (type === VORONOI_FUNCTION.CREATE) {

@@ -145,7 +145,7 @@ export namespace voronoi {
   export const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
     const px = currentVertex.x,
       py = currentVertex.y;
-    let minDist = Infinity;
+    let minDistSq = Infinity;
 
     for (let i = 0; i < walls.length; i++) {
       const wall = walls[i];
@@ -163,10 +163,11 @@ export namespace voronoi {
 
       const cx = ax + t * dx,
         cy = ay + t * dy;
-      const dist = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      if (dist < minDist) minDist = dist;
+      const ddx = px - cx, ddy = py - cy;
+      const distSq = ddx * ddx + ddy * ddy;
+      if (distSq < minDistSq) minDistSq = distSq;
     }
 
-    return minDist;
+    return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
   };
 }

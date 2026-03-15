@@ -3,7 +3,7 @@ export interface TerrainProps {
   chunks: { [key: string]: { position: number[]; chunk: Chunk } };
   active_chunk: Chunk | null;
   queued_to_build: Chunk[];
-  queued_to_destroy: string[];
+  queued_to_destroy: Set<string>;
 }
 
 export interface Chunk {
