@@ -130,6 +130,19 @@ src/
 - `getDistanceToWall` uses inline segment-distance math (no THREE object allocations).
 - `BuildChunk` reads position buffers directly as Float32Array (no Vector3 per vertex).
 
+## UI / Overlay Styling
+
+All overlays, menus, and HUD elements should follow the established style set by the stats overlay (`Overlay.tsx`) and command palette (`CommandPalette.tsx`):
+
+- **Font**: `'Kode Mono', 'Courier New', Courier, monospace` — 12px, line-height 1.5
+- **Color scheme**: green-on-black terminal aesthetic — text `#0f0`, backgrounds `rgba(0,0,0,0.6)` to `rgba(0,0,0,0.85)`
+- **Containers**: `border-radius: 4px`, `padding: 8px 12px`, `pointer-events: none` for passive overlays
+- **Selection/hover highlights**: `rgba(0,255,0,0.15)` background
+- **Inputs**: transparent background, no border except `1px solid #0f0` bottom, inherit font
+- **Graphs/sub-elements**: `border-radius: 2px`, `rgba(0,0,0,0.4)` background
+- **Positioning**: `position: fixed`, use `z-index: 1000` for HUD overlays, `z-index: 9999` for modal overlays with backdrop
+- **Inline styles preferred** — overlays use JS style objects (not CSS modules) since they're built imperatively or need dynamic values. CSS modules are used for the home/pause menus.
+
 ## Conventions
 
 - PascalCase for components/types, camelCase for utilities/functions
