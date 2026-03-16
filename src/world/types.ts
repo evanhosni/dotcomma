@@ -21,14 +21,7 @@ export const vertexData_default: VertexData = {
   attributes: {},
 };
 
-export interface Dimension {
-  name: string;
-  regions: Region[];
-  getVertexData: (x: number, y: number, isTerrain?: boolean) => Promise<VertexData>;
-  getMaterial: () => Promise<THREE.ShaderMaterial>;
-  component: () => JSX.Element;
-  spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
-}
+
 export interface Region {
   name: string;
   id: number;

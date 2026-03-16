@@ -4,16 +4,12 @@ import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
 import { useUrlParameters } from "../../context/UrlParametersContext";
-import { Dimension } from "../../world/types";
+import { WORLD_REGIONS } from "../../world/world";
 const BIOME_POLL_INTERVAL = 1; // seconds
 
 const GRAPH_WIDTH = 120;
 const GRAPH_HEIGHT = 30;
 const GRAPH_HISTORY = GRAPH_WIDTH; // one sample per pixel
-
-interface OverlayProps {
-  dimension: Dimension;
-}
 
 const LABELS = ["FPS:     ", "MS:      ", "MB:      ", "Pos:     ", "Biome:   ", "Render:  ", "Terrain: "];
 
@@ -56,7 +52,7 @@ function drawGraph(ctx: CanvasRenderingContext2D, history: number[], maxVal: num
   ctx.stroke();
 }
 
-const OverlayHUD = ({ dimension }: OverlayProps) => {
+const OverlayHUD = () => {
   const { gl, camera } = useThree();
   const { progress, terrain_loaded } = useGameContext();
 
@@ -140,7 +136,7 @@ const OverlayHUD = ({ dimension }: OverlayProps) => {
           currentVertex: new THREE.Vector2(pos.x, pos.z),
           gridSize: 500,
           regionGridSize: 2500,
-          regions: dimension.regions,
+          regions: WORLD_REGIONS,
         })
         .then((result: any) => {
           currentBiome.current = result.biome?.name ?? "???";
@@ -173,8 +169,8 @@ const OverlayHUD = ({ dimension }: OverlayProps) => {
   return null;
 };
 
-export const Overlay = ({ dimension }: OverlayProps) => {
+export const Overlay = () => {
   const { params } = useUrlParameters();
   if (!params.overlay) return null;
-  return <OverlayHUD dimension={dimension} />;
+  return <OverlayHUD />;
 };

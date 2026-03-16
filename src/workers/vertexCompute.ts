@@ -38,7 +38,7 @@ export interface SerializedBiome {
   blendWidth?: number;
 }
 
-export interface DimensionConfig {
+export interface WorldConfig {
   seed: string;
   regions: SerializedRegion[];
   gridSize: number;
@@ -484,9 +484,9 @@ const getCityDistanceToRoad = (
 // Main Pipeline
 // ══════════════════════════════════════════════════════════════════════
 
-let cfg: DimensionConfig | null = null;
+let cfg: WorldConfig | null = null;
 
-export function initCompute(config: DimensionConfig): void {
+export function initCompute(config: WorldConfig): void {
   cfg = config;
 }
 

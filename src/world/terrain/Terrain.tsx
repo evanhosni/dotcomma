@@ -3,8 +3,9 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
-import { buildDimensionConfig } from "../../workers/buildDimensionConfig";
-import { Dimension } from "../types";
+import { buildWorldConfig } from "../../workers/buildWorldConfig";
+import { WORLD_REGIONS } from "../world";
+import { getMaterial } from "../getMaterial";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
@@ -53,7 +54,7 @@ let terrainWorkerReady = false;
 let terrainWorkerInitPromise: Promise<void> | null = null;
 let pendingChunkResolve: ((result: any) => void) | null = null;
 
-const ensureTerrainWorker = (dimension: Dimension): Promise<void> => {
+const ensureTerrainWorker = (): Promise<void> => {
   if (terrainWorkerReady) return Promise.resolve();
   if (terrainWorkerInitPromise) return terrainWorkerInitPromise;
 
@@ -68,7 +69,7 @@ const ensureTerrainWorker = (dimension: Dimension): Promise<void> => {
       }
     };
 
-    const config = buildDimensionConfig(dimension);
+    const config = buildWorldConfig(WORLD_REGIONS);
     terrainWorker.postMessage({ type: "INIT", config });
   });
 
@@ -297,7 +298,7 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
   return geom;
 };
 
-export const Terrain = ({ dimension }: { dimension: Dimension }) => {
+export const Terrain = () => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
@@ -334,7 +335,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   }, [remainingChunks, terrain_loaded]);
 
   useEffect(() => {
-    dimension.getMaterial().then(setTerrainMaterial);
+    getMaterial().then(setTerrainMaterial);
   }, []);
 
   useFrame(() => {
@@ -611,7 +612,7 @@ export const Terrain = ({ dimension }: { dimension: Dimension }) => {
   };
 
   const BuildChunk = async function* (chunk: Chunk, material: THREE.Material) {
-    await ensureTerrainWorker(dimension);
+    await ensureTerrainWorker();
 
     const offset = chunk.offset;
     const pos = chunk.plane.geometry.attributes.position;

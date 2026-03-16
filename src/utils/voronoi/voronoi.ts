@@ -1,7 +1,7 @@
-import { Dust } from "../../dimensions/dust/Dust";
-import { City } from "../../dimensions/glitch-city/biomes/city/City";
-import { Grass } from "../../dimensions/glitch-city/biomes/grass/Grass";
-import { Pharmasea } from "../../dimensions/pharma/Pharma";
+import { Dust } from "../../biomes/dust/Dust";
+import { City } from "../../biomes/city/City";
+import { Grass } from "../../biomes/grass/Grass";
+import { Pharmasea } from "../../biomes/pharma/Pharma";
 import { utils } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 
@@ -100,7 +100,7 @@ export namespace voronoi {
         const { params, resolve } = nextWork;
 
         voronoiWorker.onmessage = (event) => {
-          const biomes_in_use = params.regions?.length ? utils.getAllBiomesFromRegions(params.regions) : params.biomes;
+          const biomes_in_use = params.regions?.length ? utils.getAllBiomes(params.regions) : params.biomes;
           const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
 
           resolve({ ...event.data, biome });

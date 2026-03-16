@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../context/GameContext";
 import { useUrlParameters } from "../context/UrlParametersContext";
-import { Dimension } from "../world/types";
+import { getVertexData } from "../world/getVertexData";
 import { useInput } from "./useInput";
 
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
@@ -39,7 +39,7 @@ const _moveVec = new THREE.Vector3();
 const _targetVel = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 
-export const Player = ({ dimension }: { dimension?: Dimension }) => {
+export const Player = () => {
   const { forward, backward, left, right, sprint, jump, control } = useInput();
   const { camera } = useThree();
   const { terrain_loaded } = useGameContext();
@@ -174,18 +174,12 @@ export const Player = ({ dimension }: { dimension?: Dimension }) => {
       respawning.current = true;
       const [px, , pz] = position.current;
       api.velocity.set(0, 0, 0);
-      if (dimension) {
-        dimension.getVertexData(px, pz, true).then((vd) => {
-          api.position.set(px, vd.height + 10, pz);
-          api.velocity.set(0, 0, 0);
-          grounded.current = false;
-          respawning.current = false;
-        });
-      } else {
-        api.position.set(...SPAWN_POSITION);
+      getVertexData(px, pz, true).then((vd) => {
+        api.position.set(px, vd.height + 10, pz);
+        api.velocity.set(0, 0, 0);
         grounded.current = false;
         respawning.current = false;
-      }
+      });
     }
 
     // Update camera position
