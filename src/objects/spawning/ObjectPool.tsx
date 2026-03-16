@@ -2,8 +2,8 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameContext } from "../../context/GameContext";
-import { buildDimensionConfig } from "../../workers/buildDimensionConfig";
-import { Dimension } from "../../world/types";
+import { buildWorldConfig } from "../../workers/buildWorldConfig";
+import { WORLD_REGIONS } from "../../world/world";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -18,7 +18,7 @@ import { SpawnDescriptor, SpawnedObjectProps } from "./types";
 const MAX_ACTIVE_OBJECTS = 200;
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps — responsive to player movement
 
-export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
+export const ObjectPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
 
   const objectsMapRef = useRef(new Map<string, React.ReactNode>());
@@ -32,7 +32,7 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
   const { terrain_loaded, progress, terrainHighLODPending, spawnPending } = useGameContext();
 
   // Collect all spawn descriptors from this dimension
-  const descriptors = useMemo(() => collectDescriptors(dimension), [dimension]);
+  const descriptors = useMemo(() => collectDescriptors(WORLD_REGIONS), []);
 
   // Build descriptor lookup map
   const descriptorMap = useMemo(() => {
@@ -61,11 +61,11 @@ export const ObjectPool = ({ dimension }: { dimension: Dimension }) => {
 
   // Initialize spawn worker
   useEffect(() => {
-    const config = buildDimensionConfig(dimension);
+    const config = buildWorldConfig(WORLD_REGIONS);
     initSpawnWorker(config, maxFootprint).then(() => {
       workerReadyRef.current = true;
     });
-  }, [dimension, maxFootprint]);
+  }, [maxFootprint]);
 
   // Update spatial hash when footprint changes
   useEffect(() => {

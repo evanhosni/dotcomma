@@ -6,7 +6,7 @@
  * the same public API surface to ObjectPool.
  */
 
-import { DimensionConfig } from "../../workers/vertexCompute";
+import { WorldConfig } from "../../workers/vertexCompute";
 import { SpawnDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
@@ -33,7 +33,7 @@ const handleMessage = (e: MessageEvent) => {
  * Must be called before generateSpawnPoints.
  */
 export const initSpawnWorker = (
-  config: DimensionConfig,
+  config: WorldConfig,
   maxFootprint: number
 ): Promise<void> => {
   worker = new Worker(

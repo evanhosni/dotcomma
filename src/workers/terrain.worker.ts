@@ -6,13 +6,13 @@
  * and returns Float32Array buffers as transferables.
  *
  * Messages:
- *   IN:  { type: "INIT", config: DimensionConfig }
+ *   IN:  { type: "INIT", config: WorldConfig }
  *   IN:  { type: "BUILD_CHUNK", id: number, vertexX: Float32Array, vertexY: Float32Array, offsetX: number, offsetZ: number }
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "CHUNK_BUILT", id, heights, biomeIds, distBiome, distRegion, distRoad }
  */
 
-import { DimensionConfig, initCompute, computeVertexData } from "./vertexCompute";
+import { WorldConfig, initCompute, computeVertexData } from "./vertexCompute";
 
 let initialized = false;
 
@@ -20,7 +20,7 @@ self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
 
   if (type === "INIT") {
-    initCompute(e.data.config as DimensionConfig);
+    initCompute(e.data.config as WorldConfig);
     initialized = true;
     (self as any).postMessage({ type: "INIT_DONE" });
     return;

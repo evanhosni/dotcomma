@@ -6,11 +6,10 @@ import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
 import { Terrain } from "../world/terrain/Terrain";
-import { CustomCanvasProps } from "./types";
 
 const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low for testing
 
-const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
+const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { terrain_loaded, progress } = useGameContext();
   const { params } = useUrlParameters();
 
@@ -34,29 +33,29 @@ const PreCustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
 
   return (
     <>
-      <Overlay dimension={dimension} />
+      <Overlay />
       {/* <PostProcessing /> */}
       <Physics {...(mergedPhysicsProps as any)}>
         {params.debug ? (
           <Debug color="red">
             {children}
-            <Terrain dimension={dimension} />
-            <ObjectPool dimension={dimension} />
+            <Terrain />
+            <ObjectPool />
           </Debug>
         ) : (
           <>
             {children}
-            <Terrain dimension={dimension} />
-            <ObjectPool dimension={dimension} />
+            <Terrain />
+            <ObjectPool />
           </>
         )}
-        <Player dimension={dimension} />
+        <Player />
       </Physics>
     </>
   );
 };
 
-export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
+export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
   // Default canvas properties
   const defaultCanvasProps = {
     style: { background: "#555" },
@@ -68,7 +67,7 @@ export const CustomCanvas = ({ dimension, children }: CustomCanvasProps) => {
   return (
     <Canvas {...mergedCanvasProps}>
       <GameContextProvider>
-        <PreCustomCanvas dimension={dimension}>{children}</PreCustomCanvas>
+        <PreCustomCanvas>{children}</PreCustomCanvas>
       </GameContextProvider>
     </Canvas>
   );

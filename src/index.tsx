@@ -1,10 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { CustomCanvas } from "./canvas/CustomCanvas";
 import { UrlParametersProvider } from "./context/UrlParametersContext";
-import { GlitchCity } from "./dimensions/glitch-city/GlitchCity";
 import { CommandPalette } from "./menus/command-palette/CommandPalette";
-import { Home } from "./menus/home/Home";
 import { PauseMenu } from "./menus/pause/Pause";
 import "./style.css";
 
@@ -17,8 +16,12 @@ const Dotcomma = () => {
         <PauseMenu />
         <CommandPalette />
         <Routes>
-          <Route index element={<Home />} />
-          <Route path="/glitch-city" element={<GlitchCity.component />} />
+          <Route index element={
+            <CustomCanvas>
+              <ambientLight intensity={0.5} />
+              <directionalLight position={[10, 10, 5]} intensity={1} />
+            </CustomCanvas>
+          } />
           <Route path="*" />
         </Routes>
       </UrlParametersProvider>

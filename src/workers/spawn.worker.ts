@@ -6,7 +6,7 @@
  * pipeline to resolve biome/height data for each candidate point.
  *
  * Messages:
- *   IN:  { type: "INIT", config: DimensionConfig, maxFootprint: number }
+ *   IN:  { type: "INIT", config: WorldConfig, maxFootprint: number }
  *   IN:  { type: "GENERATE_SPAWNS", id: number, chunkKeys: string[], descriptors: SerializedDescriptor[] }
  *   IN:  { type: "CLEANUP", playerX: number, playerZ: number, cleanupRadius: number }
  *   IN:  { type: "UPDATE_FOOTPRINT", maxFootprint: number }
@@ -14,7 +14,7 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { DimensionConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
+import { WorldConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
 
 const SPAWN_CHUNK_SIZE = 250;
 
@@ -232,7 +232,7 @@ self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
 
   if (type === "INIT") {
-    initCompute(e.data.config as DimensionConfig);
+    initCompute(e.data.config as WorldConfig);
     spatialHash = new SpatialHash(e.data.maxFootprint);
     initialized = true;
     (self as any).postMessage({ type: "INIT_DONE" });
