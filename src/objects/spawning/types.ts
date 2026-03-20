@@ -6,6 +6,7 @@ export interface SpawnDescriptor {
   density: number; // instances per 1,000,000 sq units
   clustering: number; // 0 = uniform, 1 = heavily clustered
   renderDistance: number; // max camera distance
+  spawnExclusionRadius?: number; // min distance from player for spawning. Default: renderDistance * 0.15
   colliderDistance?: number; // defaults to renderDistance / 3
   frustumPadding?: number; // defaults to 3
   priority?: number; // 0 = rarest (placed first), 100 = common. Default 50
