@@ -13,7 +13,7 @@ interface GameContextProviderProps {
 
 // Create a provider component
 export const GameContextProvider: React.FC<GameContextProviderProps> = ({ children }) => {
-  const [playerPosition, setPlayerPosition] = useState<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
+  const playerPositionRef = useRef(new THREE.Vector3(0, 0, 0));
   const [chunks, setChunks] = useState<{ [key: string]: { position: number[]; chunk: Chunk } }>({});
   const [progress, setProgress] = useState(0);
   const [terrain_loaded, setTerrainLoaded] = useState(false);
@@ -22,8 +22,7 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
 
   // Value object to be provided to consumers
   const value: GameContextType = {
-    playerPosition,
-    setPlayerPosition,
+    playerPosition: playerPositionRef.current,
     chunks,
     setChunks,
     progress,

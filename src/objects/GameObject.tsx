@@ -6,6 +6,7 @@ import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { utils } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import { AnimationControl } from "./state/types";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
@@ -100,6 +101,7 @@ interface GameObjectProps {
   renderDistance?: number;
   frustumPadding?: number;
   onDestroy: (id: string) => void;
+  animationControl?: AnimationControl;
 }
 
 interface ColliderState {
@@ -119,6 +121,7 @@ export const GameObject = ({
   renderDistance = DEFAULT_RENDER_DISTANCE,
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   onDestroy,
+  animationControl,
 }: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
@@ -202,10 +205,12 @@ export const GameObject = ({
       mixerRef.current = null;
       sceneRef.current = null;
     };
-  }, [scene, scale, clonedModel.animations]);
+  }, [scene, clonedModel.animations]); // scale omitted: stable per instance, only used for bounding sphere
 
-  // Add event listener for E key
+  // Add event listener for E key (only when not driven by state machine)
   useEffect(() => {
+    if (animationControl) return;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() === "e") {
         setIsPlaying((prevState) => {
@@ -232,7 +237,7 @@ export const GameObject = ({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [animationControl]);
 
   // Handle animations and frustum culling
   useFrame((state, delta) => {
@@ -291,8 +296,33 @@ export const GameObject = ({
       setShouldRenderColliders(shouldShowColliders);
     }
 
-    // Always update animations when playing, regardless of visibility
-    if (isPlaying && mixerRef.current) {
+    // State-machine-driven animation
+    if (animationControl && mixerRef.current) {
+      if (animationControl.dirty) {
+        animationControl.dirty = false;
+        const cmd = animationControl.pendingCommand;
+        if (cmd && clonedModel.animations.length > 0) {
+          const clipIndex = clonedModel.animations.findIndex(
+            (clip) => clip.name === cmd.clipName
+          );
+          if (clipIndex >= 0) {
+            const targetAction = actionsRef.current[clipIndex];
+            // Stop all actions first to clear the mixer
+            for (const action of actionsRef.current) {
+              action.stop();
+            }
+            // Play only the target
+            targetAction.reset();
+            targetAction.setLoop(cmd.loop ?? THREE.LoopRepeat, Infinity);
+            targetAction.timeScale = cmd.timeScale ?? 1.0;
+            targetAction.clampWhenFinished = cmd.clampWhenFinished ?? true;
+            targetAction.play();
+          }
+        }
+      }
+      mixerRef.current.update(delta);
+    } else if (isPlaying && mixerRef.current) {
+      // E-key toggle fallback (no animationControl)
       mixerRef.current.update(delta);
     }
   });
@@ -315,7 +345,7 @@ export const GameObject = ({
         mixerRef.current.stopAllAction();
       }
     };
-  }, [gltf, scale, rotation]);
+  }, [gltf]); // scale/rotation omitted: stable per instance, only used for collider creation
 
   return (
     <Suspense fallback={null}>
