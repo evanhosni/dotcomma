@@ -42,7 +42,7 @@ const _camTarget = new THREE.Vector3();
 export const Player = () => {
   const { forward, backward, left, right, sprint, jump, control } = useInput();
   const { camera } = useThree();
-  const { terrain_loaded } = useGameContext();
+  const { terrain_loaded, playerPosition } = useGameContext();
   const { params } = useUrlParameters();
 
   const velocity = useRef([0, 0, 0]);
@@ -193,6 +193,9 @@ export const Player = () => {
     } else {
       camera.position.lerp(_camTarget, CAMERA_LERP);
     }
+
+    // Update shared player position for state machines / other consumers
+    playerPosition.set(x, y, z);
   });
 
   return (
