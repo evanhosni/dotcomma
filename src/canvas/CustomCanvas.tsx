@@ -41,7 +41,7 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   return (
     <>
       <Overlay />
-      <PostProcessing quantization={0.02} />
+      <PostProcessing quantization={0.025} />
       <Physics {...(mergedPhysicsProps as any)}>
         {params.debug ? (
           <Debug color="red">
