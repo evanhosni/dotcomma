@@ -3,10 +3,10 @@ import { Canvas } from "@react-three/fiber";
 import { useEffect } from "react";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
 import { useUrlParameters } from "../context/UrlParametersContext";
-import { initCursor } from "../utils/cursor/cursor";
 import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
+import { initCursor } from "../utils/cursor/cursor";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
 
