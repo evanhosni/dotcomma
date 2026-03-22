@@ -2,6 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { utils } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
@@ -155,6 +156,11 @@ export const GameObject = ({
             // Set properties that affect rendering performance
             mat.transparent = false;
             (mat as any).fog = false; // Disable fog calculations if not needed
+
+            // Apply vertex quantization unless opted out
+            if (!child.userData?.skipQuantization) {
+              _quantization.patchMaterial(mat);
+            }
           });
 
           mesh.frustumCulled = true; // Enable frustum culling
