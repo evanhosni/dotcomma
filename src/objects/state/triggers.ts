@@ -63,3 +63,30 @@ export function always(id: string = "always"): TriggerDef {
     evaluate: () => true,
   };
 }
+
+// ─── Mouse Triggers ───
+
+function mouseTrigger(id: string, flagKey: string, defaultDistance: number) {
+  return (distance: number = defaultDistance): TriggerDef => {
+    const distanceSq = distance * distance;
+    return {
+      id,
+      evaluate: (ctx) =>
+        !!ctx.blackboard[flagKey] && ctx.playerDistanceSq <= distanceSq,
+    };
+  };
+}
+
+export const onMouseHoverEnter = mouseTrigger("mouse-hover-enter", "__mouse_hover_enter", 50);
+export const onMouseHoverLeave = mouseTrigger("mouse-hover-leave", "__mouse_hover_leave", 50);
+export const onMouseLeftClick = mouseTrigger("mouse-left-click", "__mouse_left_click", 30);
+export const onMouseRightClick = mouseTrigger("mouse-right-click", "__mouse_right_click", 30);
+export const onMouseLeftClickDown = mouseTrigger("mouse-left-click-down", "__mouse_left_click_down", 30);
+export const onMouseRightClickDown = mouseTrigger("mouse-right-click-down", "__mouse_right_click_down", 30);
+export const onMouseLeftClickUp = mouseTrigger("mouse-left-click-up", "__mouse_left_click_up", 30);
+export const onMouseRightClickUp = mouseTrigger("mouse-right-click-up", "__mouse_right_click_up", 30);
+export const onMouseScroll = mouseTrigger("mouse-scroll", "__mouse_scroll", 30);
+export const onMouseScrollUp = mouseTrigger("mouse-scroll-up", "__mouse_scroll_up", 30);
+export const onMouseScrollDown = mouseTrigger("mouse-scroll-down", "__mouse_scroll_down", 30);
+export const onMouseDoubleClick = mouseTrigger("mouse-double-click", "__mouse_double_click", 30);
+export const onMouseMiddleClick = mouseTrigger("mouse-middle-click", "__mouse_middle_click", 30);

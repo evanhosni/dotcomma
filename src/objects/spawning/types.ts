@@ -14,6 +14,7 @@ export interface SpawnDescriptor {
   heightRange?: [number, number]; // restrict to height band
   slopeRange?: [number, number]; // restrict to slope range (degrees)
   spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
+  cursor_override?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
 }
 
 export interface SpawnedObjectProps {
@@ -24,6 +25,7 @@ export interface SpawnedObjectProps {
   renderDistance: number;
   frustumPadding: number;
   onDestroy: (id: string) => void;
+  cursorOverride?: boolean;
 }
 
 export interface SpawnPoint {
