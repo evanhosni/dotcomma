@@ -136,6 +136,14 @@ export function useStateMachine(
     if (currentState.onUpdate) {
       currentState.onUpdate(behaviorCtx);
     }
+
+    // Clear one-shot mouse event flags
+    const bb = blackboardRef.current;
+    for (const key in bb) {
+      if (key.startsWith("__mouse_") && key !== "__mouse_hover_active") {
+        delete bb[key];
+      }
+    }
   });
 
   useEffect(() => {

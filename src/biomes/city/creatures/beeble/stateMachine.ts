@@ -1,5 +1,21 @@
 import * as THREE from "three";
-import { playerOutsideRange, playerWithinRange } from "../../../../objects/state/triggers";
+import {
+  playerOutsideRange,
+  playerWithinRange,
+  onMouseHoverEnter,
+  onMouseHoverLeave,
+  onMouseLeftClick,
+  onMouseRightClick,
+  onMouseLeftClickDown,
+  onMouseRightClickDown,
+  onMouseLeftClickUp,
+  onMouseRightClickUp,
+  onMouseScroll,
+  onMouseScrollUp,
+  onMouseScrollDown,
+  onMouseDoubleClick,
+  onMouseMiddleClick,
+} from "../../../../objects/state/triggers";
 import { StateMachineConfig } from "../../../../objects/state/types";
 
 const BEEBLE_SPEED = 5;
@@ -10,7 +26,23 @@ const _flee = new THREE.Vector3();
 
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "wander",
-  triggers: [playerWithinRange(SIGHT_RANGE), playerOutsideRange(LOSE_RANGE)],
+  triggers: [
+    playerWithinRange(SIGHT_RANGE),
+    playerOutsideRange(LOSE_RANGE),
+    onMouseHoverEnter(),
+    onMouseHoverLeave(),
+    onMouseLeftClick(),
+    onMouseRightClick(),
+    onMouseLeftClickDown(),
+    onMouseRightClickDown(),
+    onMouseLeftClickUp(),
+    onMouseRightClickUp(),
+    onMouseScroll(),
+    onMouseScrollUp(),
+    onMouseScrollDown(),
+    onMouseDoubleClick(),
+    onMouseMiddleClick(),
+  ],
   states: [
     {
       id: "wander",
