@@ -4,7 +4,6 @@ export const PARAM_DEFINITIONS = {
   overlay: "Performance Overlay",
   dev: "Dev Mode",
   debug: "Physics Debug",
-  quantize: "Vertex Quantization",
 } as const;
 
 export type ParamKey = keyof typeof PARAM_DEFINITIONS;

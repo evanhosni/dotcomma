@@ -1,12 +1,11 @@
 import { Debug, Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
-import { useEffect } from "react";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
 import { useUrlParameters } from "../context/UrlParametersContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
-import { _quantization } from "../utils/quantization/quantization";
+import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
 
 const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low for testing
@@ -14,10 +13,6 @@ const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low f
 const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { terrain_loaded, progress } = useGameContext();
   const { params } = useUrlParameters();
-
-  useEffect(() => {
-    _quantization.setGridSize(params.quantize ? 0.02 : 0.0);
-  }, [params.quantize]);
 
   // Default physics properties
   const defaultPhysicsProps = {
@@ -40,7 +35,7 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   return (
     <>
       <Overlay />
-      {/* <PostProcessing /> */}
+      <PostProcessing quantization={0.02} />
       <Physics {...(mergedPhysicsProps as any)}>
         {params.debug ? (
           <Debug color="red">
