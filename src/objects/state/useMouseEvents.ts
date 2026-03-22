@@ -1,5 +1,6 @@
-import { ThreeEvent } from "@react-three/fiber";
+import { ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useMemo, useRef } from "react";
+import * as THREE from "three";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { StateMachineHandle } from "./types";
 
@@ -37,10 +38,16 @@ export interface UseMouseEventsOptions {
 
 const DEFAULT_DISTANCE = 5;
 
+// Own raycaster — same approach as R3F: setFromCamera(center, camera) + intersectObject
+const _raycaster = new THREE.Raycaster();
+const _center = new THREE.Vector2(0, 0);
+
 export function useMouseEvents(
   sm: StateMachineHandle,
+  groupRef: React.MutableRefObject<THREE.Group | null>,
   options: UseMouseEventsOptions = {},
 ): MouseEventHandlers {
+  const { scene } = useThree();
   const bb = sm.blackboard;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
@@ -63,32 +70,60 @@ export function useMouseEvents(
     [options.distances],
   );
 
-  const onPointerOver = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
-      if (e.distance > d.hoverEnter) return;
-      if (!activeHoverRef.current) {
-        activeHoverRef.current = true;
-        console.log("onMouseHoverEnter");
-        bb.__mouse_hover_enter = true;
-        bb.__mouse_hover_active = true;
-        if (growCursor) showCursor();
-      }
-    },
-    [bb, d, growCursor],
-  );
+  const frameCountRef = useRef(0);
+  const lastHoverRef = useRef(false);
 
-  const onPointerOut = useCallback(
-    (_e: ThreeEvent<PointerEvent>) => {
-      if (activeHoverRef.current) {
-        activeHoverRef.current = false;
-        console.log("onMouseHoverLeave");
-        bb.__mouse_hover_leave = true;
-        delete bb.__mouse_hover_active;
-        if (growCursor) hideCursor();
+  // Raycast from screen center, throttled to every 3 frames
+  useFrame(({ camera }) => {
+    frameCountRef.current++;
+
+    // Only raycast every 3 frames; reuse last result on skip frames
+    if (frameCountRef.current % 3 !== 0) {
+      return;
+    }
+
+    let isHovering = false;
+
+    if (groupRef.current) {
+      // Inflate SkinnedMesh bounding spheres once so the cheap rejection test
+      // doesn't discard rays that would hit the animated pose.
+      // The actual triangle intersection uses bone-deformed vertices and is accurate.
+      if (!bb.__skinnedBoundsPatched) {
+        bb.__skinnedBoundsPatched = true;
+        groupRef.current.traverse((child) => {
+          if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+            const sm = child as THREE.SkinnedMesh;
+            sm.computeBoundingSphere();
+            sm.boundingSphere!.radius *= 3;
+          }
+        });
       }
-    },
-    [bb, growCursor],
-  );
+
+      _raycaster.setFromCamera(_center, camera);
+      const hits = _raycaster.intersectObject(groupRef.current, true);
+      if (hits.length > 0 && hits[0].distance <= d.hoverEnter) {
+        isHovering = true;
+      }
+    }
+
+    lastHoverRef.current = isHovering;
+
+    if (isHovering && !activeHoverRef.current) {
+      activeHoverRef.current = true;
+      bb.__mouse_hover_enter = true;
+      bb.__mouse_hover_active = true;
+      if (growCursor) showCursor();
+    } else if (!isHovering && activeHoverRef.current) {
+      activeHoverRef.current = false;
+      bb.__mouse_hover_leave = true;
+      delete bb.__mouse_hover_active;
+      if (growCursor) hideCursor();
+    }
+  });
+
+  // R3F events still used for clicks/scroll (they fire on actual pointer events)
+  const onPointerOver = useCallback((_e: ThreeEvent<PointerEvent>) => {}, []);
+  const onPointerOut = useCallback((_e: ThreeEvent<PointerEvent>) => {}, []);
 
   const onClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
