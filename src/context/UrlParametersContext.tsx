@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from "react
 
 export const PARAM_DEFINITIONS = {
   overlay: "Performance Overlay",
+  logs: "Console Log Overlay",
   dev: "Dev Mode",
   debug: "Physics Debug",
 } as const;

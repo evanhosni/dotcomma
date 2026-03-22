@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CustomCanvas } from "./canvas/CustomCanvas";
 import { UrlParametersProvider } from "./context/UrlParametersContext";
 import { CommandPalette } from "./menus/command-palette/CommandPalette";
+import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { PauseMenu } from "./menus/pause/Pause";
 import "./style.css";
 
@@ -15,6 +16,7 @@ const Dotcomma = () => {
       <UrlParametersProvider>
         <PauseMenu />
         <CommandPalette />
+        <LogsOverlay />
         <Routes>
           <Route index element={
             <CustomCanvas>
