@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { playerOutsideRange, playerWithinRange } from "../../../../objects/state/triggers";
 import { StateMachineConfig } from "../../../../objects/state/types";
 
-const BEEBLE_SPEED = 50;
+const BEEBLE_SPEED = 5;
 const SIGHT_RANGE = 80;
 const LOSE_RANGE = 120;
 
@@ -30,7 +30,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         _flee.subVectors(ctx.positionRef.current, ctx.playerPosition);
         _flee.y = 0;
         _flee.normalize();
-        ctx.positionRef.current.addScaledVector(_flee, BEEBLE_SPEED * 2 * ctx.delta);
+        ctx.positionRef.current.addScaledVector(_flee, BEEBLE_SPEED * 0 * ctx.delta);
         if (ctx.groupRef.current) {
           ctx.groupRef.current.position.copy(ctx.positionRef.current);
         }

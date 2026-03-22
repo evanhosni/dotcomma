@@ -1,4 +1,5 @@
 import { _material } from "../utils/material/_material";
+import { _quantization } from "../utils/quantization/quantization";
 import { utils } from "../utils/utils";
 import { CityRegion, DesertRegion } from "../regions";
 import vertexShader from "./shaders/vertex.glsl";
@@ -20,7 +21,7 @@ export const getMaterial = async () => {
   // TODO: Handle multiple regions with different biome boundary textures
   const biomeTexture = regionMaterials.find((m) => m)?.biomeTexture;
 
-  return _material.combineBiomeMaterials(biomes, vertexShader, {
+  const material = await _material.combineBiomeMaterials(biomes, vertexShader, {
     regionTexture,
     biomeTexture,
     varyingDeclarations: [
@@ -32,4 +33,8 @@ export const getMaterial = async () => {
       "varying vec2 vWorldUv;",
     ],
   });
+
+  material.uniforms.uGridSize = _quantization.uniforms.uGridSize;
+
+  return material;
 };

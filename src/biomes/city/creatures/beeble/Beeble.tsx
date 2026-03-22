@@ -7,9 +7,7 @@ import { BEEBLE_SM } from "./stateMachine";
 
 export const Beeble = (props: SpawnedObjectProps) => {
   const groupRef = useRef<THREE.Group>(null);
-  const positionRef = useRef<THREE.Vector3>(
-    new THREE.Vector3(...props.coordinates)
-  );
+  const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
 
   const sm = useStateMachine(BEEBLE_SM, positionRef, groupRef);
 
@@ -20,7 +18,7 @@ export const Beeble = (props: SpawnedObjectProps) => {
         positionRef={positionRef}
         animationControl={sm.animationControl}
         {...props}
-        scale={[10.2, 10.2, 10.2]}
+        scale={[1.2, 1.2, 1.2]}
       />
     </group>
   );
