@@ -1,7 +1,9 @@
 import { Debug, Physics } from "@react-three/cannon";
 import { Canvas } from "@react-three/fiber";
+import { useEffect } from "react";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
 import { useUrlParameters } from "../context/UrlParametersContext";
+import { initCursor } from "../utils/cursor/cursor";
 import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
@@ -13,6 +15,10 @@ const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low f
 const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { terrain_loaded, progress } = useGameContext();
   const { params } = useUrlParameters();
+
+  useEffect(() => {
+    initCursor();
+  }, []);
 
   // Default physics properties
   const defaultPhysicsProps = {
