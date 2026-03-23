@@ -19,6 +19,7 @@ import {
 import { StateMachineConfig } from "../../../../objects/state/types";
 
 const BEEBLE_SPEED = 5;
+const ASCEND_SPEED = 8;
 const SIGHT_RANGE = 80;
 const LOSE_RANGE = 120;
 
@@ -67,7 +68,21 @@ export const BEEBLE_SM: StateMachineConfig = {
           ctx.groupRef.current.position.copy(ctx.positionRef.current);
         }
       },
-      transitions: [{ trigger: `player-outside-${LOSE_RANGE}`, target: "wander" }],
+      transitions: [
+        { trigger: "mouse-left-click", target: "ascending" },
+        { trigger: `player-outside-${LOSE_RANGE}`, target: "wander" },
+      ],
+    },
+    {
+      id: "ascending",
+      animation: { clipName: "walk", timeScale: 2 },
+      onUpdate: (ctx) => {
+        ctx.positionRef.current.y += ASCEND_SPEED * ctx.delta;
+        if (ctx.groupRef.current) {
+          ctx.groupRef.current.position.copy(ctx.positionRef.current);
+        }
+      },
+      transitions: [],
     },
   ],
 };
