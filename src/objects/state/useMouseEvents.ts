@@ -1,5 +1,5 @@
 import { ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { StateMachineHandle } from "./types";
@@ -42,6 +42,15 @@ const DEFAULT_DISTANCE = 5;
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 
+// Scratch objects for the custom SkinnedMesh triangle test
+const _worldSphere = new THREE.Sphere();
+const _invMatrix = new THREE.Matrix4();
+const _localRay = new THREE.Ray();
+const _tA = new THREE.Vector3();
+const _tB = new THREE.Vector3();
+const _tC = new THREE.Vector3();
+const _hitPt = new THREE.Vector3();
+
 export function useMouseEvents(
   sm: StateMachineHandle,
   groupRef: React.MutableRefObject<THREE.Group | null>,
@@ -51,6 +60,7 @@ export function useMouseEvents(
   const bb = sm.blackboard;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
+  const hitDistRef = useRef(Infinity);
 
   const d = useMemo(
     () => ({
@@ -85,23 +95,49 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      // Inflate SkinnedMesh bounding spheres once so the cheap rejection test
-      // doesn't discard rays that would hit the animated pose.
-      // The actual triangle intersection uses bone-deformed vertices and is accurate.
-      if (!bb.__skinnedBoundsPatched) {
-        bb.__skinnedBoundsPatched = true;
-        groupRef.current.traverse((child) => {
-          if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
-            const sm = child as THREE.SkinnedMesh;
-            sm.computeBoundingSphere();
-            sm.boundingSphere!.radius *= 3;
-          }
-        });
-      }
-
       _raycaster.setFromCamera(_center, camera);
-      const hits = _raycaster.intersectObject(groupRef.current, true);
-      if (hits.length > 0 && hits[0].distance <= d.hoverEnter) {
+
+      // Custom SkinnedMesh ray-triangle test.  Three.js's built-in
+      // intersectObject silently drops valid hits for SkinnedMesh instances
+      // that mount after the initial batch (cause unknown — the geometry,
+      // bones, and matrices are all correct).  This manual test uses the
+      // same data (getVertexPosition with bone transforms, local-space ray)
+      // and reliably produces hits that intersectObject misses.
+      let hitDist = Infinity;
+      const meshes: THREE.SkinnedMesh[] = [];
+      groupRef.current.traverse((child) => {
+        if ((child as THREE.SkinnedMesh).isSkinnedMesh) meshes.push(child as THREE.SkinnedMesh);
+      });
+
+      for (let m = 0; m < meshes.length && hitDist > d.hoverEnter; m++) {
+        const sm = meshes[m];
+        const geo = sm.geometry;
+        if (!geo.index) continue;
+
+        // Quick bounding-sphere rejection in world space
+        if (!geo.boundingSphere) geo.computeBoundingSphere();
+        _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
+        _worldSphere.radius *= 3; // inflate for animation
+        if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
+
+        // Build local-space ray
+        _invMatrix.copy(sm.matrixWorld).invert();
+        _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
+
+        const idx = geo.index;
+        for (let i = 0, l = idx.count; i < l; i += 3) {
+          sm.getVertexPosition(idx.getX(i), _tA);
+          sm.getVertexPosition(idx.getX(i + 1), _tB);
+          sm.getVertexPosition(idx.getX(i + 2), _tC);
+          if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
+            _hitPt.applyMatrix4(sm.matrixWorld);
+            hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
+            break; // first hit is enough for hover detection
+          }
+        }
+      }
+      hitDistRef.current = hitDist;
+      if (hitDist <= d.hoverEnter) {
         isHovering = true;
       }
     }
@@ -121,104 +157,102 @@ export function useMouseEvents(
     }
   });
 
-  // R3F events still used for clicks/scroll (they fire on actual pointer events)
-  const onPointerOver = useCallback((_e: ThreeEvent<PointerEvent>) => {}, []);
-  const onPointerOut = useCallback((_e: ThreeEvent<PointerEvent>) => {}, []);
+  // DOM event listeners — use our manual raycast hit distance instead of
+  // R3F's internal intersectObject (which has the same SkinnedMesh bug).
+  useEffect(() => {
+    const dist = () => hitDistRef.current;
 
-  const onClick = useCallback(
-    (e: ThreeEvent<MouseEvent>) => {
-      if (e.distance > d.leftClick) return;
+    const handleClick = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if (dist() > d.leftClick) return;
       console.log("onMouseLeftClick");
       bb.__mouse_left_click = true;
-    },
-    [bb, d],
-  );
+    };
 
-  const onContextMenu = useCallback(
-    (e: ThreeEvent<MouseEvent>) => {
-      if (e.distance > d.rightClick) return;
+    const handleContextMenu = (e: MouseEvent) => {
+      if (dist() > d.rightClick) return;
       console.log("onMouseRightClick");
       bb.__mouse_right_click = true;
-    },
-    [bb, d],
-  );
+    };
 
-  const onPointerDown = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
+    const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (e.distance > d.leftClickDown) return;
+        if (dist() > d.leftClickDown) return;
         console.log("onMouseLeftClickDown");
         bb.__mouse_left_click_down = true;
       } else if (e.button === 1) {
-        if (e.distance > d.middleClick) return;
+        if (dist() > d.middleClick) return;
         console.log("onMouseMiddleClick");
         bb.__mouse_middle_click = true;
       } else if (e.button === 2) {
-        if (e.distance > d.rightClickDown) return;
+        if (dist() > d.rightClickDown) return;
         console.log("onMouseRightClickDown");
         bb.__mouse_right_click_down = true;
       }
-    },
-    [bb, d],
-  );
+    };
 
-  const onPointerUp = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
+    const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (e.distance > d.leftClickUp) return;
+        if (dist() > d.leftClickUp) return;
         console.log("onMouseLeftClickUp");
         bb.__mouse_left_click_up = true;
       } else if (e.button === 2) {
-        if (e.distance > d.rightClickUp) return;
+        if (dist() > d.rightClickUp) return;
         console.log("onMouseRightClick");
         bb.__mouse_right_click = true;
         console.log("onMouseRightClickUp");
         bb.__mouse_right_click_up = true;
       }
-    },
-    [bb, d],
-  );
+    };
 
-  const onDoubleClick = useCallback(
-    (e: ThreeEvent<MouseEvent>) => {
-      if (e.distance > d.doubleClick) return;
+    const handleDblClick = () => {
+      if (dist() > d.doubleClick) return;
       console.log("onMouseDoubleClick");
       bb.__mouse_double_click = true;
-    },
-    [bb, d],
-  );
+    };
 
-  const onWheel = useCallback(
-    (e: ThreeEvent<WheelEvent>) => {
-      if (e.distance > d.scroll) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (dist() > d.scroll) return;
       bb.__mouse_scroll = true;
       console.log("onMouseScroll");
-      if (e.deltaY < 0) {
-        if (e.distance <= d.scrollUp) {
-          console.log("onMouseScrollUp");
-          bb.__mouse_scroll_up = true;
-        }
-      } else if (e.deltaY > 0) {
-        if (e.distance <= d.scrollDown) {
-          console.log("onMouseScrollDown");
-          bb.__mouse_scroll_down = true;
-        }
+      if (e.deltaY < 0 && dist() <= d.scrollUp) {
+        console.log("onMouseScrollUp");
+        bb.__mouse_scroll_up = true;
+      } else if (e.deltaY > 0 && dist() <= d.scrollDown) {
+        console.log("onMouseScrollDown");
+        bb.__mouse_scroll_down = true;
       }
-    },
-    [bb, d],
-  );
+    };
 
+    window.addEventListener("click", handleClick);
+    window.addEventListener("contextmenu", handleContextMenu);
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("dblclick", handleDblClick);
+    window.addEventListener("wheel", handleWheel);
+
+    return () => {
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("contextmenu", handleContextMenu);
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("dblclick", handleDblClick);
+      window.removeEventListener("wheel", handleWheel);
+    };
+  }, [bb, d]);
+
+  // Return no-op handlers — events are now handled via DOM listeners above
   return useMemo(
     () => ({
-      onPointerOver,
-      onPointerOut,
-      onClick,
-      onContextMenu,
-      onPointerDown,
-      onPointerUp,
-      onDoubleClick,
-      onWheel,
+      onPointerOver: (_e: ThreeEvent<PointerEvent>) => {},
+      onPointerOut: (_e: ThreeEvent<PointerEvent>) => {},
+      onClick: (_e: ThreeEvent<MouseEvent>) => {},
+      onContextMenu: (_e: ThreeEvent<MouseEvent>) => {},
+      onPointerDown: (_e: ThreeEvent<PointerEvent>) => {},
+      onPointerUp: (_e: ThreeEvent<PointerEvent>) => {},
+      onDoubleClick: (_e: ThreeEvent<MouseEvent>) => {},
+      onWheel: (_e: ThreeEvent<WheelEvent>) => {},
     }),
-    [onPointerOver, onPointerOut, onClick, onContextMenu, onPointerDown, onPointerUp, onDoubleClick, onWheel],
+    [],
   );
 }

@@ -309,7 +309,7 @@ export const GameObject = ({
         const cmd = animationControl.pendingCommand;
         if (cmd && clonedModel.animations.length > 0) {
           const clipIndex = clonedModel.animations.findIndex(
-            (clip) => clip.name === cmd.clipName
+            (clip: THREE.AnimationClip) => clip.name === cmd.clipName
           );
           if (clipIndex >= 0) {
             const targetAction = actionsRef.current[clipIndex];
