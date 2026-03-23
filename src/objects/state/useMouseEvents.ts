@@ -82,6 +82,18 @@ export function useMouseEvents(
 
   const frameCountRef = useRef(0);
   const lastHoverRef = useRef(false);
+  const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
+
+  // Max distance at which any mouse event fires — nothing to do beyond this
+  const maxEventDist = useMemo(
+    () =>
+      Math.max(
+        d.hoverEnter, d.leftClick, d.rightClick, d.leftClickDown, d.rightClickDown,
+        d.leftClickUp, d.rightClickUp, d.doubleClick, d.middleClick,
+        d.scroll, d.scrollUp, d.scrollDown,
+      ),
+    [d],
+  );
 
   // Raycast from screen center, throttled to every 3 frames
   useFrame(({ camera }) => {
@@ -95,50 +107,65 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      _raycaster.setFromCamera(_center, camera);
+      // Cheap 3D distance pre-check — skip all geometry work if the
+      // player is too far for any event to fire
+      const dist3DSq = camera.position.distanceToSquared(groupRef.current.position);
+      // Add padding for object height/radius
+      const threshold = maxEventDist + 3;
 
-      // Custom SkinnedMesh ray-triangle test.  Three.js's built-in
-      // intersectObject silently drops valid hits for SkinnedMesh instances
-      // that mount after the initial batch (cause unknown — the geometry,
-      // bones, and matrices are all correct).  This manual test uses the
-      // same data (getVertexPosition with bone transforms, local-space ray)
-      // and reliably produces hits that intersectObject misses.
-      let hitDist = Infinity;
-      const meshes: THREE.SkinnedMesh[] = [];
-      groupRef.current.traverse((child) => {
-        if ((child as THREE.SkinnedMesh).isSkinnedMesh) meshes.push(child as THREE.SkinnedMesh);
-      });
+      if (dist3DSq > threshold * threshold) {
+        hitDistRef.current = Infinity;
+      } else {
+        _raycaster.setFromCamera(_center, camera);
 
-      for (let m = 0; m < meshes.length && hitDist > d.hoverEnter; m++) {
-        const sm = meshes[m];
-        const geo = sm.geometry;
-        if (!geo.index) continue;
+        // Cache SkinnedMesh references on first use (avoids traversal every frame)
+        if (cachedMeshesRef.current.length === 0) {
+          groupRef.current.traverse((child) => {
+            if ((child as THREE.SkinnedMesh).isSkinnedMesh)
+              cachedMeshesRef.current.push(child as THREE.SkinnedMesh);
+          });
+        }
 
-        // Quick bounding-sphere rejection in world space
-        if (!geo.boundingSphere) geo.computeBoundingSphere();
-        _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
-        _worldSphere.radius *= 3; // inflate for animation
-        if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
+        // Custom SkinnedMesh ray-triangle test. Three.js's built-in
+        // intersectObject silently drops valid hits for SkinnedMesh instances
+        // that mount after the initial batch (cause unknown — the geometry,
+        // bones, and matrices are all correct). This manual test uses the
+        // same data (getVertexPosition with bone transforms, local-space ray)
+        // and reliably produces hits that intersectObject misses.
+        let hitDist = Infinity;
+        const meshes = cachedMeshesRef.current;
 
-        // Build local-space ray
-        _invMatrix.copy(sm.matrixWorld).invert();
-        _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
+        for (let m = 0; m < meshes.length && hitDist > maxEventDist; m++) {
+          const sm = meshes[m];
+          const geo = sm.geometry;
+          if (!geo.index) continue;
 
-        const idx = geo.index;
-        for (let i = 0, l = idx.count; i < l; i += 3) {
-          sm.getVertexPosition(idx.getX(i), _tA);
-          sm.getVertexPosition(idx.getX(i + 1), _tB);
-          sm.getVertexPosition(idx.getX(i + 2), _tC);
-          if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
-            _hitPt.applyMatrix4(sm.matrixWorld);
-            hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
-            break; // first hit is enough for hover detection
+          // Quick bounding-sphere rejection in world space
+          if (!geo.boundingSphere) geo.computeBoundingSphere();
+          _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
+          _worldSphere.radius *= 3; // inflate for animation
+          if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
+
+          // Build local-space ray
+          _invMatrix.copy(sm.matrixWorld).invert();
+          _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
+
+          const idx = geo.index;
+          for (let i = 0, l = idx.count; i < l; i += 3) {
+            sm.getVertexPosition(idx.getX(i), _tA);
+            sm.getVertexPosition(idx.getX(i + 1), _tB);
+            sm.getVertexPosition(idx.getX(i + 2), _tC);
+            if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
+              _hitPt.applyMatrix4(sm.matrixWorld);
+              hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
+              break; // first hit is enough
+            }
           }
         }
-      }
-      hitDistRef.current = hitDist;
-      if (hitDist <= d.hoverEnter) {
-        isHovering = true;
+        hitDistRef.current = hitDist;
+        if (hitDist <= d.hoverEnter) {
+          isHovering = true;
+        }
       }
     }
 
@@ -213,8 +240,8 @@ export function useMouseEvents(
 
     const handleWheel = (e: WheelEvent) => {
       if (dist() > d.scroll) return;
-      bb.__mouse_scroll = true;
       console.log("onMouseScroll");
+      bb.__mouse_scroll = true;
       if (e.deltaY < 0 && dist() <= d.scrollUp) {
         console.log("onMouseScrollUp");
         bb.__mouse_scroll_up = true;
