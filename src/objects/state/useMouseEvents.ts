@@ -118,12 +118,17 @@ export function useMouseEvents(
       } else {
         _raycaster.setFromCamera(_center, camera);
 
-        // Cache SkinnedMesh references on first use (avoids traversal every frame)
+        // Cache SkinnedMesh references on first use, sorted largest-first
+        // so the body mesh (most likely to hit) is tested before tiny face
+        // meshes, maximising early-exit probability.
         if (cachedMeshesRef.current.length === 0) {
           groupRef.current.traverse((child) => {
             if ((child as THREE.SkinnedMesh).isSkinnedMesh)
               cachedMeshesRef.current.push(child as THREE.SkinnedMesh);
           });
+          cachedMeshesRef.current.sort(
+            (a, b) => (b.geometry.index?.count ?? 0) - (a.geometry.index?.count ?? 0),
+          );
         }
 
         // Custom SkinnedMesh ray-triangle test. Three.js's built-in
