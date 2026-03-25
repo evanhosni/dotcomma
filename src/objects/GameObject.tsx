@@ -323,6 +323,8 @@ export const GameObject = ({
             targetAction.timeScale = cmd.timeScale ?? 1.0;
             targetAction.clampWhenFinished = cmd.clampWhenFinished ?? true;
             targetAction.play();
+          } else {
+            console.error(`animation "${cmd.clipName}" does not exist`);
           }
         }
       }
