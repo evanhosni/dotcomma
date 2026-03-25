@@ -18,13 +18,15 @@ import {
   playerWithinRange,
   randomInterval,
 } from "../../../../objects/state/triggers";
-import { StateMachineConfig } from "../../../../objects/state/types";
+import { BehaviorContext, StateMachineConfig } from "../../../../objects/state/types";
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
 const SIGHT_RANGE = 20;
 const LOSE_RANGE = 30;
 const DIR_LERP_SPEED = 3;
+const HEAD_LERP_SPEED = 5;
+const MAX_HEAD_TURN = 50 * (Math.PI / 180);
 
 // ─── Helpers ───
 
@@ -43,6 +45,40 @@ function randomRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
+function findHeadBone(ctx: BehaviorContext): void {
+  if (ctx.blackboard.__head_bone) return;
+  if (!ctx.groupRef.current) return;
+  ctx.groupRef.current.traverse((node: any) => {
+    if (node.isBone && node.name === "head") {
+      ctx.blackboard.__head_bone = node;
+    }
+  });
+}
+
+function resetHeadBone(ctx: BehaviorContext): void {
+  const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
+  if (bone) bone.rotation.y = 0;
+}
+
+function updateHeadTracking(ctx: BehaviorContext): void {
+  const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
+  if (!bone) return;
+
+  const dx = ctx.playerPosition.x - ctx.positionRef.current.x;
+  const dz = ctx.playerPosition.z - ctx.positionRef.current.z;
+  const angleToPlayer = Math.atan2(dx, dz);
+
+  const bodyAngle = ctx.groupRef.current?.rotation.y ?? 0;
+
+  let relAngle = angleToPlayer - bodyAngle;
+  while (relAngle > Math.PI) relAngle -= Math.PI * 2;
+  while (relAngle < -Math.PI) relAngle += Math.PI * 2;
+
+  relAngle = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, relAngle));
+
+  bone.rotation.y = lerpAngle(bone.rotation.y, relAngle, HEAD_LERP_SPEED * ctx.delta);
+}
+
 // ─── State Machine ───
 
 export const BEEBLE_SM: StateMachineConfig = {
@@ -52,7 +88,7 @@ export const BEEBLE_SM: StateMachineConfig = {
     playerOutsideRange(LOSE_RANGE),
     randomInterval("idle-look", 20, 60),
     randomInterval("idle-look-end", 3, 10),
-    randomInterval("aware-blink", 5, 10),
+    randomInterval("alert-blink", 5, 10),
     afterDelay(1.5),
     onMouseLeftClick(),
     onMouseHoverEnter(),
@@ -80,6 +116,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__dir_target = angle;
         bb.__dir_timer = randomRange(1, 5);
         bb.__dir_elapsed = 0;
+        resetHeadBone(ctx);
       },
       onUpdate: (ctx) => {
         const bb = ctx.blackboard;
@@ -107,7 +144,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         }
       },
       transitions: [
-        { trigger: `player-within-${SIGHT_RANGE}`, target: "aware" },
+        { trigger: `player-within-${SIGHT_RANGE}`, target: "alert" },
         { trigger: "idle-look", target: "idle-look" },
       ],
     },
@@ -120,36 +157,43 @@ export const BEEBLE_SM: StateMachineConfig = {
         loop: THREE.LoopOnce,
         clampWhenFinished: true,
       },
+      onEnter: (ctx) => {
+        resetHeadBone(ctx);
+      },
       onUpdate: (ctx) => {
         ctx.blackboard.__vel_x = 0;
         ctx.blackboard.__vel_z = 0;
         ctx.blackboard.__vel_y = undefined;
       },
       transitions: [
-        { trigger: `player-within-${SIGHT_RANGE}`, target: "aware" },
+        { trigger: `player-within-${SIGHT_RANGE}`, target: "alert" },
         { trigger: "idle-look-end", target: "idle-walk" },
       ],
     },
 
-    // ─── Aware: Standing ───
+    // ─── Alert: Standing ───
     {
-      id: "aware",
+      id: "alert",
       animation: { clipName: "idle" },
+      onEnter: (ctx) => {
+        findHeadBone(ctx);
+      },
       onUpdate: (ctx) => {
         ctx.blackboard.__vel_x = 0;
         ctx.blackboard.__vel_z = 0;
         ctx.blackboard.__vel_y = undefined;
+        updateHeadTracking(ctx);
       },
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
         { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "aware-blink", target: "aware-blink" },
+        { trigger: "alert-blink", target: "alert-blink" },
       ],
     },
 
-    // ─── Aware: Blinking ───
+    // ─── Alert: Blinking ───
     {
-      id: "aware-blink",
+      id: "alert-blink",
       animation: {
         clipName: "blink",
         loop: THREE.LoopOnce,
@@ -159,11 +203,12 @@ export const BEEBLE_SM: StateMachineConfig = {
         ctx.blackboard.__vel_x = 0;
         ctx.blackboard.__vel_z = 0;
         ctx.blackboard.__vel_y = undefined;
+        updateHeadTracking(ctx);
       },
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
         { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "after-1.5s", target: "aware" },
+        { trigger: "after-1.5s", target: "alert" },
       ],
     },
 
@@ -171,6 +216,9 @@ export const BEEBLE_SM: StateMachineConfig = {
     {
       id: "ascending",
       animation: { clipName: "ascend" },
+      onEnter: (ctx) => {
+        resetHeadBone(ctx);
+      },
       onUpdate: (ctx) => {
         ctx.blackboard.__vel_x = 0;
         ctx.blackboard.__vel_z = 0;
