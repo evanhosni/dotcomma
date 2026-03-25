@@ -25,6 +25,7 @@ export function buildWorldConfig(regions: Region[]): WorldConfig {
     gridSize: 500,
     regionGridSize: 2500,
     boundaryWidth: 14,
+    riverWidth: 30,
     defaultBlendWidth: 200,
     roadNoiseParams: {
       type: "perlin",

@@ -9,8 +9,8 @@ const regions = [CityRegion, DesertRegion];
 export const getMaterial = async () => {
   const biomes = utils.getAllBiomes(regions);
 
-  // Load the boundary texture (between regions)
-  const [regionTexture] = await _material.loadTextures(["mahir.jpg"]);
+  // Load the river texture (between regions)
+  const [riverTexture] = await _material.loadTextures(["blue_mud.jpg"]);
 
   // Collect region biome boundary textures
   const regionMaterials = await Promise.all(
@@ -22,15 +22,19 @@ export const getMaterial = async () => {
   const biomeTexture = regionMaterials.find((m) => m)?.biomeTexture;
 
   const material = await _material.combineBiomeMaterials(biomes, vertexShader, {
-    regionTexture,
+    riverTexture,
     biomeTexture,
     varyingDeclarations: [
       "varying float vDistanceToBiomeBoundaryCenter;",
-      "varying float vDistanceToRegionBoundaryCenter;",
+      "varying float vDistanceToRiverCenter;",
       "varying float vDistanceToRoadCenter;",
       "flat varying int vBiomeId;",
       "varying vec2 vUv;",
       "varying vec2 vWorldUv;",
+      "varying float vSlopeAngle;",
+      "varying float vHeight;",
+      "varying vec3 vWorldNormal;",
+      "varying vec3 vWorldPos;",
     ],
   });
 

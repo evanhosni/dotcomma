@@ -1,13 +1,17 @@
 attribute float distanceToBiomeBoundaryCenter;
-attribute float distanceToRegionBoundaryCenter;
+attribute float distanceToRiverCenter;
 attribute float distanceToRoadCenter;
 varying float vDistanceToBiomeBoundaryCenter;
-varying float vDistanceToRegionBoundaryCenter;
+varying float vDistanceToRiverCenter;
 varying float vDistanceToRoadCenter;
 attribute float biomeId;
 flat varying int vBiomeId;
 varying vec2 vUv;
 varying vec2 vWorldUv;
+varying float vSlopeAngle;
+varying float vHeight;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
 
 uniform float uGridSize;
 
@@ -18,7 +22,7 @@ vec3 quantizeWorldPos(vec3 worldPos) {
 
 void main() {
   vDistanceToBiomeBoundaryCenter = distanceToBiomeBoundaryCenter;
-  vDistanceToRegionBoundaryCenter = distanceToRegionBoundaryCenter;
+  vDistanceToRiverCenter = distanceToRiverCenter;
   vDistanceToRoadCenter = distanceToRoadCenter;
   vBiomeId = int(biomeId);
   vUv = uv;
@@ -27,5 +31,12 @@ void main() {
   worldPos.xyz = quantizeWorldPos(worldPos.xyz);
 
   vWorldUv = worldPos.xz / 26.25;
+  vWorldPos = worldPos.xyz;
+
+  vec3 worldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  vWorldNormal = worldNormal;
+  vSlopeAngle = 1.0 - abs(worldNormal.y);
+  vHeight = worldPos.y;
+
   gl_Position = projectionMatrix * viewMatrix * worldPos;
 }

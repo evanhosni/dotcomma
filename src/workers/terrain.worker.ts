@@ -46,7 +46,7 @@ self.onmessage = (e: MessageEvent) => {
       heights[i] = result.height;
       biomeIds[i] = result.biomeId;
       distBiome[i] = result.distanceToBiomeBoundaryCenter;
-      distRegion[i] = result.distanceToRegionBoundaryCenter;
+      distRegion[i] = result.distanceToRiverCenter;
       distRoad[i] = result.distanceToRoadCenter;
     }
 

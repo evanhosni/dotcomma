@@ -3,7 +3,7 @@ import { MaterialData } from "../../world/types";
 import fragmentShader from "./shaders/fragment.glsl";
 
 export const getMaterial = async (): Promise<MaterialData> => {
-  const [sidewalkTexture, roadTexture] = await _material.loadTextures(["road.png", "road.jpg"]);
+  const [sidewalkTexture, roadTexture] = await _material.loadTextures(["sidewalk.png", "road.jpg"]);
 
   return {
     uniforms: {

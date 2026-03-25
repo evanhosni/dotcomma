@@ -1,7 +1,6 @@
-import { Dust } from "../../biomes/dust/Dust";
 import { City } from "../../biomes/city/City";
+import { Dust } from "../../biomes/dust/Dust";
 import { Grass } from "../../biomes/grass/Grass";
-import { Pharmasea } from "../../biomes/pharma/Pharma";
 import { utils } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 
@@ -40,7 +39,7 @@ export namespace voronoi {
             //TODO keeping this check temporarily.
             event.data.results.forEach((result: any, index: number) => {
               if (index < resolves.length) {
-                const biomes_in_use = [City, Grass, Dust, Pharmasea]; // TODO const somewhere else or other solution, maybe context
+                const biomes_in_use = [City, Grass, Dust]; // TODO const somewhere else or other solution, maybe context
                 const biome = biomes_in_use.find((b) => b.id === result.biome.id);
                 resolves[index]({ ...result, biome });
               }
@@ -163,7 +162,8 @@ export namespace voronoi {
 
       const cx = ax + t * dx,
         cy = ay + t * dy;
-      const ddx = px - cx, ddy = py - cy;
+      const ddx = px - cx,
+        ddy = py - cy;
       const distSq = ddx * ddx + ddy * ddy;
       if (distSq < minDistSq) minDistSq = distSq;
     }

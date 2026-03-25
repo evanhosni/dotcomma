@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Biome } from "../../world/types";
+import commonShader from "../../world/shaders/common.glsl";
 
 export namespace _material {
   export const loadTextures = async (filenames: string[]): Promise<THREE.Texture[]> => {
@@ -8,28 +9,47 @@ export namespace _material {
       filenames.map(
         (filename) =>
           new Promise<THREE.Texture>((resolve, reject) =>
-            textureLoader.load(process.env.PUBLIC_URL + "/textures/" + filename, resolve, undefined, reject),
+            textureLoader.load(
+              process.env.PUBLIC_URL + "/textures/" + filename,
+              (tex) => {
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.wrapT = THREE.RepeatWrapping;
+                resolve(tex);
+              },
+              undefined,
+              reject,
+            ),
           ),
       ),
     );
+  };
+
+  const getUniformDeclaration = (name: string, uniform: { value: any }): string => {
+    const v = uniform.value;
+    if (v instanceof THREE.Texture || v === null) return `uniform sampler2D ${name};`;
+    if (typeof v === "number") return `uniform float ${name};`;
+    if (v instanceof THREE.Vector2) return `uniform vec2 ${name};`;
+    if (v instanceof THREE.Vector3) return `uniform vec3 ${name};`;
+    if (v instanceof THREE.Vector4) return `uniform vec4 ${name};`;
+    return `uniform sampler2D ${name};`;
   };
 
   export const combineBiomeMaterials = async (
     biomes: Biome[],
     vertexShader: string,
     options: {
-      regionTexture?: THREE.Texture;
+      riverTexture?: THREE.Texture;
       biomeTexture?: THREE.Texture;
       varyingDeclarations?: string[];
     } = {},
   ): Promise<THREE.ShaderMaterial> => {
-    const { regionTexture, biomeTexture, varyingDeclarations = [] } = options;
+    const { riverTexture, biomeTexture, varyingDeclarations = [] } = options;
     // Collect all uniforms and fragment shaders from biomes
     const combinedUniforms: any = {};
 
-    // Add boundary texture if provided (between regions)
-    if (regionTexture) {
-      combinedUniforms.regiontexture = { value: regionTexture };
+    // Add river texture if provided (between regions)
+    if (riverTexture) {
+      combinedUniforms.rivertexture = { value: riverTexture };
     }
 
     // Add biome boundary texture if provided (between biomes within a region)
@@ -46,12 +66,12 @@ export namespace _material {
         // Merge uniforms
         Object.assign(combinedUniforms, biomeMaterial.uniforms);
 
-        // Strip out all declarations (varying, uniform) and extract only the main function
+        // Strip out all declarations (varying, uniform)
         let cleanShader = biomeMaterial.fragmentShader
           // Remove varying declarations
           .replace(/varying\s+\w+\s+\w+;/g, "")
-          // Remove uniform declarations
-          .replace(/uniform\s+sampler2D\s+\w+;/g, "")
+          // Remove uniform declarations (any type)
+          .replace(/uniform\s+\w+\s+\w+;/g, "")
           // Remove extra whitespace/newlines
           .replace(/^\s*[\r\n]/gm, "");
 
@@ -66,9 +86,11 @@ export namespace _material {
     const fragmentShader = `
     ${varyingDeclarations.join("\n    ")}
 
-    ${Object.keys(combinedUniforms)
-      .map((uniformName) => `uniform sampler2D ${uniformName};`)
+    ${Object.entries(combinedUniforms)
+      .map(([name, uniform]) => getUniformDeclaration(name, uniform as { value: any }))
       .join("\n    ")}
+
+    ${commonShader}
 
     ${fragmentFunctions.join("\n\n    ")}
 
@@ -80,6 +102,14 @@ export namespace _material {
       }`;
         })
         .join("\n      ")}
+
+      // Global river blending
+      if (vDistanceToRiverCenter < 50.0) {
+        vec2 riverUV = fract(vWorldUv);
+        vec4 riverColor = texture2D(rivertexture, riverUV);
+        float riverBlend = smoothstep(14.0, 50.0, vDistanceToRiverCenter);
+        gl_FragColor = mix(riverColor, gl_FragColor, riverBlend);
+      }
     }
   `;
 
