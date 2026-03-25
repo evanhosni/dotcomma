@@ -15,7 +15,6 @@ import {
   onMouseScrollDown,
   onMouseScrollUp,
   playerOutsideRange,
-  playerWithinRange,
   randomInterval,
 } from "../../../../objects/state/triggers";
 import { BehaviorContext, StateMachineConfig } from "../../../../objects/state/types";
@@ -27,6 +26,7 @@ const LOSE_RANGE = 30;
 const DIR_LERP_SPEED = 3;
 const HEAD_LERP_SPEED = 5;
 const MAX_HEAD_TURN = 50 * (Math.PI / 180);
+const SIGHT_ANGLE = 50 * (Math.PI / 180); // 50° — FOV half-angle for alert trigger
 const TURN_THRESHOLD = Math.PI / 2; // 90° — start turning body
 const TURN_DONE_THRESHOLD = Math.PI / 9; // 20° — stop turning, head tracking takes over
 
@@ -96,7 +96,12 @@ function updateHeadTracking(ctx: BehaviorContext): void {
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",
   triggers: [
-    playerWithinRange(SIGHT_RANGE),
+    custom("player-visible", (ctx) => {
+      const sightSq = SIGHT_RANGE * SIGHT_RANGE;
+      if (ctx.playerDistanceSq > sightSq) return false;
+      const bodyAngle = ctx.blackboard.__dir_angle ?? 0;
+      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) <= SIGHT_ANGLE;
+    }),
     playerOutsideRange(LOSE_RANGE),
     randomInterval("idle-look", 20, 60),
     randomInterval("idle-look-end", 3, 10),
@@ -162,7 +167,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         }
       },
       transitions: [
-        { trigger: `player-within-${SIGHT_RANGE}`, target: "alert" },
+        { trigger: "player-visible", target: "alert" },
         { trigger: "idle-look", target: "idle-look" },
       ],
     },
@@ -184,7 +189,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         ctx.blackboard.__vel_y = undefined;
       },
       transitions: [
-        { trigger: `player-within-${SIGHT_RANGE}`, target: "alert" },
+        { trigger: "player-visible", target: "alert" },
         { trigger: "idle-look-end", target: "idle-walk" },
       ],
     },
