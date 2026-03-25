@@ -44,6 +44,7 @@ export interface WorldConfig {
   gridSize: number;
   regionGridSize: number;
   boundaryWidth: number;
+  riverWidth: number;
   defaultBlendWidth: number;
   roadNoiseParams: TerrainNoiseParams;
   baseNoiseParams: TerrainNoiseParams;
@@ -68,7 +69,7 @@ export interface VertexResult {
   biomeId: number;
   blend: number;
   distanceToBiomeBoundaryCenter: number;
-  distanceToRegionBoundaryCenter: number;
+  distanceToRiverCenter: number;
   distanceToRoadCenter: number;
 }
 
@@ -257,7 +258,7 @@ const getWalls = (
   grid: VGrid[],
   regionGrid: VGrid[],
   gridSize: number
-): { biomeWalls: Wall[]; regionWalls: Wall[] } => {
+): { biomeWalls: Wall[]; riverWalls: Wall[] } => {
   const x = Math.floor(currentVertex.x / gridSize);
   const y = Math.floor(currentVertex.y / gridSize);
 
@@ -268,7 +269,7 @@ const getWalls = (
   const { delaunay, circumcenters } = getDelaunayData(grid);
 
   const biomeWalls: Wall[] = [];
-  const regionWalls: Wall[] = [];
+  const riverWalls: Wall[] = [];
 
   for (let i = 0; i < delaunay.halfedges.length; i++) {
     const edge = delaunay.halfedges[i];
@@ -311,14 +312,14 @@ const getWalls = (
     const wall: Wall = { sx: v1x, sy: v1y, ex: v2x, ey: v2y };
 
     if (cache[label].isRegionBoundary) {
-      regionWalls.push(wall);
+      riverWalls.push(wall);
       biomeWalls.push(wall);
     } else if (cache[label].isBiomeBoundary) {
       biomeWalls.push(wall);
     }
   }
 
-  return { biomeWalls, regionWalls };
+  return { biomeWalls, riverWalls };
 };
 
 const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
@@ -526,7 +527,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
 
   // Step 2c: Get biome and distances
   const biome: SerializedBiome = getNearestEntry(currentVertex, biomeGrid).element;
-  const { biomeWalls, regionWalls } = getWalls(
+  const { biomeWalls, riverWalls } = getWalls(
     cfg.seed,
     currentVertex,
     biomeGrid,
@@ -534,7 +535,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     cfg.gridSize
   );
   const distanceToBiomeBoundary = distanceToWall(cvx, cvz, biomeWalls);
-  const distanceToRegionBoundary = distanceToWall(cvx, cvz, regionWalls);
+  const distanceToRiver = distanceToWall(cvx, cvz, riverWalls);
 
   // Step 3: Blend
   const blendWidth = biome.blendWidth || cfg.defaultBlendWidth;
@@ -545,7 +546,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
   let biomeHeight = 0;
   let distanceToRoadCenter = distanceToBiomeBoundary;
 
-  if (distanceToRegionBoundary > cfg.boundaryWidth) {
+  if (distanceToRiver > cfg.riverWidth) {
+    const riverFade = Math.min(1.0, (distanceToRiver - cfg.riverWidth) / cfg.riverWidth);
     const biomeId = biome.id;
     const noiseConfig = cfg.biomeNoiseConfigs[biomeId];
 
@@ -555,7 +557,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
       if (noiseConfig.absNeg) h = Math.abs(h) * -1;
       if (noiseConfig.scale !== undefined) h *= noiseConfig.scale;
       if (noiseConfig.offset !== undefined) h += noiseConfig.offset;
-      biomeHeight = h * blend;
+      biomeHeight = h * blend * riverFade;
     } else if (cfg.cityConfig && biomeId === 1) {
       // City biome — compute internal road distance
       const cityDist = getCityDistanceToRoad(
@@ -567,9 +569,9 @@ export function computeVertexData(x: number, z: number): VertexResult {
         biomeWalls,
         cfg.cityConfig.seed
       );
-      distanceToRoadCenter = Math.min(cityDist, distanceToRegionBoundary);
+      distanceToRoadCenter = Math.min(cityDist, distanceToRiver);
       const cityHeight = distanceToRoadCenter > cfg.cityConfig.roadWidth ? 10 : 0;
-      biomeHeight = cityHeight * blend;
+      biomeHeight = cityHeight * blend * riverFade;
     }
   }
 
@@ -581,7 +583,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     biomeId: biome.id,
     blend,
     distanceToBiomeBoundaryCenter: distanceToBiomeBoundary,
-    distanceToRegionBoundaryCenter: distanceToRegionBoundary,
+    distanceToRiverCenter: distanceToRiver,
     distanceToRoadCenter,
   };
 }

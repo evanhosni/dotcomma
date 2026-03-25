@@ -647,7 +647,7 @@ export const Terrain = () => {
     };
     const attrBiomeId = ensureAttr("biomeId");
     const attrDistBiome = ensureAttr("distanceToBiomeBoundaryCenter");
-    const attrDistRegion = ensureAttr("distanceToRegionBoundaryCenter");
+    const attrDistRegion = ensureAttr("distanceToRiverCenter");
     const attrDistRoad = ensureAttr("distanceToRoadCenter");
 
     // Write main grid heights + attributes via direct array access
@@ -692,13 +692,32 @@ export const Terrain = () => {
     // Mark reused attributes for GPU upload
     (geom.getAttribute("biomeId") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToBiomeBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
-    (geom.getAttribute("distanceToRegionBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("distanceToRiverCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToRoadCenter") as THREE.BufferAttribute).needsUpdate = true;
 
     // Apply material and update geometry immediately
     chunk.plane.material = material;
     chunk.plane.geometry.attributes.position.needsUpdate = true;
     chunk.plane.geometry.computeVertexNormals();
+
+    // Copy terrain edge normals to skirt vertices so they don't trigger triplanar
+    const normalArray = chunk.plane.geometry.attributes.normal.array as Float32Array;
+    for (let i = 0; i < perimCount; i++) {
+      const srcIdx = perimeterIndices[i];
+      const nx = normalArray[srcIdx * 3];
+      const ny = normalArray[srcIdx * 3 + 1];
+      const nz = normalArray[srcIdx * 3 + 2];
+      const topIdx = (skirtTopStart + i) * 3;
+      const botIdx = (skirtBotStart + i) * 3;
+      normalArray[topIdx] = nx;
+      normalArray[topIdx + 1] = ny;
+      normalArray[topIdx + 2] = nz;
+      normalArray[botIdx] = nx;
+      normalArray[botIdx + 1] = ny;
+      normalArray[botIdx + 2] = nz;
+    }
+    (chunk.plane.geometry.attributes.normal as THREE.BufferAttribute).needsUpdate = true;
+
     chunk.plane.position.set(offset.x, 0, offset.y);
 
     if (chunk.lod.hasCollider) {

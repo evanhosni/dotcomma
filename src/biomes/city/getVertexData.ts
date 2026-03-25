@@ -20,11 +20,11 @@ export const getVertexData = async (vertexData: VertexData) => {
   vertexData.attributes.isEdgeBlock = current.isEdge;
   vertexData.attributes.block = current.block;
 
-  // Combine region boundary distance with internal city road distance
-  // distanceToRoadCenter represents the final distance to nearest road (boundary OR internal)
+  // Combine river distance with internal city road distance
+  // distanceToRoadCenter represents the final distance to nearest road (river OR internal)
   vertexData.attributes.distanceToRoadCenter = Math.min(
     distanceToInternalRoad,
-    vertexData.attributes.distanceToRegionBoundaryCenter
+    vertexData.attributes.distanceToRiverCenter
   );
 
   vertexData.height = getHeight(vertexData);

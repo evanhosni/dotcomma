@@ -77,8 +77,8 @@ async function handleTask(task: MessageData) {
     const biome = getCurrentBiome(new THREE.Vector2(currentVertex.x, currentVertex.y), grid);
     const biomeSite = getCurrentBiomeSite(new THREE.Vector2(currentVertex.x, currentVertex.y), grid);
 
-    // Get walls with region boundary information
-    const { biomeWalls, regionWalls } = getWalls({
+    // Get walls with river boundary information
+    const { biomeWalls, riverWalls } = getWalls({
       seed: `${seed} - walls`,
       currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
       grid,
@@ -90,9 +90,9 @@ async function handleTask(task: MessageData) {
       currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
       walls: biomeWalls,
     });
-    const distanceToRegionBoundary = getDistanceToWall({
+    const distanceToRiver = getDistanceToWall({
       currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
-      walls: regionWalls,
+      walls: riverWalls,
     });
 
     return {
@@ -104,7 +104,7 @@ async function handleTask(task: MessageData) {
       biomeSite,
       walls: biomeWalls,
       distanceToBiomeBoundary,
-      distanceToRegionBoundary,
+      distanceToRiver,
     };
   };
 
@@ -229,7 +229,7 @@ async function handleTask(task: MessageData) {
     grid: VoronoiGrid[];
     regionGrid: VoronoiGrid[];
     gridSize: number;
-  }): { biomeWalls: THREE.Line3[]; regionWalls: THREE.Line3[] } => {
+  }): { biomeWalls: THREE.Line3[]; riverWalls: THREE.Line3[] } => {
     const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
     const [x, y] = currentGrid;
 
@@ -239,7 +239,7 @@ async function handleTask(task: MessageData) {
     const { delaunay, circumcenters } = getDelaunayData(grid);
 
     const biomeWalls: THREE.Line3[] = [];
-    const regionWalls: THREE.Line3[] = [];
+    const riverWalls: THREE.Line3[] = [];
 
     for (let i = 0; i < delaunay.halfedges.length; i++) {
       const edge = delaunay.halfedges[i];
@@ -288,7 +288,7 @@ async function handleTask(task: MessageData) {
         const line = new THREE.Line3(start, end);
 
         if (cache[label].isRegionBoundary) {
-          regionWalls.push(line);
+          riverWalls.push(line);
           biomeWalls.push(line);
         } else if (cache[label].isBiomeBoundary) {
           biomeWalls.push(line);
@@ -296,7 +296,7 @@ async function handleTask(task: MessageData) {
       }
     }
 
-    return { biomeWalls, regionWalls };
+    return { biomeWalls, riverWalls };
   };
 
   // const getWalls = ({ seed, currentVertex, grid, gridSize }: VoronoiGetWallsParams): THREE.Line3[] => {
