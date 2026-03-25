@@ -4,12 +4,27 @@ import { useUrlParameters } from "../../context/UrlParametersContext";
 const EXPIRE_MS = 30_000;
 const CHECK_INTERVAL_MS = 1_000;
 
+type LogLevel = "log" | "error" | "warn";
+
+const LOG_COLORS: Record<LogLevel, string> = {
+  log: "#0f0",
+  error: "#f44",
+  warn: "#fa0",
+};
+
+const BADGE_COLORS: Record<LogLevel, string> = {
+  log: "#0a0",
+  error: "#a22",
+  warn: "#a70",
+};
+
 interface LogEntry {
   message: string;
   count: number;
   timestamp: number;
   el: HTMLDivElement;
   countEl: HTMLSpanElement | null;
+  type: LogLevel;
 }
 
 export const LogsOverlay = () => {
@@ -37,10 +52,7 @@ export const LogsOverlay = () => {
     containerRef.current = container;
     target.appendChild(container);
 
-    const originalLog = console.log;
-
-    console.log = (...args: any[]) => {
-      originalLog.apply(console, args);
+    function addEntry(type: LogLevel, args: any[]) {
       if (!activeRef.current) return;
 
       const message = args
@@ -50,22 +62,20 @@ export const LogsOverlay = () => {
       const now = Date.now();
       const entries = entriesRef.current;
 
-      // Check for duplicate
-      const existing = entries.find((e) => e.message === message);
+      const existing = entries.find((e) => e.message === message && e.type === type);
       if (existing) {
         existing.count++;
         existing.timestamp = now;
         if (existing.count === 2) {
           const badge = document.createElement("span");
           badge.style.cssText =
-            "margin-left:8px;color:#0a0;font-size:10px;opacity:0.7;";
+            `margin-left:8px;color:${BADGE_COLORS[type]};font-size:10px;opacity:0.7;`;
           badge.textContent = `×${existing.count}`;
           existing.el.appendChild(badge);
           existing.countEl = badge;
         } else if (existing.countEl) {
           existing.countEl.textContent = `×${existing.count}`;
         }
-        // Move to bottom
         container.appendChild(existing.el);
         container.scrollTop = container.scrollHeight;
         return;
@@ -73,14 +83,33 @@ export const LogsOverlay = () => {
 
       const el = document.createElement("div");
       el.style.cssText =
-        "background:rgba(0,0,0,0.6);color:#0f0;padding:4px 8px;border-radius:4px;" +
+        `background:rgba(0,0,0,0.6);color:${LOG_COLORS[type]};padding:4px 8px;border-radius:4px;` +
         "margin-top:2px;word-break:break-all;white-space:pre-wrap;";
       el.textContent = message;
 
-      const entry: LogEntry = { message, count: 1, timestamp: now, el, countEl: null };
+      const entry: LogEntry = { message, count: 1, timestamp: now, el, countEl: null, type };
       entries.push(entry);
       container.appendChild(el);
       container.scrollTop = container.scrollHeight;
+    }
+
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    console.log = (...args: any[]) => {
+      originalLog.apply(console, args);
+      addEntry("log", args);
+    };
+
+    console.error = (...args: any[]) => {
+      originalError.apply(console, args);
+      addEntry("error", args);
+    };
+
+    console.warn = (...args: any[]) => {
+      originalWarn.apply(console, args);
+      addEntry("warn", args);
     };
 
     // Expiry sweep
@@ -97,6 +126,8 @@ export const LogsOverlay = () => {
 
     return () => {
       console.log = originalLog;
+      console.error = originalError;
+      console.warn = originalWarn;
       clearInterval(interval);
       container.remove();
       entriesRef.current = [];
