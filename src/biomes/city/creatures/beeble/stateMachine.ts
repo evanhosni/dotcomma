@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import {
-  afterDelay,
   onMouseDoubleClick,
   onMouseHoverEnter,
   onMouseHoverLeave,
@@ -88,8 +87,6 @@ export const BEEBLE_SM: StateMachineConfig = {
     playerOutsideRange(LOSE_RANGE),
     randomInterval("idle-look", 20, 60),
     randomInterval("idle-look-end", 3, 10),
-    randomInterval("alert-blink", 5, 10),
-    afterDelay(1.5),
     onMouseLeftClick(),
     onMouseHoverEnter(),
     onMouseHoverLeave(),
@@ -187,28 +184,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
         { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "alert-blink", target: "alert-blink" },
-      ],
-    },
-
-    // ─── Alert: Blinking ───
-    {
-      id: "alert-blink",
-      animation: {
-        clipName: "blink",
-        loop: THREE.LoopOnce,
-        clampWhenFinished: true,
-      },
-      onUpdate: (ctx) => {
-        ctx.blackboard.__vel_x = 0;
-        ctx.blackboard.__vel_z = 0;
-        ctx.blackboard.__vel_y = undefined;
-        updateHeadTracking(ctx);
-      },
-      transitions: [
-        { trigger: "mouse-left-click", target: "ascending" },
-        { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "after-1.5s", target: "alert" },
       ],
     },
 
