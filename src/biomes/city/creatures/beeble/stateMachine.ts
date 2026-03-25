@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  custom,
   onMouseDoubleClick,
   onMouseHoverEnter,
   onMouseHoverLeave,
@@ -26,6 +27,8 @@ const LOSE_RANGE = 30;
 const DIR_LERP_SPEED = 3;
 const HEAD_LERP_SPEED = 5;
 const MAX_HEAD_TURN = 50 * (Math.PI / 180);
+const TURN_THRESHOLD = Math.PI / 2; // 90° — start turning body
+const TURN_DONE_THRESHOLD = Math.PI / 9; // 20° — stop turning, head tracking takes over
 
 // ─── Helpers ───
 
@@ -34,6 +37,19 @@ function lerpAngle(a: number, b: number, t: number): number {
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
   return a + diff * Math.min(t, 1);
+}
+
+function angleDiffAbs(a: number, b: number): number {
+  let diff = b - a;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return Math.abs(diff);
+}
+
+function angleToPlayer(ctx: { positionRef: { current: THREE.Vector3 }; playerPosition: THREE.Vector3 }): number {
+  const dx = ctx.playerPosition.x - ctx.positionRef.current.x;
+  const dz = ctx.playerPosition.z - ctx.positionRef.current.z;
+  return Math.atan2(dx, dz);
 }
 
 function randomAngle(): number {
@@ -63,13 +79,10 @@ function updateHeadTracking(ctx: BehaviorContext): void {
   const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
   if (!bone) return;
 
-  const dx = ctx.playerPosition.x - ctx.positionRef.current.x;
-  const dz = ctx.playerPosition.z - ctx.positionRef.current.z;
-  const angleToPlayer = Math.atan2(dx, dz);
-
+  const playerAngle = angleToPlayer(ctx);
   const bodyAngle = ctx.groupRef.current?.rotation.y ?? 0;
 
-  let relAngle = angleToPlayer - bodyAngle;
+  let relAngle = playerAngle - bodyAngle;
   while (relAngle > Math.PI) relAngle -= Math.PI * 2;
   while (relAngle < -Math.PI) relAngle += Math.PI * 2;
 
@@ -87,6 +100,14 @@ export const BEEBLE_SM: StateMachineConfig = {
     playerOutsideRange(LOSE_RANGE),
     randomInterval("idle-look", 20, 60),
     randomInterval("idle-look-end", 3, 10),
+    custom("alert-need-turn", (ctx) => {
+      const bodyAngle = ctx.blackboard.__body_angle ?? 0;
+      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) > TURN_THRESHOLD;
+    }),
+    custom("alert-done-turn", (ctx) => {
+      const bodyAngle = ctx.blackboard.__body_angle ?? 0;
+      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) <= TURN_DONE_THRESHOLD;
+    }),
     onMouseLeftClick(),
     onMouseHoverEnter(),
     onMouseHoverLeave(),
@@ -174,6 +195,7 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clipName: "idle" },
       onEnter: (ctx) => {
         findHeadBone(ctx);
+        ctx.blackboard.__body_angle = ctx.groupRef.current?.rotation.y ?? 0;
       },
       onUpdate: (ctx) => {
         ctx.blackboard.__vel_x = 0;
@@ -184,6 +206,35 @@ export const BEEBLE_SM: StateMachineConfig = {
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
         { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
+        { trigger: "alert-need-turn", target: "alert-turning" },
+      ],
+    },
+
+    // ─── Alert: Turning toward player ───
+    {
+      id: "alert-turning",
+      animation: { clipName: "walk" },
+      onEnter: (ctx) => {
+        resetHeadBone(ctx);
+      },
+      onUpdate: (ctx) => {
+        const bb = ctx.blackboard;
+        bb.__vel_x = 0;
+        bb.__vel_z = 0;
+        bb.__vel_y = undefined;
+
+        // Smoothly rotate body toward player
+        const targetAngle = angleToPlayer(ctx);
+        bb.__body_angle = lerpAngle(bb.__body_angle ?? 0, targetAngle, DIR_LERP_SPEED * ctx.delta);
+
+        if (ctx.groupRef.current) {
+          ctx.groupRef.current.rotation.y = bb.__body_angle;
+        }
+      },
+      transitions: [
+        { trigger: "mouse-left-click", target: "ascending" },
+        { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
+        { trigger: "alert-done-turn", target: "alert" },
       ],
     },
 
