@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
-import { utils } from "../utils/utils";
+import { getDistance2D } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { AnimationControl } from "./state/types";
@@ -248,7 +248,7 @@ export const GameObject = ({
   // Handle animations and frustum culling
   useFrame((state, delta) => {
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
-    const distance = utils.getDistance2D(camera.position, objectPosition);
+    const distance = getDistance2D(camera.position, objectPosition);
 
     if (distance > renderDistance * DELETE_OBJECT_BUFFER) {
       onDestroy(id);
@@ -346,13 +346,6 @@ export const GameObject = ({
     };
 
     taskQueue.addTask(task);
-
-    // Clean up animations when component unmounts
-    return () => {
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-      }
-    };
   }, [gltf]); // scale/rotation omitted: stable per instance, only used for collider creation
 
   return (

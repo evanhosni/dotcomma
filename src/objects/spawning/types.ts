@@ -2,6 +2,7 @@ export interface SpawnDescriptor {
   id: string; // unique key, e.g. "beeble"
   component: React.FC<SpawnedObjectProps>;
   model?: string; // GLTF path for preloading
+  scale?: THREE.Vector3Tuple; // render scale, defaults to [1,1,1]
   footprint: number; // radius in world units for spacing
   density: number; // instances per 1,000,000 sq units
   clustering: number; // 0 = uniform, 1 = heavily clustered
@@ -14,11 +15,12 @@ export interface SpawnDescriptor {
   heightRange?: [number, number]; // restrict to height band
   slopeRange?: [number, number]; // restrict to slope range (degrees)
   spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
-  cursor_override?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
+  cursorOverride?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
 }
 
 export interface SpawnedObjectProps {
   id: string;
+  model?: string;
   coordinates: THREE.Vector3Tuple;
   scale?: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;

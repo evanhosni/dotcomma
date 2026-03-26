@@ -12,7 +12,7 @@
     "noise-ts": "^1.0.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.16.0",
+    "react-router-dom": "^7.13.2",
     "react-scripts": "5.0.1",
     "seedrandom": "^3.0.5",
     "typescript": "^4.9.5"
