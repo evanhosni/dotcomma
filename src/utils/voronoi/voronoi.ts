@@ -1,7 +1,7 @@
 import { City } from "../../biomes/city/City";
 import { Dust } from "../../biomes/dust/Dust";
 import { Grass } from "../../biomes/grass/Grass";
-import { utils } from "../utils";
+import { getAllBiomes } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 
 export const voronoiWorker = new Worker(new URL("./voronoi.worker.ts", import.meta.url), {
@@ -99,7 +99,7 @@ export namespace voronoi {
         const { params, resolve } = nextWork;
 
         voronoiWorker.onmessage = (event) => {
-          const biomes_in_use = params.regions?.length ? utils.getAllBiomes(params.regions) : params.biomes;
+          const biomes_in_use = params.regions?.length ? getAllBiomes(params.regions) : params.biomes;
           const biome = biomes_in_use?.find((b) => b.id === event.data.biome.id);
 
           resolve({ ...event.data, biome });

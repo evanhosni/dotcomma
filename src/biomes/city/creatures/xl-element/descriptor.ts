@@ -5,6 +5,7 @@ export const XLElementDescriptor: SpawnDescriptor = {
   id: "xl-element",
   component: XLElement,
   model: "/models/apartment.glb",
+  scale: [2, 2, 2],
   footprint: 60,
   density: 4,
   clustering: 0,

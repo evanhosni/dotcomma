@@ -150,10 +150,12 @@ export const ObjectPool = () => {
         const Component = desc.component;
         const props: SpawnedObjectProps = {
           id: objId,
+          model: desc.model,
           coordinates: [point.x, point.height, point.z],
+          scale: desc.scale,
           renderDistance: desc.renderDistance,
           frustumPadding: desc.frustumPadding ?? 3,
-          cursorOverride: desc.cursor_override,
+          cursorOverride: desc.cursorOverride,
           onDestroy: (id: string) => {
             destroyedObjectsRef.current.set(objId, Date.now());
             objectsMapRef.current.delete(objId);

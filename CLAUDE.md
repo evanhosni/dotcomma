@@ -8,6 +8,7 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 
 - **React 18** + **TypeScript** (strict mode)
 - **Three.js** via `@react-three/fiber`, `@react-three/drei`, `@react-three/cannon` (physics)
+- **React Router** (`react-router-dom`) for client-side routing
 - **Craco** (CRA + webpack customization, `.glsl` files loaded as raw assets)
 - **Web Workers** for heavy computation (Voronoi/Delaunay, terrain data)
 - **Noise**: `noise-ts` (Simplex/Perlin), `seedrandom` (deterministic RNG)
@@ -38,7 +39,6 @@ src/
     city/              # Urban biome (id:1) — blocks, creatures, shaders
     grass/             # Grassland biome (id:3)
     dust/              # Desert biome (id:2)
-    pharma/            # Pharmasea biome (id:4)
   regions/             # Region definitions (contain biome lists)
     CityRegion.ts      # City region (city + grass biomes)
     DesertRegion.ts    # Desert region (dust biome)
@@ -59,7 +59,7 @@ src/
     terrain.worker.ts  # Off-thread chunk height computation
     spawn.worker.ts    # Off-thread spawn point generation
   objects/
-    GameObject.tsx     # GLTF model loader with colliders + animations
+    GameObject.tsx     # GLTF model loader with colliders + animations (handles own position when no positionRef)
     spawning/
       ObjectPool.tsx   # Spawn management, frustum culling, pooling
       collectDescriptors.ts # Aggregates SpawnDescriptors from regions/biomes
@@ -67,19 +67,24 @@ src/
       SpawnSpatialHash.ts # Grid-based spatial hash for spacing
       types.ts         # SpawnDescriptor, SpawnPoint, SpawnedObjectProps
     colliders/         # Physics collider components
+    state/             # State machine, mouse events, triggers for interactive objects
   player/
     Player.tsx         # First-person controller + physics
     useInput.tsx       # Keyboard input
   utils/
+    utils.ts           # getAllBiomes, getDistance2D (plain exports)
     voronoi/           # Web worker Voronoi system (voronoi.ts queues, .worker.ts computes)
     noise/_noise.ts    # Perlin/Simplex FBM wrapper (TerrainNoiseParams)
     math/_math.ts      # seedRand, lerp, smoothstep, randRange
     material/          # Texture loading, biome material composition
     city/_city.ts      # City grid generation + block placement
     task-queue/        # Async task queue
+    quantization/      # Vertex quantization for material patching
+    cursor/            # DOM cursor overlay
   canvas/              # Three.js canvas + physics world setup
   context/             # GameContext (player position, terrain loading state)
-  menus/               # Pause menu, overlay, command palette
+  menus/               # Overlay, command palette, logs overlay
+  vfx/                 # Post-processing effects
 ```
 
 ### Terrain Pipeline
@@ -94,6 +99,7 @@ src/
 
 - **No dimension abstraction** — the world is defined directly by `WORLD_REGIONS` in `src/world/world.ts`. Components import what they need directly instead of receiving a `dimension` prop.
 - **Utility namespaces**: `_noise.terrain()`, `_math.seedRand()`, `_material.loadTextures()`, `voronoi.create()`
+- **Plain utility exports**: `getAllBiomes()`, `getDistance2D()` from `src/utils/utils.ts`
 - **Biome shaders**: fragment shaders branch on `vBiomeId` varying; vertex shader is shared
 - **Geometry pooling**: `acquireGeometry()`/`releaseGeometry()` recycle BufferGeometry per LOD level
 - **Vertex budget**: terrain builds multiple small chunks per frame (LOD3-5) up to a budget limit
@@ -122,9 +128,16 @@ src/
 
 ### New Spawn/NPC
 
-1. Create component in the relevant biome's `creatures/` directory
-2. Use `GameObject` for GLTF loading + colliders
-3. Add a `SpawnDescriptor` to the biome's `spawnables` array
+**Static objects** (no custom behavior — just a model at a position):
+1. Add a `SpawnDescriptor` to the biome's `spawnables` array — omit `component`
+2. Set `model` (GLTF path) and `scale` on the descriptor
+3. Place GLTF model in `public/models/`
+4. ObjectPool renders `GameObject` directly; it handles its own position when no `positionRef` is provided
+
+**Interactive objects** (physics, state machines, custom logic):
+1. Create a custom component in the relevant biome's `creatures/` directory
+2. Use `GameObject` for GLTF loading + colliders, `useStateMachine` / `useMouseEvents` for behavior
+3. Add a `SpawnDescriptor` to the biome's `spawnables` array with the custom `component`
 4. Place GLTF model in `public/models/`
 
 ## Performance Notes
@@ -148,11 +161,11 @@ All overlays, menus, and HUD elements should follow the established style set by
 - **Inputs**: transparent background, no border except `1px solid #0f0` bottom, inherit font
 - **Graphs/sub-elements**: `border-radius: 2px`, `rgba(0,0,0,0.4)` background
 - **Positioning**: `position: fixed`, use `z-index: 1000` for HUD overlays, `z-index: 9999` for modal overlays with backdrop
-- **Inline styles preferred** — overlays use JS style objects (not CSS modules) since they're built imperatively or need dynamic values. CSS modules are used for the pause menu.
+- **Inline styles preferred** — overlays use JS style objects (not CSS modules) since they're built imperatively or need dynamic values
 
 ## Conventions
 
-- PascalCase for components/types, camelCase for utilities/functions
+- PascalCase for components/types, camelCase for utilities/functions/properties
 - SCREAMING_SNAKE_CASE for constants and enums
 - Feature-based directory structure — co-locate assets (shaders, textures) with their biome/feature
 - Prefer editing existing files over creating new ones

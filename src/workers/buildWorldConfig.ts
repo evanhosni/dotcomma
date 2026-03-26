@@ -72,19 +72,6 @@ export function buildWorldConfig(regions: Region[]): WorldConfig {
         absNeg: true,
         offset: 50,
       },
-      // Pharmasea (id=4)
-      4: {
-        params: {
-          type: "perlin",
-          octaves: 5,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 50,
-          scale: 200,
-        },
-        scale: -3,
-      },
     },
     cityConfig: {
       seed: "city1",

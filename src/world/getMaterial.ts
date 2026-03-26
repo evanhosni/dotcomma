@@ -1,13 +1,13 @@
 import { _material } from "../utils/material/_material";
 import { _quantization } from "../utils/quantization/quantization";
-import { utils } from "../utils/utils";
+import { getAllBiomes } from "../utils/utils";
 import { CityRegion, DesertRegion } from "../regions";
 import vertexShader from "./shaders/vertex.glsl";
 
 const regions = [CityRegion, DesertRegion];
 
 export const getMaterial = async () => {
-  const biomes = utils.getAllBiomes(regions);
+  const biomes = getAllBiomes(regions);
 
   // Load the river texture (between regions)
   const [riverTexture] = await _material.loadTextures(["blue_mud.jpg"]);

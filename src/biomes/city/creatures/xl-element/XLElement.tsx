@@ -1,27 +1,13 @@
-import { Debug } from "@react-three/cannon";
-import { useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import * as THREE from "three";
 import { GameObject } from "../../../../objects/GameObject";
 import { SpawnedObjectProps } from "../../../../objects/spawning/types";
 
 export const XLElement = (props: SpawnedObjectProps) => {
-  const ref = useRef<THREE.Group>(null);
-  const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
-  const speed = 0;
-
-  useFrame((state, delta) => {
-    if (ref.current) {
-      positionRef.current.x -= speed * delta;
-      ref.current.position.copy(positionRef.current);
-    }
-  });
-
+  const positionRef = useRef(new THREE.Vector3(...props.coordinates));
   return (
-    <Debug>
-      <group ref={ref as any}>
-        <GameObject model="/models/apartment.glb" positionRef={positionRef} {...props} scale={[2, 2, 2]} />
-      </group>
-    </Debug>
+    <group position={props.coordinates}>
+      <GameObject model={props.model!} positionRef={positionRef} {...props} />
+    </group>
   );
 };
