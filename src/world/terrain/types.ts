@@ -16,8 +16,9 @@ export interface Chunk {
 
 export interface TerrainColliderProps {
   chunkKey: string;
-  heightfield: number[][];
+  heights: Float32Array;
+  nrows: number;
+  ncols: number;
   position: number[];
-  elementSize: number;
   chunkSize: number;
 }

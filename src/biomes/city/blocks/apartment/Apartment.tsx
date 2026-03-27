@@ -7,7 +7,7 @@ export const Apartment = (props: SpawnedObjectProps) => {
   const positionRef = useRef(new THREE.Vector3(...props.coordinates));
   return (
     <group position={props.coordinates}>
-      <GameObject model={props.model!} positionRef={positionRef} {...props} />
+      <GameObject model={props.model!} positionRef={positionRef} {...props} wholeTrimesh />
     </group>
   );
 };

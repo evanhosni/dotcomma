@@ -103,6 +103,8 @@ interface GameObjectProps {
   frustumPadding?: number;
   onDestroy: (id: string) => void;
   animationControl?: AnimationControl;
+  isStatic?: boolean;
+  wholeTrimesh?: boolean;
 }
 
 interface ColliderState {
@@ -123,6 +125,8 @@ export const GameObject = ({
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   onDestroy,
   animationControl,
+  isStatic = true,
+  wholeTrimesh = false,
 }: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
@@ -338,7 +342,7 @@ export const GameObject = ({
   useEffect(() => {
     const task = async () => {
       try {
-        const colliders = await createColliders(gltf, scale, rotation);
+        const colliders = await createColliders(gltf as any, scale, rotation, wholeTrimesh);
         setColliders(colliders as ColliderState);
       } catch (error) {
         console.error("Error creating colliders:", error);
@@ -356,16 +360,16 @@ export const GameObject = ({
       {shouldRenderColliders && colliders && (
         <>
           {colliders.capsuleColliders.map((collider, index) => (
-            <CapsuleCollider key={index} {...collider} positionRef={positionRef} />
+            <CapsuleCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
           ))}
           {colliders.sphereColliders.map((collider, index) => (
-            <SphereCollider key={index} {...collider} positionRef={positionRef} />
+            <SphereCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
           ))}
           {colliders.boxColliders.map((collider, index) => (
-            <BoxCollider key={index} {...collider} positionRef={positionRef} />
+            <BoxCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
           ))}
           {colliders.trimeshColliders.map((collider, index) => (
-            <TrimeshCollider key={index} {...collider} positionRef={positionRef} />
+            <TrimeshCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
           ))}
         </>
       )}

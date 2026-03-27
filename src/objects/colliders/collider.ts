@@ -1,60 +1,148 @@
 import * as THREE from "three";
 import { GLTF } from "three/examples/jsm/loaders/GLTFLoader";
-import { COLLIDER_TYPE } from "./types";
+import { COLLIDER_TYPE, ColliderWorkerMessage, WholeTrimeshWorkerMessage } from "./types";
 
 export const colliderWorker = new Worker(new URL("./collider.worker.ts", import.meta.url), {
   type: "module",
 });
 
-export const createColliders = async (gltf: GLTF, scale: THREE.Vector3Tuple, rotation: THREE.Vector3Tuple) => {
+let messageId = 0;
+const pendingResolves = new Map<number, (data: any) => void>();
+
+colliderWorker.onmessage = (event) => {
+  const { id, data } = event.data;
+  const resolve = pendingResolves.get(id);
+  if (resolve) {
+    pendingResolves.delete(id);
+    resolve(data);
+  }
+};
+
+function postToWorker(msg: any): Promise<any> {
+  return new Promise((resolve) => {
+    const id = messageId++;
+    pendingResolves.set(id, resolve);
+    colliderWorker.postMessage({ id, ...msg });
+  });
+}
+
+/**
+ * Extract raw position array from a geometry, handling InterleavedBufferAttribute.
+ */
+function getPositionArray(geometry: THREE.BufferGeometry): number[] {
+  const attr = geometry.attributes.position;
+  if (attr instanceof THREE.InterleavedBufferAttribute) {
+    const out: number[] = [];
+    for (let i = 0; i < attr.count; i++) {
+      out.push(attr.getX(i), attr.getY(i), attr.getZ(i));
+    }
+    return out;
+  }
+  return Array.from(attr.array);
+}
+
+/**
+ * Build the combined transform matrix for a GLTF child mesh.
+ * Maps geometry-local vertices to spawn-local coordinates (offset from positionRef).
+ *
+ * The visual rendering chain is:
+ *   <group position={coordinates}>
+ *     <primitive object={scene} scale={spawnScale} rotation={spawnRotation}>
+ *       ...child meshes (potentially nested)...
+ *
+ * <primitive> overwrites the scene's own transforms, so we strip the scene's
+ * world matrix and replace it with the spawn transforms.
+ */
+function buildCombinedMatrix(
+  child: THREE.Object3D,
+  sceneWorldInverse: THREE.Matrix4,
+  spawnScale: THREE.Vector3Tuple,
+  spawnRotation: THREE.Vector3Tuple
+): THREE.Matrix4 {
+  const spawnMatrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(spawnRotation[0], spawnRotation[1], spawnRotation[2])),
+    new THREE.Vector3(spawnScale[0], spawnScale[1], spawnScale[2])
+  );
+
+  // child.matrixWorld includes the scene root's own transform + all parent
+  // transforms down to this child. Premultiplying by sceneWorldInverse strips
+  // the scene's transform, leaving only the child-to-scene-root chain.
+  const childRelative = child.matrixWorld.clone().premultiply(sceneWorldInverse);
+
+  return spawnMatrix.multiply(childRelative);
+}
+
+export const createColliders = async (
+  gltf: GLTF,
+  scale: THREE.Vector3Tuple,
+  rotation: THREE.Vector3Tuple,
+  wholeTrimesh = false,
+) => {
   const capsuleColliders: any[] = [];
   const sphereColliders: any[] = [];
   const boxColliders: any[] = [];
   const trimeshColliders: any[] = [];
 
-  for (const child of gltf.scene.children) {
-    if (child instanceof THREE.Mesh && child.geometry) {
-      const mesh = child.clone();
-      mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
-      mesh.scale.multiply(new THREE.Vector3(...scale));
+  // Force-compute world matrices so we can get child-to-scene transforms
+  gltf.scene.updateMatrixWorld(true);
+  const sceneWorldInverse = gltf.scene.matrixWorld.clone().invert();
 
-      let colliderPromise: Promise<any> | null = null;
+  if (wholeTrimesh) {
+    // Collect all mesh geometry into a single trimesh collider
+    const meshes: WholeTrimeshWorkerMessage["meshes"] = [];
 
-      if (child.userData.capsule) {
-        colliderPromise = createCollider(mesh, COLLIDER_TYPE.CAPSULE);
-        capsuleColliders.push(await colliderPromise);
-      } else if (child.userData.sphere) {
-        colliderPromise = createCollider(mesh, COLLIDER_TYPE.SPHERE);
-        sphereColliders.push(await colliderPromise);
-      } else if (child.userData.box) {
-        //TODO make box a bit more robust, make it able to detect and match object rotation OR make trimesh collision detection better
-        colliderPromise = createCollider(mesh, COLLIDER_TYPE.BOX);
-        boxColliders.push(await colliderPromise);
-      } else if (child.userData.trimesh) {
-        colliderPromise = createCollider(mesh, COLLIDER_TYPE.TRIMESH);
-        trimeshColliders.push(await colliderPromise);
-      }
+    gltf.scene.traverse((child) => {
+      if (!(child instanceof THREE.Mesh) || !child.geometry) return;
+
+      const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
+      meshes.push({
+        positions: getPositionArray(child.geometry),
+        index: child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null,
+        matrix: Array.from(matrix.elements),
+      });
+    });
+
+    if (meshes.length > 0) {
+      const result = await postToWorker({
+        type: COLLIDER_TYPE.WHOLE_TRIMESH,
+        meshes,
+      } as WholeTrimeshWorkerMessage);
+      trimeshColliders.push(result);
     }
+
+    return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
+  }
+
+  // Per-child colliders based on userData flags
+  for (const child of gltf.scene.children) {
+    if (!(child instanceof THREE.Mesh) || !child.geometry) continue;
+
+    let type: COLLIDER_TYPE | null = null;
+    if (child.userData.capsule) type = COLLIDER_TYPE.CAPSULE;
+    else if (child.userData.sphere) type = COLLIDER_TYPE.SPHERE;
+    else if (child.userData.box) type = COLLIDER_TYPE.BOX;
+    else if (child.userData.trimesh) type = COLLIDER_TYPE.TRIMESH;
+    if (!type) continue;
+
+    const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
+    const positions = getPositionArray(child.geometry);
+    const index = child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null;
+
+    const msg: ColliderWorkerMessage = {
+      type,
+      positions,
+      index,
+      matrix: Array.from(matrix.elements),
+    };
+
+    const result = await postToWorker(msg);
+
+    if (type === COLLIDER_TYPE.CAPSULE) capsuleColliders.push(result);
+    else if (type === COLLIDER_TYPE.SPHERE) sphereColliders.push(result);
+    else if (type === COLLIDER_TYPE.BOX) boxColliders.push(result);
+    else if (type === COLLIDER_TYPE.TRIMESH) trimeshColliders.push(result);
   }
 
   return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
-};
-
-const createCollider = (mesh: THREE.Mesh, type: COLLIDER_TYPE): Promise<any> => {
-  return new Promise((resolve) => {
-    colliderWorker.onmessage = (event) => {
-      resolve(event.data);
-    };
-
-    const params = {
-      geometry: type === COLLIDER_TYPE.TRIMESH ? undefined : mesh.geometry.toJSON(),
-      positions: type === COLLIDER_TYPE.TRIMESH ? Array.from(mesh.geometry.attributes.position.array) : undefined,
-      index: type === COLLIDER_TYPE.TRIMESH && mesh.geometry.index ? Array.from(mesh.geometry.index.array) : null,
-      position: [mesh.position.x, mesh.position.y, mesh.position.z],
-      scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
-      rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
-    };
-
-    colliderWorker.postMessage({ type, params });
-  });
 };

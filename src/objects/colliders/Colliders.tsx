@@ -1,73 +1,49 @@
-import { useBox, useCylinder, useSphere, useTrimesh } from "@react-three/cannon";
+import { RigidBody, CapsuleCollider as RapierCapsule, BallCollider, CuboidCollider, TrimeshCollider as RapierTrimesh } from "@react-three/rapier";
 import { useFrame } from "@react-three/fiber";
+import { useRef } from "react";
 import * as THREE from "three";
+import type { RapierRigidBody } from "@react-three/rapier";
+
+// NOTE: The RigidBody `position` prop is in LOCAL space (affected by parent
+// Three.js group transforms). Since these colliders are rendered inside a
+// `<group position={coordinates}>`, we use only the worker-computed offset
+// for the position prop. The `setNextKinematicTranslation` API uses WORLD
+// coordinates, so kinematic updates add positionRef (= world position).
 
 export const CapsuleCollider = ({
   radius,
   height,
   position,
   positionRef,
+  isStatic = true,
 }: {
   radius: number;
   height: number;
-  position: THREE.Vector3;
+  position: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
+  isStatic?: boolean;
 }) => {
-  const halfHeight = height / 2;
-
-  const [ref1, sphere1Api] = useSphere(() => ({
-    args: [radius],
-    position: [
-      positionRef.current.x + position.x,
-      positionRef.current.y + position.y + halfHeight,
-      positionRef.current.z + position.z,
-    ],
-  }));
-
-  const [ref2, sphere2Api] = useSphere(() => ({
-    args: [radius],
-    position: [
-      positionRef.current.x + position.x,
-      positionRef.current.y + position.y - halfHeight,
-      positionRef.current.z + position.z,
-    ],
-  }));
-
-  const [ref3, cylinderApi] = useCylinder(() => ({
-    args: [radius, radius, Math.abs(height), 8],
-    position: [
-      positionRef.current.x + position.x,
-      positionRef.current.y + position.y,
-      positionRef.current.z + position.z,
-    ],
-  }));
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   useFrame(() => {
-    if (positionRef.current) {
-      sphere1Api.position.set(
-        positionRef.current.x + position.x,
-        positionRef.current.y + position.y + halfHeight,
-        positionRef.current.z + position.z
-      );
-      sphere2Api.position.set(
-        positionRef.current.x + position.x,
-        positionRef.current.y + position.y - halfHeight,
-        positionRef.current.z + position.z
-      );
-      cylinderApi.position.set(
-        positionRef.current.x + position.x,
-        positionRef.current.y + position.y,
-        positionRef.current.z + position.z
-      );
+    if (!isStatic && positionRef.current && rigidBodyRef.current) {
+      rigidBodyRef.current.setNextKinematicTranslation({
+        x: positionRef.current.x + position[0],
+        y: positionRef.current.y + position[1],
+        z: positionRef.current.z + position[2],
+      });
     }
   });
 
   return (
-    <group>
-      <mesh ref={ref1 as any} />
-      <mesh ref={ref2 as any} />
-      <mesh ref={ref3 as any} />
-    </group>
+    <RigidBody
+      ref={rigidBodyRef}
+      type={isStatic ? "fixed" : "kinematicPosition"}
+      position={[position[0], position[1], position[2]]}
+      colliders={false}
+    >
+      <RapierCapsule args={[height / 2, radius]} />
+    </RigidBody>
   );
 };
 
@@ -75,31 +51,35 @@ export const SphereCollider = ({
   radius,
   position,
   positionRef,
+  isStatic = true,
 }: {
   radius: number;
   position: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
+  isStatic?: boolean;
 }) => {
-  const [ref, api] = useSphere(() => ({
-    args: [radius],
-    position: [
-      positionRef.current.x + position[0],
-      positionRef.current.y + position[1],
-      positionRef.current.z + position[2],
-    ],
-  }));
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   useFrame(() => {
-    if (positionRef.current) {
-      api.position.set(
-        positionRef.current.x + position[0],
-        positionRef.current.y + position[1],
-        positionRef.current.z + position[2]
-      );
+    if (!isStatic && positionRef.current && rigidBodyRef.current) {
+      rigidBodyRef.current.setNextKinematicTranslation({
+        x: positionRef.current.x + position[0],
+        y: positionRef.current.y + position[1],
+        z: positionRef.current.z + position[2],
+      });
     }
   });
 
-  return <mesh ref={ref as any} />;
+  return (
+    <RigidBody
+      ref={rigidBodyRef}
+      type={isStatic ? "fixed" : "kinematicPosition"}
+      position={[position[0], position[1], position[2]]}
+      colliders={false}
+    >
+      <BallCollider args={[radius]} />
+    </RigidBody>
+  );
 };
 
 export const BoxCollider = ({
@@ -107,33 +87,37 @@ export const BoxCollider = ({
   position,
   rotation,
   positionRef,
+  isStatic = true,
 }: {
   size: THREE.Vector3Tuple;
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
+  isStatic?: boolean;
 }) => {
-  const [ref, api] = useBox(() => ({
-    args: size,
-    position: [
-      positionRef.current.x + position[0],
-      positionRef.current.y + position[1],
-      positionRef.current.z + position[2],
-    ],
-    rotation,
-  }));
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   useFrame(() => {
-    if (positionRef.current) {
-      api.position.set(
-        positionRef.current.x + position[0],
-        positionRef.current.y + position[1],
-        positionRef.current.z + position[2]
-      );
+    if (!isStatic && positionRef.current && rigidBodyRef.current) {
+      rigidBodyRef.current.setNextKinematicTranslation({
+        x: positionRef.current.x + position[0],
+        y: positionRef.current.y + position[1],
+        z: positionRef.current.z + position[2],
+      });
     }
   });
 
-  return <mesh ref={ref as any} />;
+  return (
+    <RigidBody
+      ref={rigidBodyRef}
+      type={isStatic ? "fixed" : "kinematicPosition"}
+      position={[position[0], position[1], position[2]]}
+      rotation={rotation}
+      colliders={false}
+    >
+      <CuboidCollider args={[size[0] / 2, size[1] / 2, size[2] / 2]} />
+    </RigidBody>
+  );
 };
 
 export const TrimeshCollider = ({
@@ -142,32 +126,36 @@ export const TrimeshCollider = ({
   position,
   rotation,
   positionRef,
+  isStatic = true,
 }: {
   vertices: number[];
   indices: number[];
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
+  isStatic?: boolean;
 }) => {
-  const [ref, api] = useTrimesh(() => ({
-    args: [vertices || [], indices || []],
-    position: [
-      positionRef.current.x + position[0],
-      positionRef.current.y + position[1],
-      positionRef.current.z + position[2],
-    ],
-    rotation,
-  }));
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   useFrame(() => {
-    if (positionRef.current) {
-      api.position.set(
-        positionRef.current.x + position[0],
-        positionRef.current.y + position[1],
-        positionRef.current.z + position[2]
-      );
+    if (!isStatic && positionRef.current && rigidBodyRef.current) {
+      rigidBodyRef.current.setNextKinematicTranslation({
+        x: positionRef.current.x + position[0],
+        y: positionRef.current.y + position[1],
+        z: positionRef.current.z + position[2],
+      });
     }
   });
 
-  return <mesh ref={ref as any} />;
+  return (
+    <RigidBody
+      ref={rigidBodyRef}
+      type={isStatic ? "fixed" : "kinematicPosition"}
+      position={[position[0], position[1], position[2]]}
+      rotation={rotation}
+      colliders={false}
+    >
+      <RapierTrimesh args={[new Float32Array(vertices || []), new Uint32Array(indices || [])]} />
+    </RigidBody>
+  );
 };
