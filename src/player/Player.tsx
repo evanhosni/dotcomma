@@ -1,6 +1,8 @@
-import { useCylinder } from "@react-three/cannon";
+import type Rapier from "@dimforge/rapier3d-compat";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
+import type { RapierRigidBody } from "@react-three/rapier";
+import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../context/GameContext";
@@ -13,9 +15,11 @@ const FALL_RESET_Y = -500;
 
 // Normal mode speeds
 const WALK_SPEED = 15;
-const SPRINT_SPEED = 30;
+const SPRINT_SPEED = 45;
 const JUMP_IMPULSE = 40;
-const GROUND_THRESHOLD = 0.3;
+const MAX_SLOPE_ANGLE = 35 * (Math.PI / 180);
+const CC_OFFSET = 0.02;
+const SNAP_TO_GROUND = 0.3;
 
 // Dev mode speeds
 const DEV_SPEED = 60;
@@ -26,17 +30,22 @@ const DEV_VERTICAL_SPRINT_SPEED = 300;
 // Player dimensions
 const PLAYER_HEIGHT = 2;
 const PLAYER_RADIUS = 0.5;
+const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
 // Camera
 const CAMERA_FAR = 7200;
 const CAMERA_LERP = 0.3;
+
+// Gravity (manually integrated for kinematic character controller)
+const GRAVITY = -100;
+const TERMINAL_VELOCITY = -150;
+const MAX_MOVEMENT_PER_FRAME = 8;
 
 // Reusable vectors (avoid per-frame allocations)
 const _direction = new THREE.Vector3();
 const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
-const _targetVel = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 
 export const Player = () => {
@@ -45,11 +54,27 @@ export const Player = () => {
   const { terrain_loaded, playerPosition } = useGameContext();
   const { params } = useUrlParameters();
 
-  const velocity = useRef([0, 0, 0]);
-  const position = useRef([...SPAWN_POSITION] as [number, number, number]);
-  const grounded = useRef(false);
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
+  const verticalVelocity = useRef(0);
   const cameraReady = useRef(false);
   const respawning = useRef(false);
+  const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
+
+  const { world } = useRapier();
+
+  useEffect(() => {
+    const controller = world.createCharacterController(CC_OFFSET);
+    controller.setMaxSlopeClimbAngle(MAX_SLOPE_ANGLE);
+    controller.setMinSlopeSlideAngle(MAX_SLOPE_ANGLE);
+    controller.enableSnapToGround(SNAP_TO_GROUND);
+    controller.enableAutostep(0.5, 0.2, true);
+    controller.setApplyImpulsesToDynamicBodies(true);
+    controllerRef.current = controller;
+    return () => {
+      world.removeCharacterController(controller);
+      controllerRef.current = null;
+    };
+  }, [world]);
 
   // Set camera far plane once
   useEffect(() => {
@@ -57,47 +82,13 @@ export const Player = () => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
-  const [ref, api] = useCylinder(() => ({
-    mass: 1,
-    type: "Dynamic",
-    position: [...SPAWN_POSITION],
-    args: [PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT, 8],
-    material: {
-      friction: 0,
-      restitution: 0,
-    },
-    linearDamping: 0.1,
-    angularDamping: 1,
-    fixedRotation: true,
-    allowSleep: false,
-    collisionFilterGroup: 1,
-    collisionFilterMask: 1,
-    linearFactor: [1, 1, 1],
-    angularFactor: [0, 0, 0],
-    contactEquationStiffness: 1e6,
-    contactEquationRelaxation: 4,
-    ccdSpeedThreshold: 1,
-    ccdIterations: 10,
-  }));
-
-  // Subscribe to physics state
-  useEffect(() => {
-    const unsubVel = api.velocity.subscribe((v) => (velocity.current = v));
-    const unsubPos = api.position.subscribe((p) => (position.current = p));
-    return () => {
-      unsubVel();
-      unsubPos();
-    };
-  }, [api]);
-
-  // Disable gravity in dev mode by zeroing mass
-  useEffect(() => {
-    api.mass.set(params.dev ? 0 : 1);
-  }, [params.dev, api]);
-
   useFrame((_, delta) => {
-    // Clamp delta to prevent huge jumps after tab-switch
-    const dt = Math.min(delta, 0.1);
+    const rb = rigidBodyRef.current;
+    const controller = controllerRef.current;
+    if (!rb || !controller) return;
+
+    // Clamp delta to prevent huge jumps after tab-switch or frame spikes
+    const dt = Math.min(delta, 0.05);
 
     // Get camera forward (horizontal only) and side vectors
     camera.getWorldDirection(_direction);
@@ -112,12 +103,13 @@ export const Player = () => {
     if (left) _moveVec.add(_side);
     if (right) _moveVec.sub(_side);
 
+    const pos = rb.translation();
+
     // Hold player in place until terrain colliders are loaded
     if (!terrain_loaded && !params.dev) {
-      api.velocity.set(0, 0, 0);
-      api.position.set(...SPAWN_POSITION);
-      const [x, y, z] = SPAWN_POSITION;
-      _camTarget.set(x, y + PLAYER_HEIGHT * 0.5, z);
+      rb.setTranslation({ x: SPAWN_POSITION[0], y: SPAWN_POSITION[1], z: SPAWN_POSITION[2] }, true);
+      verticalVelocity.current = 0;
+      _camTarget.set(SPAWN_POSITION[0], SPAWN_POSITION[1] + PLAYER_HEIGHT * 0.5, SPAWN_POSITION[2]);
       camera.position.copy(_camTarget);
       cameraReady.current = false;
       return;
@@ -128,66 +120,87 @@ export const Player = () => {
       const hSpeed = sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
       const vSpeed = sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;
 
-      // Horizontal
       if (_moveVec.lengthSq() > 0) {
         _moveVec.normalize().multiplyScalar(hSpeed);
       }
 
-      // Vertical
       let vy = 0;
       if (jump) vy += vSpeed;
       if (control) vy -= vSpeed;
 
-      // In dev mode, directly set position for zero-gravity feel
-      const [px, py, pz] = position.current;
-      api.position.set(px + _moveVec.x * dt, py + vy * dt, pz + _moveVec.z * dt);
-      api.velocity.set(0, 0, 0);
+      rb.setTranslation({ x: pos.x + _moveVec.x * dt, y: pos.y + vy * dt, z: pos.z + _moveVec.z * dt }, true);
     } else {
-      // --- NORMAL MODE ---
+      // --- NORMAL MODE (Character Controller) ---
       const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
 
       if (_moveVec.lengthSq() > 0) {
         _moveVec.normalize().multiplyScalar(speed);
       }
 
-      // Smooth horizontal velocity
-      _targetVel.set(_moveVec.x, velocity.current[1], _moveVec.z);
-      const lerpFactor = grounded.current ? 0.25 : 0.08;
-      const vx = THREE.MathUtils.lerp(velocity.current[0], _targetVel.x, lerpFactor);
-      const vz = THREE.MathUtils.lerp(velocity.current[2], _targetVel.z, lerpFactor);
-
-      // Velocity-based ground detection: grounded when vertical velocity is near zero
-      grounded.current = Math.abs(velocity.current[1]) < GROUND_THRESHOLD;
-
-      // Jump
-      let vy = velocity.current[1];
-      if (jump && grounded.current) {
-        vy = JUMP_IMPULSE;
-        grounded.current = false;
+      // Gravity integration (capped at terminal velocity)
+      const grounded = controller.computedGrounded();
+      if (grounded && verticalVelocity.current <= 0) {
+        verticalVelocity.current = 0;
+      } else {
+        verticalVelocity.current = Math.max(verticalVelocity.current + GRAVITY * dt, TERMINAL_VELOCITY);
       }
 
-      api.velocity.set(vx, vy, vz);
+      // Jump
+      if (jump && grounded) {
+        verticalVelocity.current = JUMP_IMPULSE;
+      }
+
+      // Compute desired movement, clamped so the swept capsule query stays reliable
+      const desiredMovement = {
+        x: _moveVec.x * dt,
+        y: verticalVelocity.current * dt,
+        z: _moveVec.z * dt,
+      };
+      const movementDistSq =
+        desiredMovement.x * desiredMovement.x +
+        desiredMovement.y * desiredMovement.y +
+        desiredMovement.z * desiredMovement.z;
+      if (movementDistSq > MAX_MOVEMENT_PER_FRAME * MAX_MOVEMENT_PER_FRAME) {
+        const scale = MAX_MOVEMENT_PER_FRAME / Math.sqrt(movementDistSq);
+        desiredMovement.x *= scale;
+        desiredMovement.y *= scale;
+        desiredMovement.z *= scale;
+      }
+
+      // Let the character controller compute collision-corrected movement
+      const collider = rb.collider(0);
+      if (collider) {
+        controller.computeColliderMovement(collider, desiredMovement);
+        const corrected = controller.computedMovement();
+
+        rb.setNextKinematicTranslation({
+          x: pos.x + corrected.x,
+          y: pos.y + corrected.y,
+          z: pos.z + corrected.z,
+        });
+      }
     }
 
+    // Read final position
+    const finalPos = rb.translation();
+
     // Safety net: if player falls through terrain, respawn at ground height + 10
-    if (position.current[1] < FALL_RESET_Y && !respawning.current) {
+    if (finalPos.y < FALL_RESET_Y && !respawning.current) {
       respawning.current = true;
-      const [px, , pz] = position.current;
-      api.velocity.set(0, 0, 0);
-      getVertexData(px, pz, true).then((vd) => {
-        api.position.set(px, vd.height + 10, pz);
-        api.velocity.set(0, 0, 0);
-        grounded.current = false;
+      verticalVelocity.current = 0;
+      getVertexData(finalPos.x, finalPos.z, true).then((vd) => {
+        if (rigidBodyRef.current) {
+          rigidBodyRef.current.setTranslation({ x: finalPos.x, y: vd.height + 10, z: finalPos.z }, true);
+        }
+        verticalVelocity.current = 0;
         respawning.current = false;
       });
     }
 
     // Update camera position
-    const [x, y, z] = position.current;
-    _camTarget.set(x, y + PLAYER_HEIGHT * 0.5, z);
+    _camTarget.set(finalPos.x, finalPos.y + PLAYER_HEIGHT * 0.5, finalPos.z);
 
     if (!cameraReady.current) {
-      // Snap camera on first frame so there's no lerp-in from origin
       camera.position.copy(_camTarget);
       cameraReady.current = true;
     } else {
@@ -195,13 +208,15 @@ export const Player = () => {
     }
 
     // Update shared player position for state machines / other consumers
-    playerPosition.set(x, y, z);
+    playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
   });
 
   return (
     <>
       <PointerLockControls />
-      <mesh ref={ref as any} />
+      <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={SPAWN_POSITION} colliders={false} ccd>
+        <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
+      </RigidBody>
     </>
   );
 };

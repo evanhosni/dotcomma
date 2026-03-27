@@ -2,44 +2,33 @@ export enum COLLIDER_TYPE {
   CAPSULE = "capsule",
   SPHERE = "sphere",
   BOX = "box",
-  CONVEX = "convex",
   TRIMESH = "trimesh",
+  WHOLE_TRIMESH = "whole_trimesh",
 }
 
-export interface CapsuleColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-export interface SphereColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-export interface BoxColliderParams {
-  geometry: any;
-  position: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-}
-
-export interface TrimeshColliderParams {
+// Worker input: all types send raw positions + a 16-element combined transform matrix
+export interface ColliderWorkerMessage {
+  type: COLLIDER_TYPE;
   positions: number[];
   index: number[] | null;
-  position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
-  scale: THREE.Vector3Tuple;
+  matrix: number[]; // 16-element Matrix4 elements
 }
 
+// WHOLE_TRIMESH sends an array of meshes
+export interface WholeTrimeshWorkerMessage {
+  type: COLLIDER_TYPE.WHOLE_TRIMESH;
+  meshes: Array<{
+    positions: number[];
+    index: number[] | null;
+    matrix: number[];
+  }>;
+}
+
+// Worker output types
 export interface CapsuleColliderProps {
   radius: number;
   height: number;
   position: THREE.Vector3Tuple;
-  rotation: THREE.Vector3Tuple;
 }
 
 export interface SphereColliderProps {

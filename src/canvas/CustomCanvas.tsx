@@ -1,4 +1,4 @@
-import { Debug, Physics } from "@react-three/cannon";
+import { Physics } from "@react-three/rapier";
 import { Canvas } from "@react-three/fiber";
 import { useEffect } from "react";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
@@ -20,42 +20,14 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
     initCursor();
   }, []);
 
-  // Default physics properties
-  const defaultPhysicsProps = {
-    gravity: [0, -100, 0],
-    defaultContactMaterial: {
-      friction: 0,
-      restitution: 0,
-      contactEquationStiffness: 1e6,
-      contactEquationRelaxation: 3,
-    },
-    broadphase: "SAP", // Sweep and Prune broadphase
-    allowSleep: true, // Allows bodies to sleep for performance
-    iterations: 8, // Solver iterations
-    tolerance: 0.001, // Solver tolerance
-  };
-
-  // Merge default and user-provided physics props
-  const mergedPhysicsProps = { ...defaultPhysicsProps };
-
   return (
     <>
       <Overlay />
       <PostProcessing quantization={0.025} />
-      <Physics {...(mergedPhysicsProps as any)}>
-        {params.debug ? (
-          <Debug color="red">
-            {children}
-            <Terrain />
-            <ObjectPool />
-          </Debug>
-        ) : (
-          <>
-            {children}
-            <Terrain />
-            <ObjectPool />
-          </>
-        )}
+      <Physics gravity={[0, -100, 0]} debug={params.debug}>
+        {children}
+        <Terrain />
+        <ObjectPool />
         <Player />
       </Physics>
     </>
@@ -63,12 +35,10 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
 };
 
 export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
-  // Default canvas properties
   const defaultCanvasProps = {
     style: { background: "#555" },
   };
 
-  // Merge default and user-provided canvas props
   const mergedCanvasProps = { ...defaultCanvasProps };
 
   return (

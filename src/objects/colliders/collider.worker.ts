@@ -1,189 +1,219 @@
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import {
-  BoxColliderParams,
   BoxColliderProps,
-  CapsuleColliderParams,
   CapsuleColliderProps,
   COLLIDER_TYPE,
-  SphereColliderParams,
+  ColliderWorkerMessage,
   SphereColliderProps,
-  TrimeshColliderParams,
   TrimeshColliderProps,
+  WholeTrimeshWorkerMessage,
 } from "./types";
-
-interface MessageData {
-  type: COLLIDER_TYPE;
-  params: CapsuleColliderParams | SphereColliderParams | BoxColliderParams | TrimeshColliderParams;
-}
 
 const taskQueue = new TaskQueue();
 
-self.onmessage = function (event: MessageEvent<MessageData>) {
-  taskQueue.addTask(() => handleTask(event.data));
+// Reusable objects to reduce GC in hot path
+const _matrix = new THREE.Matrix4();
+const _position = new THREE.Vector3();
+const _quaternion = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+const _euler = new THREE.Euler();
+const _center = new THREE.Vector3();
+const _size = new THREE.Vector3();
+const _vertex = new THREE.Vector3();
+const _min = new THREE.Vector3();
+const _max = new THREE.Vector3();
+
+self.onmessage = function (event: MessageEvent) {
+  const { id, ...msg } = event.data;
+  taskQueue.addTask(async () => {
+    const data = await handleTask(msg);
+    self.postMessage({ id, data });
+  });
 };
 
-async function handleTask(task: MessageData) {
-  const { type, params } = task;
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-  if (type === COLLIDER_TYPE.CAPSULE) {
-    const { geometry, scale, position, rotation } = params as CapsuleColliderParams;
+/** Compute axis-aligned bounding box from raw position array. */
+function computeAABB(positions: number[]): { min: THREE.Vector3; max: THREE.Vector3 } {
+  _min.set(Infinity, Infinity, Infinity);
+  _max.set(-Infinity, -Infinity, -Infinity);
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    if (x < _min.x) _min.x = x;
+    if (y < _min.y) _min.y = y;
+    if (z < _min.z) _min.z = z;
+    if (x > _max.x) _max.x = x;
+    if (y > _max.y) _max.y = y;
+    if (z > _max.z) _max.z = z;
+  }
+  return { min: _min.clone(), max: _max.clone() };
+}
 
-    const boundingBox = new THREE.Box3();
-    const boundingSphere = new THREE.Sphere();
-    const bufferGeometry = new THREE.BufferGeometryLoader().parse(geometry);
+/** Compute bounding sphere from raw position array. */
+function computeBSphere(positions: number[]): { center: THREE.Vector3; radius: number } {
+  const { min, max } = computeAABB(positions);
+  const center = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
+  let maxDistSq = 0;
+  for (let i = 0; i < positions.length; i += 3) {
+    const dx = positions[i] - center.x;
+    const dy = positions[i + 1] - center.y;
+    const dz = positions[i + 2] - center.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    if (distSq > maxDistSq) maxDistSq = distSq;
+  }
+  return { center, radius: Math.sqrt(maxDistSq) };
+}
 
-    bufferGeometry.computeBoundingBox();
-    boundingBox.copy(bufferGeometry.boundingBox!);
+// ── Handlers ────────────────────────────────────────────────────────────────
 
-    bufferGeometry.computeBoundingSphere();
-    boundingSphere.copy(bufferGeometry.boundingSphere!);
+async function handleTask(
+  task: ColliderWorkerMessage | WholeTrimeshWorkerMessage
+): Promise<CapsuleColliderProps | SphereColliderProps | BoxColliderProps | TrimeshColliderProps> {
+  const { type } = task;
 
-    const meshScale = new THREE.Vector3(scale[0], scale[1], scale[2]);
-    const size = new THREE.Vector3();
-    boundingBox.getSize(size);
-    size.multiply(meshScale);
-
-    const radius = boundingSphere.radius * Math.max(meshScale.x, meshScale.y, meshScale.z);
-    const height = Math.abs(size.y - 2 * radius);
-
-    const center = new THREE.Vector3();
-    boundingBox.getCenter(center).multiply(meshScale);
-
-    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(
-      new THREE.Euler(rotation[0], rotation[1], rotation[2])
-    );
-    center.applyMatrix4(rotationMatrix);
-
-    center.add(new THREE.Vector3(position[0], position[1], position[2]));
-
-    const colliderData: CapsuleColliderProps = {
-      radius,
-      height,
-      position: [center.x, center.y, center.z],
-      rotation: [rotation[0], rotation[1], rotation[2]],
-    };
-
-    self.postMessage(colliderData);
+  if (type === COLLIDER_TYPE.WHOLE_TRIMESH) {
+    return handleWholeTrimesh(task as WholeTrimeshWorkerMessage);
   }
 
-  if (type === COLLIDER_TYPE.SPHERE) {
-    const { geometry, scale, position, rotation } = params as SphereColliderParams;
+  const msg = task as ColliderWorkerMessage;
+  _matrix.fromArray(msg.matrix);
+  _matrix.decompose(_position, _quaternion, _scale);
 
-    const bufferGeometry = new THREE.BufferGeometryLoader().parse(geometry);
-    let boundingSphere = new THREE.Sphere();
+  switch (type) {
+    case COLLIDER_TYPE.CAPSULE:
+      return handleCapsule(msg.positions);
+    case COLLIDER_TYPE.SPHERE:
+      return handleSphere(msg.positions);
+    case COLLIDER_TYPE.BOX:
+      return handleBox(msg.positions);
+    case COLLIDER_TYPE.TRIMESH:
+      return handleTrimesh(msg.positions, msg.index);
+    default:
+      throw new Error(`Unknown collider type: ${type}`);
+  }
+}
 
-    const positionAttribute = bufferGeometry.attributes.position;
+function handleCapsule(positions: number[]): CapsuleColliderProps {
+  // Bounding box for height, bounding sphere for radius
+  const { min, max } = computeAABB(positions);
+  const bsphere = computeBSphere(positions);
 
-    if (positionAttribute instanceof THREE.InterleavedBufferAttribute) {
-      const tempArray: number[] = [];
-      for (let i = 0; i < positionAttribute.count; i++) {
-        tempArray.push(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i));
-      }
-      const bufferAttribute = new THREE.BufferAttribute(new Float32Array(tempArray), 3);
-      bufferGeometry.setAttribute("position", bufferAttribute);
+  const maxScale = Math.max(_scale.x, _scale.y, _scale.z);
+  const radius = bsphere.radius * maxScale;
+
+  _size.subVectors(max, min).multiply(_scale);
+  const height = Math.abs(_size.y - 2 * radius);
+
+  // Transform the local geometry center by the full matrix
+  _center.addVectors(min, max).multiplyScalar(0.5);
+  _center.applyMatrix4(_matrix);
+
+  return {
+    radius,
+    height,
+    position: [_center.x, _center.y, _center.z],
+  };
+}
+
+function handleSphere(positions: number[]): SphereColliderProps {
+  const bsphere = computeBSphere(positions);
+
+  const maxScale = Math.max(_scale.x, _scale.y, _scale.z);
+  const radius = bsphere.radius * maxScale;
+
+  // Transform center by the full matrix
+  bsphere.center.applyMatrix4(_matrix);
+
+  return {
+    radius,
+    position: [bsphere.center.x, bsphere.center.y, bsphere.center.z],
+  };
+}
+
+function handleBox(positions: number[]): BoxColliderProps {
+  const { min, max } = computeAABB(positions);
+
+  // Size = local size * scale from decomposed matrix
+  _size.subVectors(max, min).multiply(_scale);
+
+  // Center = local center transformed by the full matrix
+  _center.addVectors(min, max).multiplyScalar(0.5);
+  _center.applyMatrix4(_matrix);
+
+  // Rotation from decomposed matrix
+  _euler.setFromQuaternion(_quaternion);
+
+  return {
+    size: [_size.x, _size.y, _size.z],
+    position: [_center.x, _center.y, _center.z],
+    rotation: [_euler.x, _euler.y, _euler.z],
+  };
+}
+
+function handleTrimesh(positions: number[], index: number[] | null): TrimeshColliderProps {
+  // Transform all vertices by the full combined matrix
+  const vertices: number[] = new Array(positions.length);
+  for (let i = 0; i < positions.length; i += 3) {
+    _vertex.set(positions[i], positions[i + 1], positions[i + 2]);
+    _vertex.applyMatrix4(_matrix);
+    vertices[i] = _vertex.x;
+    vertices[i + 1] = _vertex.y;
+    vertices[i + 2] = _vertex.z;
+  }
+
+  // Copy or generate indices
+  let indices: number[];
+  if (index) {
+    indices = index;
+  } else {
+    indices = [];
+    for (let i = 0; i < positions.length / 3; i += 3) {
+      indices.push(i, i + 1, i + 2);
+    }
+  }
+
+  return {
+    vertices,
+    indices,
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+  };
+}
+
+function handleWholeTrimesh(task: WholeTrimeshWorkerMessage): TrimeshColliderProps {
+  const allVertices: number[] = [];
+  const allIndices: number[] = [];
+  let vertexOffset = 0;
+
+  for (const mesh of task.meshes) {
+    const mat = new THREE.Matrix4().fromArray(mesh.matrix);
+
+    // Transform vertices
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      _vertex.set(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]);
+      _vertex.applyMatrix4(mat);
+      allVertices.push(_vertex.x, _vertex.y, _vertex.z);
     }
 
-    bufferGeometry.computeBoundingSphere();
-    boundingSphere.copy(bufferGeometry.boundingSphere!);
-
-    const meshScale = new THREE.Vector3(scale[0], scale[1], scale[2]);
-    const radius = boundingSphere.radius * Math.max(meshScale.x, meshScale.y, meshScale.z);
-
-    const center = boundingSphere.center.clone();
-    center.multiply(meshScale);
-
-    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(
-      new THREE.Euler(rotation[0], rotation[1], rotation[2])
-    );
-    center.applyMatrix4(rotationMatrix);
-
-    center.add(new THREE.Vector3(position[0], position[1], position[2]));
-
-    const colliderData: SphereColliderProps = {
-      radius,
-      position: [center.x, center.y, center.z],
-    };
-
-    self.postMessage(colliderData);
-  }
-
-  if (type === COLLIDER_TYPE.BOX) {
-    const { geometry, scale, position, rotation } = params as BoxColliderParams;
-
-    const bufferGeometry = new THREE.BufferGeometryLoader().parse(geometry);
-    let boundingBox = new THREE.Box3();
-
-    const positionAttribute = bufferGeometry.attributes.position;
-
-    if (positionAttribute instanceof THREE.InterleavedBufferAttribute) {
-      const tempArray: number[] = [];
-      for (let i = 0; i < positionAttribute.count; i++) {
-        tempArray.push(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i));
+    // Re-index with offset
+    const vertCount = mesh.positions.length / 3;
+    if (mesh.index) {
+      for (let i = 0; i < mesh.index.length; i++) {
+        allIndices.push(mesh.index[i] + vertexOffset);
       }
-      const bufferAttribute = new THREE.BufferAttribute(new Float32Array(tempArray), 3);
-      boundingBox = new THREE.Box3().setFromBufferAttribute(bufferAttribute);
     } else {
-      boundingBox = new THREE.Box3().setFromBufferAttribute(positionAttribute);
-    }
-
-    const meshScale = new THREE.Vector3(scale[0], scale[1], scale[2]);
-
-    const size = new THREE.Vector3();
-    boundingBox.getSize(size).multiply(meshScale);
-
-    const center = new THREE.Vector3();
-    boundingBox.getCenter(center).multiply(meshScale);
-
-    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(
-      new THREE.Euler(rotation[0], rotation[1], rotation[2])
-    );
-    center.applyMatrix4(rotationMatrix);
-
-    center.add(new THREE.Vector3(position[0], position[1], position[2]));
-
-    //TODO maybe rotation could be better. Currently it only matches rotation.y
-
-    const colliderData: BoxColliderProps = {
-      size: [size.x, size.y, size.z],
-      position: [center.x, center.y, center.z],
-      rotation: [rotation[0], rotation[1], rotation[2]],
-    };
-
-    self.postMessage(colliderData);
-  }
-
-  if (type === COLLIDER_TYPE.TRIMESH) {
-    const { positions, index, position, rotation, scale } = params as TrimeshColliderParams;
-
-    const vertices: number[] = [];
-    const indices: number[] = [];
-
-    const scaleMatrix = new THREE.Matrix4().makeScale(scale[0], scale[1], scale[2]);
-
-    for (let i = 0; i < positions.length; i += 3) {
-      const vertex = new THREE.Vector3(positions[i], positions[i + 1], positions[i + 2]);
-      vertex.applyMatrix4(scaleMatrix);
-      vertices.push(vertex.x, vertex.y, vertex.z);
-    }
-
-    if (index) {
-      for (let i = 0; i < index.length; i += 3) {
-        indices.push(index[i], index[i + 1], index[i + 2]);
-      }
-    } else {
-      for (let i = 0; i < vertices.length / 3; i += 3) {
-        indices.push(i, i + 1, i + 2);
+      for (let i = 0; i < vertCount; i += 3) {
+        allIndices.push(i + vertexOffset, i + 1 + vertexOffset, i + 2 + vertexOffset);
       }
     }
-
-    const colliderData: TrimeshColliderProps = {
-      vertices,
-      indices,
-      position: [position[0], position[1], position[2]],
-      rotation: [rotation[0], rotation[1], rotation[2]],
-    };
-
-    self.postMessage(colliderData);
+    vertexOffset += vertCount;
   }
+
+  return {
+    vertices: allVertices,
+    indices: allIndices,
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+  };
 }

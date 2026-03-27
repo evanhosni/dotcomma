@@ -1,4 +1,4 @@
-import { useCylinder } from "@react-three/cannon";
+import { RigidBody, CapsuleCollider, useRapier } from "@react-three/rapier";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
@@ -7,79 +7,109 @@ import { SpawnedObjectProps } from "../../../../objects/spawning/types";
 import { useMouseEvents } from "../../../../objects/state/useMouseEvents";
 import { useStateMachine } from "../../../../objects/state/useStateMachine";
 import { BEEBLE_SM } from "./stateMachine";
+import type { RapierRigidBody } from "@react-three/rapier";
+import type Rapier from "@dimforge/rapier3d-compat";
 
 const BEEBLE_RADIUS = 0.5;
 const BEEBLE_HEIGHT = 2.4;
+const CAPSULE_HALF_HEIGHT = BEEBLE_HEIGHT / 2 - BEEBLE_RADIUS;
+const MAX_SLOPE_ANGLE = 35 * (Math.PI / 180);
+const CC_OFFSET = 0.02;
+const SNAP_TO_GROUND = 0.3;
+const GRAVITY = -100;
 
 const HAS_CLICK_TRIGGER = BEEBLE_SM.triggers.some((t) => t.id === "mouse-left-click");
 
 export const Beeble = (props: SpawnedObjectProps) => {
   const groupRef = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
-  const velocityRef = useRef([0, 0, 0]);
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
+  const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
+  const verticalVelocity = useRef(0);
+
+  const { world } = useRapier();
 
   const sm = useStateMachine(BEEBLE_SM, positionRef, groupRef);
   const mouseEvents = useMouseEvents(sm, groupRef, {
     shouldGrowCursor: props.cursorOverride ?? HAS_CLICK_TRIGGER,
   });
 
-  const [physRef, api] = useCylinder(() => ({
-    mass: 1,
-    type: "Dynamic",
-    position: [props.coordinates[0], props.coordinates[1] + BEEBLE_HEIGHT / 2, props.coordinates[2]],
-    args: [BEEBLE_RADIUS, BEEBLE_RADIUS, BEEBLE_HEIGHT, 8],
-    material: { friction: 0, restitution: 0 },
-    fixedRotation: true,
-    angularDamping: 1,
-    linearDamping: 0.1,
-    allowSleep: false,
-    collisionFilterGroup: 1,
-    collisionFilterMask: 1,
-    angularFactor: [0, 0, 0],
-  }));
-
   useEffect(() => {
-    const unsubPos = api.position.subscribe((p) => {
-      positionRef.current.set(p[0], p[1], p[2]);
-    });
-    const unsubVel = api.velocity.subscribe((v) => {
-      velocityRef.current = v;
-    });
+    const controller = world.createCharacterController(CC_OFFSET);
+    controller.setMaxSlopeClimbAngle(MAX_SLOPE_ANGLE);
+    controller.setMinSlopeSlideAngle(MAX_SLOPE_ANGLE);
+    controller.enableSnapToGround(SNAP_TO_GROUND);
+    controller.enableAutostep(0.5, 0.2, true);
+    controllerRef.current = controller;
     return () => {
-      unsubPos();
-      unsubVel();
+      world.removeCharacterController(controller);
+      controllerRef.current = null;
     };
-  }, [api]);
+  }, [world]);
 
-  // Apply velocity from state machine blackboard and sync group position
-  useFrame(() => {
+  useFrame((_, delta) => {
+    const rb = rigidBodyRef.current;
+    const controller = controllerRef.current;
+    if (!rb || !controller) return;
+
+    const dt = Math.min(delta, 0.1);
     const bb = sm.blackboard;
     const velX = bb.__vel_x ?? 0;
     const velZ = bb.__vel_z ?? 0;
     const velY = bb.__vel_y;
 
+    const pos = rb.translation();
+
+    // Gravity integration
+    const grounded = controller.computedGrounded();
     if (velY !== undefined) {
-      // Ascending: override vertical velocity
-      api.velocity.set(velX, velY, velZ);
+      verticalVelocity.current = velY;
+    } else if (grounded && verticalVelocity.current <= 0) {
+      verticalVelocity.current = 0;
     } else {
-      // Ground movement: preserve physics vertical velocity (gravity)
-      api.velocity.set(velX, velocityRef.current[1], velZ);
+      verticalVelocity.current += GRAVITY * dt;
     }
 
-    // Sync group position from physics body (offset down by half cylinder height
-    // so model feet align with bottom of collider)
+    const desiredMovement = {
+      x: velX * dt,
+      y: verticalVelocity.current * dt,
+      z: velZ * dt,
+    };
+
+    const collider = rb.collider(0);
+    if (collider) {
+      controller.computeColliderMovement(collider, desiredMovement);
+      const corrected = controller.computedMovement();
+
+      rb.setNextKinematicTranslation({
+        x: pos.x + corrected.x,
+        y: pos.y + corrected.y,
+        z: pos.z + corrected.z,
+      });
+    }
+
+    const finalPos = rb.translation();
+    positionRef.current.set(finalPos.x, finalPos.y, finalPos.z);
+
     if (groupRef.current) {
       groupRef.current.position.set(
-        positionRef.current.x,
-        positionRef.current.y - BEEBLE_HEIGHT / 2,
-        positionRef.current.z,
+        finalPos.x,
+        finalPos.y - BEEBLE_HEIGHT / 2,
+        finalPos.z,
       );
     }
   });
 
   return (
     <>
-      <mesh ref={physRef as any} visible={false} />
+      <RigidBody
+        ref={rigidBodyRef}
+        type="kinematicPosition"
+        position={[props.coordinates[0], props.coordinates[1] + BEEBLE_HEIGHT / 2, props.coordinates[2]]}
+        colliders={false}
+      >
+        <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, BEEBLE_RADIUS]} />
+      </RigidBody>
       <group
         ref={groupRef as any}
         onPointerOver={mouseEvents.onPointerOver}
@@ -96,6 +126,7 @@ export const Beeble = (props: SpawnedObjectProps) => {
           positionRef={positionRef}
           animationControl={sm.animationControl}
           {...props}
+          isStatic={false}
           scale={[1.2, 1.2, 1.2]}
         />
       </group>

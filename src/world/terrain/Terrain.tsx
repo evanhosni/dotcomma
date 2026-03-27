@@ -1,4 +1,4 @@
-import { useHeightfield } from "@react-three/cannon";
+import { RigidBody, HeightfieldCollider } from "@react-three/rapier";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
@@ -734,24 +734,27 @@ export const Terrain = () => {
     const posArray = chunk.plane.geometry.attributes.position.array as Float32Array;
     const n = segments + 1;
 
-    // Cannon heightfield: data[xi][yi] in local XY, height along local Z.
-    // With Rx(-π/2), local Z maps to world Y (height), local Y maps to world -Z.
-    // So data[ix][segments - iz] = mesh height at grid (ix, iz).
-    const heightfield: number[][] = Array.from({ length: n }, () => new Array(n));
-
+    // Rapier heightfield uses COLUMN-MAJOR order: heights[col * (nrows+1) + row].
+    // The mesh geometry (rotated -PI/2 around X) maps:
+    //   grid (ix, iz) → worldX = localX, worldZ = -localY
+    //   ix=0 → worldX = -half, ix=segments → worldX = +half
+    //   iz=0 → worldZ = -half, iz=segments → worldZ = +half
+    // Rapier: col index → X axis, row index → Z axis.
+    const heights = new Float32Array(n * n);
     for (let iz = 0; iz < n; iz++) {
       for (let ix = 0; ix < n; ix++) {
         const height = posArray[(iz * n + ix) * 3 + 2];
-        heightfield[ix][segments - iz] = height;
+        heights[ix * n + iz] = height; // column-major: col=ix, row=iz
       }
     }
 
     const chunkKey = `${chunk.lod.level}/${offset.x / cs}/${offset.y / cs}`;
     chunk.collider = {
       chunkKey,
-      heightfield,
+      heights,
+      nrows: segments,
+      ncols: segments,
       position: offset.toArray(),
-      elementSize: cs / segments,
       chunkSize: cs,
     };
   };
@@ -768,13 +771,12 @@ export const Terrain = () => {
   );
 };
 
-export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heightfield, position, elementSize, chunkSize }) => {
-  const half = chunkSize / 2;
-  const [ref] = useHeightfield(() => ({
-    args: [heightfield, { elementSize }],
-    position: [position[0] - half, 0, position[1] + half],
-    rotation: [-Math.PI / 2, 0, 0],
-  }));
-
-  return <mesh ref={ref as any} />;
+export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heights, nrows, ncols, position, chunkSize }) => {
+  return (
+    <RigidBody type="fixed" position={[position[0], 0, position[1]]} colliders={false}>
+      <HeightfieldCollider
+        args={[nrows, ncols, heights as unknown as number[], { x: chunkSize, y: 1, z: chunkSize }]}
+      />
+    </RigidBody>
+  );
 };
