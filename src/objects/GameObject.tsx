@@ -342,7 +342,7 @@ export const GameObject = ({
   useEffect(() => {
     const task = async () => {
       try {
-        const colliders = await createColliders(gltf as any, scale, rotation, wholeTrimesh);
+        const colliders = await createColliders(gltf as any, scale, rotation, wholeTrimesh, model);
         setColliders(colliders as ColliderState);
       } catch (error) {
         console.error("Error creating colliders:", error);

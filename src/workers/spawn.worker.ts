@@ -114,6 +114,7 @@ let spatialHash: SpatialHash | null = null;
 const chunkCache = new Map<string, SpawnPoint[]>();
 const hashPopulatedChunks = new Set<string>();
 
+
 // ── Spawn Generation ──
 
 const generateForChunk = (

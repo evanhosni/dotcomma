@@ -9,6 +9,26 @@ export const colliderWorker = new Worker(new URL("./collider.worker.ts", import.
 let messageId = 0;
 const pendingResolves = new Map<number, (data: any) => void>();
 
+interface ColliderState {
+  capsuleColliders: any[];
+  sphereColliders: any[];
+  boxColliders: any[];
+  trimeshColliders: any[];
+}
+
+// Cache collider results by model+scale+rotation+wholeTrimesh to avoid redundant worker computations
+const colliderCache = new Map<string, Promise<ColliderState>>();
+
+function buildCacheKey(
+  modelUrl: string | undefined,
+  scale: THREE.Vector3Tuple,
+  rotation: THREE.Vector3Tuple,
+  wholeTrimesh: boolean
+): string | null {
+  if (!modelUrl) return null;
+  return `${modelUrl}|${scale[0]},${scale[1]},${scale[2]}|${rotation[0]},${rotation[1]},${rotation[2]}|${wholeTrimesh}`;
+}
+
 colliderWorker.onmessage = (event) => {
   const { id, data } = event.data;
   const resolve = pendingResolves.get(id);
@@ -78,71 +98,87 @@ export const createColliders = async (
   scale: THREE.Vector3Tuple,
   rotation: THREE.Vector3Tuple,
   wholeTrimesh = false,
-) => {
-  const capsuleColliders: any[] = [];
-  const sphereColliders: any[] = [];
-  const boxColliders: any[] = [];
-  const trimeshColliders: any[] = [];
+  modelUrl?: string,
+): Promise<ColliderState> => {
+  const cacheKey = buildCacheKey(modelUrl, scale, rotation, wholeTrimesh);
 
-  // Force-compute world matrices so we can get child-to-scene transforms
-  gltf.scene.updateMatrixWorld(true);
-  const sceneWorldInverse = gltf.scene.matrixWorld.clone().invert();
+  if (cacheKey) {
+    const cached = colliderCache.get(cacheKey);
+    if (cached) return cached;
+  }
 
-  if (wholeTrimesh) {
-    // Collect all mesh geometry into a single trimesh collider
-    const meshes: WholeTrimeshWorkerMessage["meshes"] = [];
+  const resultPromise = (async (): Promise<ColliderState> => {
+    const capsuleColliders: any[] = [];
+    const sphereColliders: any[] = [];
+    const boxColliders: any[] = [];
+    const trimeshColliders: any[] = [];
 
-    gltf.scene.traverse((child) => {
-      if (!(child instanceof THREE.Mesh) || !child.geometry) return;
+    // Force-compute world matrices so we can get child-to-scene transforms
+    gltf.scene.updateMatrixWorld(true);
+    const sceneWorldInverse = gltf.scene.matrixWorld.clone().invert();
+
+    if (wholeTrimesh) {
+      // Collect all mesh geometry into a single trimesh collider
+      const meshes: WholeTrimeshWorkerMessage["meshes"] = [];
+
+      gltf.scene.traverse((child) => {
+        if (!(child instanceof THREE.Mesh) || !child.geometry) return;
+
+        const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
+        meshes.push({
+          positions: getPositionArray(child.geometry),
+          index: child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null,
+          matrix: Array.from(matrix.elements),
+        });
+      });
+
+      if (meshes.length > 0) {
+        const result = await postToWorker({
+          type: COLLIDER_TYPE.WHOLE_TRIMESH,
+          meshes,
+        } as WholeTrimeshWorkerMessage);
+        trimeshColliders.push(result);
+      }
+
+      return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
+    }
+
+    // Per-child colliders based on userData flags
+    for (const child of gltf.scene.children) {
+      if (!(child instanceof THREE.Mesh) || !child.geometry) continue;
+
+      let type: COLLIDER_TYPE | null = null;
+      if (child.userData.capsule) type = COLLIDER_TYPE.CAPSULE;
+      else if (child.userData.sphere) type = COLLIDER_TYPE.SPHERE;
+      else if (child.userData.box) type = COLLIDER_TYPE.BOX;
+      else if (child.userData.trimesh) type = COLLIDER_TYPE.TRIMESH;
+      if (!type) continue;
 
       const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
-      meshes.push({
-        positions: getPositionArray(child.geometry),
-        index: child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null,
-        matrix: Array.from(matrix.elements),
-      });
-    });
+      const positions = getPositionArray(child.geometry);
+      const index = child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null;
 
-    if (meshes.length > 0) {
-      const result = await postToWorker({
-        type: COLLIDER_TYPE.WHOLE_TRIMESH,
-        meshes,
-      } as WholeTrimeshWorkerMessage);
-      trimeshColliders.push(result);
+      const msg: ColliderWorkerMessage = {
+        type,
+        positions,
+        index,
+        matrix: Array.from(matrix.elements),
+      };
+
+      const result = await postToWorker(msg);
+
+      if (type === COLLIDER_TYPE.CAPSULE) capsuleColliders.push(result);
+      else if (type === COLLIDER_TYPE.SPHERE) sphereColliders.push(result);
+      else if (type === COLLIDER_TYPE.BOX) boxColliders.push(result);
+      else if (type === COLLIDER_TYPE.TRIMESH) trimeshColliders.push(result);
     }
 
     return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
+  })();
+
+  if (cacheKey) {
+    colliderCache.set(cacheKey, resultPromise);
   }
 
-  // Per-child colliders based on userData flags
-  for (const child of gltf.scene.children) {
-    if (!(child instanceof THREE.Mesh) || !child.geometry) continue;
-
-    let type: COLLIDER_TYPE | null = null;
-    if (child.userData.capsule) type = COLLIDER_TYPE.CAPSULE;
-    else if (child.userData.sphere) type = COLLIDER_TYPE.SPHERE;
-    else if (child.userData.box) type = COLLIDER_TYPE.BOX;
-    else if (child.userData.trimesh) type = COLLIDER_TYPE.TRIMESH;
-    if (!type) continue;
-
-    const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
-    const positions = getPositionArray(child.geometry);
-    const index = child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null;
-
-    const msg: ColliderWorkerMessage = {
-      type,
-      positions,
-      index,
-      matrix: Array.from(matrix.elements),
-    };
-
-    const result = await postToWorker(msg);
-
-    if (type === COLLIDER_TYPE.CAPSULE) capsuleColliders.push(result);
-    else if (type === COLLIDER_TYPE.SPHERE) sphereColliders.push(result);
-    else if (type === COLLIDER_TYPE.BOX) boxColliders.push(result);
-    else if (type === COLLIDER_TYPE.TRIMESH) trimeshColliders.push(result);
-  }
-
-  return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
+  return resultPromise;
 };
