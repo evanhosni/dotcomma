@@ -49,7 +49,7 @@ const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 
 export const Player = () => {
-  const { forward, backward, left, right, sprint, jump, control } = useInput();
+  const inputRef = useInput();
   const { camera } = useThree();
   const { terrain_loaded, playerPosition } = useGameContext();
   const { params } = useUrlParameters();
@@ -86,6 +86,8 @@ export const Player = () => {
     const rb = rigidBodyRef.current;
     const controller = controllerRef.current;
     if (!rb || !controller) return;
+
+    const { forward, backward, left, right, sprint, jump, control } = inputRef.current;
 
     // Clamp delta to prevent huge jumps after tab-switch or frame spikes
     const dt = Math.min(delta, 0.05);

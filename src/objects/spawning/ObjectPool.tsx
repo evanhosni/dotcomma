@@ -29,6 +29,7 @@ export const ObjectPool = () => {
   const lastBatchFrameRef = useRef(0);
   const workerReadyRef = useRef(false);
   const initialSpawnDoneRef = useRef(false);
+  const dirtyRef = useRef(false);
 
   const { camera } = useThree();
   const { terrain_loaded, progress, terrainHighLODPending, spawnPending } = useGameContext();
@@ -109,6 +110,8 @@ export const ObjectPool = () => {
 
     isGeneratingRef.current = true;
     spawnPending.current = true;
+    const wasDirty = dirtyRef.current;
+    dirtyRef.current = false;
 
     try {
       cleanupDestroyedObjects();
@@ -159,7 +162,7 @@ export const ObjectPool = () => {
           onDestroy: (id: string) => {
             destroyedObjectsRef.current.set(objId, Date.now());
             objectsMapRef.current.delete(objId);
-            setStableComponents(Array.from(objectsMapRef.current.values()));
+            dirtyRef.current = true;
           },
         };
 
@@ -167,7 +170,7 @@ export const ObjectPool = () => {
         hasChanges = true;
       }
 
-      if (hasChanges) {
+      if (hasChanges || wasDirty) {
         setStableComponents(Array.from(objectsMapRef.current.values()));
       }
       initialSpawnDoneRef.current = true;

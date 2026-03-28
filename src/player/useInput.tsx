@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useUrlParameters } from "../context/UrlParametersContext";
 
 enum KeyAction {
@@ -22,35 +22,50 @@ export interface InputState {
   control: boolean;
 }
 
-const EMPTY_INPUT: InputState = {
-  forward: false,
-  backward: false,
-  left: false,
-  right: false,
-  sprint: false,
-  jump: false,
-  control: false,
-};
-
-export const useInput = (): InputState => {
+export const useInput = (): React.MutableRefObject<InputState> => {
   const { paletteOpen } = useUrlParameters();
-  const [input, setInput] = useState<InputState>(EMPTY_INPUT);
+  const inputRef = useRef<InputState>({
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    sprint: false,
+    jump: false,
+    control: false,
+  });
+  const paletteOpenRef = useRef(paletteOpen);
+  paletteOpenRef.current = paletteOpen;
 
-  const findKey = (key: string): KeyAction | undefined => {
-    return KeyAction[key as keyof typeof KeyAction];
-  };
+  // Clear all input when palette opens
+  useEffect(() => {
+    if (paletteOpen) {
+      const input = inputRef.current;
+      input.forward = false;
+      input.backward = false;
+      input.left = false;
+      input.right = false;
+      input.sprint = false;
+      input.jump = false;
+      input.control = false;
+    }
+  }, [paletteOpen]);
 
   useEffect(() => {
+    const findKey = (key: string): KeyAction | undefined => {
+      return KeyAction[key as keyof typeof KeyAction];
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (paletteOpenRef.current) return;
       const action = findKey(e.code);
       if (action) {
-        setInput((m) => ({ ...m, [action]: true }));
+        (inputRef.current as any)[action] = true;
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       const action = findKey(e.code);
       if (action) {
-        setInput((m) => ({ ...m, [action]: false }));
+        (inputRef.current as any)[action] = false;
       }
     };
     document.addEventListener("keydown", handleKeyDown);
@@ -62,6 +77,5 @@ export const useInput = (): InputState => {
     };
   }, []);
 
-  if (paletteOpen) return EMPTY_INPUT;
-  return input;
+  return inputRef;
 };
