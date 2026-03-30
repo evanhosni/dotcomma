@@ -11,6 +11,7 @@ import { AnimationControl } from "./state/types";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
+const FADE_DURATION = 1;
 const DEFAULT_RENDER_DISTANCE = 500;
 const DEFAULT_FRUSTUM_PADDING = 3;
 
@@ -139,6 +140,8 @@ export const GameObject = ({
   const scene = clonedModel.scene;
 
   const groupRef = useRef<THREE.Group>(null);
+  const fadeRef = useRef({ opacity: 0, fadingOut: false });
+  const materialsRef = useRef<THREE.Material[]>([]);
   const shouldRenderCollidersRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
@@ -149,7 +152,8 @@ export const GameObject = ({
 
     sceneRef.current = scene;
 
-    // Optimize materials - make sure they're not transparent
+    // Collect all materials for fade control and optimize
+    const allMaterials: THREE.Material[] = [];
     scene.traverse((child: THREE.Object3D) => {
       if ((child as THREE.Mesh).isMesh || (child as THREE.SkinnedMesh).isSkinnedMesh) {
         const mesh = child as THREE.Mesh;
@@ -157,22 +161,23 @@ export const GameObject = ({
           const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
           materials.forEach((mat) => {
-            // Set properties that affect rendering performance
-            mat.transparent = false;
-            (mat as any).fog = false; // Disable fog calculations if not needed
+            mat.transparent = true;
+            mat.opacity = 0;
+            (mat as any).fog = false;
 
-            // Apply vertex quantization unless opted out
             if (!child.userData?.skipQuantization) {
               _quantization.patchMaterial(mat);
             }
+            allMaterials.push(mat);
           });
 
-          mesh.frustumCulled = true; // Enable frustum culling
-          mesh.castShadow = false; // Disable shadow casting if not needed
-          mesh.receiveShadow = false; // Disable shadow receiving if not needed
+          mesh.frustumCulled = true;
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
         }
       }
     });
+    materialsRef.current = allMaterials;
 
     // Set up animations efficiently
     if (clonedModel.animations && clonedModel.animations.length > 0) {
@@ -254,18 +259,41 @@ export const GameObject = ({
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
     const distance = getDistance2D(camera.position, objectPosition);
 
+    // Fade in/out
+    const fade = fadeRef.current;
+    if (distance > renderDistance && !fade.fadingOut) {
+      fade.fadingOut = true;
+    } else if (distance <= renderDistance && fade.fadingOut) {
+      fade.fadingOut = false;
+    }
+
+    // Hard kill safety net
     if (distance > renderDistance * DELETE_OBJECT_BUFFER) {
       onDestroy(id);
       return;
     }
 
+    if (fade.fadingOut) {
+      fade.opacity = Math.max(0, fade.opacity - delta / FADE_DURATION);
+      if (fade.opacity <= 0) {
+        onDestroy(id);
+        return;
+      }
+    } else {
+      fade.opacity = Math.min(1, fade.opacity + delta / FADE_DURATION);
+    }
+
+    // Apply fade to materials
+    const mats = materialsRef.current;
+    for (let i = 0; i < mats.length; i++) {
+      mats[i].opacity = fade.opacity;
+      mats[i].transparent = fade.opacity < 1;
+    }
+
     // Update shared frustum once per frame (first GameObject instance wins)
     if (state.clock.elapsedTime !== frustumUpdatedAt) {
       frustumUpdatedAt = state.clock.elapsedTime;
-      projScreenMatrix.multiplyMatrices(
-        state.camera.projectionMatrix,
-        state.camera.matrixWorldInverse
-      );
+      projScreenMatrix.multiplyMatrices(state.camera.projectionMatrix, state.camera.matrixWorldInverse);
       frustum.setFromProjectionMatrix(projScreenMatrix);
     }
 
@@ -312,9 +340,7 @@ export const GameObject = ({
         animationControl.dirty = false;
         const cmd = animationControl.pendingCommand;
         if (cmd && clonedModel.animations.length > 0) {
-          const clipIndex = clonedModel.animations.findIndex(
-            (clip: THREE.AnimationClip) => clip.name === cmd.clipName
-          );
+          const clipIndex = clonedModel.animations.findIndex((clip: THREE.AnimationClip) => clip.name === cmd.clipName);
           if (clipIndex >= 0) {
             const targetAction = actionsRef.current[clipIndex];
             // Stop all actions first to clear the mixer
