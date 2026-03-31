@@ -5,8 +5,8 @@ import type { RapierRigidBody } from "@react-three/rapier";
 import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
-import { useUrlParameters } from "../context/UrlParametersContext";
 import { getVertexData } from "../world/getVertexData";
 import { useInput } from "./useInput";
 
@@ -21,7 +21,7 @@ const MAX_SLOPE_ANGLE = 35 * (Math.PI / 180);
 const CC_OFFSET = 0.02;
 const SNAP_TO_GROUND = 0.3;
 
-// Dev mode speeds
+// Devmode speeds
 const DEV_SPEED = 60;
 const DEV_SPRINT_SPEED = 300;
 const DEV_VERTICAL_SPEED = 60;
@@ -52,7 +52,7 @@ export const Player = () => {
   const inputRef = useInput();
   const { camera } = useThree();
   const { terrain_loaded, playerPosition } = useGameContext();
-  const { params } = useUrlParameters();
+  const { noclip } = useDevMode();
 
   const rigidBodyRef = useRef<RapierRigidBody>(null);
   const verticalVelocity = useRef(0);
@@ -108,7 +108,7 @@ export const Player = () => {
     const pos = rb.translation();
 
     // Hold player in place until terrain colliders are loaded
-    if (!terrain_loaded && !params.dev) {
+    if (!terrain_loaded && !noclip) {
       rb.setTranslation({ x: SPAWN_POSITION[0], y: SPAWN_POSITION[1], z: SPAWN_POSITION[2] }, true);
       verticalVelocity.current = 0;
       _camTarget.set(SPAWN_POSITION[0], SPAWN_POSITION[1] + PLAYER_HEIGHT * 0.5, SPAWN_POSITION[2]);
@@ -117,7 +117,7 @@ export const Player = () => {
       return;
     }
 
-    if (params.dev) {
+    if (noclip) {
       // --- DEV MODE ---
       const hSpeed = sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
       const vSpeed = sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;

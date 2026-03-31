@@ -3,8 +3,9 @@ import { useRef, useEffect } from "react";
 import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
-import { useUrlParameters } from "../../context/UrlParametersContext";
+import { useDevMode } from "../../context/DevContext";
 import { WORLD_REGIONS } from "../../world/world";
+import { getOrCreateLeftColumn } from "./overlayContainer";
 const BIOME_POLL_INTERVAL = 1; // seconds
 
 const GRAPH_WIDTH = 120;
@@ -68,12 +69,11 @@ const OverlayHUD = () => {
 
   // Build the DOM overlay imperatively (outside R3F's reconciler)
   useEffect(() => {
-    const target = document.getElementById("dotcomma");
-    if (!target) return;
+    const column = getOrCreateLeftColumn();
 
     const container = document.createElement("div");
     container.style.cssText =
-      "position:fixed;bottom:12px;left:12px;z-index:1000;background:rgba(0,0,0,0.6);" +
+      "order:1;background:rgba(0,0,0,0.6);" +
       "color:#0f0;font-family:'Kode Mono','Courier New',Courier,monospace;font-size:12px;" +
       "line-height:1.5;padding:8px 12px;border-radius:4px;pointer-events:none;white-space:pre;";
 
@@ -97,10 +97,10 @@ const OverlayHUD = () => {
 
     spans.current = createdSpans;
     graphs.current = createdGraphs;
-    target.appendChild(container);
+    column.appendChild(container);
 
     return () => {
-      target.removeChild(container);
+      container.remove();
     };
   }, []);
 
@@ -170,7 +170,7 @@ const OverlayHUD = () => {
 };
 
 export const Overlay = () => {
-  const { params } = useUrlParameters();
-  if (!params.overlay) return null;
+  const { devMode } = useDevMode();
+  if (!devMode) return null;
   return <OverlayHUD />;
 };
