@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useUrlParameters } from "../../context/UrlParametersContext";
+import { useDevMode } from "../../context/DevContext";
 
 const EXPIRE_MS = 30_000;
 const CHECK_INTERVAL_MS = 1_000;
@@ -28,12 +28,12 @@ interface LogEntry {
 }
 
 export const LogsOverlay = () => {
-  const { params } = useUrlParameters();
+  const { devMode } = useDevMode();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const entriesRef = useRef<LogEntry[]>([]);
-  const activeRef = useRef(params.logs);
+  const activeRef = useRef(devMode);
 
-  activeRef.current = params.logs;
+  activeRef.current = devMode;
 
   useEffect(() => {
     const target = document.getElementById("dotcomma");
@@ -137,9 +137,9 @@ export const LogsOverlay = () => {
   // Toggle visibility
   useEffect(() => {
     if (containerRef.current) {
-      containerRef.current.style.display = params.logs ? "flex" : "none";
+      containerRef.current.style.display = devMode ? "flex" : "none";
     }
-  }, [params.logs]);
+  }, [devMode]);
 
   return null;
 };

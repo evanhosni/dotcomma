@@ -2,8 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { CustomCanvas } from "./canvas/CustomCanvas";
-import { UrlParametersProvider } from "./context/UrlParametersContext";
-import { CommandPalette } from "./menus/command-palette/CommandPalette";
+import { DevProvider } from "./context/DevContext";
+import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import "./style.css";
 
@@ -12,8 +12,8 @@ const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElem
 const Dotcomma = () => {
   return (
     <BrowserRouter>
-      <UrlParametersProvider>
-        <CommandPalette />
+      <DevProvider>
+        <DevOverlay />
         <LogsOverlay />
         <Routes>
           <Route
@@ -27,7 +27,7 @@ const Dotcomma = () => {
           />
           <Route path="*" />
         </Routes>
-      </UrlParametersProvider>
+      </DevProvider>
     </BrowserRouter>
   );
 };

@@ -2,7 +2,7 @@ import { Physics } from "@react-three/rapier";
 import { Canvas } from "@react-three/fiber";
 import { useEffect } from "react";
 import { GameContextProvider, useGameContext } from "../context/GameContext";
-import { useUrlParameters } from "../context/UrlParametersContext";
+import { useDevMode } from "../context/DevContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { Player } from "../player/Player";
@@ -14,7 +14,7 @@ const OBJECT_LOAD_THRESHOLD = 0.2; //TODO make this 1 for release, keep it low f
 
 const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { terrain_loaded, progress } = useGameContext();
-  const { params } = useUrlParameters();
+  const { physicsDebug } = useDevMode();
 
   useEffect(() => {
     initCursor();
@@ -24,7 +24,7 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
     <>
       <Overlay />
       <PostProcessing quantization={0.025} />
-      <Physics gravity={[0, -100, 0]} debug={params.debug}>
+      <Physics gravity={[0, -100, 0]} debug={physicsDebug}>
         {children}
         <Terrain />
         <ObjectPool />
