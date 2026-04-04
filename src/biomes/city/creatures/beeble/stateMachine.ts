@@ -249,11 +249,70 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clipName: "ascend" },
       onEnter: (ctx) => {
         resetHeadBone(ctx);
+        const bb = ctx.blackboard;
+        bb.__inflate_t = 0;
+        bb.__inflate_meshes = [];
+
+        if (!ctx.groupRef.current) return;
+
+        ctx.groupRef.current.traverse((node: any) => {
+          if (node.isMesh && node.geometry) {
+            // Clone geometry so we only mutate this instance
+            const cloned = (node.geometry as THREE.BufferGeometry).clone();
+            node.geometry = cloned;
+
+            const posAttr = cloned.getAttribute("position");
+            if (!posAttr) return;
+
+            const original = new Float32Array(posAttr.array.length);
+            original.set(posAttr.array as Float32Array);
+
+            cloned.computeBoundingSphere();
+            const center = cloned.boundingSphere!.center;
+            const radius = cloned.boundingSphere!.radius;
+
+            const spherePositions = new Float32Array(original.length);
+            for (let i = 0; i < original.length; i += 3) {
+              const dx = original[i] - center.x;
+              const dy = original[i + 1] - center.y;
+              const dz = original[i + 2] - center.z;
+              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
+              spherePositions[i] = center.x + (dx / dist) * radius;
+              spherePositions[i + 1] = center.y + (dy / dist) * radius;
+              spherePositions[i + 2] = center.z + (dz / dist) * radius;
+            }
+
+            bb.__inflate_meshes.push({ posAttr, original, spherePositions });
+          }
+        });
       },
       onUpdate: (ctx) => {
-        ctx.blackboard.__vel_x = 0;
-        ctx.blackboard.__vel_z = 0;
-        ctx.blackboard.__vel_y = ASCEND_SPEED;
+        const bb = ctx.blackboard;
+        bb.__ascend_elapsed = (bb.__ascend_elapsed ?? 0) + ctx.delta;
+        const ramp = Math.min(bb.__ascend_elapsed / 1, 1); // ease in over 1s
+        const easedRamp = ramp * ramp; // quadratic ease-in
+
+        bb.__vel_x = 0;
+        bb.__vel_z = 0;
+        bb.__vel_y = ASCEND_SPEED * easedRamp;
+
+        bb.__inflate_t = Math.min((bb.__inflate_t ?? 0) + ctx.delta * 0.5, 1);
+        const t = bb.__inflate_t;
+
+        const meshes = bb.__inflate_meshes ?? [];
+        for (const { posAttr, original, spherePositions } of meshes) {
+          const arr = posAttr.array as Float32Array;
+          for (let i = 0; i < arr.length; i++) {
+            arr[i] = original[i] + (spherePositions[i] - original[i]) * t;
+          }
+          posAttr.needsUpdate = true;
+        }
+
+        // Balloon scale-up
+        if (ctx.groupRef.current) {
+          const s = 1 + t * 0.5;
+          ctx.groupRef.current.scale.set(s, s, s);
+        }
       },
       transitions: [],
     },
