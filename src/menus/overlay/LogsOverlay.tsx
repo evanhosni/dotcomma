@@ -23,6 +23,7 @@ interface LogEntry {
   count: number;
   timestamp: number;
   el: HTMLDivElement;
+  textEl: HTMLSpanElement;
   countEl: HTMLSpanElement | null;
   type: LogLevel;
 }
@@ -39,18 +40,55 @@ export const LogsOverlay = () => {
     const target = document.getElementById("dotcomma");
     if (!target) return;
 
-    const container = document.createElement("div");
-    container.style.cssText =
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText =
       "position:fixed;bottom:12px;right:12px;z-index:1000;" +
-      "max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;justify-content:flex-end;" +
+      "max-height:50vh;display:flex;flex-direction:column;" +
       "pointer-events:auto;user-select:text;" +
       "font-family:'Kode Mono','Courier New',Courier,monospace;font-size:12px;line-height:1.5;" +
       "max-width:500px;";
-    container.addEventListener("mousedown", (e) => e.stopPropagation());
-    container.addEventListener("click", (e) => e.stopPropagation());
+    wrapper.addEventListener("mousedown", (e) => e.stopPropagation());
+    wrapper.addEventListener("click", (e) => e.stopPropagation());
 
-    containerRef.current = container;
-    target.appendChild(container);
+    // Toolbar (hidden until first log)
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText =
+      "display:none;justify-content:flex-end;gap:4px;margin-bottom:4px;";
+
+    const btnStyle =
+      "background:rgba(0,0,0,0.6);color:#0f0;border:1px solid #0f0;border-radius:4px;" +
+      "padding:2px 8px;cursor:pointer;font:inherit;font-size:11px;";
+
+    const copyAllBtn = document.createElement("button");
+    copyAllBtn.style.cssText = btnStyle;
+    copyAllBtn.textContent = "copy all";
+    copyAllBtn.addEventListener("click", () => {
+      const text = entriesRef.current
+        .map((e) => (e.count > 1 ? `${e.message} ×${e.count}` : e.message))
+        .join("\n");
+      navigator.clipboard.writeText(text);
+    });
+
+    const clearAllBtn = document.createElement("button");
+    clearAllBtn.style.cssText = btnStyle;
+    clearAllBtn.textContent = "clear all";
+    clearAllBtn.addEventListener("click", () => {
+      for (const entry of entriesRef.current) entry.el.remove();
+      entriesRef.current = [];
+      toolbar.style.display = "none";
+    });
+
+    toolbar.appendChild(copyAllBtn);
+    toolbar.appendChild(clearAllBtn);
+    wrapper.appendChild(toolbar);
+
+    const container = document.createElement("div");
+    container.style.cssText =
+      "overflow-y:auto;display:flex;flex-direction:column;justify-content:flex-end;";
+
+    containerRef.current = wrapper;
+    wrapper.appendChild(container);
+    target.appendChild(wrapper);
 
     function addEntry(type: LogLevel, args: any[]) {
       if (!activeRef.current) return;
@@ -71,7 +109,7 @@ export const LogsOverlay = () => {
           badge.style.cssText =
             `margin-left:8px;color:${BADGE_COLORS[type]};font-size:10px;opacity:0.7;`;
           badge.textContent = `×${existing.count}`;
-          existing.el.appendChild(badge);
+          existing.textEl.appendChild(badge);
           existing.countEl = badge;
         } else if (existing.countEl) {
           existing.countEl.textContent = `×${existing.count}`;
@@ -84,13 +122,32 @@ export const LogsOverlay = () => {
       const el = document.createElement("div");
       el.style.cssText =
         `background:rgba(0,0,0,0.6);color:${LOG_COLORS[type]};padding:4px 8px;border-radius:4px;` +
-        "margin-top:2px;word-break:break-all;white-space:pre-wrap;";
-      el.textContent = message;
+        "margin-top:2px;word-break:break-all;white-space:pre-wrap;display:flex;align-items:flex-start;gap:6px;";
 
-      const entry: LogEntry = { message, count: 1, timestamp: now, el, countEl: null, type };
+      const copyBtn = document.createElement("button");
+      copyBtn.style.cssText =
+        `background:none;border:none;color:${LOG_COLORS[type]};cursor:pointer;padding:0;` +
+        "font:inherit;font-size:10px;opacity:0.5;flex-shrink:0;line-height:1.5;";
+      copyBtn.textContent = "⧉";
+      copyBtn.addEventListener("mouseenter", () => { copyBtn.style.opacity = "1"; });
+      copyBtn.addEventListener("mouseleave", () => { copyBtn.style.opacity = "0.5"; });
+      copyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(message);
+      });
+
+      const textSpan = document.createElement("span");
+      textSpan.style.cssText = "flex:1;min-width:0;";
+      textSpan.textContent = message;
+
+      el.appendChild(copyBtn);
+      el.appendChild(textSpan);
+
+      const entry: LogEntry = { message, count: 1, timestamp: now, el, textEl: textSpan, countEl: null, type };
       entries.push(entry);
       container.appendChild(el);
       container.scrollTop = container.scrollHeight;
+      toolbar.style.display = "flex";
     }
 
     const originalLog = console.log;
@@ -122,6 +179,7 @@ export const LogsOverlay = () => {
           entries.splice(i, 1);
         }
       }
+      if (entries.length === 0) toolbar.style.display = "none";
     }, CHECK_INTERVAL_MS);
 
     return () => {
@@ -129,7 +187,7 @@ export const LogsOverlay = () => {
       console.error = originalError;
       console.warn = originalWarn;
       clearInterval(interval);
-      container.remove();
+      wrapper.remove();
       entriesRef.current = [];
     };
   }, []);
