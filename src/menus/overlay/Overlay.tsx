@@ -67,6 +67,13 @@ const OverlayHUD = () => {
   const biomePoll = useRef(0);
   const currentBiome = useRef("...");
 
+  // Disable per-render auto-reset so gl.info accumulates stats across all
+  // render passes (portal + main). We manually reset once per frame below.
+  useEffect(() => {
+    gl.info.autoReset = false;
+    return () => { gl.info.autoReset = true; };
+  }, [gl]);
+
   // Build the DOM overlay imperatively (outside R3F's reconciler)
   useEffect(() => {
     const column = getOrCreateLeftColumn();
@@ -105,6 +112,12 @@ const OverlayHUD = () => {
   }, []);
 
   useFrame((_, delta) => {
+    // Capture accumulated render stats from all previous frame's render passes
+    // (portal + main), then reset for the next frame's accumulation.
+    const renderCalls = gl.info.render.calls;
+    const renderTris = gl.info.render.triangles;
+    gl.info.reset();
+
     const s = spans.current;
     const g = graphs.current;
     if (s.length === 0) return;
@@ -150,8 +163,7 @@ const OverlayHUD = () => {
     const p = camera.position;
     s[I_POS].textContent = `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
     s[I_BIOME].textContent = currentBiome.current;
-    const info = gl.info.render;
-    s[I_RENDER].textContent = `${info.calls} draws, ${info.triangles} tris`;
+    s[I_RENDER].textContent = `${renderCalls} draws, ${renderTris} tris`;
     s[I_TERRAIN].textContent = terrain_loaded ? "loaded" : `${Math.round(progress * 100)}%`;
 
     // Update graphs
@@ -164,7 +176,7 @@ const OverlayHUD = () => {
         drawGraph(g[i].ctx, hist, GRAPH_MAX_DEFAULTS[i], GRAPH_COLORS[i]);
       }
     }
-  });
+  }, -1000);
 
   return null;
 };
