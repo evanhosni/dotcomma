@@ -1,12 +1,12 @@
 import type Rapier from "@dimforge/rapier3d-compat";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import type { RapierRigidBody } from "@react-three/rapier";
 import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
+import { usePortalContext } from "../portals/PortalContext";
 import { getVertexData } from "../world/getVertexData";
 import { useInput } from "./useInput";
 
@@ -54,8 +54,10 @@ export const Player = () => {
   const { terrain_loaded, playerPosition } = useGameContext();
   const { noclip } = useDevMode();
 
-  const rigidBodyRef = useRef<RapierRigidBody>(null);
-  const verticalVelocity = useRef(0);
+  const { playerRigidBodyRef, verticalVelocityRef, transitioning, activeIndoorId, pendingTeleport, pendingYawDelta } =
+    usePortalContext();
+  const rigidBodyRef = playerRigidBodyRef;
+  const verticalVelocity = verticalVelocityRef;
   const cameraReady = useRef(false);
   const respawning = useRef(false);
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
@@ -87,6 +89,35 @@ export const Player = () => {
     const controller = controllerRef.current;
     if (!rb || !controller) return;
 
+    // Apply pending teleport from portal system
+    if (pendingTeleport.current) {
+      const tp = pendingTeleport.current;
+      const yawDelta = pendingYawDelta.current;
+      pendingTeleport.current = null;
+      pendingYawDelta.current = 0;
+      rb.setNextKinematicTranslation(tp);
+      rb.setTranslation(tp, true);
+      verticalVelocity.current = 0;
+      cameraReady.current = false; // snap camera to new position
+      // Update shared position immediately
+      playerPosition.set(tp.x, tp.y, tp.z);
+      _camTarget.set(tp.x, tp.y + PLAYER_HEIGHT * 0.5, tp.z);
+      camera.position.copy(_camTarget);
+      // Apply yaw rotation from portal transform so view direction matches
+      // what the virtual camera was showing through the portal
+      if (yawDelta !== 0) {
+        camera.rotation.y += yawDelta;
+      }
+      // Recompute matrixWorld + matrixWorldInverse immediately so that
+      // GameObjects (which run after Player at default priority) read the
+      // correct frustum for this frame instead of the stale indoor position.
+      camera.updateMatrixWorld();
+      return;
+    }
+
+    // Skip physics during portal transition
+    if (transitioning.current) return;
+
     const { forward, backward, left, right, sprint, jump, control } = inputRef.current;
 
     // Clamp delta to prevent huge jumps after tab-switch or frame spikes
@@ -107,8 +138,9 @@ export const Player = () => {
 
     const pos = rb.translation();
 
-    // Hold player in place until terrain colliders are loaded
-    if (!terrain_loaded && !noclip) {
+    // Hold player in place until terrain colliders are loaded (outdoor world only)
+    const needsTerrain = !transitioning.current && !activeIndoorId;
+    if (needsTerrain && !terrain_loaded && !noclip) {
       rb.setTranslation({ x: SPAWN_POSITION[0], y: SPAWN_POSITION[1], z: SPAWN_POSITION[2] }, true);
       verticalVelocity.current = 0;
       _camTarget.set(SPAWN_POSITION[0], SPAWN_POSITION[1] + PLAYER_HEIGHT * 0.5, SPAWN_POSITION[2]);
@@ -172,7 +204,7 @@ export const Player = () => {
       // Let the character controller compute collision-corrected movement
       const collider = rb.collider(0);
       if (collider) {
-        controller.computeColliderMovement(collider, desiredMovement);
+        controller.computeColliderMovement(collider, desiredMovement, undefined, undefined, (c) => !c.isSensor());
         const corrected = controller.computedMovement();
 
         rb.setNextKinematicTranslation({
@@ -186,8 +218,8 @@ export const Player = () => {
     // Read final position
     const finalPos = rb.translation();
 
-    // Safety net: if player falls through terrain, respawn at ground height + 10
-    if (finalPos.y < FALL_RESET_Y && !respawning.current) {
+    // Safety net: if player falls through terrain, respawn at ground height + 10 (outdoor only)
+    if (!activeIndoorId && finalPos.y < FALL_RESET_Y && !respawning.current) {
       respawning.current = true;
       verticalVelocity.current = 0;
       getVertexData(finalPos.x, finalPos.z, true).then((vd) => {

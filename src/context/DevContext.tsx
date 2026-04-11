@@ -16,8 +16,10 @@ function readDevParam(): boolean {
 }
 
 function writeDevParam(devMode: boolean) {
-  const url = window.location.pathname + (devMode ? "?devmode" : "");
-  window.history.replaceState(null, "", url);
+  const url = new URL(window.location.href);
+  if (devMode) url.searchParams.set("devmode", "");
+  else url.searchParams.delete("devmode");
+  window.history.replaceState(null, "", url.toString());
 }
 
 export const DevProvider = ({ children }: { children: React.ReactNode }) => {

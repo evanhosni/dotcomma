@@ -17,7 +17,7 @@ const Dotcomma = () => {
         <LogsOverlay />
         <Routes>
           <Route
-            index
+            path="*"
             element={
               <CustomCanvas>
                 <ambientLight intensity={0.5} />
@@ -25,7 +25,6 @@ const Dotcomma = () => {
               </CustomCanvas>
             }
           />
-          <Route path="*" />
         </Routes>
       </DevProvider>
     </BrowserRouter>
