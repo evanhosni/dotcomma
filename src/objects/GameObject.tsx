@@ -20,6 +20,10 @@ const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
 let frustumUpdatedAt = -1;
 
+/** Objects hidden by GameObject frustum culling. Portal reads this set
+ *  to temporarily restore visibility during its virtual-camera render. */
+export const frustumHiddenObjects = new Set<THREE.Object3D>();
+
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
 // Helper function to properly clone a model with animations
@@ -210,6 +214,10 @@ export const GameObject = ({
       // Mark component as unmounted to prevent state updates
       mountedRef.current = false;
 
+      if (groupRef.current) {
+        frustumHiddenObjects.delete(groupRef.current);
+      }
+
       // Stop animations
       if (mixerRef.current) {
         mixerRef.current.stopAllAction();
@@ -323,6 +331,11 @@ export const GameObject = ({
     // Set visibility directly on the group ref — no React re-render
     if (groupRef.current) {
       groupRef.current.visible = isVisible;
+      if (isVisible) {
+        frustumHiddenObjects.delete(groupRef.current);
+      } else {
+        frustumHiddenObjects.add(groupRef.current);
+      }
     }
 
     // Also scale collider render distance based on object size
