@@ -1,5 +1,6 @@
 import { Biome } from "../../world/types";
 import { ApartmentDescriptor } from "./blocks/apartment/descriptor";
+import { Building1Descriptor } from "./blocks/building1/descriptor";
 import { BeebleDescriptor } from "./creatures/beeble/descriptor";
 import { BigBeebleDescriptor } from "./creatures/big-beeble/descriptor";
 import { XLElementDescriptor } from "./creatures/xl-element/descriptor";
@@ -21,5 +22,6 @@ export const City: Biome = {
     BigBeebleDescriptor,
     XLElementDescriptor,
     XXLElementDescriptor,
+    Building1Descriptor,
   ],
 };

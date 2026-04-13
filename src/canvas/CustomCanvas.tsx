@@ -9,20 +9,8 @@ import { initCursor } from "../utils/cursor/cursor";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
-import { PortalContextProvider, usePortalContext } from "../portals/PortalContext";
-import { PortalBuilding } from "../portals/PortalBuilding";
-import { getIndoorWorldById } from "../portals/worlds/registry";
+import { PortalContextProvider } from "../portals/PortalContext";
 import { Sky } from "./Sky";
-
-/** Renders the active indoor world as an overlay, if any */
-const ActiveIndoorWorld = () => {
-  const { activeIndoorId, entryPortalPos } = usePortalContext();
-  if (!activeIndoorId) return null;
-  const entry = getIndoorWorldById(activeIndoorId);
-  if (!entry) return null;
-  const IndoorComponent = entry.component;
-  return <IndoorComponent entryPortalPos={entryPortalPos.current} />;
-};
 
 /** Portal useFrame hooks use non-zero priorities (-1, 1), which disables R3F's
  *  auto-rendering. This component replaces it with an explicit render at the end. */
@@ -50,14 +38,9 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
       <PostProcessing quantization={0.025} />
       <Physics gravity={[0, -100, 0]} debug={physicsDebug}>
         {children}
-        {/* Outdoor world — always mounted. Terrain/ObjectPool stay top-level to avoid
-            group wrapper issues. PortalBuilding visibility toggles with indoor state. */}
         <Sky />
         <Terrain />
         <ObjectPool />
-        <PortalBuilding />
-        {/* Indoor world colliders — mount when player enters (visuals are always mounted in PortalBuilding) */}
-        <ActiveIndoorWorld />
         <Player />
       </Physics>
     </>

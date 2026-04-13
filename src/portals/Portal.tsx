@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { frustumHiddenObjects } from "../objects/GameObject";
 import { usePortalContext } from "./PortalContext";
-import { getIndoorWorldById } from "./worlds/registry";
 
 interface PortalProps {
   id: string;
@@ -11,10 +10,14 @@ interface PortalProps {
   position: [number, number, number];
   rotation?: [number, number, number];
   size: [number, number];
+  /** Actual portal mesh geometry (matches the shape of the GLTF portal object) */
+  geometry: THREE.BufferGeometry;
   targetIndoorId: string;
   activationDistance: number;
   /** "enter" = outdoor→indoor, "exit" = indoor→outdoor */
   direction: "enter" | "exit";
+  /** URL path for indoor world navigation. Default "/" (no URL change). */
+  urlPath?: string;
 }
 
 // --- Projective-texture shaders (same technique as Three.js Reflector) ---
@@ -30,10 +33,11 @@ void main() {
 
 const FRAG = `
 uniform sampler2D portalTexture;
+uniform float portalOpacity;
 varying vec4 vPortalUv;
 void main() {
   vec4 col = texture2DProj(portalTexture, vPortalUv);
-  gl_FragColor = vec4(col.rgb, 1.0);
+  gl_FragColor = vec4(col.rgb * portalOpacity, 1.0);
 }
 `;
 
@@ -43,6 +47,7 @@ const _portalNormal = new THREE.Vector3();
 const _portalRight = new THREE.Vector3();
 const _toPlayer = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
+const _up = new THREE.Vector3(0, 1, 0);
 
 // Virtual camera transform
 const _srcMat = new THREE.Matrix4();
@@ -101,6 +106,7 @@ const MAX_RES_SCALE = 1.0;
 // Beyond this distance, only re-render portal texture every THROTTLE_FRAMES frames
 const FULL_RATE_DIST = 15;
 const THROTTLE_FRAMES = 3;
+const PORTAL_FADE_RANGE = 10;
 
 // Frustum culling scratch objects
 const _frustum = new THREE.Frustum();
@@ -113,9 +119,11 @@ export const Portal = ({
   position,
   rotation,
   size,
+  geometry,
   targetIndoorId,
   activationDistance,
   direction,
+  urlPath,
 }: PortalProps) => {
   const {
     enterIndoor,
@@ -138,7 +146,6 @@ export const Portal = ({
   const frameCounter = useRef(0);
 
   const [width, height] = size;
-  const indoorEntry = getIndoorWorldById(targetIndoorId);
 
   // Persistent virtual camera
   const virtualCamera = useMemo(() => {
@@ -170,6 +177,7 @@ export const Portal = ({
         uniforms: {
           textureMatrix: { value: new THREE.Matrix4() },
           portalTexture: { value: renderTarget.texture },
+          portalOpacity: { value: 0 },
         },
         vertexShader: VERT,
         fragmentShader: FRAG,
@@ -218,7 +226,8 @@ export const Portal = ({
     }
     wasTransitioning.current = transitioning.current;
 
-    const shouldBeActive = dist < activationDistance || camera.position.distanceTo(_portalPos) < activationDistance;
+    const cameraDist = camera.position.distanceTo(_portalPos);
+    const shouldBeActive = dist < activationDistance || cameraDist < activationDistance;
     if (shouldBeActive !== activeRef.current) {
       activeRef.current = shouldBeActive;
       if (!shouldBeActive) {
@@ -230,21 +239,28 @@ export const Portal = ({
     // ---- Plane-crossing detection ----
     if (activeRef.current && !hasTriggered.current && !transitioning.current && prevSignedDist.current !== null) {
       const localX = _toPlayer.dot(_portalRight);
-      const inDoorFrame = Math.abs(localX) < width / 2 && Math.abs(signedDist) < 1.5;
+      const localY = _toPlayer.y;
+      const inDoorFrame =
+        Math.abs(localX) < width / 2 &&
+        Math.abs(localY) < height / 2 + 1 && // +1 for player half-height
+        Math.abs(signedDist) < 1.5;
 
-      const crossedThreshold = prevSignedDist.current > 0 && signedDist <= 0;
-      // Catch players who landed behind the portal (e.g. barely crossed the
-      // enter portal) and are now moving away — teleport them through.
-      const behindAndRetreating = signedDist < -0.1 && signedDist < prevSignedDist.current;
-      if (inDoorFrame && (crossedThreshold || behindAndRetreating)) {
+      // Trigger on plane crossing in EITHER direction — GLTF portal normals may
+      // face either way, so we can't assume which side is "front". A door can be
+      // walked through from both sides. The 8-frame transitioning guard + null
+      // prevSignedDist reset prevents bounce-back after teleporting.
+      const crossedPlane =
+        (prevSignedDist.current > 0 && signedDist <= 0) ||
+        (prevSignedDist.current < 0 && signedDist >= 0);
+      if (inDoorFrame && crossedPlane) {
         const paired = getPortalTransform(pairedId);
         if (paired) {
           hasTriggered.current = true;
           prevSignedDist.current = null;
 
           // Compute teleport destination: dest * rotY(π) * inv(src) * playerPos
-          // Same transform as the virtual camera, so the post-teleport view is
-          // pixel-identical to what the portal texture was showing.
+          // The Valve formula rotates the player's offset to account for the
+          // different facing directions of the enter/exit portals.
           _srcMat.compose(_portalPos, _quat, _scale1);
           _srcMatInv.copy(_srcMat).invert();
           _destMat.compose(paired.position, paired.quaternion, _scale1);
@@ -263,8 +279,8 @@ export const Portal = ({
           const dest = { x: _teleportPos.x, y: _teleportPos.y, z: _teleportPos.z };
           const yawDelta = _yawEuler.y;
 
-          if (direction === "enter" && indoorEntry) {
-            enterIndoor(targetIndoorId, indoorEntry.urlPath, _portalPos.clone(), _portalNormal.clone(), dest, yawDelta);
+          if (direction === "enter") {
+            enterIndoor(targetIndoorId, urlPath ?? "/", _portalPos.clone(), _portalNormal.clone(), dest, yawDelta);
           } else {
             exitIndoor(dest, yawDelta);
           }
@@ -273,7 +289,12 @@ export const Portal = ({
           // renders from the teleport target — prevents the flash that
           // occurred when the camera's near plane clipped the portal mesh.
           camera.position.set(dest.x, dest.y + PLAYER_EYE_OFFSET, dest.z);
-          if (yawDelta !== 0) camera.rotation.y += yawDelta;
+          // Apply yaw via quaternion premultiply — avoids the Euler gimbal
+          // flip that occurs when modifying rotation.y with non-zero pitch.
+          if (yawDelta !== 0) {
+            _relQuat.setFromAxisAngle(_up, yawDelta);
+            camera.quaternion.premultiply(_relQuat);
+          }
           camera.updateMatrixWorld();
           pendingYawDelta.current = 0;
 
@@ -318,8 +339,22 @@ export const Portal = ({
     const cameraDist = _toPlayer.length();
     const cameraSignedDist = _toPlayer.dot(_portalNormal);
 
-    // Don't render if camera is behind the portal (looking at the back face)
-    if (cameraSignedDist < 0) return;
+    // Distance-based fade: uses camera distance (body may lag by 1 frame
+    // after a teleport since Player runs at priority -3, before portals).
+    const fadeDist = cameraDist;
+    material.uniforms.portalOpacity.value = Math.max(0, Math.min(1, (activationDistance - fadeDist) / PORTAL_FADE_RANGE));
+
+    // Skip rendering when portal is fully transparent (out of range)
+    if (material.uniforms.portalOpacity.value < 0.01) {
+      mesh.visible = false;
+      return;
+    }
+    mesh.visible = true;
+
+    // Skip back-face render only when far away (optimization). When close
+    // (e.g. just teleported), always render to avoid a black-frame flash —
+    // GLTF normals may place the camera on the "back" side of the portal.
+    if (cameraSignedDist < 0 && cameraDist > activationDistance * 0.5) return;
 
     const paired = getPortalTransform(pairedId);
     if (!paired) return;
@@ -456,8 +491,10 @@ export const Portal = ({
 
   return (
     <group ref={groupRef} position={position} rotation={euler}>
-      <mesh ref={meshRef}>
-        <planeGeometry args={[width, height, 16, 16]} />
+      {/* Start invisible — Hook 2 toggles visibility once the render target
+          has been filled with a valid texture. Prevents a black-quad flash
+          in other portals' virtual-camera renders on the very first frame. */}
+      <mesh ref={meshRef} geometry={geometry} visible={false}>
         <primitive object={material} attach="material" />
       </mesh>
     </group>
