@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from "react";
 import * as THREE from "three";
 import { RapierRigidBody } from "@react-three/rapier";
+import { IndoorLightRig } from "./IndoorLightRig";
 
 function updateUrlPath(newPath: string) {
   const url = new URL(window.location.href);
@@ -11,6 +12,13 @@ function updateUrlPath(newPath: string) {
 export interface PortalTransformData {
   position: THREE.Vector3;
   quaternion: THREE.Quaternion;
+}
+
+export interface IndoorBounds {
+  /** World-space center of the indoor volume */
+  center: THREE.Vector3;
+  /** World-space size of the indoor volume */
+  size: THREE.Vector3;
 }
 
 interface PortalContextType {
@@ -27,6 +35,11 @@ interface PortalContextType {
   registerPortal: (id: string, position: THREE.Vector3, quaternion: THREE.Quaternion) => void;
   unregisterPortal: (id: string) => void;
   getPortalTransform: (id: string) => PortalTransformData | undefined;
+  /** Indoor bounds registry — buildings publish their world-space interior
+   *  bounds so IndoorLightRig can position lights for the active indoor. */
+  publishIndoorBounds: (id: string, bounds: IndoorBounds) => void;
+  unpublishIndoorBounds: (id: string) => void;
+  getIndoorBounds: (id: string) => IndoorBounds | undefined;
 }
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
@@ -66,6 +79,23 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
   const getPortalTransform = useCallback((id: string): PortalTransformData | undefined => {
     return portalTransforms.current.get(id);
   }, []);
+
+  // Indoor bounds registry (used by IndoorLightRig to place lights at the
+  // active indoor's world-space center each frame).
+  const indoorBoundsMap = useRef(new Map<string, IndoorBounds>());
+
+  const publishIndoorBounds = useCallback((id: string, bounds: IndoorBounds) => {
+    indoorBoundsMap.current.set(id, bounds);
+  }, []);
+
+  const unpublishIndoorBounds = useCallback((id: string) => {
+    indoorBoundsMap.current.delete(id);
+  }, []);
+
+  const getIndoorBounds = useCallback(
+    (id: string): IndoorBounds | undefined => indoorBoundsMap.current.get(id),
+    [],
+  );
 
   // Clear transitioning after several frames so the player has time to move
   // away from the paired portal, preventing immediate bounce-back teleports.
@@ -135,8 +165,12 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
         registerPortal,
         unregisterPortal,
         getPortalTransform,
+        publishIndoorBounds,
+        unpublishIndoorBounds,
+        getIndoorBounds,
       }}
     >
+      <IndoorLightRig />
       {children}
     </PortalContext.Provider>
   );
