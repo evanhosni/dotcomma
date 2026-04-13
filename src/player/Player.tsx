@@ -103,10 +103,14 @@ export const Player = () => {
       playerPosition.set(tp.x, tp.y, tp.z);
       _camTarget.set(tp.x, tp.y + PLAYER_HEIGHT * 0.5, tp.z);
       camera.position.copy(_camTarget);
-      // Apply yaw rotation from portal transform so view direction matches
-      // what the virtual camera was showing through the portal
+      // Apply yaw via quaternion premultiply — avoids the Euler gimbal
+      // flip that occurs when modifying rotation.y with non-zero pitch.
       if (yawDelta !== 0) {
-        camera.rotation.y += yawDelta;
+        const yawQuat = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0),
+          yawDelta,
+        );
+        camera.quaternion.premultiply(yawQuat);
       }
       // Recompute matrixWorld + matrixWorldInverse immediately so that
       // GameObjects (which run after Player at default priority) read the
@@ -243,7 +247,7 @@ export const Player = () => {
 
     // Update shared player position for state machines / other consumers
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
-  });
+  }, -3);
 
   return (
     <>

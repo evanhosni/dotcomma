@@ -23,10 +23,12 @@ function buildCacheKey(
   modelUrl: string | undefined,
   scale: THREE.Vector3Tuple,
   rotation: THREE.Vector3Tuple,
-  wholeTrimesh: boolean
+  wholeTrimesh: boolean,
+  excludeNames?: string[]
 ): string | null {
   if (!modelUrl) return null;
-  return `${modelUrl}|${scale[0]},${scale[1]},${scale[2]}|${rotation[0]},${rotation[1]},${rotation[2]}|${wholeTrimesh}`;
+  const excludeStr = excludeNames ? excludeNames.slice().sort().join(',') : '';
+  return `${modelUrl}|${scale[0]},${scale[1]},${scale[2]}|${rotation[0]},${rotation[1]},${rotation[2]}|${wholeTrimesh}|${excludeStr}`;
 }
 
 colliderWorker.onmessage = (event) => {
@@ -99,8 +101,9 @@ export const createColliders = async (
   rotation: THREE.Vector3Tuple,
   wholeTrimesh = false,
   modelUrl?: string,
+  excludeNames?: string[],
 ): Promise<ColliderState> => {
-  const cacheKey = buildCacheKey(modelUrl, scale, rotation, wholeTrimesh);
+  const cacheKey = buildCacheKey(modelUrl, scale, rotation, wholeTrimesh, excludeNames);
 
   if (cacheKey) {
     const cached = colliderCache.get(cacheKey);
@@ -120,9 +123,11 @@ export const createColliders = async (
     if (wholeTrimesh) {
       // Collect all mesh geometry into a single trimesh collider
       const meshes: WholeTrimeshWorkerMessage["meshes"] = [];
+      const excludeSet = excludeNames ? new Set(excludeNames) : null;
 
       gltf.scene.traverse((child) => {
         if (!(child instanceof THREE.Mesh) || !child.geometry) return;
+        if (excludeSet && excludeSet.has(child.name)) return;
 
         const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
         meshes.push({

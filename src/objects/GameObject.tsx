@@ -110,6 +110,7 @@ interface GameObjectProps {
   animationControl?: AnimationControl;
   isStatic?: boolean;
   wholeTrimesh?: boolean;
+  excludeColliderNames?: string[];
 }
 
 interface ColliderState {
@@ -132,6 +133,7 @@ export const GameObject = ({
   animationControl,
   isStatic = true,
   wholeTrimesh = false,
+  excludeColliderNames,
 }: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
@@ -381,7 +383,7 @@ export const GameObject = ({
   useEffect(() => {
     const task = async () => {
       try {
-        const colliders = await createColliders(gltf as any, scale, rotation, wholeTrimesh, model);
+        const colliders = await createColliders(gltf as any, scale, rotation, wholeTrimesh, model, excludeColliderNames);
         setColliders(colliders as ColliderState);
       } catch (error) {
         console.error("Error creating colliders:", error);

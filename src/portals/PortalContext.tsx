@@ -1,8 +1,6 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from "react";
 import * as THREE from "three";
 import { RapierRigidBody } from "@react-three/rapier";
-import { INDOOR_Y_OFFSET } from "./types";
-import { getIndoorWorldByPath } from "./worlds/registry";
 
 function updateUrlPath(newPath: string) {
   const url = new URL(window.location.href);
@@ -34,8 +32,7 @@ interface PortalContextType {
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
 const getInitialIndoorId = (): string | null => {
-  const entry = getIndoorWorldByPath(window.location.pathname);
-  return entry?.id ?? null;
+  return null;
 };
 
 export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
@@ -70,6 +67,20 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
     return portalTransforms.current.get(id);
   }, []);
 
+  // Clear transitioning after several frames so the player has time to move
+  // away from the paired portal, preventing immediate bounce-back teleports.
+  const clearTransitionAfterFrames = useCallback((frames: number) => {
+    let remaining = frames;
+    const tick = () => {
+      if (--remaining > 0) {
+        requestAnimationFrame(tick);
+      } else {
+        transitioning.current = false;
+      }
+    };
+    requestAnimationFrame(tick);
+  }, []);
+
   const enterIndoor = useCallback(
     (id: string, urlPath: string, portalWorldPos: THREE.Vector3, portalNormal: THREE.Vector3, teleportDest: { x: number; y: number; z: number }, yawDelta: number) => {
       if (activeIndoorId === id) return;
@@ -86,13 +97,11 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
       pendingTeleport.current = teleportDest;
       pendingYawDelta.current = yawDelta;
 
-      updateUrlPath(urlPath);
+      if (urlPath !== "/") updateUrlPath(urlPath);
       setActiveIndoorId(id);
-      requestAnimationFrame(() => {
-        transitioning.current = false;
-      });
+      clearTransitionAfterFrames(8);
     },
-    [activeIndoorId],
+    [activeIndoorId, clearTransitionAfterFrames],
   );
 
   const exitIndoor = useCallback(
@@ -105,11 +114,9 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
 
       updateUrlPath("/");
       setActiveIndoorId(null);
-      requestAnimationFrame(() => {
-        transitioning.current = false;
-      });
+      clearTransitionAfterFrames(8);
     },
-    [activeIndoorId],
+    [activeIndoorId, clearTransitionAfterFrames],
   );
 
   return (
