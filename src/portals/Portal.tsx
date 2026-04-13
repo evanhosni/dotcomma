@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { frustumHiddenObjects } from "../objects/GameObject";
 import { usePortalContext } from "./PortalContext";
+import { acquireRenderTarget, releaseRenderTarget } from "./portalRenderTargetPool";
 
 interface PortalProps {
   id: string;
@@ -154,20 +155,15 @@ export const Portal = ({
     return cam;
   }, []);
 
-  // Render target — resized each frame to match the drawing buffer.
-  // isXRRenderTarget + SRGBColorSpace tricks Three.js into applying tone mapping
-  // and sRGB encoding during the portal render, identical to screen output.
-  // This ensures ALL materials (standard + custom terrain shaders) produce the
-  // same pixel values as the main render — the portal shader just passes through.
-  const renderTarget = useMemo(() => {
-    const rt = new THREE.WebGLRenderTarget(2, 2, {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-    });
-    (rt as any).isXRRenderTarget = true;
-    rt.texture.colorSpace = THREE.SRGBColorSpace;
-    return rt;
-  }, []);
+  // Render target — acquired from a module-level pool so that a portal's
+  // render target survives its unmount and is reused by the next Portal
+  // instance that mounts. Fresh WebGLRenderTarget allocation on every spawn
+  // was a GPU-texture-memory cost contributing to the spawn lag spike.
+  // isXRRenderTarget + SRGBColorSpace (set at creation in the pool) trick
+  // Three.js into applying tone mapping + sRGB encoding during the portal
+  // render, identical to screen output — the portal shader just passes
+  // through.
+  const renderTarget = useMemo(() => acquireRenderTarget(), []);
 
   // Portal shader material — toneMapped:false because the render target already
   // contains fully processed (tone-mapped + sRGB) values; no extra processing needed.
@@ -189,10 +185,12 @@ export const Portal = ({
   // Unregister on unmount
   useEffect(() => () => unregisterPortal(id), [id, unregisterPortal]);
 
-  // Dispose GPU resources
+  // Return the render target to the pool on unmount (don't dispose — it'll
+  // be reused by the next Portal that mounts). Material is per-instance and
+  // does get disposed.
   useEffect(
     () => () => {
-      renderTarget.dispose();
+      releaseRenderTarget(renderTarget);
       material.dispose();
     },
     [renderTarget, material],
