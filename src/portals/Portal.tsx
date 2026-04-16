@@ -248,8 +248,7 @@ export const Portal = ({
       // walked through from both sides. The 8-frame transitioning guard + null
       // prevSignedDist reset prevents bounce-back after teleporting.
       const crossedPlane =
-        (prevSignedDist.current > 0 && signedDist <= 0) ||
-        (prevSignedDist.current < 0 && signedDist >= 0);
+        (prevSignedDist.current > 0 && signedDist <= 0) || (prevSignedDist.current < 0 && signedDist >= 0);
       if (inDoorFrame && crossedPlane) {
         const paired = getPortalTransform(pairedId);
         if (paired) {
@@ -300,7 +299,9 @@ export const Portal = ({
           // while the camera was still indoors — restore their visibility so
           // they render correctly from the new outdoor camera position.
           if (direction === "exit") {
-            frustumHiddenObjects.forEach((obj) => { obj.visible = true; });
+            frustumHiddenObjects.forEach((obj) => {
+              obj.visible = true;
+            });
           }
         }
       }
@@ -340,7 +341,10 @@ export const Portal = ({
     // Distance-based fade: uses camera distance (body may lag by 1 frame
     // after a teleport since Player runs at priority -3, before portals).
     const fadeDist = cameraDist;
-    material.uniforms.portalOpacity.value = Math.max(0, Math.min(1, (activationDistance - fadeDist) / PORTAL_FADE_RANGE));
+    material.uniforms.portalOpacity.value = Math.max(
+      0,
+      Math.min(1, (activationDistance - fadeDist) / PORTAL_FADE_RANGE),
+    );
 
     // Skip rendering when portal is fully transparent (out of range)
     if (material.uniforms.portalOpacity.value < 0.01) {
@@ -396,7 +400,7 @@ export const Portal = ({
     // ---- Oblique near-plane clipping (Lengyel method) ----
     // Clip plane sits on the paired portal's surface, normal facing into the destination scene.
     _clipNormal.set(0, 0, 1).applyQuaternion(paired.quaternion);
-    _clipPoint.copy(paired.position).addScaledVector(_clipNormal, -CLIP_BIAS);
+    _clipPoint.copy(paired.position).addScaledVector(_clipNormal, CLIP_BIAS);
 
     // Transform clip plane into virtual camera space
     _mat3.setFromMatrix4(virtualCamera.matrixWorldInverse);
