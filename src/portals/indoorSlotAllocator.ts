@@ -1,6 +1,4 @@
-import { INDOOR_Y_OFFSET } from "./types";
-
-const INDOOR_Y_SPACING = 200;
+import { INDOOR_Y_OFFSET, INDOOR_Y_SPACING } from "./constants";
 const freeSlots: number[] = [];
 let nextSlot = 0;
 

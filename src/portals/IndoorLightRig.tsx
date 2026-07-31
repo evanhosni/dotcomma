@@ -24,7 +24,7 @@ import { usePortalContext } from "./PortalContext";
 const PARK_Y = -1e6;
 
 export const IndoorLightRig = () => {
-  const { activeIndoorId, getIndoorBounds } = usePortalContext();
+  const { activeIndoorId, previewIndoorIdRef, getIndoorBounds } = usePortalContext();
   const ceilingLightRef = useRef<THREE.PointLight>(null);
   const fillLightRef = useRef<THREE.PointLight>(null);
 
@@ -33,7 +33,11 @@ export const IndoorLightRig = () => {
     const fill = fillLightRef.current;
     if (!ceiling || !fill) return;
 
-    const bounds = activeIndoorId ? getIndoorBounds(activeIndoorId) : null;
+    // Light the active indoor, or the one whose portal preview is on screen —
+    // so the interior seen through a portal matches the interior after
+    // stepping in (no lighting pop on teleport).
+    const targetId = activeIndoorId ?? previewIndoorIdRef.current;
+    const bounds = targetId ? getIndoorBounds(targetId) : null;
     if (!bounds) {
       ceiling.position.set(0, PARK_Y, 0);
       fill.position.set(0, PARK_Y, 0);

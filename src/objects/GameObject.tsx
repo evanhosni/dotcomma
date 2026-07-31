@@ -8,6 +8,7 @@ import { getDistance2D } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { AnimationControl } from "./state/types";
+import { frustumHiddenObjects } from "./frustumVisibility";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
@@ -19,10 +20,6 @@ const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
 let frustumUpdatedAt = -1;
-
-/** Objects hidden by GameObject frustum culling. Portal reads this set
- *  to temporarily restore visibility during its virtual-camera render. */
-export const frustumHiddenObjects = new Set<THREE.Object3D>();
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
