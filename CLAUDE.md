@@ -68,6 +68,18 @@ src/
       types.ts         # SpawnDescriptor, SpawnPoint, SpawnedObjectProps
     colliders/         # Physics collider components
     state/             # State machine, mouse events, triggers for interactive objects
+    frustumVisibility.ts # Shared set of frustum-hidden objects (portals restore them for off-screen renders)
+  portals/
+    Building.tsx       # Spawnable building: exterior + always-mounted interior at an indoor Y slot, paired portals
+    Portal.tsx         # Portal surface (door mesh + crossing-time protection box) — registers a static PortalDescriptor
+    PortalContext.tsx  # Portal registry, activeIndoorId, indoor bounds registry
+    PortalTeleportSystem.tsx # ONE useFrame for all portals: camera plane-crossing detection + teleport
+    usePortalRenderer.ts # Render-to-texture virtual camera (oblique clipping, adaptive res, throttling)
+    portalMath.ts      # Shared pair-transform math (dest * rotY180 * inv(src)), near-plane corner distance
+    portalAssets.ts    # Per-building-type cache: portal transforms + interior template
+    IndoorLightRig.tsx # Fixed-count global indoor lights (stable shader variants)
+    indoorSlotAllocator.ts # Unique Y slot per building instance (INDOOR_Y_OFFSET + slot spacing)
+    constants.ts       # Teleport thresholds, render perf tuning
   player/
     Player.tsx         # First-person controller + physics
     useInput.tsx       # Keyboard input
@@ -94,6 +106,17 @@ src/
 3. Per-vertex: worker uses `WorldConfig` → voronoi → biome height + blend
 4. Geometry buffers written, normals computed, skirt vertices set
 5. Chunk made visible via atomic LOD swap system
+
+### Portal System
+
+Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors live at `INDOOR_Y_OFFSET` (+ per-instance slot spacing) directly above the building so terrain streaming is unaffected. Seamless walk-through uses the Valve/Portal technique:
+
+- **One shared transform** (`portalMath.ts`): `dest * rotY(180°) * inv(src)` drives BOTH the portal preview (virtual camera) and the teleport, so the frames before/after crossing are pixel-identical.
+- **Near-plane protection**: the portal surface is normally the door-shaped GLTF mesh, but while the camera is within near-plane-corner distance of the door plane it swaps to a box extruded through the plane away from the camera — the near plane can never clip a hole through it. The projective texture is screen-space, so both surfaces render identical pixels; the swap is invisible.
+- **Camera-crossing teleport** (`PortalTeleportSystem.tsx`, single `useFrame` at priority -2): fires the instant the camera crosses the plane inside the door frame; applies the pair transform to body + camera synchronously, then hands plane-tracking to the destination portal. No transition guards or physics freezes.
+- **Oblique near-plane clipping** (Lengyel) hides geometry behind the destination portal; the clip plane is kept at least `NEAR_CLIP_LIMIT` from the virtual camera (clamped, not skipped) to avoid degenerate-projection flicker.
+- **One level of recursion via context mode**: when the player is near an enter portal, every exit portal of that building renders the exterior observed by that enter portal's virtual camera (`contextEnterId`, set by the teleport system) — so other doors visible inside a preview show the outside. During any portal RT render, foreign portal surfaces whose texture matrix was built for a different observer are hidden (screen-space projective textures are only valid for their own observer).
+- `useFrame` priority order: portal transform refresh (-4, in Portal.tsx) → Player (-3) → teleport (-2) → object culling (0) → exit-portal RTs (0.9) → enter-portal RTs (1) → explicit scene render (2, `SceneRender` in CustomCanvas).
 
 ### Key Patterns
 

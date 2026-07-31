@@ -6,6 +6,7 @@ import { GameObject } from "../objects/GameObject";
 import { SpawnedObjectProps } from "../objects/spawning/types";
 import { Portal } from "./Portal";
 import { usePortalContext } from "./PortalContext";
+import { DEFAULT_ACTIVATION_DISTANCE, INDOOR_COLLIDER_PADDING } from "./constants";
 import { allocateIndoorSlot, getIndoorY, releaseIndoorSlot } from "./indoorSlotAllocator";
 import { getBuildingAssets } from "./portalAssets";
 
@@ -15,8 +16,6 @@ interface BuildingProps extends SpawnedObjectProps {
   portals: string[];
   activationDistance?: number;
 }
-
-const DEFAULT_ACTIVATION_DISTANCE = 50;
 
 export const Building = ({
   id,
@@ -30,7 +29,7 @@ export const Building = ({
   scale,
   frustumPadding,
 }: BuildingProps) => {
-  const { activeIndoorId, publishIndoorBounds, unpublishIndoorBounds } = usePortalContext();
+  const { publishIndoorBounds, unpublishIndoorBounds } = usePortalContext();
 
   const positionRef = useRef(new THREE.Vector3(...coordinates));
   const extScale = scale ? scale[0] : 1;
@@ -85,7 +84,6 @@ export const Building = ({
     return () => unpublishIndoorBounds(id);
   }, [id, coordinates, indoorY, assets.interiorBounds, publishIndoorBounds, unpublishIndoorBounds]);
 
-  const isInside = activeIndoorId === id;
   const { size: interiorSize, center: interiorCenter } = assets.interiorBounds;
 
   return (
@@ -148,20 +146,21 @@ export const Building = ({
           />
         ))}
 
-        {/* Floor + ceiling colliders — only while the player is inside. No
-             walls, so players can walk through the exit portal planes. */}
-        {isInside && (
-          <RigidBody type="fixed" position={[interiorCenter.x, interiorCenter.y, interiorCenter.z]}>
-            <CuboidCollider
-              args={[interiorSize.x / 2, 0.1, interiorSize.z / 2]}
-              position={[0, -interiorSize.y / 2, 0]}
-            />
-            <CuboidCollider
-              args={[interiorSize.x / 2, 0.1, interiorSize.z / 2]}
-              position={[0, interiorSize.y / 2, 0]}
-            />
-          </RigidBody>
-        )}
+        {/* Floor + ceiling colliders — always mounted so they're already in
+             the physics world the instant a teleport lands here (mounting them
+             on-enter left the player floorless for a frame). Padded past the
+             walls so the body stays supported while straddling a portal plane.
+             No walls, so players can walk through the exit portal planes. */}
+        <RigidBody type="fixed" position={[interiorCenter.x, interiorCenter.y, interiorCenter.z]}>
+          <CuboidCollider
+            args={[interiorSize.x / 2 + INDOOR_COLLIDER_PADDING, 0.1, interiorSize.z / 2 + INDOOR_COLLIDER_PADDING]}
+            position={[0, -interiorSize.y / 2, 0]}
+          />
+          <CuboidCollider
+            args={[interiorSize.x / 2 + INDOOR_COLLIDER_PADDING, 0.1, interiorSize.z / 2 + INDOOR_COLLIDER_PADDING]}
+            position={[0, interiorSize.y / 2, 0]}
+          />
+        </RigidBody>
       </group>
     </group>
   );

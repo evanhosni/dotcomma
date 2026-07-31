@@ -1,13 +1,11 @@
 import * as THREE from "three";
-import { TessellateModifier } from "three/examples/jsm/modifiers/TessellateModifier";
 
 /**
- * Module-level cache for portal building assets (portal geometry, transforms,
- * interior template) so the expensive work is performed ONCE per building
- * type rather than once per instance.
+ * Module-level cache for portal building assets (portal transforms, interior
+ * template) so the expensive work is performed ONCE per building type rather
+ * than once per instance.
  *
  * The spawn/despawn lag spike was almost entirely per-instance work:
- *   - TessellateModifier.modify() ran on every Building mount
  *   - interior scene deep-cloned every mount
  *   - new MeshStandardMaterial per mesh per mount (caused shader variants)
  *
@@ -19,9 +17,9 @@ import { TessellateModifier } from "three/examples/jsm/modifiers/TessellateModif
 export interface PortalTransform {
   position: [number, number, number];
   rotation: [number, number, number];
-  /** [width, height] in world units (already scaled) */
+  /** [width, height] of the door opening in local units */
   size: [number, number];
-  /** Shared across all instances of this building type */
+  /** Door-shaped mesh in portal-local space; shared across all instances of this building type */
   geometry: THREE.BufferGeometry;
 }
 
@@ -82,6 +80,9 @@ const extractPortalTransform = (scene: THREE.Group, name: string): PortalTransfo
   else if (size.z < THIN) width = size.x;
   else width = Math.max(size.x, size.z);
 
+  // Re-express the door mesh in portal-local space (portal origin at door
+  // center, +z along the door normal) so it can be rendered under the Portal
+  // group's transform.
   const geometry = mesh.geometry.clone();
   const toPortalLocal = new THREE.Matrix4()
     .makeRotationY(-yaw)
@@ -95,16 +96,6 @@ const extractPortalTransform = (scene: THREE.Group, name: string): PortalTransfo
     size: [width, height],
     geometry,
   };
-};
-
-// Subdivide triangles larger than ~1/16 of the portal's smaller dimension.
-// Matches the density the vertex shader needs to smoothly clamp vertices
-// around the camera's near plane (otherwise the whole quad pops when the
-// player steps through).
-const tessellatePortalGeometry = (geom: THREE.BufferGeometry, w: number, h: number): THREE.BufferGeometry => {
-  const edge = Math.max(0.05, Math.min(w, h) / 16);
-  const modifier = new TessellateModifier(edge, 6);
-  return modifier.modify(geom);
 };
 
 const cache = new Map<string, BuildingAssets>();
@@ -145,12 +136,7 @@ export const getBuildingAssets = (
     const ext = extractPortalTransform(exteriorScene, name);
     const int = extractPortalTransform(interiorScene, name);
     if (!ext || !int) continue;
-
     if (extScale !== 1) ext.geometry.scale(extScale, extScale, extScale);
-    const extW = ext.size[0] * extScale;
-    const extH = ext.size[1] * extScale;
-    ext.geometry = tessellatePortalGeometry(ext.geometry, extW, extH);
-    int.geometry = tessellatePortalGeometry(int.geometry, int.size[0], int.size[1]);
     portalData.push({ name, exterior: ext, interior: int });
   }
 

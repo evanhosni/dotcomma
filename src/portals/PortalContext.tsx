@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useRef, useState } from 
 import * as THREE from "three";
 import { RapierRigidBody } from "@react-three/rapier";
 import { IndoorLightRig } from "./IndoorLightRig";
+import { PortalTeleportSystem } from "./PortalTeleportSystem";
 
 function updateUrlPath(newPath: string) {
   const url = new URL(window.location.href);
@@ -9,9 +10,34 @@ function updateUrlPath(newPath: string) {
   window.history.replaceState(null, "", url.toString());
 }
 
-export interface PortalTransformData {
+/** Everything the teleport system and renderer need to know about a portal.
+ *  Registered once by the Portal component — portals are static. */
+export interface PortalDescriptor {
+  id: string;
+  pairedId: string;
+  direction: "enter" | "exit";
+  targetIndoorId: string;
+  urlPath: string;
+  activationDistance: number;
+  halfWidth: number;
+  halfHeight: number;
+  /** World transform (local +z is the portal normal) */
   position: THREE.Vector3;
   quaternion: THREE.Quaternion;
+  matrix: THREE.Matrix4;
+  invMatrix: THREE.Matrix4;
+  /** For exit portals: the same-building enter portal the player is currently
+   *  near (set per frame by PortalTeleportSystem). When the main camera is far
+   *  but this is set, the exit portal renders in "context mode" — observed by
+   *  that enter portal's virtual camera — so it shows the exterior inside the
+   *  enter portal's interior preview (one level of portal recursion). */
+  contextEnterId: string | null;
+  /** The mesh currently representing this portal (door or protection box) —
+   *  lets other portals' render passes hide surfaces that would sample their
+   *  texture from the wrong camera. */
+  activeMesh: THREE.Mesh | null;
+  /** Scratch for visibility save/restore during portal render passes */
+  prevVisible?: boolean;
 }
 
 export interface IndoorBounds {
@@ -23,18 +49,18 @@ export interface IndoorBounds {
 
 interface PortalContextType {
   activeIndoorId: string | null;
-  enterIndoor: (id: string, urlPath: string, portalWorldPos: THREE.Vector3, portalNormal: THREE.Vector3, teleportDest: { x: number; y: number; z: number }, yawDelta: number) => void;
-  exitIndoor: (teleportDest: { x: number; y: number; z: number }, yawDelta: number) => void;
+  enterIndoor: (id: string, urlPath: string) => void;
+  exitIndoor: () => void;
   playerRigidBodyRef: React.MutableRefObject<RapierRigidBody | null>;
-  verticalVelocityRef: React.MutableRefObject<number>;
-  transitioning: React.MutableRefObject<boolean>;
-  entryPortalPos: React.MutableRefObject<THREE.Vector3>;
-  savedOutdoorPos: React.MutableRefObject<THREE.Vector3>;
-  pendingTeleport: React.MutableRefObject<{ x: number; y: number; z: number } | null>;
-  pendingYawDelta: React.MutableRefObject<number>;
-  registerPortal: (id: string, position: THREE.Vector3, quaternion: THREE.Quaternion) => void;
+  /** Portal registry — the teleport system iterates this each frame. */
+  portals: React.MutableRefObject<Map<string, PortalDescriptor>>;
+  registerPortal: (descriptor: PortalDescriptor) => void;
   unregisterPortal: (id: string) => void;
-  getPortalTransform: (id: string) => PortalTransformData | undefined;
+  getPortal: (id: string) => PortalDescriptor | undefined;
+  /** Indoor whose enter-portal preview is currently visible — lets the light
+   *  rig illuminate an interior BEFORE the player steps in, so the portal
+   *  preview matches what they see after teleporting. */
+  previewIndoorIdRef: React.MutableRefObject<string | null>;
   /** Indoor bounds registry — buildings publish their world-space interior
    *  bounds so IndoorLightRig can position lights for the active indoor. */
   publishIndoorBounds: (id: string, bounds: IndoorBounds) => void;
@@ -44,40 +70,23 @@ interface PortalContextType {
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
-const getInitialIndoorId = (): string | null => {
-  return null;
-};
-
 export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const [activeIndoorId, setActiveIndoorId] = useState<string | null>(getInitialIndoorId);
+  const [activeIndoorId, setActiveIndoorId] = useState<string | null>(null);
   const playerRigidBodyRef = useRef<RapierRigidBody | null>(null);
-  const verticalVelocityRef = useRef(0);
-  const transitioning = useRef(false);
-  const entryPortalPos = useRef(new THREE.Vector3());
-  const entryPortalNormal = useRef(new THREE.Vector3());
-  const savedOutdoorPos = useRef(new THREE.Vector3());
-  const pendingTeleport = useRef<{ x: number; y: number; z: number } | null>(null);
-  const pendingYawDelta = useRef(0);
+  const previewIndoorIdRef = useRef<string | null>(null);
 
-  // Portal transform registry — portals register their world transforms each frame
-  const portalTransforms = useRef(new Map<string, PortalTransformData>());
+  const portals = useRef(new Map<string, PortalDescriptor>());
 
-  const registerPortal = useCallback((id: string, pos: THREE.Vector3, quat: THREE.Quaternion) => {
-    let data = portalTransforms.current.get(id);
-    if (!data) {
-      data = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
-      portalTransforms.current.set(id, data);
-    }
-    data.position.copy(pos);
-    data.quaternion.copy(quat);
+  const registerPortal = useCallback((descriptor: PortalDescriptor) => {
+    portals.current.set(descriptor.id, descriptor);
   }, []);
 
   const unregisterPortal = useCallback((id: string) => {
-    portalTransforms.current.delete(id);
+    portals.current.delete(id);
   }, []);
 
-  const getPortalTransform = useCallback((id: string): PortalTransformData | undefined => {
-    return portalTransforms.current.get(id);
+  const getPortal = useCallback((id: string): PortalDescriptor | undefined => {
+    return portals.current.get(id);
   }, []);
 
   // Indoor bounds registry (used by IndoorLightRig to place lights at the
@@ -97,57 +106,15 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
     [],
   );
 
-  // Clear transitioning after several frames so the player has time to move
-  // away from the paired portal, preventing immediate bounce-back teleports.
-  const clearTransitionAfterFrames = useCallback((frames: number) => {
-    let remaining = frames;
-    const tick = () => {
-      if (--remaining > 0) {
-        requestAnimationFrame(tick);
-      } else {
-        transitioning.current = false;
-      }
-    };
-    requestAnimationFrame(tick);
+  const enterIndoor = useCallback((id: string, urlPath: string) => {
+    if (urlPath !== "/") updateUrlPath(urlPath);
+    setActiveIndoorId(id);
   }, []);
 
-  const enterIndoor = useCallback(
-    (id: string, urlPath: string, portalWorldPos: THREE.Vector3, portalNormal: THREE.Vector3, teleportDest: { x: number; y: number; z: number }, yawDelta: number) => {
-      if (activeIndoorId === id) return;
-      transitioning.current = true;
-      entryPortalPos.current.copy(portalWorldPos);
-      entryPortalNormal.current.copy(portalNormal);
-
-      const rb = playerRigidBodyRef.current;
-      if (rb) {
-        const pos = rb.translation();
-        savedOutdoorPos.current.set(pos.x, pos.y, pos.z);
-      }
-
-      pendingTeleport.current = teleportDest;
-      pendingYawDelta.current = yawDelta;
-
-      if (urlPath !== "/") updateUrlPath(urlPath);
-      setActiveIndoorId(id);
-      clearTransitionAfterFrames(8);
-    },
-    [activeIndoorId, clearTransitionAfterFrames],
-  );
-
-  const exitIndoor = useCallback(
-    (teleportDest: { x: number; y: number; z: number }, yawDelta: number) => {
-      if (activeIndoorId === null) return;
-      transitioning.current = true;
-
-      pendingTeleport.current = teleportDest;
-      pendingYawDelta.current = yawDelta;
-
-      updateUrlPath("/");
-      setActiveIndoorId(null);
-      clearTransitionAfterFrames(8);
-    },
-    [activeIndoorId, clearTransitionAfterFrames],
-  );
+  const exitIndoor = useCallback(() => {
+    updateUrlPath("/");
+    setActiveIndoorId(null);
+  }, []);
 
   return (
     <PortalContext.Provider
@@ -156,20 +123,17 @@ export const PortalContextProvider: React.FC<React.PropsWithChildren> = ({ child
         enterIndoor,
         exitIndoor,
         playerRigidBodyRef,
-        verticalVelocityRef,
-        transitioning,
-        entryPortalPos,
-        savedOutdoorPos,
-        pendingTeleport,
-        pendingYawDelta,
+        portals,
         registerPortal,
         unregisterPortal,
-        getPortalTransform,
+        getPortal,
+        previewIndoorIdRef,
         publishIndoorBounds,
         unpublishIndoorBounds,
         getIndoorBounds,
       }}
     >
+      <PortalTeleportSystem />
       <IndoorLightRig />
       {children}
     </PortalContext.Provider>
