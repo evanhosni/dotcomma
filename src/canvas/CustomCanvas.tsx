@@ -8,6 +8,7 @@ import { Player } from "../player/Player";
 import { initCursor } from "../utils/cursor/cursor";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Terrain } from "../world/terrain/Terrain";
+import { BiomeComponents } from "../world/BiomeComponents";
 import { ObjectPool } from "../objects/spawning/ObjectPool";
 import { PortalContextProvider } from "../portals/PortalContext";
 import { Sky } from "./Sky";
@@ -40,6 +41,7 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
         {children}
         <Sky />
         <Terrain />
+        <BiomeComponents />
         <ObjectPool />
         <Player />
       </Physics>

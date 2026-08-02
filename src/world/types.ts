@@ -37,6 +37,7 @@ export interface Biome {
   blendable: boolean;
   blendWidth?: number;
   spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
+  components?: import("react").FC[]; // always-mounted child components (e.g. grass cover) — each gates itself by biomeId
 }
 
 export interface Block {
