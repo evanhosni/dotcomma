@@ -46,6 +46,7 @@ src/
   world/
     world.ts           # WORLD_REGIONS — single source of truth for active regions
     types.ts           # Region, Biome, Block, VertexData, MaterialData
+    BiomeComponents.tsx # Mounts every biome's child components (Biome.components)
     getVertexData.ts   # World-level terrain pipeline (voronoi → biome heights)
     getMaterial.ts     # Combines all biome fragment shaders
     shaders/           # Shared vertex shader
@@ -58,8 +59,13 @@ src/
     buildWorldConfig.ts # Serializes regions into WorldConfig for workers
     terrain.worker.ts  # Off-thread chunk height computation
     spawn.worker.ts    # Off-thread spawn point generation
+    grass.worker.ts    # Off-thread grass blade placement (coarse height grid + bilinear interp)
   objects/
     GameObject.tsx     # GLTF model loader with colliders + animations (handles own position when no positionRef)
+    vegetation/
+      GrassField.tsx   # Instanced billboard grass (GPU sway, per-chunk draw calls, spawn-style filter props)
+      grassWorker.ts   # Worker client for grass.worker.ts (shared across GrassField instances)
+      types.ts         # GrassFieldProps
     spawning/
       ObjectPool.tsx   # Spawn management, frustum culling, pooling
       collectDescriptors.ts # Aggregates SpawnDescriptors from regions/biomes
@@ -156,6 +162,11 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
 2. Set `model` (GLTF path) and `scale` on the descriptor
 3. Place GLTF model in `public/models/`
 4. ObjectPool renders `GameObject` directly; it handles its own position when no `positionRef` is provided
+
+**Grass / mass vegetation** (thousands of instances — too many for the spawn system):
+1. Add a component to the biome's `components[]` array (`Biome.components` — always-mounted children rendered by `BiomeComponents`)
+2. Use `GrassField` (`src/objects/vegetation/GrassField.tsx`) with spawn-style filter props (`density`, `biomeIds`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`)
+3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
 
 **Interactive objects** (physics, state machines, custom logic):
 1. Create a custom component in the relevant biome's `creatures/` directory
