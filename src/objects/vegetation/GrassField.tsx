@@ -1,8 +1,9 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
-import { buildWorldConfig } from "../../workers/buildWorldConfig";
+import { BiomeContext } from "../../world/components/context";
+import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import { generateGrassChunk, GrassChunkParams, initGrassWorker } from "./grassWorker";
 import { GrassFieldProps } from "./types";
 
@@ -150,6 +151,11 @@ export const GrassField: React.FC<GrassFieldProps> = ({
   const { camera } = useThree();
   const { terrain_loaded, progress } = useGameContext();
 
+  // When mounted inside a <Biome> and no explicit biomeIds are given,
+  // restrict placement to that biome.
+  const biomeCtx = useContext(BiomeContext);
+  const effectiveBiomeIds = biomeIds ?? (biomeCtx ? [biomeCtx.biomeId] : undefined);
+
   const texture = useMemo(() => {
     if (!png) return getDefaultBladeTexture();
     const tex = new THREE.TextureLoader().load(png);
@@ -188,15 +194,15 @@ export const GrassField: React.FC<GrassFieldProps> = ({
   }, [material, color, sway, swaySpeed, bladeWidth, bladeHeight, renderDistance]);
 
   const params: GrassChunkParams = useMemo(
-    () => ({ seed, chunkSize: GRASS_CHUNK_SIZE, density, biomeIds, heightRange, slopeRange, slopeBlend }),
+    () => ({ seed, chunkSize: GRASS_CHUNK_SIZE, density, biomeIds: effectiveBiomeIds, heightRange, slopeRange, slopeBlend }),
     // stringify array props so inline literals don't retrigger a rebuild every render
-    [seed, density, slopeBlend, JSON.stringify(biomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange)]
+    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange)]
   );
 
   useEffect(() => {
-    // dynamic import — a static one is circular (world → regions → biome → GrassField → world)
-    import("../../world/world")
-      .then(({ WORLD_REGIONS }) => initGrassWorker(buildWorldConfig(WORLD_REGIONS)))
+    // the shared grass worker initializes with the committed world config
+    whenWorldReady()
+      .then(() => initGrassWorker(getActiveWorldConfig()))
       .then(() => {
         workerReadyRef.current = true;
       });

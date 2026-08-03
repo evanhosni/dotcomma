@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
 import { useDevMode } from "../../context/DevContext";
-import { WORLD_REGIONS } from "../../world/world";
+import { getActiveRegions, getWorldTerrainParams } from "../../world/registry";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 const BIOME_POLL_INTERVAL = 1; // seconds
 
@@ -58,6 +58,7 @@ const OverlayHUD = () => {
   const { progress, terrain_loaded } = useGameContext();
 
   const spans = useRef<HTMLSpanElement[]>([]);
+  const avgSpans = useRef<HTMLSpanElement[]>([]);
   const graphs = useRef<{ ctx: CanvasRenderingContext2D; history: number[] }[]>([]);
 
   const frames = useRef(0);
@@ -66,6 +67,15 @@ const OverlayHUD = () => {
   const lastMs = useRef(0);
   const biomePoll = useRef(0);
   const currentBiome = useRef("...");
+
+  // Running averages — accumulate only after terrain loads (load-phase stutter
+  // would skew benchmarks) and only while this tab is visible AND focused
+  // (background tabs throttle rAF, producing faulty samples)
+  const avgFrames = useRef(0);
+  const avgTime = useRef(0);
+  const avgMbSum = useRef(0);
+  const avgMbSamples = useRef(0);
+  const wasActive = useRef(false);
 
   // Disable per-render auto-reset so gl.info accumulates stats across all
   // render passes (portal + main). We manually reset once per frame below.
@@ -85,6 +95,7 @@ const OverlayHUD = () => {
       "line-height:1.5;padding:8px 12px;border-radius:4px;pointer-events:none;white-space:pre;";
 
     const createdSpans: HTMLSpanElement[] = [];
+    const createdAvgSpans: HTMLSpanElement[] = [];
     const createdGraphs: { ctx: CanvasRenderingContext2D; history: number[] }[] = [];
 
     LABELS.forEach((label, i) => {
@@ -93,6 +104,14 @@ const OverlayHUD = () => {
       const span = document.createElement("span");
       container.appendChild(span);
       createdSpans.push(span);
+
+      // Average readout to the right of the FPS, MS, MB counters
+      if (i <= I_MB) {
+        const avg = document.createElement("span");
+        avg.style.color = "rgba(0,255,0,0.55)";
+        container.appendChild(avg);
+        createdAvgSpans.push(avg);
+      }
 
       // Add graph canvas after FPS, MS, MB rows
       if (i <= I_MB) {
@@ -103,6 +122,7 @@ const OverlayHUD = () => {
     });
 
     spans.current = createdSpans;
+    avgSpans.current = createdAvgSpans;
     graphs.current = createdGraphs;
     column.appendChild(container);
 
@@ -143,17 +163,49 @@ const OverlayHUD = () => {
     if (biomePoll.current >= BIOME_POLL_INTERVAL) {
       biomePoll.current = 0;
       const pos = camera.position;
-      voronoi
-        .create({
-          seed: "123",
-          currentVertex: new THREE.Vector2(pos.x, pos.z),
-          gridSize: 500,
-          regionGridSize: 2500,
-          regions: WORLD_REGIONS,
-        })
-        .then((result: any) => {
-          currentBiome.current = result.biome?.name ?? "???";
-        });
+      const regions = getActiveRegions();
+      if (regions.length > 0) {
+        const params = getWorldTerrainParams();
+        voronoi
+          .create({
+            seed: params.seed,
+            currentVertex: new THREE.Vector2(pos.x, pos.z),
+            gridSize: params.gridSize,
+            regionGridSize: params.regionGridSize,
+            regions,
+          })
+          .then((result: any) => {
+            currentBiome.current = result.biome?.name ?? "???";
+          });
+      }
+    }
+
+    // Running averages (only once the world is loaded, and only while the tab
+    // is active — the frame right after regaining focus is skipped too, since
+    // its delta spans the whole inactive period)
+    const isActive = document.visibilityState === "visible" && document.hasFocus();
+    if (terrain_loaded && isActive && wasActive.current) {
+      avgFrames.current++;
+      avgTime.current += delta;
+      if (mem) {
+        avgMbSum.current += mem.usedJSHeapSize / 1048576;
+        avgMbSamples.current++;
+      }
+    }
+    wasActive.current = isActive;
+    const a = avgSpans.current;
+    if (a.length === 3) {
+      if (avgTime.current > 0) {
+        const avgFps = avgFrames.current / avgTime.current;
+        const avgMs = (avgTime.current / avgFrames.current) * 1000;
+        a[I_FPS].textContent = `   avg ${avgFps.toFixed(1)}`;
+        a[I_MS].textContent = `   avg ${avgMs.toFixed(1)}`;
+        a[I_MB].textContent = avgMbSamples.current
+          ? `   avg ${(avgMbSum.current / avgMbSamples.current).toFixed(1)}`
+          : "   avg N/A";
+      } else {
+        for (const el of a) el.textContent = "   avg --";
+      }
     }
 
     // Update text

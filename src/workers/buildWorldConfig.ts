@@ -1,12 +1,17 @@
+import { getAllBiomes } from "../utils/utils";
+import { WorldTerrainParams } from "../world/registry";
 import { Region } from "../world/types";
-import { WorldConfig, SerializedRegion } from "./vertexCompute";
+import { SerializedRegion, WorldConfig } from "./vertexCompute";
 
 /**
- * Builds a serializable WorldConfig from an array of Regions.
- * This config is sent to terrain and spawn workers to initialize
- * the inlined vertex computation pipeline.
+ * Builds a serializable WorldConfig from regions + global terrain params.
+ * This config is sent to terrain/spawn/grass workers to initialize the
+ * inlined vertex computation pipeline.
+ *
+ * Global params come from the world-level <Terrain> component; per-biome
+ * noise comes from each biome-level <Terrain noise={...}> registration.
  */
-export function buildWorldConfig(regions: Region[]): WorldConfig {
+export function buildWorldConfig(regions: Region[], params: WorldTerrainParams): WorldConfig {
   const serializedRegions: SerializedRegion[] = regions.map((r) => ({
     id: r.id,
     name: r.name,
@@ -19,65 +24,22 @@ export function buildWorldConfig(regions: Region[]): WorldConfig {
     })),
   }));
 
+  const biomeNoiseConfigs: WorldConfig["biomeNoiseConfigs"] = {};
+  for (const biome of getAllBiomes(regions)) {
+    if (biome.noise) biomeNoiseConfigs[biome.id] = biome.noise;
+  }
+
   return {
-    seed: "123",
+    seed: params.seed,
     regions: serializedRegions,
-    gridSize: 500,
-    regionGridSize: 2500,
-    boundaryWidth: 14,
-    riverWidth: 30,
-    defaultBlendWidth: 200,
-    roadNoiseParams: {
-      type: "perlin",
-      octaves: 2,
-      persistence: 1,
-      lacunarity: 1,
-      exponentiation: 1,
-      height: 150,
-      scale: 250,
-    },
-    baseNoiseParams: {
-      type: "perlin",
-      octaves: 3,
-      persistence: 2,
-      lacunarity: 2,
-      exponentiation: 2,
-      height: 500,
-      scale: 5000,
-    },
-    biomeNoiseConfigs: {
-      // Grass (id=3)
-      3: {
-        params: {
-          type: "perlin",
-          octaves: 3,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 100,
-          scale: 100,
-        },
-      },
-      // Dust (id=2)
-      2: {
-        params: {
-          type: "perlin",
-          octaves: 3,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 150,
-          scale: 200,
-        },
-        absNeg: true,
-        offset: 50,
-      },
-    },
-    cityConfig: {
-      seed: "city1",
-      gridSize: 100,
-      roadWidth: 10,
-      blockCount: 4,
-    },
+    gridSize: params.gridSize,
+    regionGridSize: params.regionGridSize,
+    boundaryWidth: params.boundaryWidth,
+    riverWidth: params.riverWidth,
+    defaultBlendWidth: params.defaultBlendWidth,
+    roadNoiseParams: params.roadNoise,
+    baseNoiseParams: params.baseNoise,
+    biomeNoiseConfigs,
+    cityConfig: params.cityConfig,
   };
 }

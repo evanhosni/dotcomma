@@ -1,16 +1,19 @@
 import { _material } from "../utils/material/_material";
 import { _quantization } from "../utils/quantization/quantization";
 import { getAllBiomes } from "../utils/utils";
-import { CityRegion, DesertRegion } from "../regions";
+import { getActiveRegions, getWorldRiverTexture, whenWorldReady } from "./registry";
 import vertexShader from "./shaders/vertex.glsl";
 
-const regions = [CityRegion, DesertRegion];
-
+/** Combines every active biome's fragment shader into the terrain material.
+ *  Regions/biomes and the river texture come from the registry committed by
+ *  the <World> component tree (world-level <Material riverTexture=…>). */
 export const getMaterial = async () => {
+  await whenWorldReady();
+  const regions = getActiveRegions();
   const biomes = getAllBiomes(regions);
 
   // Load the river texture (between regions)
-  const [riverTexture] = await _material.loadTextures(["blue_mud.jpg"]);
+  const [riverTexture] = await _material.loadTextures([getWorldRiverTexture()]);
 
   // Collect region biome boundary textures
   const regionMaterials = await Promise.all(

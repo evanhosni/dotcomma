@@ -1,3 +1,3 @@
-export { CityRegion } from "./CityRegion";
-export { DesertRegion } from "./DesertRegion";
-export { GrassRegion } from "./GrassRegion";
+export { CityRegion } from "./city/CityRegion";
+export { DesertRegion } from "./desert/DesertRegion";
+export { GrassRegion } from "./grass/GrassRegion";

@@ -2,8 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGameContext } from "../../context/GameContext";
-import { buildWorldConfig } from "../../workers/buildWorldConfig";
-import { WORLD_REGIONS } from "../../world/world";
+import { getActiveRegions, getActiveWorldConfig } from "../../world/registry";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -34,8 +33,9 @@ export const ObjectPool = () => {
   const { camera } = useThree();
   const { terrain_loaded, progress, terrainHighLODPending, spawnPending } = useGameContext();
 
-  // Collect all spawn descriptors from this dimension
-  const descriptors = useMemo(() => collectDescriptors(WORLD_REGIONS), []);
+  // Collect all spawn descriptors from the active world (registered by
+  // <Spawnable> components; mounted by <World> after the first commit)
+  const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
 
   // Build descriptor lookup map
   const descriptorMap = useMemo(() => {
@@ -55,7 +55,7 @@ export const ObjectPool = () => {
 
   // Initialize spawn worker
   useEffect(() => {
-    const config = buildWorldConfig(WORLD_REGIONS);
+    const config = getActiveWorldConfig();
     initSpawnWorker(config, maxFootprint).then(() => {
       workerReadyRef.current = true;
     });
