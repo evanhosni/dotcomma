@@ -15,6 +15,11 @@ const DELETE_OBJECT_BUFFER = 1.2;
 const FADE_DURATION = 1;
 const DEFAULT_RENDER_DISTANCE = 500;
 const DEFAULT_FRUSTUM_PADDING = 3;
+// Animation LOD: mixers pause while frustum-culled and run at half rate past
+// this fraction of the render distance. Skipped time accumulates (capped) so
+// looping animations stay continuous when the object reappears.
+const ANIM_HALF_RATE_FRACTION = 0.4;
+const MAX_ANIM_CATCHUP = 0.5;
 
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
@@ -46,50 +51,41 @@ function cloneModelWithAnimations(gltf: any): {
     }
   });
 
+  // Single pass over the clone: index bones by name (the old per-bone
+  // re-traversal was O(bones × scene nodes) and caused spawn-batch hitches)
+  const clonedBones = new Map<string, THREE.Bone>();
+  const clonedSkinned: THREE.SkinnedMesh[] = [];
   clone.scene.traverse((node: any) => {
+    if (node.isBone) {
+      clonedBones.set(node.name, node as THREE.Bone);
+    }
     if (node.isSkinnedMesh) {
-      const originalMesh = skinnedMeshes[node.name];
-      if (originalMesh && originalMesh.skeleton) {
-        node.skeleton = originalMesh.skeleton.clone();
-
-        // Update bone references
-        if (node.skeleton && node.skeleton.bones) {
-          const newBones: THREE.Bone[] = [];
-          node.skeleton.bones.forEach((originalBone: THREE.Bone) => {
-            // Find the corresponding bone in the cloned scene
-            let newBone: THREE.Bone | null = null;
-            clone.scene.traverse((clonedNode: any) => {
-              if (clonedNode.isBone && clonedNode.name === originalBone.name) {
-                newBone = clonedNode as THREE.Bone;
-              }
-            });
-            if (newBone) {
-              newBones.push(newBone);
-            }
-          });
-          // Replace the bones in the skeleton
-          node.skeleton.bones = newBones;
-        }
-
-        // Clone and assign material
-        if (originalMesh.material) {
-          node.material = (originalMesh.material as THREE.Material).clone();
-          // Make material visible immediately (removed opacity setting here)
-        }
-
-        // Ensure bind matrices are updated
-        if (node.skeleton.boneInverses) {
-          node.skeleton.boneInverses = node.skeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
-        }
-      }
-    } else if (node.isMesh) {
+      clonedSkinned.push(node as THREE.SkinnedMesh);
+    } else if (node.isMesh && node.material) {
       // For regular meshes, just clone the material
-      if (node.material) {
-        node.material = node.material.clone();
-        // Make material visible immediately (removed opacity setting here)
-      }
+      node.material = node.material.clone();
     }
   });
+
+  for (const node of clonedSkinned) {
+    const originalMesh = skinnedMeshes[node.name];
+    if (!originalMesh || !originalMesh.skeleton) continue;
+
+    node.skeleton = originalMesh.skeleton.clone();
+
+    // Rebind skeleton bones to the cloned scene's bones by name
+    node.skeleton.bones = node.skeleton.bones.map((bone: THREE.Bone) => clonedBones.get(bone.name) ?? bone);
+
+    // Clone and assign material
+    if (originalMesh.material) {
+      node.material = (originalMesh.material as THREE.Material).clone();
+    }
+
+    // Ensure bind matrices are updated
+    if (node.skeleton.boneInverses) {
+      node.skeleton.boneInverses = node.skeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
+    }
+  }
 
   return clone;
 }
@@ -145,6 +141,9 @@ export const GameObject = ({
   const groupRef = useRef<THREE.Group>(null);
   const fadeRef = useRef({ opacity: 0, fadingOut: false });
   const materialsRef = useRef<THREE.Material[]>([]);
+  const appliedOpacityRef = useRef(-1);
+  const animDeltaRef = useRef(0);
+  const animFrameParityRef = useRef(false);
   const shouldRenderCollidersRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
@@ -290,11 +289,15 @@ export const GameObject = ({
       fade.opacity = Math.min(1, fade.opacity + delta / FADE_DURATION);
     }
 
-    // Apply fade to materials
-    const mats = materialsRef.current;
-    for (let i = 0; i < mats.length; i++) {
-      mats[i].opacity = fade.opacity;
-      mats[i].transparent = fade.opacity < 1;
+    // Apply fade to materials — only when the opacity actually changed
+    // (steady-state objects skip the whole loop)
+    if (fade.opacity !== appliedOpacityRef.current) {
+      appliedOpacityRef.current = fade.opacity;
+      const mats = materialsRef.current;
+      for (let i = 0; i < mats.length; i++) {
+        mats[i].opacity = fade.opacity;
+        mats[i].transparent = fade.opacity < 1;
+      }
     }
 
     // Update shared frustum once per frame (first GameObject instance wins)
@@ -346,34 +349,43 @@ export const GameObject = ({
       setShouldRenderColliders(shouldShowColliders);
     }
 
-    // State-machine-driven animation
-    if (animationControl && mixerRef.current) {
-      if (animationControl.dirty) {
-        animationControl.dirty = false;
-        const cmd = animationControl.pendingCommand;
-        if (cmd && clonedModel.animations.length > 0) {
-          const clipIndex = clonedModel.animations.findIndex((clip: THREE.AnimationClip) => clip.name === cmd.clipName);
-          if (clipIndex >= 0) {
-            const targetAction = actionsRef.current[clipIndex];
-            // Stop all actions first to clear the mixer
-            for (const action of actionsRef.current) {
-              action.stop();
-            }
-            // Play only the target
-            targetAction.reset();
-            targetAction.setLoop(cmd.loop ?? THREE.LoopRepeat, Infinity);
-            targetAction.timeScale = cmd.timeScale ?? 1.0;
-            targetAction.clampWhenFinished = cmd.clampWhenFinished ?? true;
-            targetAction.play();
-          } else {
-            console.error(`animation "${cmd.clipName}" does not exist`);
+    // State-machine-driven animation commands (cheap — always processed so
+    // state changes apply even while the mixer itself is LOD-skipped)
+    if (animationControl && mixerRef.current && animationControl.dirty) {
+      animationControl.dirty = false;
+      const cmd = animationControl.pendingCommand;
+      if (cmd && clonedModel.animations.length > 0) {
+        const clipIndex = clonedModel.animations.findIndex((clip: THREE.AnimationClip) => clip.name === cmd.clipName);
+        if (clipIndex >= 0) {
+          const targetAction = actionsRef.current[clipIndex];
+          // Stop all actions first to clear the mixer
+          for (const action of actionsRef.current) {
+            action.stop();
           }
+          // Play only the target
+          targetAction.reset();
+          targetAction.setLoop(cmd.loop ?? THREE.LoopRepeat, Infinity);
+          targetAction.timeScale = cmd.timeScale ?? 1.0;
+          targetAction.clampWhenFinished = cmd.clampWhenFinished ?? true;
+          targetAction.play();
+        } else {
+          console.error(`animation "${cmd.clipName}" does not exist`);
         }
       }
-      mixerRef.current.update(delta);
-    } else if (isPlaying && mixerRef.current) {
-      // E-key toggle fallback (no animationControl)
-      mixerRef.current.update(delta);
+    }
+
+    // Animation LOD: skinned/keyframe updates are the per-frame CPU cost of
+    // animated spawns. Skip entirely while frustum-culled; halve the rate at
+    // distance. Delta accumulates so loops stay continuous on reappear.
+    const mixer = mixerRef.current;
+    if (mixer && (animationControl || isPlaying)) {
+      animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
+      animFrameParityRef.current = !animFrameParityRef.current;
+      const skipFarFrame = distance > renderDistance * ANIM_HALF_RATE_FRACTION && animFrameParityRef.current;
+      if (isVisible && !skipFarFrame) {
+        mixer.update(animDeltaRef.current);
+        animDeltaRef.current = 0;
+      }
     }
   });
 

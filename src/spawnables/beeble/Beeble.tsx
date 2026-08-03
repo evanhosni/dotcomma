@@ -17,6 +17,13 @@ const MAX_SLOPE_ANGLE = 35 * (Math.PI / 180);
 const CC_OFFSET = 0.02;
 const SNAP_TO_GROUND = 0.3;
 const GRAVITY = -100;
+// Physics LOD: character-controller shape casts are the per-frame CPU cost of
+// each beeble. Within this camera distance they resolve every frame; beyond
+// it, every Nth frame with accumulated dt (speed is preserved — movement per
+// step is velocity × accumulated time). Idle grounded beebles skip entirely.
+const PHYSICS_FULL_RATE_DIST = 80;
+const PHYSICS_THROTTLE_FRAMES = 3;
+const MAX_PHYSICS_CATCHUP = 0.15;
 
 const HAS_CLICK_TRIGGER = BEEBLE_SM.triggers.some((t) => t.id === "mouse-left-click");
 
@@ -26,6 +33,10 @@ export const Beeble = (props: SpawnedObjectProps) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
   const verticalVelocity = useRef(0);
+  const pendingDtRef = useRef(0);
+  const physicsFrameRef = useRef(0);
+  const groundedRef = useRef(false);
+  const hasComputedRef = useRef(false);
 
   const { world } = useRapier();
 
@@ -47,12 +58,11 @@ export const Beeble = (props: SpawnedObjectProps) => {
     };
   }, [world]);
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     const rb = rigidBodyRef.current;
     const controller = controllerRef.current;
     if (!rb || !controller) return;
 
-    const dt = Math.min(delta, 0.1);
     const bb = sm.blackboard;
     const velX = bb.__vel_x ?? 0;
     const velZ = bb.__vel_z ?? 0;
@@ -60,8 +70,36 @@ export const Beeble = (props: SpawnedObjectProps) => {
 
     const pos = rb.translation();
 
+    physicsFrameRef.current++;
+    pendingDtRef.current = Math.min(pendingDtRef.current + Math.min(delta, 0.1), MAX_PHYSICS_CATCHUP);
+
+    // Idle short-circuit: standing still on the ground with no vertical
+    // motion — nothing to resolve, skip the shape cast entirely.
+    const idle =
+      hasComputedRef.current &&
+      groundedRef.current &&
+      velY === undefined &&
+      velX === 0 &&
+      velZ === 0 &&
+      verticalVelocity.current === 0;
+    if (idle) {
+      pendingDtRef.current = 0;
+      return;
+    }
+
+    // Distance LOD: far-away beebles resolve collisions every Nth frame with
+    // the accumulated dt, so their speed is unchanged.
+    const dxCam = state.camera.position.x - pos.x;
+    const dzCam = state.camera.position.z - pos.z;
+    const isFar = dxCam * dxCam + dzCam * dzCam > PHYSICS_FULL_RATE_DIST * PHYSICS_FULL_RATE_DIST;
+    if (isFar && physicsFrameRef.current % PHYSICS_THROTTLE_FRAMES !== 0) return;
+
+    const dt = pendingDtRef.current;
+    pendingDtRef.current = 0;
+
     // Gravity integration
     const grounded = controller.computedGrounded();
+    groundedRef.current = grounded;
     if (velY !== undefined) {
       verticalVelocity.current = velY;
     } else if (grounded && verticalVelocity.current <= 0) {
@@ -80,6 +118,7 @@ export const Beeble = (props: SpawnedObjectProps) => {
     if (collider) {
       controller.computeColliderMovement(collider, desiredMovement);
       const corrected = controller.computedMovement();
+      hasComputedRef.current = true;
 
       rb.setNextKinematicTranslation({
         x: pos.x + corrected.x,
