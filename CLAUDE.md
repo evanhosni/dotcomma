@@ -250,6 +250,10 @@ Mount `<Skybox topColor=… horizonColor=… bottomColor=… />` inside a `<Regi
 - Cache eviction in the worker only runs on cache misses, not every query.
 - `getDistanceToWall` uses inline segment-distance math (no THREE object allocations).
 - `BuildChunk` reads position buffers directly as Float32Array (no Vector3 per vertex).
+- **Animation LOD** (`GameObject.tsx`): mixers don't update while frustum-culled and run at half rate past 40% of render distance; skipped time accumulates (capped) so loops stay continuous.
+- **Beeble physics LOD** (`Beeble.tsx`): idle grounded beebles skip the character-controller shape cast entirely; beyond `PHYSICS_FULL_RATE_DIST` (80u) moving beebles resolve collisions every 3rd frame with accumulated dt (speed preserved).
+- **GameObject fades** write material opacity only when it changes (steady-state objects skip the loop).
+- Skeleton cloning on spawn indexes bones by name in one pass (`cloneModelWithAnimations`) — avoid per-bone scene traversals.
 
 ## UI / Overlay Styling
 
