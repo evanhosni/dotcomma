@@ -1,3 +1,5 @@
+import { TerrainNoiseParams } from "../utils/noise/_noise";
+
 export interface VertexData {
   x: number;
   y: number;
@@ -21,6 +23,14 @@ export const vertexData_default: VertexData = {
   attributes: {},
 };
 
+/** Worker-side noise config for a biome's height computation (mirrors
+ *  WorldConfig.biomeNoiseConfigs entries in workers/vertexCompute.ts). */
+export interface BiomeNoiseConfig {
+  params: TerrainNoiseParams;
+  absNeg?: boolean;
+  scale?: number;
+  offset?: number;
+}
 
 export interface Region {
   name: string;
@@ -36,8 +46,9 @@ export interface Biome {
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;
+  /** Worker-side height noise (sent to terrain/spawn/grass workers via WorldConfig). */
+  noise?: BiomeNoiseConfig;
   spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
-  components?: import("react").FC[]; // always-mounted child components (e.g. grass cover) — each gates itself by biomeId
 }
 
 export interface Block {
@@ -51,4 +62,3 @@ export const block_default = {
   joinable: false,
   components: [],
 };
-

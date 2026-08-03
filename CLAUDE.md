@@ -7,7 +7,7 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 ## Tech Stack
 
 - **React 18** + **TypeScript** (strict mode)
-- **Three.js** via `@react-three/fiber`, `@react-three/drei`, `@react-three/cannon` (physics)
+- **Three.js** via `@react-three/fiber`, `@react-three/drei`, `@react-three/rapier` (physics)
 - **React Router** (`react-router-dom`) for client-side routing
 - **Craco** (CRA + webpack customization, `.glsl` files loaded as raw assets)
 - **Web Workers** for heavy computation (Voronoi/Delaunay, terrain data)
@@ -23,35 +23,79 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 
 ## Architecture
 
-### Content Hierarchy
+### Content Hierarchy — everything is a component
 
 ```
-Region[] → Biome[]
+<World>                      // global rulesets + systems
+  <Terrain/>                 //   global terrain rules (seed, grid sizes, base/road noise, city config)
+  <Material/>                //   river texture (between regions)
+  <Skybox/>                  //   default sky
+  <PostProcessing/>          //   global post-processing
+  <Region>                   // one per region, JSX order = voronoi order
+    <Material/>              //   biome-boundary texture for this region
+    <Biome>                  // one per biome (flags: joinable/blendable/blendWidth)
+      <Terrain/>             //   biome height fns (main-thread getVertexData + worker noise)
+      <Material/>            //   biome fragment shader (getMaterial)
+      <Spawnables>           //   groups spawnables; its props are shared defaults for children
+        <BeebleSpawnable/>   //   per-object component wrapping <Spawnable> (props = overrides)
+      </Spawnables>
+      <GrassField/>          //   always-mounted visuals (auto-scoped to the biome)
+      <Skybox/>              //   optional per-biome sky override (also valid at Region level)
+    </Biome>
+  </Region>
+</World>
 ```
 
-The world is defined by a flat list of regions (`WORLD_REGIONS` in `src/world/world.ts`). Each region contains biomes. Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at biome boundaries using distance-to-wall calculations. World-level `getVertexData` and `getMaterial` live in `src/world/`.
+The world is defined by the `GameWorld` component tree in `src/world/world.tsx`. Config components (`Region`, `Biome`, `Terrain`, `Material`, `Skybox`, `Spawnable` — all in `src/world/components/`) register into a store during layout effects; `<World>` then **commits** the assembled `Region[]` data + serializable `WorldConfig` to a module-level registry (`src/world/registry.ts`) and mounts the global systems (`TerrainRenderer`, `ObjectPool`, `SkyboxSystem`). Non-React code (workers init, voronoi client, Player) reads from the registry — `getActiveRegions()`, `getActiveWorldConfig()`, `getWorldTerrainParams()`, or `await whenWorldReady()`.
+
+`Terrain`/`Material`/`Skybox` are **scope-aware**: their meaning depends on whether they're mounted under `World`, `Region`, or `Biome` (see the tree above). Skyboxes cross-fade as the player moves between scopes (biome wins over region wins over world); the current biome is polled off-thread via the voronoi worker only when scoped skyboxes exist.
+
+Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at biome boundaries using distance-to-wall calculations. World-level `getVertexData` and `getMaterial` live in `src/world/`.
+
+**Performance note:** this is a *declarative shell* over the same pipeline as before — all heavy work still runs in web workers, and worker configs are built once at commit. Workers are initialized with the first committed config; registrations added after the first commit update the registry but do not re-init running workers.
 
 ### Directory Layout
 
 ```
 src/
-  biomes/              # All biome implementations
-    city/              # Urban biome (id:1) — blocks, creatures, shaders
-    grass/             # Grassland biome (id:3)
-    dust/              # Desert biome (id:2)
-  regions/             # Region definitions (contain biome lists)
-    CityRegion.ts      # City region (city + grass biomes)
-    DesertRegion.ts    # Desert region (dust biome)
-    GrassRegion.ts     # Grass region (grass biome)
+  regions/             # Each region owns its folder: <Name>Region.tsx + its biomes.
+    city/              # There is NO shared biomes folder — a biome used by several
+      CityRegion.tsx   # regions is DUPLICATED into each region under a distinct name
+      biomes/          # (e.g. CityGrassBiome / GrassBiome, both biome id 3).
+        city/          # Urban biome (id:1) — CityBiome.tsx, height fns, blocks.ts, shaders
+        grass/         # Grassland biome (id:3) — CityGrassBiome.tsx (duplicate of grass region's)
+    desert/
+      DesertRegion.tsx # Desert region (dust biome)
+      biomes/dust/     # Desert biome (id:2) — DustBiome.tsx, height fns, shaders
+    grass/
+      GrassRegion.tsx  # Grass region
+      biomes/grass/    # Grassland biome (id:3) — GrassBiome.tsx
+    index.ts
+  spawnables/          # Spawnable objects — kept separate from biomes because one
+    beeble/            #   spawnable may exist in multiple biomes. Each folder has the
+    big-beeble/        #   object component (+ optional stateMachine.ts) and spawnable.tsx
+    xl-element/        #   (SpawnDescriptor + <XxxSpawnable> wrapper component)
+    xxl-element/
+    apartment/
+    building1/
   world/
-    world.ts           # WORLD_REGIONS — single source of truth for active regions
-    types.ts           # Region, Biome, Block, VertexData, MaterialData
-    BiomeComponents.tsx # Mounts every biome's child components (Biome.components)
-    getVertexData.ts   # World-level terrain pipeline (voronoi → biome heights)
-    getMaterial.ts     # Combines all biome fragment shaders
+    GameWorld.tsx      # GameWorld — the <World> tree, single source of truth for active content
+    registry.ts        # Module-level active world (regions/params/WorldConfig) + whenWorldReady()
+    types.ts           # Region, Biome (data model), BiomeNoiseConfig, VertexData, MaterialData
+    components/        # The declarative world component system
+      World.tsx        # Registration store + commit → registry; mounts global systems
+      Region.tsx       # Region declaration + RegionContext
+      Biome.tsx        # Biome declaration + BiomeContext
+      Terrain.tsx      # Scope-aware terrain rules (world params / biome height fns + noise)
+      Material.tsx     # Scope-aware materials (river / region boundary / biome shader)
+      Skybox.tsx       # Scope-aware skybox registration + SkyboxSystem (cross-fading sky)
+      Spawnable.tsx    # <Spawnable> descriptor registration + <Spawnables> defaults group
+      context.ts       # WorldStore, WorldStoreContext, RegionContext, BiomeContext
+    getVertexData.ts   # World-level terrain pipeline (voronoi → biome heights), reads registry
+    getMaterial.ts     # Combines all biome fragment shaders, reads registry
     shaders/           # Shared vertex shader
     terrain/
-      Terrain.tsx      # Chunk lifecycle, LOD quadtree, build loop, geometry pool
+      TerrainRenderer.tsx # Chunk lifecycle, LOD quadtree, build loop, geometry pool
       lodConfig.ts     # LOD levels, chunk sizes, segment counts, render distances
       types.ts         # Chunk, TerrainProps
   workers/
@@ -126,58 +170,81 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
 
 ### Key Patterns
 
-- **No dimension abstraction** — the world is defined directly by `WORLD_REGIONS` in `src/world/world.ts`. Components import what they need directly instead of receiving a `dimension` prop.
+- **Declarative world, data-model core** — content is declared as JSX (`GameWorld` in `src/world/GameWorld.tsx`), but the commit produces the same plain `Region[]`/`Biome[]` data model (`src/world/types.ts`) the pipeline always used. Non-React code reads it from `src/world/registry.ts` (`getActiveRegions()`, `getActiveWorldConfig()`, `await whenWorldReady()`).
+- **Scope-aware config components** — `<Terrain>`, `<Material>`, `<Skybox>` mean different things under `<World>`, `<Region>`, or `<Biome>` (they read `RegionContext`/`BiomeContext`). Registration components render `null`; visual components (e.g. `GrassField`) render normally.
+- **Registration effects use stringified deps** — inline object props (noise params, descriptors) are registered under `JSON.stringify` deps so parent re-renders don't re-commit the world.
 - **Utility namespaces**: `_noise.terrain()`, `_math.seedRand()`, `_material.loadTextures()`, `voronoi.create()`
 - **Plain utility exports**: `getAllBiomes()`, `getDistance2D()` from `src/utils/utils.ts`
 - **Biome shaders**: fragment shaders branch on `vBiomeId` varying; vertex shader is shared
 - **Geometry pooling**: `acquireGeometry()`/`releaseGeometry()` recycle BufferGeometry per LOD level
 - **Vertex budget**: terrain builds multiple small chunks per frame (LOD3-5) up to a budget limit
 - **Voronoi caching**: grid results, Delaunay triangulations, and wall boundary data are cached with spatial eviction
-- **WorldConfig**: serializable config sent to workers (`buildWorldConfig(regions)`) containing region/biome data, noise params, and city config
+- **WorldConfig**: serializable config sent to workers (`buildWorldConfig(regions, params)`) containing region/biome data, global terrain params (from the world-level `<Terrain>`), per-biome noise (from biome-level `<Terrain noise={…}>`), and city config
 
 ## Adding Content
 
 ### New Biome
 
-1. Create `src/biomes/<name>/`
-2. Define biome object implementing `Biome` interface (`id`, `name`, `joinable`, `blendable`, `getVertexData`, `getMaterial`)
-3. Create `getVertexData.ts` — receives `VertexData`, modifies height, returns it
-4. Create `getMaterial.ts` — returns `{ uniforms, fragmentShader }`
-5. Create `shaders/fragment.glsl` — define a `<name>_frag()` function
-6. Register in a Region's `biomes[]` array
-7. Add biome ID branch to the world's combined fragment shader (`src/world/getMaterial.ts`)
-8. Add biome class to the `biomes_in_use` array in `voronoi.ts` worker message handler
-9. Add biome noise config to `buildWorldConfig.ts` if the biome uses noise-based height
+1. Create the biome folder: `src/regions/<region>/biomes/<name>/`. If another region needs the same biome, duplicate the folder there under a distinct component name (e.g. `CityGrassBiome` vs `GrassBiome`) with the SAME biome `id` — there is deliberately no shared biomes folder
+2. Create `getVertexData.ts` — receives `VertexData`, modifies height, returns it
+3. Create `getMaterial.ts` — returns `{ uniforms, fragmentShader }`
+4. Create `shaders/fragment.glsl` — define a `<name>_frag()` function
+5. Export a `<NameBiome>` component in `<Name>Biome.tsx` (see `src/regions/desert/biomes/dust/DustBiome.tsx` for the minimal template):
+   ```tsx
+   export const NameBiome = () => (
+     <Biome name="name" id={N} joinable blendable>
+       <Terrain getVertexData={getVertexData} noise={{ params: {...} }} />
+       <Material getMaterial={getMaterial} />
+       {/* <Spawnables>…</Spawnables>, <GrassField … />, <Skybox … /> as needed */}
+     </Biome>
+   );
+   ```
+   The `noise` prop is the worker-side height config — keep it consistent with `getVertexData.ts` (main-thread path). Biomes whose height is computed elsewhere (e.g. city grid) omit `noise`.
+6. Mount it inside a region component
+
+The combined fragment shader branch, voronoi biome lookup, and worker noise config are all derived from the registrations — no core files to touch.
+
+Note on duplicated biomes: registrations (terrain rules, materials, spawnables) for the same biome `id` are merged into one biome data object at commit, so duplicates must be kept in sync manually (a divergence would silently resolve last-registration-wins). *Visual* children (e.g. `GrassField`) are NOT merged — if two regions with the same duplicated biome are mounted at once, each duplicate renders its own grass; be mindful of that cost when mounting multiple regions that duplicate a biome.
 
 ### New Region
 
-1. Create `src/regions/<Name>Region.ts`
-2. Export a `Region` object with `name`, unique `id`, `biomes[]`, optional `getMaterial`
-3. Add to `WORLD_REGIONS` in `src/world/world.ts`
+1. Create `src/regions/<name>/<Name>Region.tsx` (region-exclusive biomes go in `src/regions/<name>/biomes/`):
+   ```tsx
+   export const NameRegion = () => (
+     <Region name="name" id={N}>
+       <Material texture="boundary.jpg" />
+       <SomeBiome />
+     </Region>
+   );
+   ```
+2. Export it from `src/regions/index.ts` and mount it inside `GameWorld` (`src/world/GameWorld.tsx`). Region JSX order matters — voronoi assignment depends on it.
 
 ### New Spawn/NPC
 
 **Static objects** (no custom behavior — just a model at a position):
-1. Add a `SpawnDescriptor` to the biome's `spawnables` array — omit `component`
-2. Set `model` (GLTF path) and `scale` on the descriptor
+1. Create `src/spawnables/<name>/` with a `spawnable.tsx` exporting a `SpawnDescriptor` (set `model` GLTF path and `scale`) plus a `<XxxSpawnable>` component wrapping it: `export const XxxSpawnable = (overrides: Partial<SpawnDescriptor>) => <Spawnable {...XxxDescriptor} {...overrides} />` — spawn restrictions (`biomeIds`, `heightRange`, `slopeRange`, `density`, spacing) are descriptor props; `biomeIds` unset means "spawns in every biome". Spawnables live outside biome folders because one spawnable may be mounted in several biomes.
+2. Mount it inside a biome's `<Spawnables>` group (props on `<Spawnables>` are shared defaults for all children; a child's own props win)
 3. Place GLTF model in `public/models/`
-4. ObjectPool renders `GameObject` directly; it handles its own position when no `positionRef` is provided
 
 **Grass / mass vegetation** (thousands of instances — too many for the spawn system):
-1. Add a component to the biome's `components[]` array (`Biome.components` — always-mounted children rendered by `BiomeComponents`)
-2. Use `GrassField` (`src/objects/vegetation/GrassField.tsx`) with spawn-style filter props (`density`, `biomeIds`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`)
+1. Mount `<GrassField>` (`src/objects/vegetation/GrassField.tsx`) directly inside the biome component — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
+2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`)
 3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
 
 **Interactive objects** (physics, state machines, custom logic):
-1. Create a custom component in the relevant biome's `creatures/` directory
+1. Create `src/spawnables/<name>/` with the object component (+ `stateMachine.ts` if needed)
 2. Use `GameObject` for GLTF loading + colliders, `useStateMachine` / `useMouseEvents` for behavior
-3. Add a `SpawnDescriptor` to the biome's `spawnables` array with the custom `component`
+3. Add a `spawnable.tsx` with a `SpawnDescriptor` (its `component` = your custom component) and a `<XxxSpawnable>` wrapper; mount it in a biome's `<Spawnables>` group (see `src/spawnables/beeble/`)
 4. Place GLTF model in `public/models/`
+
+### Per-Region / Per-Biome Skybox
+
+Mount `<Skybox topColor=… horizonColor=… bottomColor=… />` inside a `<Region>` or `<Biome>`. The `SkyboxSystem` cross-fades sky colors as the player moves (biome-scoped wins over region-scoped wins over the world default). The current biome is polled off-thread via the voronoi worker only when scoped skyboxes exist; only the world-level skybox's `radius` is used.
 
 ## Performance Notes
 
 - **Voronoi batch size** (`MAX_BATCH_SIZE` in `voronoi.ts`) is 10. Increasing it causes frame drops because the worker blocks too long on large batches.
-- **Terrain vertex budget** (`MAX_VERTS_PER_FRAME` in `Terrain.tsx`) is 2500. This lets many small LOD chunks build per frame while capping main-thread work.
+- **Terrain vertex budget** (`MAX_VERTS_PER_FRAME` in `TerrainRenderer.tsx`) is 2500. This lets many small LOD chunks build per frame while capping main-thread work.
 - Voronoi worker uses O(n) nearest-entry scans instead of sorting. Grid arrays are never mutated by lookups.
 - Delaunay triangulations are cached via `WeakMap` keyed by grid array identity.
 - Cache eviction in the worker only runs on cache misses, not every query.

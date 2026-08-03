@@ -1,6 +1,4 @@
-import { City } from "../../biomes/city/City";
-import { Dust } from "../../biomes/dust/Dust";
-import { Grass } from "../../biomes/grass/Grass";
+import { getActiveRegions } from "../../world/registry";
 import { getAllBiomes } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, VoronoiQueue } from "./types";
 
@@ -39,7 +37,7 @@ export namespace voronoi {
             //TODO keeping this check temporarily.
             event.data.results.forEach((result: any, index: number) => {
               if (index < resolves.length) {
-                const biomes_in_use = [City, Grass, Dust]; // TODO const somewhere else or other solution, maybe context
+                const biomes_in_use = getAllBiomes(getActiveRegions());
                 const biome = biomes_in_use.find((b) => b.id === result.biome.id);
                 resolves[index]({ ...result, biome });
               }
