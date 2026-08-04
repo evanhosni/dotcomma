@@ -1,13 +1,13 @@
-import { Physics } from "@react-three/rapier";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Physics } from "@react-three/rapier";
 import { useEffect } from "react";
-import { GameContextProvider } from "../context/GameContext";
 import { useDevMode } from "../context/DevContext";
+import { GameContextProvider } from "../context/GameContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
-import { initCursor } from "../utils/cursor/cursor";
-import { GameWorld } from "../world/GameWorld";
 import { PortalContextProvider } from "../portals/PortalContext";
+import { initCursor } from "../utils/cursor/cursor";
+import { GameWorld } from "./GameWorld";
 
 /** Portal useFrame hooks use non-zero priorities (-1, 1), which disables R3F's
  *  auto-rendering. This component replaces it with an explicit render at the end. */

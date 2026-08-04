@@ -1,5 +1,5 @@
-import { TerrainNoiseParams, _noise } from "../../../../utils/noise/_noise";
-import { VertexData, vertexData_default } from "../../../../world/types";
+import { TerrainNoiseParams, _noise } from "../../../../../utils/noise/_noise";
+import { VertexData, vertexData_default } from "../../../../types";
 
 const noise: TerrainNoiseParams = {
   type: "perlin",

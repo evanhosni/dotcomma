@@ -1,5 +1,5 @@
-import { Material, Region } from "../../world/components";
-import { DustBiome } from "./biomes/dust/DustBiome";
+import { Material, Region } from "../../components";
+import { DustBiome } from "./biomes/dust/biome";
 
 /** Desert region: dust dunes. */
 export const DesertRegion = () => (

@@ -58,19 +58,6 @@ Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at b
 
 ```
 src/
-  regions/             # Each region owns its folder: <Name>Region.tsx + its biomes.
-    city/              # There is NO shared biomes folder — a biome used by several
-      CityRegion.tsx   # regions is DUPLICATED into each region under a distinct name
-      biomes/          # (e.g. CityGrassBiome / GrassBiome, both biome id 3).
-        city/          # Urban biome (id:1) — CityBiome.tsx, height fns, blocks.ts, shaders
-        grass/         # Grassland biome (id:3) — CityGrassBiome.tsx (duplicate of grass region's)
-    desert/
-      DesertRegion.tsx # Desert region (dust biome)
-      biomes/dust/     # Desert biome (id:2) — DustBiome.tsx, height fns, shaders
-    grass/
-      GrassRegion.tsx  # Grass region
-      biomes/grass/    # Grassland biome (id:3) — GrassBiome.tsx
-    index.ts
   spawnables/          # Spawnable objects — kept separate from biomes because one
     beeble/            #   spawnable may exist in multiple biomes. Each folder has the
     big-beeble/        #   object component (+ optional stateMachine.ts) and spawnable.tsx
@@ -81,6 +68,21 @@ src/
   world/
     GameWorld.tsx      # GameWorld — the <World> tree, single source of truth for active content
     registry.ts        # Module-level active world (regions/params/WorldConfig) + whenWorldReady()
+    regions/           # Each region owns its folder: region.tsx + its biomes.
+      city/            # Region file is always region.tsx, biome file is always biome.tsx —
+        region.tsx     # the folder path identifies which is which. There is NO shared
+        biomes/        # biomes folder — a biome used by several regions is DUPLICATED
+          city/        # into each region under a distinct component name (e.g.
+          grass/       # CityGrassBiome / GrassBiome, both biome id 3).
+                       # city/: urban biome (id:1) — biome.tsx, height fns, blocks.ts, shaders
+                       # grass/: grassland biome (id:3) — biome.tsx (duplicate of grass region's)
+      desert/
+        region.tsx     # Desert region (dust biome)
+        biomes/dust/   # Desert biome (id:2) — biome.tsx, height fns, shaders
+      grass/
+        region.tsx     # Grass region
+        biomes/grass/  # Grassland biome (id:3) — biome.tsx
+      index.ts
     types.ts           # Region, Biome (data model), BiomeNoiseConfig, VertexData, MaterialData
     components/        # The declarative world component system
       World.tsx        # Registration store + commit → registry; mounts global systems
@@ -91,8 +93,8 @@ src/
       Skybox.tsx       # Scope-aware skybox registration + SkyboxSystem (cross-fading sky)
       Spawnable.tsx    # <Spawnable> descriptor registration + <Spawnables> defaults group
       context.ts       # WorldStore, WorldStoreContext, RegionContext, BiomeContext
-    getVertexData.ts   # World-level terrain pipeline (voronoi → biome heights), reads registry
-    getMaterial.ts     # Combines all biome fragment shaders, reads registry
+    vertexData.ts      # World-level terrain pipeline (voronoi → biome heights), reads registry
+    material.ts        # Combines all biome fragment shaders, reads registry
     shaders/           # Shared vertex shader
     terrain/
       TerrainRenderer.tsx # Chunk lifecycle, LOD quadtree, build loop, geometry pool
@@ -185,11 +187,11 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
 
 ### New Biome
 
-1. Create the biome folder: `src/regions/<region>/biomes/<name>/`. If another region needs the same biome, duplicate the folder there under a distinct component name (e.g. `CityGrassBiome` vs `GrassBiome`) with the SAME biome `id` — there is deliberately no shared biomes folder
-2. Create `getVertexData.ts` — receives `VertexData`, modifies height, returns it
-3. Create `getMaterial.ts` — returns `{ uniforms, fragmentShader }`
+1. Create the biome folder: `src/world/regions/<region>/biomes/<name>/`. If another region needs the same biome, duplicate the folder there under a distinct component name (e.g. `CityGrassBiome` vs `GrassBiome`) with the SAME biome `id` — there is deliberately no shared biomes folder
+2. Create `vertexData.ts` — exports `getVertexData`: receives `VertexData`, modifies height, returns it
+3. Create `material.ts` — exports `getMaterial`: returns `{ uniforms, fragmentShader }`
 4. Create `shaders/fragment.glsl` — define a `<name>_frag()` function
-5. Export a `<NameBiome>` component in `<Name>Biome.tsx` (see `src/regions/desert/biomes/dust/DustBiome.tsx` for the minimal template):
+5. Export a `<NameBiome>` component in `biome.tsx` (see `src/world/regions/desert/biomes/dust/biome.tsx` for the minimal template):
    ```tsx
    export const NameBiome = () => (
      <Biome name="name" id={N} joinable blendable>
@@ -199,7 +201,7 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
      </Biome>
    );
    ```
-   The `noise` prop is the worker-side height config — keep it consistent with `getVertexData.ts` (main-thread path). Biomes whose height is computed elsewhere (e.g. city grid) omit `noise`.
+   The `noise` prop is the worker-side height config — keep it consistent with `vertexData.ts` (main-thread path). Biomes whose height is computed elsewhere (e.g. city grid) omit `noise`.
 6. Mount it inside a region component
 
 The combined fragment shader branch, voronoi biome lookup, and worker noise config are all derived from the registrations — no core files to touch.
@@ -208,7 +210,7 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
 
 ### New Region
 
-1. Create `src/regions/<name>/<Name>Region.tsx` (region-exclusive biomes go in `src/regions/<name>/biomes/`):
+1. Create `src/world/regions/<name>/region.tsx` (region-exclusive biomes go in `src/world/regions/<name>/biomes/`):
    ```tsx
    export const NameRegion = () => (
      <Region name="name" id={N}>
@@ -217,7 +219,7 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
      </Region>
    );
    ```
-2. Export it from `src/regions/index.ts` and mount it inside `GameWorld` (`src/world/GameWorld.tsx`). Region JSX order matters — voronoi assignment depends on it.
+2. Export it from `src/world/regions/index.ts` and mount it inside `GameWorld` (`src/world/GameWorld.tsx`). Region JSX order matters — voronoi assignment depends on it.
 
 ### New Spawn/NPC
 

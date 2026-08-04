@@ -1,11 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { CustomCanvas } from "./canvas/CustomCanvas";
 import { DevProvider } from "./context/DevContext";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import "./style.css";
+import { CustomCanvas } from "./world/CustomCanvas";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 

@@ -1,5 +1,5 @@
-import { Material, Region } from "../../world/components";
-import { GrassBiome } from "./biomes/grass/GrassBiome";
+import { Material, Region } from "../../components";
+import { GrassBiome } from "./biomes/grass/biome";
 
 /** Pure grassland region. */
 export const GrassRegion = () => (

@@ -7,7 +7,7 @@ import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { usePortalContext } from "../portals/PortalContext";
-import { getVertexData } from "../world/getVertexData";
+import { getVertexData } from "../world/vertexData";
 import { useInput } from "./useInput";
 
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];

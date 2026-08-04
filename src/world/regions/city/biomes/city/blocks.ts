@@ -1,4 +1,4 @@
-import { Block } from "../../../../world/types";
+import { Block } from "../../../../types";
 
 export const blocks: Block[] = [
   {
