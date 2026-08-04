@@ -16,6 +16,7 @@ export interface SpawnDescriptor {
   slopeRange?: [number, number]; // restrict to slope range (degrees)
   spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
   cursorOverride?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
+  quantization?: number; // vertex quantization grid size for this object; defaults to the global grid
 }
 
 export interface SpawnedObjectProps {
@@ -28,6 +29,7 @@ export interface SpawnedObjectProps {
   frustumPadding: number;
   onDestroy: (id: string) => void;
   cursorOverride?: boolean;
+  quantization?: number;
 }
 
 export interface SpawnPoint {

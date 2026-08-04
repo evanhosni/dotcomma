@@ -46,15 +46,26 @@ export namespace _quantization {
   /**
    * Patch a standard Three.js material to quantize vertices in world space.
    * Safe to call multiple times on the same material (idempotent).
+   *
+   * `gridSize` overrides the global grid size for this material (fixed at
+   * first patch; later calls can only update the value of an existing
+   * override). Omit it to follow the shared global uniform.
    */
-  export const patchMaterial = (material: THREE.Material): void => {
-    if ((material as any).__quantizationPatched) return;
+  export const patchMaterial = (material: THREE.Material, gridSize?: number): void => {
+    const existing = (material as any).__quantizationUniform as THREE.IUniform<number> | undefined;
+    if (existing) {
+      if (gridSize !== undefined && existing !== uniforms.uGridSize) existing.value = gridSize;
+      return;
+    }
+
+    const uniform: THREE.IUniform<number> =
+      gridSize !== undefined ? { value: gridSize } : uniforms.uGridSize;
 
     const originalCacheKey = material.customProgramCacheKey?.bind(material);
     material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + "_quantized";
 
     material.onBeforeCompile = (shader) => {
-      shader.uniforms.uGridSize = uniforms.uGridSize;
+      shader.uniforms.uGridSize = uniform;
 
       // Inject quantize function before main()
       shader.vertexShader = shader.vertexShader.replace(
@@ -75,7 +86,7 @@ export namespace _quantization {
       );
     };
 
-    (material as any).__quantizationPatched = true;
+    (material as any).__quantizationUniform = uniform;
     material.needsUpdate = true;
   };
 

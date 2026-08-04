@@ -12,4 +12,5 @@ export interface GrassFieldProps {
   swaySpeed?: number; // wind animation speed multiplier. Default 1.2
   renderDistance?: number; // max camera distance; blades shrink out near the edge. Default 120
   seed?: string; // deterministic placement seed — vary to decorrelate multiple GrassFields. Default "grass"
+  quantization?: number; // vertex quantization grid size for this field; defaults to the global grid
 }

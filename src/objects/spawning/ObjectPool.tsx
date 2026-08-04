@@ -159,6 +159,7 @@ export const ObjectPool = () => {
           renderDistance: desc.renderDistance,
           frustumPadding: desc.frustumPadding ?? 3,
           cursorOverride: desc.cursorOverride,
+          quantization: desc.quantization,
           onDestroy: (id: string) => {
             destroyedObjectsRef.current.set(objId, Date.now());
             objectsMapRef.current.delete(objId);
