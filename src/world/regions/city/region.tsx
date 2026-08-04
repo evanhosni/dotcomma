@@ -1,6 +1,6 @@
-import { Material, Region } from "../../world/components";
-import { CityBiome } from "./biomes/city/CityBiome";
-import { CityGrassBiome } from "./biomes/grass/CityGrassBiome";
+import { Material, Region } from "../../components";
+import { CityBiome } from "./biomes/city/biome";
+import { CityGrassBiome } from "./biomes/grass/biome";
 
 /** Urban region: city blocks interleaved with grassland. */
 export const CityRegion = () => (

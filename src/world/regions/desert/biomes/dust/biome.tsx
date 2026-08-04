@@ -1,6 +1,6 @@
-import { Biome, Material, Terrain } from "../../../../world/components";
-import { getMaterial } from "./getMaterial";
-import { getVertexData } from "./getVertexData";
+import { Biome, Material, Terrain } from "../../../../components";
+import { getMaterial } from "./material";
+import { getVertexData } from "./vertexData";
 
 export const DUST_BIOME_ID = 2;
 

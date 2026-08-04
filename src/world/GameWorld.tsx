@@ -1,5 +1,5 @@
 import React from "react";
-import { CityRegion, DesertRegion } from "../regions";
+import { CityRegion, DesertRegion } from "./regions";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Material, Skybox, Terrain, World } from "./components";
 

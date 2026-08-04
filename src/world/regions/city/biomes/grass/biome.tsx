@@ -1,7 +1,7 @@
-import { GrassField } from "../../../../objects/vegetation/GrassField";
-import { Biome, Material, Terrain } from "../../../../world/components";
-import { getMaterial } from "./getMaterial";
-import { getVertexData } from "./getVertexData";
+import { GrassField } from "../../../../../objects/vegetation/GrassField";
+import { Biome, Material, Terrain } from "../../../../components";
+import { getMaterial } from "./material";
+import { getVertexData } from "./vertexData";
 
 export const CITY_GRASS_BIOME_ID = 3;
 
