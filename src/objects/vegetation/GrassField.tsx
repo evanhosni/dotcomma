@@ -9,8 +9,11 @@ import { generateGrassChunk, GrassChunkParams, initGrassWorker } from "./grassWo
 import { GrassFieldProps } from "./types";
 
 const GRASS_CHUNK_SIZE = 32; // world units per grass chunk (one instanced draw call each)
-const MAX_PENDING_CHUNKS = 2; // worker requests in flight at once
-const UPDATE_INTERVAL_FRAMES = 10;
+const MAX_PENDING_CHUNKS = 4; // worker requests in flight at once
+const UPDATE_INTERVAL_FRAMES = 3;
+// Grass starts filling in ahead of the object spawn system (ObjectPool gates on
+// progress 0.5) so ground cover lands before objects pop in.
+const MIN_TERRAIN_PROGRESS = 0;
 
 const GRASS_VERTEX_SHADER = /* glsl */ `
 attribute vec3 offset;
@@ -308,7 +311,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
     frameCountRef.current++;
     if (frameCountRef.current % UPDATE_INTERVAL_FRAMES !== 0) return;
     if (!workerReadyRef.current) return;
-    if (!terrain_loaded && progress < 0.5) return;
+    if (!terrain_loaded && progress < MIN_TERRAIN_PROGRESS) return;
 
     const px = camera.position.x;
     const pz = camera.position.z;
