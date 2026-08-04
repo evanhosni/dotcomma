@@ -224,13 +224,13 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
 ### New Spawn/NPC
 
 **Static objects** (no custom behavior — just a model at a position):
-1. Create `src/spawnables/<name>/` with a `spawnable.tsx` exporting a `SpawnDescriptor` (set `model` GLTF path and `scale`) plus a `<XxxSpawnable>` component wrapping it: `export const XxxSpawnable = (overrides: Partial<SpawnDescriptor>) => <Spawnable {...XxxDescriptor} {...overrides} />` — spawn restrictions (`biomeIds`, `heightRange`, `slopeRange`, `density`, spacing) are descriptor props; `biomeIds` unset means "spawns in every biome". Spawnables live outside biome folders because one spawnable may be mounted in several biomes.
+1. Create `src/spawnables/<name>/` with a `spawnable.tsx` exporting a `SpawnDescriptor` (set `model` GLTF path and `scale`) plus a `<XxxSpawnable>` component wrapping it: `export const XxxSpawnable = (overrides: Partial<SpawnDescriptor>) => <Spawnable {...XxxDescriptor} {...overrides} />` — spawn restrictions (`biomeIds`, `heightRange`, `slopeRange`, `density`, spacing) are descriptor props; `biomeIds` unset means "spawns in every biome"; `quantization` overrides the global vertex-quantization grid size for this object (unset = global). Spawnables live outside biome folders because one spawnable may be mounted in several biomes.
 2. Mount it inside a biome's `<Spawnables>` group (props on `<Spawnables>` are shared defaults for all children; a child's own props win)
 3. Place GLTF model in `public/models/`
 
 **Grass / mass vegetation** (thousands of instances — too many for the spawn system):
 1. Mount `<GrassField>` (`src/objects/vegetation/GrassField.tsx`) directly inside the biome component — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
-2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`)
+2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`, `quantization` to override the global vertex-quantization grid)
 3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
 
 **Interactive objects** (physics, state machines, custom logic):

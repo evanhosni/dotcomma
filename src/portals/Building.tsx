@@ -28,6 +28,7 @@ export const Building = ({
   onDestroy,
   scale,
   frustumPadding,
+  quantization,
 }: BuildingProps) => {
   const { publishIndoorBounds, unpublishIndoorBounds } = usePortalContext();
 
@@ -100,6 +101,7 @@ export const Building = ({
         scale={scale}
         wholeTrimesh
         excludeColliderNames={portalNames}
+        quantization={quantization}
       />
 
       {/* Enter portals — outdoor-side doors, scaled to match the exterior */}

@@ -104,6 +104,7 @@ interface GameObjectProps {
   isStatic?: boolean;
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
+  quantization?: number; // per-object vertex quantization grid size; defaults to the global grid
 }
 
 interface ColliderState {
@@ -127,6 +128,7 @@ export const GameObject = ({
   isStatic = true,
   wholeTrimesh = false,
   excludeColliderNames,
+  quantization,
 }: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
@@ -168,7 +170,7 @@ export const GameObject = ({
             (mat as any).fog = false;
 
             if (!child.userData?.skipQuantization) {
-              _quantization.patchMaterial(mat);
+              _quantization.patchMaterial(mat, quantization);
             }
             allMaterials.push(mat);
           });
@@ -226,7 +228,7 @@ export const GameObject = ({
       mixerRef.current = null;
       sceneRef.current = null;
     };
-  }, [scene, clonedModel.animations]); // scale omitted: stable per instance, only used for bounding sphere
+  }, [scene, clonedModel.animations, quantization]); // scale omitted: stable per instance, only used for bounding sphere
 
   // Add event listener for E key (only when not driven by state machine)
   useEffect(() => {

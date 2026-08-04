@@ -35,6 +35,7 @@ export const CityGrassBiome = () => (
       bladeHeight={1.3}
       sway={0.5}
       renderDistance={1000}
+      quantization={0.05}
     />
   </Biome>
 );

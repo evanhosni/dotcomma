@@ -2,6 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
+import { _quantization } from "../../utils/quantization/quantization";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import { generateGrassChunk, GrassChunkParams, initGrassWorker } from "./grassWorker";
@@ -21,9 +22,15 @@ uniform float uSwaySpeed;
 uniform float uBladeWidth;
 uniform float uBladeHeight;
 uniform float uRenderDistance;
+uniform float uGridSize;
 
 varying vec2 vUv;
 varying float vTint;
+
+vec3 quantizeWorldPos(vec3 worldPos) {
+  if (uGridSize <= 0.0) return worldPos;
+  return floor(worldPos / uGridSize + 0.5) * uGridSize;
+}
 
 void main() {
   vUv = uv;
@@ -58,6 +65,8 @@ void main() {
   float flutter = sin(t * 2.3 + phase * 2.0) * 0.3;
   pos.x += (gust + flutter) * bend;
   pos.z += cos(t * 0.7 + (offset.x - offset.z) * 0.12 + phase) * bend * 0.7;
+
+  pos = quantizeWorldPos(pos);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
 }
@@ -139,6 +148,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
   swaySpeed = 1.2,
   renderDistance = 120,
   seed = "grass",
+  quantization,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const chunksRef = useRef(new Map<string, THREE.Mesh | null>()); // null = built but empty
@@ -175,13 +185,16 @@ export const GrassField: React.FC<GrassFieldProps> = ({
           uBladeWidth: { value: bladeWidth },
           uBladeHeight: { value: bladeHeight },
           uRenderDistance: { value: renderDistance },
+          // without a per-field override, share the global grid-size uniform (never mutated here)
+          uGridSize: quantization !== undefined ? { value: quantization } : _quantization.uniforms.uGridSize,
         },
         vertexShader: GRASS_VERTEX_SHADER,
         fragmentShader: GRASS_FRAGMENT_SHADER,
         side: THREE.DoubleSide,
       }),
-    // scalar uniforms are kept in sync below without rebuilding the material
-    [texture]
+    // scalar uniforms are kept in sync below without rebuilding the material;
+    // quantization picks its uniform object at creation, so it rebuilds
+    [texture, quantization],
   );
 
   useEffect(() => {
@@ -194,9 +207,24 @@ export const GrassField: React.FC<GrassFieldProps> = ({
   }, [material, color, sway, swaySpeed, bladeWidth, bladeHeight, renderDistance]);
 
   const params: GrassChunkParams = useMemo(
-    () => ({ seed, chunkSize: GRASS_CHUNK_SIZE, density, biomeIds: effectiveBiomeIds, heightRange, slopeRange, slopeBlend }),
+    () => ({
+      seed,
+      chunkSize: GRASS_CHUNK_SIZE,
+      density,
+      biomeIds: effectiveBiomeIds,
+      heightRange,
+      slopeRange,
+      slopeBlend,
+    }),
     // stringify array props so inline literals don't retrigger a rebuild every render
-    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange)]
+    [
+      seed,
+      density,
+      slopeBlend,
+      JSON.stringify(effectiveBiomeIds),
+      JSON.stringify(heightRange),
+      JSON.stringify(slopeRange),
+    ],
   );
 
   useEffect(() => {
@@ -220,8 +248,8 @@ export const GrassField: React.FC<GrassFieldProps> = ({
     pendingRef.current.clear();
   }, []);
 
-  // Rebuild all chunks when placement params change; tear down on unmount
-  useEffect(() => clearChunks, [params, clearChunks]);
+  // Rebuild all chunks when placement params or the material change; tear down on unmount
+  useEffect(() => clearChunks, [params, material, clearChunks]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -265,7 +293,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       const radiusY = (result.maxY - result.minY) / 2 + bladeHeight + Math.abs(sway) + 1;
       geo.boundingSphere = new THREE.Sphere(
         new THREE.Vector3(cx * GRASS_CHUNK_SIZE + half, centerY, cz * GRASS_CHUNK_SIZE + half),
-        Math.sqrt(half * half * 2 + radiusY * radiusY)
+        Math.sqrt(half * half * 2 + radiusY * radiusY),
       );
 
       const mesh = new THREE.Mesh(geo, material);
