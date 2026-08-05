@@ -133,16 +133,18 @@ export interface InteriorPlan {
   stories: number;
   /** ceilingHeight + slab thickness — story s floor top sits at s*storyHeight. */
   storyHeight: number;
-  /** Room layout of one story (identical on every story). For polygon
-   *  interiors, rooms fill an inscribed rect block ringed by a corridor. */
-  rooms: RoomRect[];
-  /** Walls replicated on every story: BSP splits, shaft walls, block
-   *  boundary walls, pillars. The interior PERIMETER has no wall boxes — it
-   *  is the shell's inner surface (the shell has real thickness). */
-  wallBoxesCommon: WallBox[];
+  /** Room layout PER STORY — each floor rolls its own room count and BSP
+   *  splits, so no two floors are identical. For polygon interiors, rooms
+   *  fill an inscribed rect block ringed by a corridor. */
+  roomsPerStory: RoomRect[][];
+  /** Wall boxes PER STORY (story-local y: 0..ceilingHeight): BSP splits and
+   *  pillars. The interior PERIMETER has no wall boxes — it is the shell's
+   *  inner surface (the shell has real thickness). */
+  wallBoxesPerStory: WallBox[][];
   ramp: RampSpec | null;
-  /** Ceiling light panel centers [x, z] (replicated per story). */
-  lightPanels: [number, number][];
+  /** Ceiling light panel centers [x, z] per story (each floor rolls its own
+   *  grid gaps). */
+  lightPanelsPerStory: [number, number][][];
   childSlots: ChildSlot[];
 }
 
@@ -210,10 +212,12 @@ export interface BuildingOptions {
   heightRange?: [number, number];
   /** Interior floor count (default seeded 1–5). Drives the exterior height. */
   stories?: number;
-  /** Rooms per floor (default seeded 3–6). Together with `stories` this
-   *  drives the exterior footprint, so the shell realistically reflects the
-   *  interior. */
-  roomCount?: number;
+  /** Rooms-per-floor choices — EACH floor rolls its own count from this
+   *  array (like `numberOfSides`), and its own BSP layout, so no two floors
+   *  look alike. A plain number pins every floor to that count (layouts
+   *  still vary). Default seeded 3–6 per floor. The LARGEST choice drives
+   *  the exterior footprint, so every floor's program fits. */
+  roomCount?: number | number[];
   doorCount?: 1 | 2;
   /** Door opening [width, height]. Height is clamped below the interior ceiling. */
   doorSize?: [number, number];

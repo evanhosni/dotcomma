@@ -6,7 +6,7 @@ import { Building } from "./Building";
  *  the top floor reads as mechanical levels), with a gentler lean so tall
  *  neighbors don't collide. */
 export const Skyscraper = (props: SpawnedObjectProps) => (
-  <Building {...props} stories={6} roomCount={5} heightRange={[70, 115]} maxLean={0.04} />
+  <Building {...props} stories={6} roomCount={[3, 4, 5, 6]} heightRange={[70, 115]} maxLean={0.04} />
 );
 
 export const SkyscraperDescriptor: SpawnDescriptor = {
