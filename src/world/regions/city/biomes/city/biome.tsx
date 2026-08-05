@@ -1,29 +1,25 @@
-import { ApartmentSpawnable } from "../../../../../spawnables/apartment/spawnable";
 import { BeebleSpawnable } from "../../../../../spawnables/beeble/spawnable";
-import { BigBeebleSpawnable } from "../../../../../spawnables/big-beeble/spawnable";
-import { Building1Spawnable } from "../../../../../spawnables/building1/spawnable";
-import { XLElementSpawnable } from "../../../../../spawnables/xl-element/spawnable";
-import { XXLElementSpawnable } from "../../../../../spawnables/xxl-element/spawnable";
-import { Biome, Material, Spawnables, Terrain } from "../../../../components";
+import { SkyscraperSpawnable } from "../../../../../spawnables/building/skyscraper";
+import { BuildingSpawnable } from "../../../../../spawnables/building/spawnable";
+import { Biome, Material, Spawnables } from "../../../../components";
 import { getMaterial } from "./material";
-import { getVertexData } from "./vertexData";
 
 export const CITY_BIOME_ID = 1;
 
-/** Urban biome: city grid with blocks, buildings, and creatures.
- *  Heights come from the city grid (WorldConfig.cityConfig in the workers,
- *  getVertexData on the main thread) — no biome noise. */
+/** Urban biome: flat city grid with buildings and creatures. Height (flat,
+ *  base-noise-cancelling) and road distances come from the city branch of the
+ *  shared vertex pipeline (workers/vertexCompute.ts, keyed by biome id 1 +
+ *  WorldConfig.cityConfig) — no `noise` config here. */
 export const CityBiome = () => (
   <Biome name="city" id={CITY_BIOME_ID} joinable blendable={false} blendWidth={3}>
-    <Terrain getVertexData={getVertexData} />
     <Material getMaterial={getMaterial} />
     <Spawnables>
       <BeebleSpawnable />
-      <ApartmentSpawnable />
-      <BigBeebleSpawnable />
+      {/* <BigBeebleSpawnable />
       <XLElementSpawnable />
-      <XXLElementSpawnable />
-      <Building1Spawnable />
+      <XXLElementSpawnable /> */}
+      <BuildingSpawnable biomeIds={[CITY_BIOME_ID]} />
+      <SkyscraperSpawnable biomeIds={[CITY_BIOME_ID]} />
     </Spawnables>
   </Biome>
 );

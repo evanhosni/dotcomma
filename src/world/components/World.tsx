@@ -75,7 +75,6 @@ const commitWorld = (store: WorldStore) => {
         joinable: record.joinable,
         blendable: record.blendable,
         blendWidth: record.blendWidth,
-        getVertexData: async (vertexData) => vertexData,
         spawnables: [],
       };
       biomeById.set(record.id, data);
@@ -87,7 +86,6 @@ const commitWorld = (store: WorldStore) => {
   for (const { biomeId, config } of store.biomeTerrain.values()) {
     const data = biomeById.get(biomeId);
     if (!data) continue;
-    if (config.getVertexData) data.getVertexData = config.getVertexData;
     if (config.noise) data.noise = config.noise;
   }
   for (const { biomeId, getMaterial } of store.biomeMaterials.values()) {

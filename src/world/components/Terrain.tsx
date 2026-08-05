@@ -1,12 +1,12 @@
 import { useContext, useLayoutEffect } from "react";
 import { WorldTerrainParams } from "../registry";
-import { BiomeNoiseConfig, VertexData } from "../types";
+import { BiomeNoiseConfig } from "../types";
 import { BiomeContext, RegionContext, RegionTerrainConfig, useWorldStore } from "./context";
 
 export interface TerrainConfigProps extends Partial<WorldTerrainParams> {
-  /** Biome scope: main-thread height function (Player raycasts, world getVertexData). */
-  getVertexData?: (vertexData: VertexData) => Promise<VertexData>;
-  /** Biome scope: worker-side height noise, sent to terrain/spawn/grass workers. */
+  /** Biome scope: the biome's height definition. Single source of truth —
+   *  evaluated by the shared pipeline (workers/vertexCompute.ts) on both the
+   *  workers and the main thread. */
   noise?: BiomeNoiseConfig;
 }
 
@@ -17,8 +17,8 @@ export interface TerrainConfigProps extends Partial<WorldTerrainParams> {
  *   widths, base/road noise, city config). Unset props fall back to
  *   DEFAULT_WORLD_TERRAIN_PARAMS.
  * - Inside <Region>: reserved — stored for future per-region terrain rules.
- * - Inside <Biome>:  the biome's height pipeline (`getVertexData` for the
- *   main thread, `noise` for the workers).
+ * - Inside <Biome>:  the biome's height definition (`noise`), consumed by the
+ *   shared vertex pipeline everywhere heights are computed.
  *
  * Renders nothing — pure registration.
  */
@@ -27,7 +27,7 @@ export const Terrain = (props: TerrainConfigProps) => {
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
 
-  const { getVertexData, noise, ...worldParams } = props;
+  const { noise, ...worldParams } = props;
   // Object props are registered under stringified deps so inline literals in
   // JSX don't re-register (and re-commit the world) on every parent render.
   const noiseKey = JSON.stringify(noise ?? null);
@@ -36,7 +36,7 @@ export const Terrain = (props: TerrainConfigProps) => {
   useLayoutEffect(() => {
     if (biome) {
       const key = `${biome.regionId}/${biome.biomeId}`;
-      store.biomeTerrain.set(key, { biomeId: biome.biomeId, config: { getVertexData, noise } });
+      store.biomeTerrain.set(key, { biomeId: biome.biomeId, config: { noise } });
       store.invalidate();
       return () => {
         store.biomeTerrain.delete(key);
@@ -57,7 +57,7 @@ export const Terrain = (props: TerrainConfigProps) => {
       store.worldTerrain = null;
       store.invalidate();
     };
-  }, [store, biome, region, getVertexData, noiseKey, worldKey]);
+  }, [store, biome, region, noiseKey, worldKey]);
 
   return null;
 };

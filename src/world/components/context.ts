@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { SpawnDescriptor } from "../../objects/spawning/types";
 import { WorldTerrainParams } from "../registry";
-import { BiomeNoiseConfig, MaterialData, RegionMaterialData, VertexData } from "../types";
+import { BiomeNoiseConfig, MaterialData, RegionMaterialData } from "../types";
 
 /**
  * Registration store backing the <World> component tree.
@@ -27,7 +27,6 @@ export interface BiomeRecord {
 }
 
 export interface BiomeTerrainConfig {
-  getVertexData?: (vertexData: VertexData) => Promise<VertexData>;
   noise?: BiomeNoiseConfig;
 }
 
