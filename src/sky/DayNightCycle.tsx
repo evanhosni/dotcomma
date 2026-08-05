@@ -1,7 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, NIGHT_DURATION_MS, setNightBlend, tickWindowLights } from "./dayNight";
+import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, MOON_DIRECTION, NIGHT_DURATION_MS, setNightBlend, SUN_DIRECTION, tickWindowLights } from "./dayNight";
 
 /**
  * Day/night cycle: a jittery low-poly sun parked in one spot of the sky, a
@@ -30,8 +30,8 @@ const MOON_VERTICES_COUNT = 19; // total boundary vertices across both arcs
 const STAR_DISTANCE = 5600;
 const STAR_COUNT = 550;
 
-const SUN_DIR = new THREE.Vector3(0.45, 0.72, -0.6).normalize();
-const MOON_DIR = new THREE.Vector3(-0.45, 0.62, 0.6).normalize();
+const SUN_DIR = SUN_DIRECTION;
+const MOON_DIR = MOON_DIRECTION;
 
 const JITTER_INTERVAL_S = 0.09; // vertex re-jitter tick
 const JITTER_AMPLITUDE = 0.07; // × radius, per tick, per vertex

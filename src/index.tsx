@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { DevProvider } from "./context/DevContext";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
+import { DayNightLights } from "./sky/DayNightLights";
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
 
@@ -20,8 +21,7 @@ const Dotcomma = () => {
             path="*"
             element={
               <CustomCanvas>
-                <ambientLight intensity={0.5} />
-                <directionalLight position={[10, 10, 5]} intensity={1} />
+                <DayNightLights />
               </CustomCanvas>
             }
           />

@@ -147,6 +147,10 @@ src/
     DayNightContext.tsx # DayNightProvider (mounted in CustomCanvas) + useDayNight() —
                        #   React access to { phase, isNight }; re-renders only on phase
                        #   flips, continuous values via the dayNight.ts getters
+    DayNightLights.tsx # Scene ambient + directional lights (mounted in index.tsx),
+                       #   dimmed by nightBlend; directional swings sun → moon.
+                       #   Unlit shaders (terrain/grass) dim via NIGHT_BLEND_UNIFORM +
+                       #   NIGHT_GROUND_DIM instead (building interiors stay bright)
   player/
     Player.tsx         # First-person controller + physics
     useInput.tsx       # Keyboard input
