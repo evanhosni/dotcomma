@@ -176,6 +176,8 @@ export interface BuildingPlan {
    *  the interior lives inside); the rest are rooftop caps and pipes. */
   bodyLoftCount: number;
   doors: DoorPlan[];
+  /** Door leaf color — seeded from the building palette like everything else. */
+  doorColor: number;
   windows: WindowSpec[];
   interior: InteriorPlan;
 }

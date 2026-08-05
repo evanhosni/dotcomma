@@ -54,6 +54,7 @@ const DEFAULT_SIDES = [4, 5, 6, 7, 8];
 const DEFAULT_WINDOW_SIZE: [number, number] = [2.4, 4.4];
 const GLASS_COLORS = [0x9fd8ec, 0x8ec7de, 0xaad4ea];
 const PIPE_COLORS = [0x6b4a2f, 0x8a8f96, 0x3c4046];
+const DOOR_BROWNS = [0x4a352a, 0x5a4030, 0x6b4a2f, 0x7a5a3a, 0x8a6a4a];
 
 const WINDOW_ROW_SPACING = 6.0;
 
@@ -404,6 +405,12 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     }
     lofts.push({ rect: false, sides: 8, phase: 0, levels, color: pick(PIPE_COLORS), roof: true });
   }
+
+  // ---- Door leaf color: only a color already on the exterior, a brown, or
+  // a grayscale tone — doors never introduce a new bright hue. ----
+  const doorRoll = rng();
+  const doorColor =
+    doorRoll < 0.4 ? pick(lofts.map((l) => l.color)) : doorRoll < 0.7 ? pick(DOOR_BROWNS) : pick(GRAYSCALE);
 
   // ---- Doors: carved into a flat facet of the door band ----
   const doorCount = opts.doorCount ?? (rng() < 0.4 ? 2 : 1);
@@ -869,6 +876,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     lofts,
     bodyLoftCount: 1 + segCount,
     doors,
+    doorColor,
     windows,
     interior: {
       width: 2 * ihw,

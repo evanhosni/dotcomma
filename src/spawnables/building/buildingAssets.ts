@@ -526,14 +526,15 @@ export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions)
   const exteriorIndices = new Uint32Array(exteriorVertices.length / 3);
   for (let i = 0; i < exteriorIndices.length; i++) exteriorIndices[i] = i;
 
-  // Door leaf slightly smaller than the opening; origin at the hinge edge so
-  // rotating the parent group swings it open. Raised so its bottom clears
-  // the lifted interior floor (FLOOR_LIFT) when swung inward.
-  const leafW = plan.doors[0].width - 0.08;
-  const doorGeometry = new THREE.BoxGeometry(leafW, plan.doors[0].height - 0.2, 0.1).translate(
-    leafW / 2,
-    FLOOR_LIFT - 0.02,
-    0,
+  // Door leaf slightly LARGER than the opening (overlapping the jamb and
+  // header a little) so no gap ever shows around a closed door; it swings
+  // OUTWARD, so no interior-floor clearance is needed. Origin at the hinge
+  // edge so rotating the parent group swings it open. Color is seeded per
+  // building and baked as vertex colors, like every other building surface.
+  const leafW = plan.doors[0].width + 0.16;
+  const doorGeometry = withColor(
+    new THREE.BoxGeometry(leafW, plan.doors[0].height + 0.2, 0.1).translate(leafW / 2 - 0.08, 0.05, 0),
+    plan.doorColor,
   );
 
   const assets: ProceduralBuildingAssets = {
