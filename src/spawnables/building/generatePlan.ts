@@ -506,6 +506,9 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     // Ramp shaft in the block's (-x,-z) corner: ramp lane along the block's
     // -z edge ascending +x, walkway lane beside it. Identical on every story:
     // top out at the far landing, walk back along the walkway, climb again.
+    // The shaft is OPEN — no enclosing walls, it lives in the room around
+    // it — but its rect is excluded from the BSP domain so no room divider
+    // ever crosses the ramp or the slab holes above it.
     const room: RoomRect = { x0: bx0, z0: bz0, x1: bx0 + shaftLen, z1: bz0 + shaftWidth };
     ramp = {
       room,
@@ -515,13 +518,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       laneZ0: bz0,
       laneZ1: bz0 + RAMP_WIDTH,
     };
-    // Shaft boundary walls (doors open onto the solid walkway lane) + the
-    // wall closing the rest of the shaft strip.
-    splitWalls.push(
-      { axis: "z", at: room.z1, from: room.x0, to: room.x1, doorAt: room.x0 + shaftLen / 2 },
-      { axis: "x", at: room.x1, from: room.z0, to: room.z1, doorAt: bz0 + RAMP_WIDTH + WALKWAY_WIDTH / 2 },
-      { axis: "z", at: room.z1, from: room.x1, to: bx1, doorAt: range(room.x1 + 1.6, Math.max(room.x1 + 1.7, bx1 - 1.6)) },
-    );
     rooms = [
       { x0: room.x1, z0: bz0, x1: bx1, z1: room.z1 },
       { x0: bx0, z0: room.z1, x1: bx1, z1: bz1 },
@@ -602,30 +598,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const domHi = w.axis === "x" ? bz1 : bx1;
     if (w.from <= domLo + 0.05) w.from = lo - 0.06;
     if (w.to >= domHi - 0.05) w.to = hi + 0.06;
-  }
-
-  // Polygon interiors: the ramp shaft sits at the BSP domain's corner, which
-  // is inset from the polygon — seal its outer sides so the lane isn't open
-  // to the leftover sliver between domain and shell.
-  if (ramp && !rect) {
-    const [sxLo] = ringSpanAt(intPts, "z", bz0);
-    const [szLo] = ringSpanAt(intPts, "x", bx0);
-    wallBoxesCommon.push({
-      cx: (sxLo - 0.06 + ramp.room.x1) / 2,
-      cy: ceilingHeight / 2,
-      cz: bz0,
-      sx: ramp.room.x1 - (sxLo - 0.06),
-      sy: ceilingHeight,
-      sz: T,
-    });
-    wallBoxesCommon.push({
-      cx: bx0,
-      cy: ceilingHeight / 2,
-      cz: (szLo - 0.06 + ramp.room.z1) / 2,
-      sx: T,
-      sy: ceilingHeight,
-      sz: ramp.room.z1 - (szLo - 0.06),
-    });
   }
 
   for (const w of splitWalls) {
