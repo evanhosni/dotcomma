@@ -16,7 +16,7 @@ const DESPAWN_BUFFER = 1.1;
 const CHILDREN_ACTIVE_DISTANCE = 150;
 const DOOR_INTERACT_DISTANCE = 6; // click/hover reach
 const DOOR_HOVER_GATE = 30; // building distance under which the door raycast runs
-const DOOR_OPEN_ANGLE = 1.9; // rad — swings inward
+const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
 const DOOR_SWING_RATE = 4;
 
 // Shared default materials — one instance across every Building, so shaders
@@ -30,7 +30,8 @@ const DEFAULT_EXTERIOR = new THREE.MeshStandardMaterial({
   metalness: 0.05,
 });
 const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
-const DOOR_MATERIAL = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.9, metalness: 0.05 });
+// Door color is baked into the (per-building) leaf geometry's vertex colors.
+const DOOR_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, metalness: 0.05 });
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
