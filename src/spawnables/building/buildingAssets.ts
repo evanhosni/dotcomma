@@ -285,7 +285,7 @@ const mergeOrThrow = (geos: THREE.BufferGeometry[], label: string): THREE.Buffer
 };
 
 const buildInteriorGeometries = (plan: BuildingPlan) => {
-  const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesCommon, ramp, lightPanels } = plan.interior;
+  const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesPerStory, ramp, lightPanelsPerStory } = plan.interior;
   const { rect, sides, phase } = plan.lofts[0];
   const ihw = width / 2;
   const ihd = depth / 2;
@@ -297,13 +297,13 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
   const interiorColliders: WallBox[] = [];
   const rampColliders: RampCollider[] = [];
 
-  // ---- Walls, replicated per story. There are NO perimeter wall boxes —
-  // the perimeter is the shell's inner surface (emitted below), and split
-  // walls run all the way into it. ----
+  // ---- Walls, each story's OWN layout lifted to its floor. There are NO
+  // perimeter wall boxes — the perimeter is the shell's inner surface
+  // (emitted below), and split walls run all the way into it. ----
   const colors = plan.interior.colors;
   for (let s = 0; s < stories; s++) {
     const yOff = s * storyHeight;
-    for (const b of wallBoxesCommon) {
+    for (const b of wallBoxesPerStory[s]) {
       const wb: WallBox = { ...b, cy: b.cy + yOff };
       parts.push(withColor(box(wb).toNonIndexed(), colors.wall));
       interiorColliders.push(wb);
@@ -435,9 +435,9 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     }
   }
 
-  // Ceiling light panels (glowing color baked in)
+  // Ceiling light panels (glowing color baked in; per-story gap pattern)
   for (let s = 0; s < stories; s++) {
-    for (const [x, z] of lightPanels) {
+    for (const [x, z] of lightPanelsPerStory[s]) {
       // rotateX(π/2) points the plane's +z normal down at the floor
       parts.push(
         withColor(

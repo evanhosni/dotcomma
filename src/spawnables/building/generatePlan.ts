@@ -33,6 +33,9 @@ export const RAMP_THICKNESS = 0.25;
 export const RAMP_WIDTH = 2.0; // ramp lane width
 const WALKWAY_WIDTH = 1.8; // solid lane beside the ramp, loops back to the next flight
 const RAMP_LANDING = 1.2; // solid floor at each end of the run
+/** The BSP block corner can lie exactly on the inner wall surface, so a ramp
+ *  lane / slab hole placed flush at bz0 z-fights the wall — inset it. */
+const RAMP_WALL_GAP = 0.05;
 const RAMP_RUN_FACTOR = 1.5; // run = storyHeight × this (≈34° slope, comfortably walkable)
 const RAMP_RUN_MIN_FACTOR = 1.25; // steepest allowed fit (≈39°) before giving up on stories
 const DOORWAY_WIDTH = 2.4; // interior room-to-room openings
@@ -111,7 +114,15 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
 
   let stories = clampNum(Math.round(opts.stories ?? rangeInt(1, 5)), 1, 6);
   const requestedStories = stories;
-  const roomCount = Math.max(1, Math.round(opts.roomCount ?? rangeInt(3, 6)));
+  // Rooms-per-floor choices: each story rolls its own count (a plain number
+  // pins the count, but layouts still vary per floor). The footprint is
+  // sized for the LARGEST choice so every floor's program fits.
+  const roomChoices = (Array.isArray(opts.roomCount) ? opts.roomCount : opts.roomCount !== undefined ? [opts.roomCount] : null)
+    ?.map((n) => Math.max(1, Math.round(n)));
+  const pickRoomCount = (): number => (roomChoices?.length ? pick(roomChoices) : rangeInt(3, 6));
+  // Unset: size for a seeded 4–6 so footprints vary like before; a floor
+  // rolling more rooms than fits just gets a denser split (BSP stops early).
+  const maxRoomCount = roomChoices?.length ? Math.max(...roomChoices) : rangeInt(4, 6);
   const roomArea = range(70, 110);
   let rampRun = storyHeight * RAMP_RUN_FACTOR;
   let shaftLen = rampRun + 2 * RAMP_LANDING;
@@ -139,7 +150,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     // Footprint from the room program: enough inscribed-rect area for the
     // rooms (plus the ramp shaft on multi-story buildings), plus a corridor
     // ring on polygon interiors.
-    const needed = roomCount * roomArea + (stories > 1 ? shaftLen * shaftWidth * 1.4 : 0);
+    const needed = maxRoomCount * roomArea + (stories > 1 ? shaftLen * shaftWidth * 1.4 : 0);
     const unitPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: 1, hd: aspect }, phase);
     const f = rect ? 1 : inscribedRectFactor(unitPts, 1, aspect);
     const s = Math.sqrt(needed / (4 * f * f * aspect));
@@ -498,8 +509,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
 
   // ---- Interior room layout (perimeter/block/shaft geometry was resolved
   // above, before the exterior, so the shell height reflects real floors) ----
-  const splitWalls: SplitWall[] = [];
-  let rooms: RoomRect[];
   let ramp: RampSpec | null = null;
 
   if (stories > 1) {
@@ -512,52 +521,78 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const room: RoomRect = { x0: bx0, z0: bz0, x1: bx0 + shaftLen, z1: bz0 + shaftWidth };
     ramp = {
       room,
-      hole: { x0: bx0 + RAMP_LANDING, z0: bz0, x1: bx0 + RAMP_LANDING + rampRun, z1: bz0 + RAMP_WIDTH },
+      hole: { x0: bx0 + RAMP_LANDING, z0: bz0 + RAMP_WALL_GAP, x1: bx0 + RAMP_LANDING + rampRun, z1: bz0 + RAMP_WALL_GAP + RAMP_WIDTH },
       runStart: bx0 + RAMP_LANDING,
       runEnd: bx0 + RAMP_LANDING + rampRun,
-      laneZ0: bz0,
-      laneZ1: bz0 + RAMP_WIDTH,
+      laneZ0: bz0 + RAMP_WALL_GAP,
+      laneZ1: bz0 + RAMP_WALL_GAP + RAMP_WIDTH,
     };
-    rooms = [
-      { x0: room.x1, z0: bz0, x1: bx1, z1: room.z1 },
-      { x0: bx0, z0: room.z1, x1: bx1, z1: bz1 },
-    ];
-  } else {
-    rooms = [{ x0: bx0, z0: bz0, x1: bx1, z1: bz1 }];
   }
 
-  // Recursive splits of the biggest room; each split wall gets exactly one
-  // doorway, so the room graph is a tree — every room is reachable.
-  while (rooms.length < roomCount) {
-    let bi = 0;
-    let bestArea = 0;
-    rooms.forEach((r, i) => {
-      const a = (r.x1 - r.x0) * (r.z1 - r.z0);
-      if (a > bestArea) {
-        bestArea = a;
-        bi = i;
+  // Starting rooms for a story: the full domain, or (multi-story) the two
+  // rooms wrapping the fixed ramp shaft.
+  const baseRooms = (): RoomRect[] =>
+    ramp
+      ? [
+          { x0: ramp.room.x1, z0: bz0, x1: bx1, z1: ramp.room.z1 },
+          { x0: bx0, z0: ramp.room.z1, x1: bx1, z1: bz1 },
+        ]
+      : [{ x0: bx0, z0: bz0, x1: bx1, z1: bz1 }];
+
+  // One BSP pass = one story. Each split wall gets exactly one doorway, so
+  // the room graph is a tree — every room is reachable. Variation comes from
+  // three dice per split: WHICH room (area-weighted, not always the biggest),
+  // which AXIS (mostly the long one, sometimes across), and WHERE (ratio).
+  interface StoryLayout {
+    rooms: RoomRect[];
+    splitWalls: SplitWall[];
+  }
+  const buildStoryLayout = (targetRooms: number): StoryLayout => {
+    const rooms = baseRooms();
+    const splitWalls: SplitWall[] = [];
+    while (rooms.length < targetRooms) {
+      const candidates = rooms
+        .map((r, i) => ({ i, w: (r.x1 - r.x0) * (r.z1 - r.z0), r }))
+        .filter(({ r }) => Math.max(r.x1 - r.x0, r.z1 - r.z0) >= MIN_ROOM_DIM * 2);
+      if (candidates.length === 0) break; // nothing left worth splitting
+      // Area-weighted pick: big rooms split most often, but not always.
+      const totalW = candidates.reduce((a, c) => a + c.w, 0);
+      let roll = rng() * totalW;
+      let chosen = candidates[candidates.length - 1];
+      for (const c of candidates) {
+        roll -= c.w;
+        if (roll <= 0) {
+          chosen = c;
+          break;
+        }
       }
-    });
-    const r = rooms[bi];
-    const rw = r.x1 - r.x0;
-    const rd = r.z1 - r.z0;
-    if (Math.max(rw, rd) < MIN_ROOM_DIM * 2) break; // nothing left worth splitting
-    const ratio = range(0.38, 0.62);
-    if (rw >= rd) {
-      const at = r.x0 + rw * ratio;
-      const doorAt = rd > 4.4 ? range(r.z0 + 1.8, r.z1 - 1.8) : (r.z0 + r.z1) / 2;
-      splitWalls.push({ axis: "x", at, from: r.z0, to: r.z1, doorAt });
-      rooms.splice(bi, 1, { ...r, x1: at }, { ...r, x0: at });
-    } else {
-      const at = r.z0 + rd * ratio;
-      const doorAt = rw > 4.4 ? range(r.x0 + 1.8, r.x1 - 1.8) : (r.x0 + r.x1) / 2;
-      splitWalls.push({ axis: "z", at, from: r.x0, to: r.x1, doorAt });
-      rooms.splice(bi, 1, { ...r, z1: at }, { ...r, z0: at });
+      const r = chosen.r;
+      const rw = r.x1 - r.x0;
+      const rd = r.z1 - r.z0;
+      // Long axis by default; cross-split sometimes when both directions fit.
+      let splitX = rw >= rd;
+      if (Math.min(rw, rd) >= MIN_ROOM_DIM * 2 && rng() < 0.35) splitX = !splitX;
+      const ratio = range(0.35, 0.65);
+      if (splitX) {
+        const at = r.x0 + rw * ratio;
+        const doorAt = rd > 4.4 ? range(r.z0 + 1.8, r.z1 - 1.8) : (r.z0 + r.z1) / 2;
+        splitWalls.push({ axis: "x", at, from: r.z0, to: r.z1, doorAt });
+        rooms.splice(chosen.i, 1, { ...r, x1: at }, { ...r, x0: at });
+      } else {
+        const at = r.z0 + rd * ratio;
+        const doorAt = rw > 4.4 ? range(r.x0 + 1.8, r.x1 - 1.8) : (r.x0 + r.x1) / 2;
+        splitWalls.push({ axis: "z", at, from: r.x0, to: r.x1, doorAt });
+        rooms.splice(chosen.i, 1, { ...r, z1: at }, { ...r, z0: at });
+      }
     }
-  }
+    return { rooms, splitWalls };
+  };
 
-  // ---- Wall boxes (one story's worth; replicated per story at build time) ----
-  const wallBoxesCommon: WallBox[] = [];
+  // Every story rolls its own room count and layout — no two floors alike.
+  const storyLayouts: StoryLayout[] = [];
+  for (let s = 0; s < stories; s++) storyLayouts.push(buildStoryLayout(pickRoomCount()));
+
+  // ---- Wall boxes (per story, story-local y; lifted per story at build time) ----
   const T = WALL_THICKNESS;
 
   /** Axis-aligned wall at `at` on `axis`, running `from`..`to`, carved by a doorway. */
@@ -592,23 +627,41 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   // enclosed room-within-a-room. Any wall end on the BSP domain boundary is
   // stretched to the interior polygon (+0.12 into the wall cavity; the inner
   // shell surface is a straight prism, so this fit is exact at every story).
-  for (const w of splitWalls) {
-    const [lo, hi] = ringSpanAt(intPts, w.axis, w.at);
-    const domLo = w.axis === "x" ? bz0 : bx0;
-    const domHi = w.axis === "x" ? bz1 : bx1;
-    if (w.from <= domLo + 0.05) w.from = lo - 0.06;
-    if (w.to >= domHi - 0.05) w.to = hi + 0.06;
+  for (const layout of storyLayouts) {
+    for (const w of layout.splitWalls) {
+      const [lo, hi] = ringSpanAt(intPts, w.axis, w.at);
+      const domLo = w.axis === "x" ? bz0 : bx0;
+      const domHi = w.axis === "x" ? bz1 : bx1;
+      if (w.from <= domLo + 0.05) w.from = lo - 0.06;
+      if (w.to >= domHi - 0.05) w.to = hi + 0.06;
+    }
   }
 
-  for (const w of splitWalls) {
-    addWallWithDoor(wallBoxesCommon, w.axis, w.at, w.from, w.to, w.doorAt, DOORWAY_WIDTH, DOORWAY_HEIGHT);
-  }
+  const wallBoxesPerStory: WallBox[][] = storyLayouts.map((layout) => {
+    const boxes: WallBox[] = [];
+    for (const w of layout.splitWalls) {
+      addWallWithDoor(boxes, w.axis, w.at, w.from, w.to, w.doorAt, DOORWAY_WIDTH, DOORWAY_HEIGHT);
+    }
+    // Occasional pillars in big rooms — pure backrooms. Each floor rolls its own.
+    for (const r of layout.rooms) {
+      const rw = r.x1 - r.x0;
+      const rd = r.z1 - r.z0;
+      if (rw * rd > 70 && rng() < 0.6) {
+        const px = (r.x0 + r.x1) / 2 + range(-0.25, 0.25) * rw;
+        const pz = (r.z0 + r.z1) / 2 + range(-0.25, 0.25) * rd;
+        boxes.push({ cx: px, cy: ceilingHeight / 2, cz: pz, sx: 0.55, sy: ceilingHeight, sz: 0.55 });
+      }
+    }
+    return boxes;
+  });
 
   // ---- Door alignment ----
   // Keep the opening off the interior edge's corners AND clear of any split
   // wall that dead-ends into this stretch of the perimeter, then sync the
   // final position back onto the exterior door so the shell carve,
-  // inner-shell carve, and door leaf always agree.
+  // inner-shell carve, and door leaf always agree. Exterior doors live on
+  // the GROUND floor, so only story 0's walls matter here.
+  const groundWalls = storyLayouts[0].splitWalls;
   for (const d of doors) {
     const len = edgeLength(intPts, d.edge);
     const a = intPts[d.edge];
@@ -618,7 +671,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const tMargin = (d.width / 2 + 0.6) / len;
     let t = clampNum((d.t0 + d.t1) / 2, tMargin, 1 - tMargin);
     for (let pass = 0; pass < 2; pass++) {
-      for (const w of splitWalls) {
+      for (const w of groundWalls) {
         // Wall endpoints in the plane
         const ends: [number, number][] =
           w.axis === "x"
@@ -649,37 +702,32 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     d.offset = d.side === "+z" || d.side === "-z" ? pc[0] : pc[1];
   }
 
-  // Occasional pillars in big rooms — pure backrooms.
-  for (const r of rooms) {
-    const rw = r.x1 - r.x0;
-    const rd = r.z1 - r.z0;
-    if (rw * rd > 70 && rng() < 0.6) {
-      const px = (r.x0 + r.x1) / 2 + range(-0.25, 0.25) * rw;
-      const pz = (r.z0 + r.z1) / 2 + range(-0.25, 0.25) * rd;
-      wallBoxesCommon.push({ cx: px, cy: ceilingHeight / 2, cz: pz, sx: 0.55, sy: ceilingHeight, sz: 0.55 });
-    }
-  }
-
   // ---- Ceiling light panels (uniform grid clipped to the perimeter, a few
-  // tubes randomly dead; skipped over the ramp shaft where the slab is open) ----
-  const lightPanels: [number, number][] = [];
-  for (let x = -ihw + LIGHT_PANEL_SPACING / 2; x < ihw - 1; x += LIGHT_PANEL_SPACING) {
-    for (let z = -ihd + LIGHT_PANEL_SPACING / 2; z < ihd - 1; z += LIGHT_PANEL_SPACING) {
-      if (!pointInRing(intPts, [x, z], 1)) continue;
-      if (ramp && x > ramp.room.x0 - 0.5 && x < ramp.room.x1 + 0.5 && z > ramp.room.z0 - 0.5 && z < ramp.room.z1 + 0.5) {
-        continue;
+  // tubes randomly dead — each floor rolls its own gaps; skipped over the
+  // ramp shaft where the slab is open) ----
+  const lightPanelsPerStory: [number, number][][] = [];
+  for (let s = 0; s < stories; s++) {
+    const panels: [number, number][] = [];
+    for (let x = -ihw + LIGHT_PANEL_SPACING / 2; x < ihw - 1; x += LIGHT_PANEL_SPACING) {
+      for (let z = -ihd + LIGHT_PANEL_SPACING / 2; z < ihd - 1; z += LIGHT_PANEL_SPACING) {
+        if (!pointInRing(intPts, [x, z], 1)) continue;
+        if (ramp && x > ramp.room.x0 - 0.5 && x < ramp.room.x1 + 0.5 && z > ramp.room.z0 - 0.5 && z < ramp.room.z1 + 0.5) {
+          continue;
+        }
+        if (rng() > 0.15) panels.push([x, z]);
       }
-      if (rng() > 0.15) lightPanels.push([x, z]);
     }
+    lightPanelsPerStory.push(panels);
   }
 
-  // ---- Child slots: deterministic placements cycling rooms and stories ----
+  // ---- Child slots: deterministic placements cycling stories, using each
+  // story's OWN room layout ----
   const childSlots: ChildSlot[] = [];
-  const roomOrder = shuffle(rooms.map((_, i) => i));
   for (let i = 0; i < CHILD_SLOT_COUNT; i++) {
-    const roomIndex = roomOrder[i % roomOrder.length];
-    const r = rooms[roomIndex];
     const story = rangeInt(0, stories - 1);
+    const storyRooms = storyLayouts[story].rooms;
+    const roomIndex = rangeInt(0, storyRooms.length - 1);
+    const r = storyRooms[roomIndex];
     const m = 1.4;
     const x = r.x1 - r.x0 > 2 * m ? range(r.x0 + m, r.x1 - m) : (r.x0 + r.x1) / 2;
     const z = r.z1 - r.z0 > 2 * m ? range(r.z0 + m, r.z1 - m) : (r.z0 + r.z1) / 2;
@@ -704,10 +752,10 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       colors: interiorColors,
       stories,
       storyHeight,
-      rooms,
-      wallBoxesCommon,
+      roomsPerStory: storyLayouts.map((l) => l.rooms),
+      wallBoxesPerStory,
       ramp,
-      lightPanels,
+      lightPanelsPerStory,
       childSlots,
     },
   };
