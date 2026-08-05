@@ -4,9 +4,17 @@ import { Building } from "./Building";
 
 /** Skyscraper variant: max floors under a much taller shell (the mass above
  *  the top floor reads as mechanical levels), with a gentler lean so tall
- *  neighbors don't collide. */
+ *  neighbors don't collide. Most windows light up at night — towers read as
+ *  busy from across the city. */
 export const Skyscraper = (props: SpawnedObjectProps) => (
-  <Building {...props} stories={6} roomCount={[3, 4, 5, 6]} heightRange={[70, 115]} maxLean={0.04} />
+  <Building
+    {...props}
+    stories={6}
+    roomCount={[3, 4, 5, 6]}
+    heightRange={[70, 115]}
+    maxLean={0.04}
+    windowLightChance={0.8}
+  />
 );
 
 export const SkyscraperDescriptor: SpawnDescriptor = {

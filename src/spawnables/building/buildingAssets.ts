@@ -96,9 +96,14 @@ const madd = (a: Vec3, b: Vec3, s: number): Vec3 => [a[0] + b[0] * s, a[1] + b[1
 class TriangleSink {
   positions: number[] = [];
   colors: number[] = [];
+  /** Per-vertex night-light data: [per-window random, building light chance].
+   *  (0,0) everywhere except window glass — chance 0 can never light. */
+  windows: number[] = [];
   private r = 1;
   private g = 1;
   private b = 1;
+  private winRnd = 0;
+  private winChance = 0;
 
   setColor(hex: number): void {
     _color.set(hex); // converts sRGB hex to the working color space
@@ -107,9 +112,17 @@ class TriangleSink {
     this.b = _color.b;
   }
 
+  setWindow(rnd: number, chance: number): void {
+    this.winRnd = rnd;
+    this.winChance = chance;
+  }
+
   tri(a: Vec3, b: Vec3, c: Vec3): void {
     this.positions.push(...a, ...b, ...c);
-    for (let i = 0; i < 3; i++) this.colors.push(this.r, this.g, this.b);
+    for (let i = 0; i < 3; i++) {
+      this.colors.push(this.r, this.g, this.b);
+      this.windows.push(this.winRnd, this.winChance);
+    }
   }
 
   quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3): void {
@@ -176,7 +189,7 @@ const emitLoft = (
   }
 };
 
-const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec): void => {
+const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec, lightChance: number): void => {
   const loft = lofts[spec.loft];
   const ringC = interpRing(loft.levels, spec.y);
   const ptsC = ringPoints(loft.rect, loft.sides, ringC, loft.phase);
@@ -235,7 +248,9 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec)
       }
     };
     fan(1, bulge + 0.05, spec.frame);
+    sink.setWindow(spec.litRnd, lightChance); // only the glass glows at night
     fan(0.7, bulge + 0.1, spec.glass);
+    sink.setWindow(0, 0);
   } else {
     // Quad window: frame + inset glass, top edge sheared by `skew` so the
     // shape is a subtle parallelogram rather than a perfect rectangle
@@ -249,12 +264,14 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec)
     sink.setColor(spec.frame);
     sink.quad(madd(bl, n, bulge + 0.05), madd(br, n, bulge + 0.05), madd(trS, n, bulge + 0.05), madd(tlS, n, bulge + 0.05));
     sink.setColor(spec.glass);
+    sink.setWindow(spec.litRnd, lightChance); // only the glass glows at night
     sink.quad(
       madd(shrink(bl, 0.68), n, bulge + 0.1),
       madd(shrink(br, 0.68), n, bulge + 0.1),
       madd(shrink(trS, 0.68), n, bulge + 0.1),
       madd(shrink(tlS, 0.68), n, bulge + 0.1),
     );
+    sink.setWindow(0, 0);
   }
 };
 
@@ -262,10 +279,13 @@ const buildExteriorGeometry = (plan: BuildingPlan): { geometry: THREE.BufferGeom
   const sink = new TriangleSink();
   plan.lofts.forEach((loft, i) => emitLoft(sink, loft, i === 0 ? plan.doors : []));
   const bodyFloats = sink.positions.length; // windows excluded from the collider
-  for (const w of plan.windows) emitWindow(sink, plan.lofts, w);
+  for (const w of plan.windows) emitWindow(sink, plan.lofts, w, plan.windowLightChance);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(sink.positions, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(sink.colors, 3));
+  // Per-vertex night-light data (per-window random + building light chance),
+  // read by the exterior material's shader patch. (0,0) outside window glass.
+  geometry.setAttribute("aWindow", new THREE.Float32BufferAttribute(sink.windows, 2));
   geometry.computeVertexNormals(); // non-indexed → flat faceted shading
   return { geometry, bodyFloats };
 };

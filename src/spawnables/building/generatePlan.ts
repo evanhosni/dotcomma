@@ -87,8 +87,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   const rng = seedrandom(`building:${seed}`);
   const range = (a: number, b: number): number => a + rng() * (b - a);
   const rangeInt = (a: number, b: number): number => Math.floor(a + rng() * (b + 1 - a));
-  const pick = <T,>(arr: T[]): T => arr[Math.floor(rng() * arr.length)];
-  const shuffle = <T,>(arr: T[]): T[] => {
+  const pick = <T>(arr: T[]): T => arr[Math.floor(rng() * arr.length)];
+  const shuffle = <T>(arr: T[]): T[] => {
     const out = [...arr];
     for (let i = out.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
@@ -117,8 +117,9 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   // Rooms-per-floor choices: each story rolls its own count (a plain number
   // pins the count, but layouts still vary per floor). The footprint is
   // sized for the LARGEST choice so every floor's program fits.
-  const roomChoices = (Array.isArray(opts.roomCount) ? opts.roomCount : opts.roomCount !== undefined ? [opts.roomCount] : null)
-    ?.map((n) => Math.max(1, Math.round(n)));
+  const roomChoices = (
+    Array.isArray(opts.roomCount) ? opts.roomCount : opts.roomCount !== undefined ? [opts.roomCount] : null
+  )?.map((n) => Math.max(1, Math.round(n)));
   const pickRoomCount = (): number => (roomChoices?.length ? pick(roomChoices) : rangeInt(3, 6));
   // Unset: size for a seeded 4–6 so footprints vary like before; a floor
   // rolling more rooms than fits just gets a denser split (BSP stops early).
@@ -275,8 +276,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   const accents = opts.accentColors?.length ? opts.accentColors : ACCENTS;
   const accentChance = opts.accentChance ?? 0.2;
   const primary = rng() < accentChance ? pick(accents) : pick(palette);
-  const segColor = (): number =>
-    rng() < 0.55 ? primary : rng() < accentChance * 0.4 ? pick(accents) : pick(palette);
+  const segColor = (): number => (rng() < 0.55 ? primary : rng() < accentChance * 0.4 ? pick(accents) : pick(palette));
 
   // ---- Door band: prismatic ground section the doors are carved into ----
   const bandColor = segColor();
@@ -403,7 +403,13 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       { y: y2, cx: px + Math.cos(bend) * reach, cz: pz + Math.sin(bend) * reach, hw: pr, hd: pr },
     ];
     if (rng() < 0.5) {
-      levels.push({ y: y2 + range(0.4, 1), cx: px + Math.cos(bend) * reach * 1.6, cz: pz + Math.sin(bend) * reach * 1.6, hw: pr, hd: pr });
+      levels.push({
+        y: y2 + range(0.4, 1),
+        cx: px + Math.cos(bend) * reach * 1.6,
+        cz: pz + Math.sin(bend) * reach * 1.6,
+        hw: pr,
+        hd: pr,
+      });
     }
     lofts.push({ rect: false, sides: 8, phase: 0, levels, color: pick(PIPE_COLORS), roof: true });
   }
@@ -425,17 +431,15 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       const a = bandPts[edge];
       const b = bandPts[(edge + 1) % bandPts.length];
       const c: Pt2 =
-        edge === RECT_EDGE["+z"] || edge === RECT_EDGE["-z"]
-          ? [offsetOverride, a[1]]
-          : [a[0], offsetOverride];
-      t = (Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? (c[0] - a[0]) / (b[0] - a[0]) : (c[1] - a[1]) / (b[1] - a[1]));
+        edge === RECT_EDGE["+z"] || edge === RECT_EDGE["-z"] ? [offsetOverride, a[1]] : [a[0], offsetOverride];
+      t = Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? (c[0] - a[0]) / (b[0] - a[0]) : (c[1] - a[1]) / (b[1] - a[1]);
     } else {
       const margin = Math.max(0, (L - doorWidth) / 2 - 0.4);
       t = 0.5 + (range(-1, 1) * margin) / L;
     }
     const c = edgePoint(bandPts, edge, t);
     const n = edgeNormal(bandPts, edge);
-    const side: WallSide = Math.abs(n[0]) > Math.abs(n[1]) ? (n[0] > 0 ? "+x" : "-x") : (n[1] > 0 ? "+z" : "-z");
+    const side: WallSide = Math.abs(n[0]) > Math.abs(n[1]) ? (n[0] > 0 ? "+x" : "-x") : n[1] > 0 ? "+z" : "-z";
     const offset = side === "+z" || side === "-z" ? c[0] : c[1];
     return {
       side,
@@ -470,6 +474,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   // leans ~75% toward one shape; circles are opt-in), sizes/aspects vary,
   // quads get a subtle skew — windows are rarely symmetrical. ----
   const windows: BuildingPlan["windows"] = [];
+  const windowLightChance = clampNum(opts.windowLightChance ?? 0.6, 0, 1);
   const glass = pick(GLASS_COLORS);
   const windowShapes = opts.windowShapes?.length ? opts.windowShapes : [WINDOW_SHAPE.SQUARE];
   const [winMin, winMax] = opts.windowSize ?? DEFAULT_WINDOW_SIZE;
@@ -519,6 +524,9 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       maxFrac: 0.8 / cell.slots,
       glass,
       frame: cell.frame,
+      // Stable per-window random — the shader hashes it with a per-night
+      // seed to pick tonight's lit subset and stagger their turn-on times.
+      litRnd: rng(),
     });
   }
 
@@ -612,7 +620,12 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       if (at - lo < MIN_SIDE || hi - at < MIN_SIDE) return false;
       for (const o of obstacles) {
         const [oa0, oa1, oc0, oc1] = axis === "x" ? [o.x0, o.x1, o.z0, o.z1] : [o.z0, o.z1, o.x0, o.x1];
-        if (at > oa0 - WALL_OBS_MARGIN && at < oa1 + WALL_OBS_MARGIN && cf < oc1 + WALL_OBS_MARGIN && ct > oc0 - WALL_OBS_MARGIN) {
+        if (
+          at > oa0 - WALL_OBS_MARGIN &&
+          at < oa1 + WALL_OBS_MARGIN &&
+          cf < oc1 + WALL_OBS_MARGIN &&
+          ct > oc0 - WALL_OBS_MARGIN
+        ) {
           return false;
         }
       }
@@ -635,7 +648,12 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       for (let k = 0; k < 6; k++) {
         const blocked = obstacles.some((o) => {
           const [oa0, oa1, oc0, oc1] = axis === "x" ? [o.x0, o.x1, o.z0, o.z1] : [o.z0, o.z1, o.x0, o.x1];
-          return oa0 - 1.5 < at && oa1 + 1.5 > at && doorAt + DOORWAY_WIDTH / 2 > oc0 - 0.3 && doorAt - DOORWAY_WIDTH / 2 < oc1 + 0.3;
+          return (
+            oa0 - 1.5 < at &&
+            oa1 + 1.5 > at &&
+            doorAt + DOORWAY_WIDTH / 2 > oc0 - 0.3 &&
+            doorAt - DOORWAY_WIDTH / 2 < oc1 + 0.3
+          );
         });
         if (!blocked) break;
         doorAt = range(from + 1.8, to - 1.8);
@@ -879,6 +897,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     bodyLoftCount: 1 + segCount,
     doors,
     doorColor,
+    windowLightChance,
     windows,
     interior: {
       width: 2 * ihw,

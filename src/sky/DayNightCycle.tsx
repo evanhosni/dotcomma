@@ -1,7 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, NIGHT_DURATION_MS, setNightBlend } from "./dayNight";
+import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, NIGHT_DURATION_MS, setNightBlend, tickWindowLights } from "./dayNight";
 
 /**
  * Day/night cycle: a jittery low-poly sun parked in one spot of the sky, a
@@ -201,6 +201,7 @@ export const DayNightCycle = ({
     else if (t < dayDurationMs + transitionMs + nightDurationMs) blend = 1;
     else blend = 1 - (t - dayDurationMs - transitionMs - nightDurationMs) / transitionMs;
     setNightBlend(blend);
+    tickWindowLights(delta * 1000);
 
     const sunPresence = 1 - blend;
     const moonPresence = blend;

@@ -2,6 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
 import { Children, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { getDistance2D } from "../../utils/utils";
 import { getProceduralBuildingAssets } from "./buildingAssets";
@@ -29,6 +30,55 @@ const DEFAULT_EXTERIOR = new THREE.MeshStandardMaterial({
   roughness: 0.85,
   metalness: 0.05,
 });
+
+// ---- Night window lights ----
+// The exterior geometry carries a per-vertex vec2 `aWindow`: a stable
+// per-window random and the building's windowLightChance ((0,0) outside
+// window glass). Each night the random is hashed with a per-night seed —
+// tonight's roll below the chance means this window lights, and the roll
+// doubles as its turn-on order within the lights transition, so a DIFFERENT
+// subset pops on sporadically every night (and off the same way at dawn).
+// Lit glass turns washed yellowish and glows via the emissive term — no
+// per-window light objects, no extra draw calls, one shader compile shared
+// by every building.
+const WINDOW_LIGHTS_UNIFORM = { value: 0 };
+const NIGHT_SEED_UNIFORM = { value: 0 };
+DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
+  shader.uniforms.uWindowLights = WINDOW_LIGHTS_UNIFORM;
+  shader.uniforms.uNightSeed = NIGHT_SEED_UNIFORM;
+  // The hash roll runs in the VERTEX shader on the exact attribute value —
+  // hashing an interpolated varying per fragment amplifies 1-ulp
+  // interpolation noise into per-pixel speckle. Every vertex of a window
+  // shares the same aWindow, so the finished lit factor interpolates flat.
+  shader.vertexShader = shader.vertexShader
+    .replace(
+      "#include <common>",
+      `#include <common>
+      attribute vec2 aWindow;
+      uniform float uWindowLights;
+      uniform float uNightSeed;
+      varying float vWindowLit;`,
+    )
+    .replace(
+      "#include <begin_vertex>",
+      `#include <begin_vertex>
+      float winRoll = fract(sin((aWindow.x * 91.17 + uNightSeed) * 47.53) * 43758.5453);
+      float winOrder = winRoll / max(aWindow.y, 1e-3);
+      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * clamp((uWindowLights - winOrder) * 16.0, 0.0, 1.0);`,
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", "#include <common>\nvarying float vWindowLit;")
+    .replace(
+      "#include <color_fragment>",
+      `#include <color_fragment>
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.85, 0.5), vWindowLit);`,
+    )
+    .replace(
+      "#include <emissivemap_fragment>",
+      `#include <emissivemap_fragment>
+      totalEmissiveRadiance += vec3(1.0, 0.75, 0.35) * vWindowLit * 0.7;`,
+    );
+};
 const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
 // Door color is baked into the (per-building) leaf geometry's vertex colors.
 const DOOR_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, metalness: 0.05 });
@@ -68,6 +118,7 @@ export const Building = ({
   doorCount,
   doorSize,
   ceilingHeight,
+  windowLightChance,
   interiorColors,
   materials,
   renderDistance,
@@ -97,6 +148,7 @@ export const Building = ({
     doorCount,
     doorSize,
     ceilingHeight,
+    windowLightChance,
     interiorColors,
   };
   const optionsKey = JSON.stringify(opts);
@@ -124,6 +176,11 @@ export const Building = ({
 
   useFrame((_, delta) => {
     const frame = frameCounter.current++;
+
+    // Shared-material uniforms — every building writes the same values, so
+    // whichever runs first each frame wins and the rest are no-ops.
+    WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
+    NIGHT_SEED_UNIFORM.value = getNightIndex();
 
     if (frame % DISTANCE_CHECK_INTERVAL === 0) {
       const distance = getDistance2D(camera.position, positionVec);

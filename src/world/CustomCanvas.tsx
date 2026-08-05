@@ -6,6 +6,7 @@ import { GameContextProvider } from "../context/GameContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
 import { PortalContextProvider } from "../portals/PortalContext";
+import { DayNightProvider } from "../sky/DayNightContext";
 import { initCursor } from "../utils/cursor/cursor";
 import { GameWorld } from "./GameWorld";
 
@@ -57,7 +58,9 @@ export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
   return (
     <Canvas {...mergedCanvasProps}>
       <GameContextProvider>
-        <PreCustomCanvasWithPortal>{children}</PreCustomCanvasWithPortal>
+        <DayNightProvider>
+          <PreCustomCanvasWithPortal>{children}</PreCustomCanvasWithPortal>
+        </DayNightProvider>
       </GameContextProvider>
     </Canvas>
   );
