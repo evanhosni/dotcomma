@@ -137,6 +137,11 @@ src/
     IndoorLightRig.tsx # Fixed-count global indoor lights (stable shader variants)
     indoorSlotAllocator.ts # Unique Y slot per building instance (INDOOR_Y_OFFSET + slot spacing)
     constants.ts       # Teleport thresholds, render perf tuning
+  sky/
+    DayNightCycle.tsx  # Jittery low-poly sun (flat irregular disc) + crescent moon +
+                       #   stars; follows the camera; drives the night blend
+    dayNight.ts        # Cycle durations, DAY_NIGHT_CYCLE_TRANSITION_MS, night palette,
+                       #   nightBlend channel (read by SkyboxSystem)
   player/
     Player.tsx         # First-person controller + physics
     useInput.tsx       # Keyboard input
