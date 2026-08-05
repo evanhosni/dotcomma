@@ -6,8 +6,9 @@ export interface SpawnDescriptor {
   footprint: number; // radius in world units for spacing
   density: number; // instances per 1,000,000 sq units
   clustering: number; // 0 = uniform, 1 = heavily clustered
-  renderDistance: number; // max camera distance
-  spawnExclusionRadius?: number; // min distance from player for spawning. Default: renderDistance * 0.15
+  renderDistance: number; // spawn radius: camera distance at which the object mounts (and starts fading)
+  despawnDistance?: number; // hard unmount distance. Default: (renderDistance + footprint/2) * 1.2
+  immediateRadius?: number; // inner radius where despawned objects can't REspawn. Default: spawn radius * 0.5
   colliderDistance?: number; // defaults to renderDistance / 3
   frustumPadding?: number; // defaults to 3
   priority?: number; // 0 = rarest (placed first), 100 = common. Default 50
@@ -26,6 +27,7 @@ export interface SpawnedObjectProps {
   scale?: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;
   renderDistance: number;
+  despawnDistance?: number; // self-despawn (hard kill) distance; components fall back to a renderDistance buffer
   frustumPadding: number;
   onDestroy: (id: string) => void;
   cursorOverride?: boolean;

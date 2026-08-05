@@ -70,6 +70,7 @@ export const Building = ({
   interiorColors,
   materials,
   renderDistance,
+  despawnDistance,
   onDestroy,
   children,
 }: BuildingProps) => {
@@ -126,7 +127,7 @@ export const Building = ({
     if (frame % DISTANCE_CHECK_INTERVAL === 0) {
       const distance = getDistance2D(camera.position, positionVec);
       lastDistanceRef.current = distance;
-      if (distance > renderDistance * DESPAWN_BUFFER) {
+      if (distance > (despawnDistance ?? renderDistance * DESPAWN_BUFFER)) {
         if (hoverDoorRef.current >= 0) hideCursor();
         onDestroy(id);
         return;

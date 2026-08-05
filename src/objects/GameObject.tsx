@@ -98,6 +98,7 @@ interface GameObjectProps {
   rotation?: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
   renderDistance?: number;
+  despawnDistance?: number; // hard-kill distance; defaults to renderDistance * DELETE_OBJECT_BUFFER
   frustumPadding?: number;
   onDestroy: (id: string) => void;
   animationControl?: AnimationControl;
@@ -122,6 +123,7 @@ export const GameObject = ({
   rotation = [0, 0, 0],
   positionRef,
   renderDistance = DEFAULT_RENDER_DISTANCE,
+  despawnDistance,
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   onDestroy,
   animationControl,
@@ -276,7 +278,7 @@ export const GameObject = ({
     }
 
     // Hard kill safety net
-    if (distance > renderDistance * DELETE_OBJECT_BUFFER) {
+    if (distance > (despawnDistance ?? renderDistance * DELETE_OBJECT_BUFFER)) {
       onDestroy(id);
       return;
     }
