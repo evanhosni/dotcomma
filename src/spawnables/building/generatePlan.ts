@@ -221,8 +221,15 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     bh = opts.exteriorSize[1];
   } else if (opts.heightRange && stories === requestedStories) {
     bh = Math.max(range(opts.heightRange[0], opts.heightRange[1]), stories * storyHeight + 2);
+  } else if (stories === 1) {
+    // Single-floor shells vary a lot — some wear tall mass above their one
+    // floor (mechanical space), reading as a bigger building than they are.
+    bh = storyHeight + range(3, 16);
   } else {
-    bh = stories * storyHeight + range(3, 16);
+    // Multi-floor shells are unmistakably tall: a base of extra mass plus
+    // per-floor visual height, so even the shortest 2-story building clears
+    // the tallest 1-story shell.
+    bh = stories * storyHeight + range(8, 12) + stories * range(2.5, 4.5);
   }
 
   // ---- Gentle lean (banana-curve via exponent) + overall taper ----
