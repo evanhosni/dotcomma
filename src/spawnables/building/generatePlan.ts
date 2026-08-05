@@ -229,8 +229,10 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   } else {
     // Multi-floor shells are unmistakably tall: a base of extra mass plus
     // per-floor visual height, so even the shortest 2-story building clears
-    // the tallest 1-story shell.
-    bh = stories * storyHeight + range(8, 12) + stories * range(2.5, 4.5);
+    // the tallest 1-story shell. Past 2 floors the per-floor mass grows —
+    // an eye reading a shell of height H should never expect FEWER floors
+    // than it contains (~30u ⇒ 2, ~48u ⇒ 3, ~60u ⇒ 4).
+    bh = stories * storyHeight + range(8, 12) + stories * (stories <= 2 ? range(2.5, 4.5) : range(5, 7));
   }
 
   // ---- Gentle lean (banana-curve via exponent) + overall taper ----
