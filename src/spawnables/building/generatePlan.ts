@@ -475,6 +475,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   // quads get a subtle skew — windows are rarely symmetrical. ----
   const windows: BuildingPlan["windows"] = [];
   const windowLightChance = clampNum(opts.windowLightChance ?? 0.6, 0, 1);
+  const windowLightIntensity = Math.max(0, opts.windowLightIntensity ?? 1.4);
   const glass = pick(GLASS_COLORS);
   const windowShapes = opts.windowShapes?.length ? opts.windowShapes : [WINDOW_SHAPE.SQUARE];
   const [winMin, winMax] = opts.windowSize ?? DEFAULT_WINDOW_SIZE;
@@ -898,6 +899,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     doors,
     doorColor,
     windowLightChance,
+    windowLightIntensity,
     windows,
     interior: {
       width: 2 * ihw,
