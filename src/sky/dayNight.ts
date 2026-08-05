@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 /**
  * Day/night cycle timing constants + the tiny channels the DayNightCycle
  * writes and other systems read:
@@ -25,7 +27,20 @@ export const NIGHT_SKY_COLORS = {
   bottom: "#05060d",
 };
 
+/** Where the sun and moon sit in the sky (unit directions). The celestial
+ *  billboards AND the scene's directional light both use these, so daylight
+ *  comes from the sun and night light from the moon. */
+export const SUN_DIRECTION = new THREE.Vector3(0.45, 0.72, -0.6).normalize();
+export const MOON_DIRECTION = new THREE.Vector3(-0.45, 0.62, 0.6).normalize();
+
 export type DayNightPhase = "day" | "dusk" | "night" | "dawn";
+
+/** Shared THREE-style uniform mirroring nightBlend — custom shader materials
+ *  (terrain, grass) reference this ONE object so every material dims with the
+ *  cycle without per-frame uniform writes. */
+export const NIGHT_BLEND_UNIFORM = { value: 0 };
+/** How dark unlit custom shaders (terrain, grass) get at full night. */
+export const NIGHT_GROUND_DIM = 0.22;
 
 let nightBlend = 0; // 0 = full day, 1 = full night
 let phase: DayNightPhase = "day";
@@ -42,6 +57,7 @@ export const setNightBlend = (blend: number): void => {
             ? "dawn"
             : phase;
   nightBlend = blend;
+  NIGHT_BLEND_UNIFORM.value = blend;
 };
 
 export const getNightBlend = (): number => nightBlend;

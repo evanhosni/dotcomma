@@ -2,6 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
+import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
 import { _quantization } from "../../utils/quantization/quantization";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
@@ -78,6 +79,7 @@ void main() {
 const GRASS_FRAGMENT_SHADER = /* glsl */ `
 uniform sampler2D uMap;
 uniform vec3 uColor;
+uniform float uNightBlend;
 
 varying vec2 vUv;
 varying float vTint;
@@ -87,6 +89,8 @@ void main() {
   if (tex.a < 0.5) discard;
   // per-blade tint variation + slight darkening toward the base
   vec3 col = uColor * tex.rgb * (0.85 + vTint * 0.3) * (0.75 + 0.25 * vUv.y);
+  // unlit shader — dim with the day/night cycle like the terrain does
+  col *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -190,6 +194,8 @@ export const GrassField: React.FC<GrassFieldProps> = ({
           uRenderDistance: { value: renderDistance },
           // without a per-field override, share the global grid-size uniform (never mutated here)
           uGridSize: quantization !== undefined ? { value: quantization } : _quantization.uniforms.uGridSize,
+          // shared day/night uniform object — updated by the cycle each frame
+          uNightBlend: NIGHT_BLEND_UNIFORM,
         },
         vertexShader: GRASS_VERTEX_SHADER,
         fragmentShader: GRASS_FRAGMENT_SHADER,

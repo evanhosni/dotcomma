@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
 import { Biome } from "../../world/types";
 import commonShader from "../../world/shaders/common.glsl";
 
@@ -45,7 +46,9 @@ export namespace _material {
   ): Promise<THREE.ShaderMaterial> => {
     const { riverTexture, biomeTexture, varyingDeclarations = [] } = options;
     // Collect all uniforms and fragment shaders from biomes
-    const combinedUniforms: any = {};
+    // uNightBlend is the SHARED day/night uniform object — updated once per
+    // frame by the cycle, so every terrain material dims in lockstep.
+    const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM };
 
     // Add river texture if provided (between regions)
     if (riverTexture) {
@@ -110,6 +113,10 @@ export namespace _material {
         float riverBlend = smoothstep(14.0, 50.0, vDistanceToRiverCenter);
         gl_FragColor = mix(riverColor, gl_FragColor, riverBlend);
       }
+
+      // Day/night: terrain is unlit, so scene-light dimming can't reach it —
+      // darken directly by the shared night blend.
+      gl_FragColor.rgb *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
     }
   `;
 
