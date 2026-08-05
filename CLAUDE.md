@@ -169,6 +169,16 @@ src/
 4. Geometry buffers written, normals computed, skirt vertices set
 5. Chunk made visible via atomic LOD swap system
 
+### Spawn Lifecycle
+
+Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density grid + probability roll + spatial-hash spacing, cached per 250u chunk; cache eviction also removes the chunk's points from the spatial hash so a revisited chunk regenerates the identical points instead of being blocked by its own stale copies). `ObjectPool.tsx` mounts/unmounts them with a size-aware multi-radius hysteresis:
+
+- `immediateRadius = spawnRadius * 0.5` (or `desc.immediateRadius`) — inner zone: initial spawns allowed, REspawns blocked
+- `spawnRadius = renderDistance + footprint/2` — points inside it mount (big objects spawn sooner); between immediate and spawn radius, respawns are allowed so a camped area keeps repopulating as NPCs wander off
+- `despawnRadius = spawnRadius * 1.2` (or `desc.despawnDistance`) — mounted objects beyond it are unmounted by the pool sweep; the pool also passes radii to spawned components (`renderDistance` prop = fade start, `despawnDistance` prop = self-despawn hard kill) so all radii have one source
+- **Initial spawns have NO inner exclusion zone** — a point newly entering the spawn radius mounts at any distance, so spawning catches up when the player outruns spawn batches
+- **Only REspawns are blocked, and only in the immediate radius**: when an object self-destroys (`onDestroy` — NPC walked away, fade-out kill), its id enters a despawn ledger; the entry clears (after a 1s cooldown) once its spawn point is outside the immediate radius, allowing the respawn. Nothing is ever permanently despawned, and ids are position-based so an object can never be duplicated.
+
 ### Portal System
 
 Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors live at `INDOOR_Y_OFFSET` (+ per-instance slot spacing) directly above the building so terrain streaming is unaffected. Seamless walk-through uses the Valve/Portal technique:

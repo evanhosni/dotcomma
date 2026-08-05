@@ -69,6 +69,18 @@ class SpatialHash {
     bucket.push(point);
   }
 
+  /** Remove by identity (points in the hash are the same refs held by chunkCache). */
+  remove(point: SpawnPoint): void {
+    const cx = Math.floor(point.x * this.invCellSize);
+    const cz = Math.floor(point.z * this.invCellSize);
+    const k = this.key(cx, cz);
+    const bucket = this.cells.get(k);
+    if (!bucket) return;
+    const i = bucket.indexOf(point);
+    if (i !== -1) bucket.splice(i, 1);
+    if (bucket.length === 0) this.cells.delete(k);
+  }
+
   isTooClose(
     x: number,
     z: number,
@@ -270,6 +282,15 @@ self.onmessage = (e: MessageEvent) => {
         (playerX - chunkCenterX) ** 2 + (playerZ - chunkCenterZ) ** 2;
 
       if (distSq > cleanupRadiusSq) {
+        // Evict the chunk's points from the spatial hash too. Stale copies
+        // would otherwise block their own deterministic regeneration when the
+        // player returns (every candidate lands exactly on its old copy and
+        // fails the spacing check), permanently despawning the chunk's objects.
+        const points = chunkCache.get(key)!;
+        if (hashPopulatedChunks.has(key)) {
+          for (const p of points) spatialHash!.remove(p);
+          hashPopulatedChunks.delete(key);
+        }
         chunkCache.delete(key);
       }
     }
