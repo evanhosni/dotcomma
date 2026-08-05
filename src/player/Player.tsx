@@ -192,7 +192,7 @@ export const Player = () => {
     if (!activeIndoorId && finalPos.y < FALL_RESET_Y && !respawning.current) {
       respawning.current = true;
       verticalVelocity.current = 0;
-      getVertexData(finalPos.x, finalPos.z, true).then((vd) => {
+      getVertexData(finalPos.x, finalPos.z).then((vd) => {
         if (rigidBodyRef.current) {
           rigidBodyRef.current.setTranslation({ x: finalPos.x, y: vd.height + 10, z: finalPos.z }, true);
         }

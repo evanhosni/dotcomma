@@ -570,8 +570,10 @@ export function computeVertexData(x: number, z: number): VertexResult {
         cfg.cityConfig.seed
       );
       distanceToRoadCenter = Math.min(cityDist, distanceToRiver);
-      const cityHeight = distanceToRoadCenter > cfg.cityConfig.roadWidth ? 10 : 0;
-      biomeHeight = cityHeight * blend * riverFade;
+      // Flat city: the biome height cancels the global base noise, so blocks
+      // and roads all sit at exactly 0 (and blend smoothly back to the
+      // neighboring biome's terrain at the boundary).
+      biomeHeight = -terrainNoise(cfg.baseNoiseParams, x, z) * blend * riverFade;
     }
   }
 

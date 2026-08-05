@@ -1,6 +1,5 @@
 import { Biome, Material, Terrain } from "../../../../components";
 import { getMaterial } from "./material";
-import { getVertexData } from "./vertexData";
 
 export const DUST_BIOME_ID = 2;
 
@@ -8,7 +7,6 @@ export const DUST_BIOME_ID = 2;
 export const DustBiome = () => (
   <Biome name="dust" id={DUST_BIOME_ID} joinable blendable>
     <Terrain
-      getVertexData={getVertexData}
       noise={{
         params: {
           type: "perlin",

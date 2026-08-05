@@ -34,7 +34,7 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
   <Region>                   // one per region, JSX order = voronoi order
     <Material/>              //   biome-boundary texture for this region
     <Biome>                  // one per biome (flags: joinable/blendable/blendWidth)
-      <Terrain/>             //   biome height fns (main-thread getVertexData + worker noise)
+      <Terrain/>             //   biome height config (noise params — single source of truth)
       <Material/>            //   biome fragment shader (getMaterial)
       <Spawnables>           //   groups spawnables; its props are shared defaults for children
         <BeebleSpawnable/>   //   per-object component wrapping <Spawnable> (props = overrides)
@@ -50,7 +50,9 @@ The world is defined by the `GameWorld` component tree in `src/world/world.tsx`.
 
 `Terrain`/`Material`/`Skybox` are **scope-aware**: their meaning depends on whether they're mounted under `World`, `Region`, or `Biome` (see the tree above). Skyboxes cross-fade as the player moves between scopes (biome wins over region wins over world); the current biome is polled off-thread via the voronoi worker only when scoped skyboxes exist.
 
-Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at biome boundaries using distance-to-wall calculations. World-level `getVertexData` and `getMaterial` live in `src/world/`.
+Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at biome boundaries using distance-to-wall calculations.
+
+**Heights have a single source of truth**: `src/workers/vertexCompute.ts` is the ONLY height implementation. The terrain, spawn, and grass workers run it off-thread; the main thread (`src/world/vertexData.ts`, used by Player respawn) imports and runs the SAME module, initialized with the same serialized `WorldConfig` from the registry. Biome heights are defined declaratively via the biome-level `<Terrain noise={…}>` config; biomes with bespoke height logic (city — flat, base-noise-cancelling) have their branch inside `vertexCompute.ts`. Never add a second height code path.
 
 **Performance note:** this is a *declarative shell* over the same pipeline as before — all heavy work still runs in web workers, and worker configs are built once at commit. Workers are initialized with the first committed config; registrations added after the first commit update the registry but do not re-init running workers.
 
@@ -64,6 +66,9 @@ src/
     xl-element/        #   (SpawnDescriptor + <XxxSpawnable> wrapper component)
     xxl-element/
     apartment/
+    building/          # Procedural portal building: seeded exterior massing +
+                       #   backrooms-style BSP interior (generatePlan.ts →
+                       #   buildingAssets.ts cache → Building.tsx). No GLTF.
     building1/
   world/
     GameWorld.tsx      # GameWorld — the <World> tree, single source of truth for active content
@@ -74,11 +79,11 @@ src/
         biomes/        # biomes folder — a biome used by several regions is DUPLICATED
           city/        # into each region under a distinct component name (e.g.
           grass/       # CityGrassBiome / GrassBiome, both biome id 3).
-                       # city/: urban biome (id:1) — biome.tsx, height fns, blocks.ts, shaders
+                       # city/: urban biome (id:1) — biome.tsx, shaders (height: city branch in vertexCompute.ts)
                        # grass/: grassland biome (id:3) — biome.tsx (duplicate of grass region's)
       desert/
         region.tsx     # Desert region (dust biome)
-        biomes/dust/   # Desert biome (id:2) — biome.tsx, height fns, shaders
+        biomes/dust/   # Desert biome (id:2) — biome.tsx (noise config), shaders
       grass/
         region.tsx     # Grass region
         biomes/grass/  # Grassland biome (id:3) — biome.tsx
@@ -88,12 +93,12 @@ src/
       World.tsx        # Registration store + commit → registry; mounts global systems
       Region.tsx       # Region declaration + RegionContext
       Biome.tsx        # Biome declaration + BiomeContext
-      Terrain.tsx      # Scope-aware terrain rules (world params / biome height fns + noise)
+      Terrain.tsx      # Scope-aware terrain rules (world params / biome noise config)
       Material.tsx     # Scope-aware materials (river / region boundary / biome shader)
       Skybox.tsx       # Scope-aware skybox registration + SkyboxSystem (cross-fading sky)
       Spawnable.tsx    # <Spawnable> descriptor registration + <Spawnables> defaults group
       context.ts       # WorldStore, WorldStoreContext, RegionContext, BiomeContext
-    vertexData.ts      # World-level terrain pipeline (voronoi → biome heights), reads registry
+    vertexData.ts      # Main-thread adapter over workers/vertexCompute.ts (same pipeline, same config)
     material.ts        # Combines all biome fragment shaders, reads registry
     shaders/           # Shared vertex shader
     terrain/
@@ -141,7 +146,6 @@ src/
     noise/_noise.ts    # Perlin/Simplex FBM wrapper (TerrainNoiseParams)
     math/_math.ts      # seedRand, lerp, smoothstep, randRange
     material/          # Texture loading, biome material composition
-    city/_city.ts      # City grid generation + block placement
     task-queue/        # Async task queue
     quantization/      # Vertex quantization for material patching
     cursor/            # DOM cursor overlay
@@ -188,21 +192,20 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
 ### New Biome
 
 1. Create the biome folder: `src/world/regions/<region>/biomes/<name>/`. If another region needs the same biome, duplicate the folder there under a distinct component name (e.g. `CityGrassBiome` vs `GrassBiome`) with the SAME biome `id` — there is deliberately no shared biomes folder
-2. Create `vertexData.ts` — exports `getVertexData`: receives `VertexData`, modifies height, returns it
-3. Create `material.ts` — exports `getMaterial`: returns `{ uniforms, fragmentShader }`
-4. Create `shaders/fragment.glsl` — define a `<name>_frag()` function
-5. Export a `<NameBiome>` component in `biome.tsx` (see `src/world/regions/desert/biomes/dust/biome.tsx` for the minimal template):
+2. Create `material.ts` — exports `getMaterial`: returns `{ uniforms, fragmentShader }`
+3. Create `shaders/fragment.glsl` — define a `<name>_frag()` function
+4. Export a `<NameBiome>` component in `biome.tsx` (see `src/world/regions/desert/biomes/dust/biome.tsx` for the minimal template):
    ```tsx
    export const NameBiome = () => (
      <Biome name="name" id={N} joinable blendable>
-       <Terrain getVertexData={getVertexData} noise={{ params: {...} }} />
+       <Terrain noise={{ params: {...} }} />
        <Material getMaterial={getMaterial} />
        {/* <Spawnables>…</Spawnables>, <GrassField … />, <Skybox … /> as needed */}
      </Biome>
    );
    ```
-   The `noise` prop is the worker-side height config — keep it consistent with `vertexData.ts` (main-thread path). Biomes whose height is computed elsewhere (e.g. city grid) omit `noise`.
-6. Mount it inside a region component
+   The `noise` prop is the biome's ONLY height definition — the shared pipeline (`workers/vertexCompute.ts`) evaluates it on workers and main thread alike, so there is nothing to keep in sync. A biome needing bespoke height code (like the city) omits `noise` and adds a branch in `vertexCompute.ts` instead.
+5. Mount it inside a region component
 
 The combined fragment shader branch, voronoi biome lookup, and worker noise config are all derived from the registrations — no core files to touch.
 
@@ -232,6 +235,12 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
 1. Mount `<GrassField>` (`src/objects/vegetation/GrassField.tsx`) directly inside the biome component — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
 2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`, `quantization` to override the global vertex-quantization grid)
 3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
+
+**Procedural buildings** (seeded shape, portal doors, room interior — no GLTF):
+1. `src/spawnables/building/` — `<Building>` generates a deterministic building from a seed (default: spawn coordinates), interior-first: rooms-per-floor × floors set the interior area, which sets the exterior footprint and height (so the shell realistically wraps the inside). Exterior: 4–8-sided masses — boxy slabs or rotated faceted canisters — grayscale segments with occasional accent colors, lips/bulges, gentle lean, scattered oval/skewed-quad windows, rooftop caps + crooked pipes; colors baked as vertex colors so all buildings share one material. Interior perimeter matches the exterior N-gon: 4-sided interiors are BSP-filled rects; polygon interiors put the BSP room block inside a ring corridor (exit doors open into it). Stories share one layout and connect through a corner ramp shaft (inclined slab flights + walkway lane; slab holes over the run). Doors are portal pairs built on `src/portals/` (enter portal faces out of the building, exit portal faces INTO the interior — the pair transform `dest·rotY180·inv(src)` requires this convention).
+2. Building variants (apartment/office/theater/…) wrap `<Building>` with their own options — every randomization knob is a prop with a seeded default: `exteriorSize`, `heightRange`, `numberOfSides` (default [4,5,6,7,8]), `palette`/`accentColors`/`accentChance`, `windowShapes` (WINDOW_SHAPE enum; default [SQUARE], CIRCLE opt-in), `windowCount` (array of count choices), `windowSize`, `maxLean`, `stories`, `roomCount`, `doorCount`, `doorSize`, `ceilingHeight`, `interiorScale`, `materials` — plus children, which render at seeded positions inside rooms across stories. First variant: `Skyscraper` (`skyscraper.tsx`) — 6 stories under a 70–115u shell. The interior (meshes, exit portals, colliders) only mounts within ~110u of the building, keeping high spawn density cheap.
+3. Geometry is cached per seed in `buildingAssets.ts`; interior wall boxes double as cuboid colliders; the exterior render triangles double as the trimesh collider (door openings included).
+4. Register via `<BuildingSpawnable biomeIds={[CITY_BIOME_ID]} />` (currently city-only).
 
 **Interactive objects** (physics, state machines, custom logic):
 1. Create `src/spawnables/<name>/` with the object component (+ `stateMachine.ts` if needed)

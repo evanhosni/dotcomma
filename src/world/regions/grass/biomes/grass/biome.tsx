@@ -1,7 +1,6 @@
 import { GrassField } from "../../../../../objects/vegetation/GrassField";
 import { Biome, Material, Terrain } from "../../../../components";
 import { getMaterial } from "./material";
-import { getVertexData } from "./vertexData";
 
 export const GRASS_BIOME_ID = 3;
 
@@ -12,7 +11,6 @@ export const GRASS_BIOME_ID = 3;
 export const GrassBiome = () => (
   <Biome name="grass" id={GRASS_BIOME_ID} joinable blendable>
     <Terrain
-      getVertexData={getVertexData}
       noise={{
         params: {
           type: "perlin",
