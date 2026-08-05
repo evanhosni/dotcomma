@@ -247,8 +247,14 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec,
         sink.tri(C, p0, p1);
       }
     };
+    // Window parts encode a depth-bias layer in aWindow.x: frame = rnd (0..1],
+    // glass = rnd + 1 (glass overlaps the frame, so it's pulled further).
+    // Chance 0 keeps the frame from ever lighting; the shader recovers the
+    // per-window random with fract().
+    const rndR = Math.max(spec.litRnd, 1e-3);
+    sink.setWindow(rndR, 0);
     fan(1, bulge + 0.05, spec.frame);
-    sink.setWindow(spec.litRnd, lightChance); // only the glass glows at night
+    sink.setWindow(rndR + 1, lightChance); // only the glass glows at night
     fan(0.7, bulge + 0.1, spec.glass);
     sink.setWindow(0, 0);
   } else {
@@ -261,10 +267,16 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec,
       c[1] + (p[1] - c[1]) * f,
       c[2] + (p[2] - c[2]) * f,
     ];
+    // Window parts encode a depth-bias layer in aWindow.x: frame = rnd (0..1],
+    // glass = rnd + 1 (glass overlaps the frame, so it's pulled further).
+    // Chance 0 keeps the frame from ever lighting; the shader recovers the
+    // per-window random with fract().
+    const rndQ = Math.max(spec.litRnd, 1e-3);
     sink.setColor(spec.frame);
+    sink.setWindow(rndQ, 0);
     sink.quad(madd(bl, n, bulge + 0.05), madd(br, n, bulge + 0.05), madd(trS, n, bulge + 0.05), madd(tlS, n, bulge + 0.05));
     sink.setColor(spec.glass);
-    sink.setWindow(spec.litRnd, lightChance); // only the glass glows at night
+    sink.setWindow(rndQ + 1, lightChance); // only the glass glows at night
     sink.quad(
       madd(shrink(bl, 0.68), n, bulge + 0.1),
       madd(shrink(br, 0.68), n, bulge + 0.1),
