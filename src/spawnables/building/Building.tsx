@@ -62,21 +62,41 @@ DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
     .replace(
       "#include <begin_vertex>",
       `#include <begin_vertex>
-      float winRoll = fract(sin((aWindow.x * 91.17 + uNightSeed) * 47.53) * 43758.5453);
+      float winRoll = fract(sin((fract(aWindow.x) * 91.17 + uNightSeed) * 47.53) * 43758.5453);
       float winOrder = winRoll / max(aWindow.y, 1e-3);
-      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * clamp((uWindowLights - winOrder) * 16.0, 0.0, 1.0);`,
+      // step, not a ramp — each window snaps on/off the frame the global
+      // progress crosses its turn-on order (no per-window fade). The final
+      // step gates progress == 0: a hash that lands exactly on 0 would
+      // otherwise satisfy step(winOrder, 0) and glow in daylight.
+      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * step(winOrder, uWindowLights) * step(1e-4, uWindowLights);`,
+    )
+    .replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+      // Windows float only 0.05-0.1u proud of the wall — below the depth
+      // buffer's precision a few hundred units out, which z-fights. Pull
+      // window parts toward the camera in view space (screen position is
+      // unchanged, only depth), scaled with distance so the bias always
+      // outruns the shrinking precision. aWindow.x encodes the layer:
+      // 0 = wall, (0,1] = frame, (1,2] = glass (pulled twice as far, since
+      // the glass overlaps the frame).
+      if (aWindow.x > 0.0) {
+        float winLayer = aWindow.x > 1.0 ? 2.0 : 1.0;
+        mvPosition.xyz *= 1.0 - min(-mvPosition.z * 2e-6, 0.003) * winLayer;
+        gl_Position = projectionMatrix * mvPosition;
+      }`,
     );
   shader.fragmentShader = shader.fragmentShader
     .replace("#include <common>", "#include <common>\nvarying float vWindowLit;")
     .replace(
       "#include <color_fragment>",
       `#include <color_fragment>
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.85, 0.5), vWindowLit);`,
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.82, 0.38), vWindowLit);`,
     )
     .replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(1.0, 0.75, 0.35) * vWindowLit * 0.7;`,
+      totalEmissiveRadiance += vec3(1.0, 0.72, 0.24) * vWindowLit * 0.7;`,
     );
 };
 const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });

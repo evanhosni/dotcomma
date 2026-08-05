@@ -53,11 +53,11 @@ let lightsProgress = 0; // 0 = all off, 1 = every selected window on
 let nightIndex = 0; // increments at each nightfall — reshuffles WHICH windows light
 let wasNight = false;
 
-/** Advance the lights ramp toward night or day. Lights react at the very
- *  START of each blend transition: on the moment dusk begins, off the moment
+/** Advance the lights ramp toward night or day. Lights start turning ON
+ *  halfway through the dusk transition, but start turning OFF the moment
  *  dawn begins. Called once per frame by DayNightCycle. */
 export const tickWindowLights = (deltaMs: number): void => {
-  const isNight = phase === "dusk" || phase === "night";
+  const isNight = phase === "night" || (phase === "dusk" && nightBlend > 0.5);
   if (isNight && !wasNight) nightIndex++; // new night, new set of lit windows
   wasNight = isNight;
   const target = isNight ? 1 : 0;
