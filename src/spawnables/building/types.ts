@@ -69,6 +69,11 @@ export interface WindowSpec {
   maxFrac: number;
   glass: number;
   frame: number;
+  /** Stable per-window random (0..1). The night-light shader hashes it with
+   *  a per-night seed and the building's windowLightChance to decide whether
+   *  (and when, within the transition) this window lights tonight — so a
+   *  different subset glows every night. */
+  litRnd: number;
 }
 
 export interface RoomRect {
@@ -178,6 +183,8 @@ export interface BuildingPlan {
   doors: DoorPlan[];
   /** Door leaf color — seeded from the building palette like everything else. */
   doorColor: number;
+  /** Fraction (0–1) of this building's windows that light up each night. */
+  windowLightChance: number;
   windows: WindowSpec[];
   interior: InteriorPlan;
 }
@@ -237,6 +244,10 @@ export interface BuildingOptions {
   /** Door opening [width, height]. Height is clamped below the interior ceiling. */
   doorSize?: [number, number];
   ceilingHeight?: number;
+  /** Fraction (0–1) of windows that glow yellowish each night — a different
+   *  random subset every night. 0 = never lit. Default 0.2 (Skyscraper
+   *  passes 0.8). */
+  windowLightChance?: number;
   /** Interior surface colors — unset entries match the exterior (walls take
    *  the ground-segment color; floor darker, ceiling lighter). */
   interiorColors?: InteriorColors;
