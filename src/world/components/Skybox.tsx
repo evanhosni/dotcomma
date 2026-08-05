@@ -101,6 +101,7 @@ export const SkyboxSystem = () => {
   const { version } = useContext(WorldDataContext);
   const { camera } = useThree();
 
+  const meshRef = useRef<THREE.Mesh>(null);
   const currentBiomeIdRef = useRef<number | null>(null);
   const pollTimerRef = useRef(0);
   const pollInFlightRef = useRef(false);
@@ -165,6 +166,9 @@ export const SkyboxSystem = () => {
   });
 
   useFrame((_, delta) => {
+    // Follow the camera so the sky never leaves render distance
+    if (meshRef.current) meshRef.current.position.copy(camera.position);
+
     // Poll the current biome only when a scoped skybox could change the sky
     if (hasScoped && !pollInFlightRef.current) {
       pollTimerRef.current += delta;
@@ -214,7 +218,7 @@ export const SkyboxSystem = () => {
   });
 
   return (
-    <mesh renderOrder={-1000}>
+    <mesh ref={meshRef} renderOrder={-1000}>
       <sphereGeometry args={[worldSky.radius, 32, 16]} />
       <primitive object={material} attach="material" />
     </mesh>
