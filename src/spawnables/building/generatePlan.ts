@@ -31,11 +31,11 @@ export const SLAB_THICKNESS = 0.3;
 export const FLOOR_LIFT = 0.12;
 export const RAMP_THICKNESS = 0.25;
 export const RAMP_WIDTH = 2.0; // ramp lane width
-const WALKWAY_WIDTH = 1.8; // solid lane beside the ramp, loops back to the next flight
+const WALKWAY_WIDTH = 1.8; // sizing allowance beside the lane so the room around a shaft stays walkable
 const RAMP_LANDING = 1.2; // solid floor at each end of the run
-/** The BSP block corner can lie exactly on the inner wall surface, so a ramp
- *  lane / slab hole placed flush at bz0 z-fights the wall — inset it. */
-const RAMP_WALL_GAP = 0.05;
+/** Shaft footprints keep this inset from the BSP domain edges so ramp faces
+ *  and slab-hole rims never sit flush against (z-fight with) the shell. */
+const RAMP_MARGIN = 0.3;
 const RAMP_RUN_FACTOR = 1.5; // run = storyHeight × this (≈34° slope, comfortably walkable)
 const RAMP_RUN_MIN_FACTOR = 1.25; // steepest allowed fit (≈39°) before giving up on stories
 const DOORWAY_WIDTH = 2.4; // interior room-to-room openings
@@ -57,9 +57,8 @@ const PIPE_COLORS = [0x6b4a2f, 0x8a8f96, 0x3c4046];
 
 const WINDOW_ROW_SPACING = 6.0;
 
-/** An interior wall created by a BSP split (or the ramp-shaft boundary):
- *  lies at `at` on `axis`, running along the other axis from `from` to `to`,
- *  with one doorway at `doorAt`. */
+/** An interior wall created by a BSP split: lies at `at` on `axis`, running
+ *  along the other axis from `from` to `to`, with one doorway at `doorAt`. */
 interface SplitWall {
   axis: "x" | "z";
   at: number;
@@ -509,48 +508,127 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
 
   // ---- Interior room layout (perimeter/block/shaft geometry was resolved
   // above, before the exterior, so the shell height reflects real floors) ----
-  let ramp: RampSpec | null = null;
 
-  if (stories > 1) {
-    // Ramp shaft in the block's (-x,-z) corner: ramp lane along the block's
-    // -z edge ascending +x, walkway lane beside it. Identical on every story:
-    // top out at the far landing, walk back along the walkway, climb again.
-    // The shaft is OPEN — no enclosing walls, it lives in the room around
-    // it — but its rect is excluded from the BSP domain so no room divider
-    // ever crosses the ramp or the slab holes above it.
-    const room: RoomRect = { x0: bx0, z0: bz0, x1: bx0 + shaftLen, z1: bz0 + shaftWidth };
-    ramp = {
-      room,
-      hole: { x0: bx0 + RAMP_LANDING, z0: bz0 + RAMP_WALL_GAP, x1: bx0 + RAMP_LANDING + rampRun, z1: bz0 + RAMP_WALL_GAP + RAMP_WIDTH },
-      runStart: bx0 + RAMP_LANDING,
-      runEnd: bx0 + RAMP_LANDING + rampRun,
-      laneZ0: bz0 + RAMP_WALL_GAP,
-      laneZ1: bz0 + RAMP_WALL_GAP + RAMP_WIDTH,
+  // Ramps: ONE per story gap, each placed independently — a different spot
+  // and orientation per gap. A shaft is NOT its own room: it sits inside
+  // whatever room the BSP grows around it (split walls never cross a shaft
+  // footprint, so each shaft always lands wholly inside one leaf room).
+  const rectsOverlap = (a: RoomRect, b: RoomRect, m: number): boolean =>
+    a.x0 < b.x1 + m && a.x1 > b.x0 - m && a.z0 < b.z1 + m && a.z1 > b.z0 - m;
+
+  const makeRampAt = (story: number, axis: "x" | "z", dir: 1 | -1, a0: number, l0: number): RampSpec => {
+    const a1 = a0 + shaftLen;
+    const lane1 = l0 + RAMP_WIDTH;
+    const runStart = dir === 1 ? a0 + RAMP_LANDING : a1 - RAMP_LANDING;
+    const runEnd = runStart + dir * rampRun;
+    const holeA0 = Math.min(runStart, runEnd);
+    const holeA1 = Math.max(runStart, runEnd);
+    const landA0 = dir === 1 ? holeA1 : a0;
+    const landA1 = dir === 1 ? a1 : holeA0;
+    const box = (c0: number, c1: number): RoomRect =>
+      axis === "x" ? { x0: c0, z0: l0, x1: c1, z1: lane1 } : { x0: l0, z0: c0, x1: lane1, z1: c1 };
+    return {
+      story,
+      rect: box(a0, a1),
+      hole: box(holeA0, holeA1),
+      landing: box(landA0, landA1),
+      axis,
+      dir,
+      runStart,
+      runEnd,
+      lane0: l0,
+      lane1,
     };
-  }
+  };
 
-  // Starting rooms for a story: the full domain, or (multi-story) the two
-  // rooms wrapping the fixed ramp shaft.
-  const baseRooms = (): RoomRect[] =>
-    ramp
-      ? [
-          { x0: ramp.room.x1, z0: bz0, x1: bx1, z1: ramp.room.z1 },
-          { x0: bx0, z0: ramp.room.z1, x1: bx1, z1: bz1 },
-        ]
-      : [{ x0: bx0, z0: bz0, x1: bx1, z1: bz1 }];
+  /** Seed a shaft somewhere in the domain, clear of `avoid` rects (the
+   *  arrival hole/landing from the gap below; exterior door zones on the
+   *  ground floor). Falls back to alternating corners when crowded. */
+  const placeRamp = (story: number, avoid: RoomRect[]): RampSpec => {
+    const axes: ("x" | "z")[] = [];
+    if (bx1 - bx0 >= shaftLen + 2 * RAMP_MARGIN) axes.push("x");
+    if (bz1 - bz0 >= shaftLen + 2 * RAMP_MARGIN) axes.push("z");
+    if (axes.length === 0) axes.push("x"); // shaftLen was clamped to the x extent
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const axis = pick(axes);
+      const dir: 1 | -1 = rng() < 0.5 ? 1 : -1;
+      const [alo, ahi] = axis === "x" ? [bx0, bx1] : [bz0, bz1];
+      const [llo, lhi] = axis === "x" ? [bz0, bz1] : [bx0, bx1];
+      const r = makeRampAt(
+        story,
+        axis,
+        dir,
+        range(alo + RAMP_MARGIN, ahi - RAMP_MARGIN - shaftLen),
+        range(llo + RAMP_MARGIN, lhi - RAMP_MARGIN - RAMP_WIDTH),
+      );
+      if (!avoid.some((o) => rectsOverlap(r.rect, o, 0.5))) return r;
+    }
+    const corners = [
+      makeRampAt(story, "x", 1, bx0 + RAMP_MARGIN, bz0 + RAMP_MARGIN),
+      makeRampAt(story, "x", -1, bx1 - RAMP_MARGIN - shaftLen, bz1 - RAMP_MARGIN - RAMP_WIDTH),
+    ];
+    if (story % 2) corners.reverse();
+    return corners.find((r) => !avoid.some((o) => rectsOverlap(r.rect, o, 0.5))) ?? corners[0];
+  };
 
   // One BSP pass = one story. Each split wall gets exactly one doorway, so
   // the room graph is a tree — every room is reachable. Variation comes from
   // three dice per split: WHICH room (area-weighted, not always the biggest),
   // which AXIS (mostly the long one, sometimes across), and WHERE (ratio).
+  // Split walls never cross an obstacle rect (this story's ramp shaft, or
+  // the arrival hole + landing of the ramp from the story below), and never
+  // dead-end into a perpendicular wall right at its doorway.
   interface StoryLayout {
     rooms: RoomRect[];
     splitWalls: SplitWall[];
+    obstacles: RoomRect[];
   }
-  const buildStoryLayout = (targetRooms: number): StoryLayout => {
-    const rooms = baseRooms();
+  const WALL_OBS_MARGIN = WALL_THICKNESS / 2 + 0.25;
+  const DOOR_CLEARANCE = DOORWAY_WIDTH / 2 + WALL_THICKNESS / 2 + 0.5;
+  const MIN_SIDE = 3.2;
+
+  const buildStoryLayout = (targetRooms: number, obstacles: RoomRect[]): StoryLayout => {
+    const rooms: RoomRect[] = [{ x0: bx0, z0: bz0, x1: bx1, z1: bz1 }];
     const splitWalls: SplitWall[] = [];
-    while (rooms.length < targetRooms) {
+
+    const validAt = (axis: "x" | "z", at: number, r: RoomRect): boolean => {
+      const [lo, hi, cf, ct] = axis === "x" ? [r.x0, r.x1, r.z0, r.z1] : [r.z0, r.z1, r.x0, r.x1];
+      if (at - lo < MIN_SIDE || hi - at < MIN_SIDE) return false;
+      for (const o of obstacles) {
+        const [oa0, oa1, oc0, oc1] = axis === "x" ? [o.x0, o.x1, o.z0, o.z1] : [o.z0, o.z1, o.x0, o.x1];
+        if (at > oa0 - WALL_OBS_MARGIN && at < oa1 + WALL_OBS_MARGIN && cf < oc1 + WALL_OBS_MARGIN && ct > oc0 - WALL_OBS_MARGIN) {
+          return false;
+        }
+      }
+      // The new wall T-junctions into perpendicular walls at its ends — keep
+      // those junctions clear of the perpendicular wall's doorway (a wall
+      // dead-ending right at a door reads as a generator bug).
+      for (const w of splitWalls) {
+        if (w.axis === axis) continue;
+        const touches = w.at > cf - 0.1 && w.at < ct + 0.1 && at > w.from - 0.1 && at < w.to + 0.1;
+        if (touches && Math.abs(at - w.doorAt) < DOOR_CLEARANCE) return false;
+      }
+      return true;
+    };
+
+    /** Doorways avoid opening straight onto a shaft flight or an arrival
+     *  hole right on the other side of the wall. */
+    const chooseDoorAt = (axis: "x" | "z", at: number, from: number, to: number): number => {
+      if (to - from <= 4.4) return (from + to) / 2;
+      let doorAt = range(from + 1.8, to - 1.8);
+      for (let k = 0; k < 6; k++) {
+        const blocked = obstacles.some((o) => {
+          const [oa0, oa1, oc0, oc1] = axis === "x" ? [o.x0, o.x1, o.z0, o.z1] : [o.z0, o.z1, o.x0, o.x1];
+          return oa0 - 1.5 < at && oa1 + 1.5 > at && doorAt + DOORWAY_WIDTH / 2 > oc0 - 0.3 && doorAt - DOORWAY_WIDTH / 2 < oc1 + 0.3;
+        });
+        if (!blocked) break;
+        doorAt = range(from + 1.8, to - 1.8);
+      }
+      return doorAt;
+    };
+
+    let guard = targetRooms * 8; // a fully blocked floor stops splitting instead of looping
+    while (rooms.length < targetRooms && guard-- > 0) {
       const candidates = rooms
         .map((r, i) => ({ i, w: (r.x1 - r.x0) * (r.z1 - r.z0), r }))
         .filter(({ r }) => Math.max(r.x1 - r.x0, r.z1 - r.z0) >= MIN_ROOM_DIM * 2);
@@ -572,25 +650,52 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       // Long axis by default; cross-split sometimes when both directions fit.
       let splitX = rw >= rd;
       if (Math.min(rw, rd) >= MIN_ROOM_DIM * 2 && rng() < 0.35) splitX = !splitX;
-      const ratio = range(0.35, 0.65);
-      if (splitX) {
-        const at = r.x0 + rw * ratio;
-        const doorAt = rd > 4.4 ? range(r.z0 + 1.8, r.z1 - 1.8) : (r.z0 + r.z1) / 2;
-        splitWalls.push({ axis: "x", at, from: r.z0, to: r.z1, doorAt });
-        rooms.splice(chosen.i, 1, { ...r, x1: at }, { ...r, x0: at });
-      } else {
-        const at = r.z0 + rd * ratio;
-        const doorAt = rw > 4.4 ? range(r.x0 + 1.8, r.x1 - 1.8) : (r.x0 + r.x1) / 2;
-        splitWalls.push({ axis: "z", at, from: r.x0, to: r.x1, doorAt });
-        rooms.splice(chosen.i, 1, { ...r, z1: at }, { ...r, z0: at });
+      const axisOrder: ("x" | "z")[] = [splitX ? "x" : "z"];
+      if (Math.min(rw, rd) >= MIN_ROOM_DIM * 2) axisOrder.push(splitX ? "z" : "x");
+      for (const axis of axisOrder) {
+        const [lo, hi] = axis === "x" ? [r.x0, r.x1] : [r.z0, r.z1];
+        let at: number | null = null;
+        for (let k = 0; k < 8 && at === null; k++) {
+          const cand = lo + (hi - lo) * range(0.35, 0.65);
+          if (validAt(axis, cand, r)) at = cand;
+        }
+        if (at === null) continue; // blocked on this axis — try the other or re-pick
+        if (axis === "x") {
+          splitWalls.push({ axis: "x", at, from: r.z0, to: r.z1, doorAt: chooseDoorAt("x", at, r.z0, r.z1) });
+          rooms.splice(chosen.i, 1, { ...r, x1: at }, { ...r, x0: at });
+        } else {
+          splitWalls.push({ axis: "z", at, from: r.x0, to: r.x1, doorAt: chooseDoorAt("z", at, r.x0, r.x1) });
+          rooms.splice(chosen.i, 1, { ...r, z1: at }, { ...r, z0: at });
+        }
+        break;
       }
     }
-    return { rooms, splitWalls };
+    return { rooms, splitWalls, obstacles };
   };
 
-  // Every story rolls its own room count and layout — no two floors alike.
+  // Stories generate in order: place the gap's ramp first (clear of the
+  // arrival rects from the gap below), then BSP the floor around both. Every
+  // story rolls its own room count and layout — no two floors alike.
+  const ramps: RampSpec[] = [];
   const storyLayouts: StoryLayout[] = [];
-  for (let s = 0; s < stories; s++) storyLayouts.push(buildStoryLayout(pickRoomCount()));
+  // Keep ground-floor shafts away from the exterior door openings.
+  const doorZones: RoomRect[] = doors.map((d) => ({
+    x0: d.position[0] - d.width / 2 - 2.2,
+    x1: d.position[0] + d.width / 2 + 2.2,
+    z0: d.position[2] - d.width / 2 - 2.2,
+    z1: d.position[2] + d.width / 2 + 2.2,
+  }));
+  let arrival: RoomRect[] = []; // hole + top landing of the ramp arriving on this story
+  for (let s = 0; s < stories; s++) {
+    const shaft: RoomRect[] = [];
+    if (s < stories - 1) {
+      const r = placeRamp(s, [...arrival, ...(s === 0 ? doorZones : [])]);
+      ramps.push(r);
+      shaft.push(r.rect);
+    }
+    storyLayouts.push(buildStoryLayout(pickRoomCount(), [...arrival, ...shaft]));
+    arrival = s < stories - 1 ? [ramps[s].hole, ramps[s].landing] : [];
+  }
 
   // ---- Wall boxes (per story, story-local y; lifted per story at build time) ----
   const T = WALL_THICKNESS;
@@ -642,13 +747,17 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     for (const w of layout.splitWalls) {
       addWallWithDoor(boxes, w.axis, w.at, w.from, w.to, w.doorAt, DOORWAY_WIDTH, DOORWAY_HEIGHT);
     }
-    // Occasional pillars in big rooms — pure backrooms. Each floor rolls its own.
+    // Occasional pillars in big rooms — pure backrooms. Each floor rolls its
+    // own; a pillar landing on a ramp shaft or over an arrival hole is dropped.
     for (const r of layout.rooms) {
       const rw = r.x1 - r.x0;
       const rd = r.z1 - r.z0;
       if (rw * rd > 70 && rng() < 0.6) {
         const px = (r.x0 + r.x1) / 2 + range(-0.25, 0.25) * rw;
         const pz = (r.z0 + r.z1) / 2 + range(-0.25, 0.25) * rd;
+        if (layout.obstacles.some((o) => px > o.x0 - 0.9 && px < o.x1 + 0.9 && pz > o.z0 - 0.9 && pz < o.z1 + 0.9)) {
+          continue;
+        }
         boxes.push({ cx: px, cy: ceilingHeight / 2, cz: pz, sx: 0.55, sy: ceilingHeight, sz: 0.55 });
       }
     }
@@ -703,17 +812,16 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   }
 
   // ---- Ceiling light panels (uniform grid clipped to the perimeter, a few
-  // tubes randomly dead — each floor rolls its own gaps; skipped over the
-  // ramp shaft where the slab is open) ----
+  // tubes randomly dead — each floor rolls its own gaps; skipped near the
+  // slab hole piercing this story's ceiling) ----
   const lightPanelsPerStory: [number, number][][] = [];
   for (let s = 0; s < stories; s++) {
+    const holes = ramps.filter((r) => r.story === s).map((r) => r.hole);
     const panels: [number, number][] = [];
     for (let x = -ihw + LIGHT_PANEL_SPACING / 2; x < ihw - 1; x += LIGHT_PANEL_SPACING) {
       for (let z = -ihd + LIGHT_PANEL_SPACING / 2; z < ihd - 1; z += LIGHT_PANEL_SPACING) {
         if (!pointInRing(intPts, [x, z], 1)) continue;
-        if (ramp && x > ramp.room.x0 - 0.5 && x < ramp.room.x1 + 0.5 && z > ramp.room.z0 - 0.5 && z < ramp.room.z1 + 0.5) {
-          continue;
-        }
+        if (holes.some((h) => x > h.x0 - 1.6 && x < h.x1 + 1.6 && z > h.z0 - 1.6 && z < h.z1 + 1.6)) continue;
         if (rng() > 0.15) panels.push([x, z]);
       }
     }
@@ -721,16 +829,26 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   }
 
   // ---- Child slots: deterministic placements cycling stories, using each
-  // story's OWN room layout ----
+  // story's OWN room layout. Rooms can contain ramp shafts now, so slots
+  // re-roll away from this story's shaft and the arrival hole in its floor. ----
   const childSlots: ChildSlot[] = [];
   for (let i = 0; i < CHILD_SLOT_COUNT; i++) {
     const story = rangeInt(0, stories - 1);
     const storyRooms = storyLayouts[story].rooms;
     const roomIndex = rangeInt(0, storyRooms.length - 1);
     const r = storyRooms[roomIndex];
+    const clearOf: RoomRect[] = [
+      ...ramps.filter((rp) => rp.story === story).map((rp) => rp.rect),
+      ...ramps.filter((rp) => rp.story === story - 1).map((rp) => rp.hole),
+    ];
     const m = 1.4;
-    const x = r.x1 - r.x0 > 2 * m ? range(r.x0 + m, r.x1 - m) : (r.x0 + r.x1) / 2;
-    const z = r.z1 - r.z0 > 2 * m ? range(r.z0 + m, r.z1 - m) : (r.z0 + r.z1) / 2;
+    let x = (r.x0 + r.x1) / 2;
+    let z = (r.z0 + r.z1) / 2;
+    for (let tries = 0; tries < 8; tries++) {
+      x = r.x1 - r.x0 > 2 * m ? range(r.x0 + m, r.x1 - m) : (r.x0 + r.x1) / 2;
+      z = r.z1 - r.z0 > 2 * m ? range(r.z0 + m, r.z1 - m) : (r.z0 + r.z1) / 2;
+      if (!clearOf.some((o) => x > o.x0 - 0.5 && x < o.x1 + 0.5 && z > o.z0 - 0.5 && z < o.z1 + 0.5)) break;
+    }
     const y = story * storyHeight + (story === 0 ? FLOOR_LIFT : 0);
     childSlots.push({ position: [x, y, z], rotationY: range(0, Math.PI * 2), roomIndex });
   }
@@ -754,7 +872,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       storyHeight,
       roomsPerStory: storyLayouts.map((l) => l.rooms),
       wallBoxesPerStory,
-      ramp,
+      ramps,
       lightPanelsPerStory,
       childSlots,
     },

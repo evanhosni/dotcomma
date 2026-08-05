@@ -285,7 +285,7 @@ const mergeOrThrow = (geos: THREE.BufferGeometry[], label: string): THREE.Buffer
 };
 
 const buildInteriorGeometries = (plan: BuildingPlan) => {
-  const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesPerStory, ramp, lightPanelsPerStory } = plan.interior;
+  const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesPerStory, ramps, lightPanelsPerStory } = plan.interior;
   const { rect, sides, phase } = plan.lofts[0];
   const ihw = width / 2;
   const ihd = depth / 2;
@@ -368,12 +368,11 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
   // ---- Slabs: extruded copies of the interior polygon, slightly oversized
   // so their edges tuck into the prismatic inner shell at every story. ----
   const slabPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: ihw + 0.06, hd: ihd + 0.06 }, phase);
-  const slabShape = (withHole: boolean): THREE.Shape => {
+  const slabShape = (holes: { x0: number; z0: number; x1: number; z1: number }[]): THREE.Shape => {
     const shape = new THREE.Shape();
     slabPts.forEach(([x, z], i) => (i === 0 ? shape.moveTo(x, z) : shape.lineTo(x, z)));
     shape.closePath();
-    if (withHole && ramp) {
-      const h = ramp.hole;
+    for (const h of holes) {
       const path = new THREE.Path();
       path.moveTo(h.x0, h.z0);
       path.lineTo(h.x1, h.z0);
@@ -385,53 +384,76 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     return shape;
   };
   /** Slab occupying y ∈ [yTop − thickness, yTop]. */
-  const slabGeo = (yTop: number, thickness: number, withHole: boolean): THREE.BufferGeometry =>
-    new THREE.ExtrudeGeometry(slabShape(withHole), { depth: thickness, bevelEnabled: false })
+  const slabGeo = (yTop: number, thickness: number, holes: { x0: number; z0: number; x1: number; z1: number }[]): THREE.BufferGeometry =>
+    new THREE.ExtrudeGeometry(slabShape(holes), { depth: thickness, bevelEnabled: false })
       .rotateX(Math.PI / 2) // shape (x,y) → world (x,z); extrusion ends up downward
       .translate(0, yTop, 0);
 
   // Bottom floor slab — top surface lifted above grade so terrain never
   // z-fights through, reaching below grade so no gap shows at the door sill.
-  parts.push(withColor(slabGeo(FLOOR_LIFT, SLAB_THICKNESS + FLOOR_LIFT + 0.4, false), colors.floor));
-  slabColliderGeos.push(slabGeo(FLOOR_LIFT, SLAB_THICKNESS, false));
+  parts.push(withColor(slabGeo(FLOOR_LIFT, SLAB_THICKNESS + FLOOR_LIFT + 0.4, []), colors.floor));
+  slabColliderGeos.push(slabGeo(FLOOR_LIFT, SLAB_THICKNESS, []));
 
-  // Inter-story slabs (with the ramp-shaft hole): floor-colored top layer +
-  // ceiling-colored underside.
+  // Inter-story slabs: floor-colored top layer + ceiling-colored underside,
+  // each cut by ITS gap's ramp hole (every gap places its ramp elsewhere).
   for (let s = 1; s < stories; s++) {
     const yTop = s * storyHeight; // story s floor surface
-    parts.push(withColor(slabGeo(yTop, SLAB_THICKNESS / 2, true), colors.floor));
-    parts.push(withColor(slabGeo(yTop - SLAB_THICKNESS / 2, SLAB_THICKNESS / 2, true), colors.ceiling));
-    slabColliderGeos.push(slabGeo(yTop, SLAB_THICKNESS, true));
+    const holes = ramps.filter((r) => r.story === s - 1).map((r) => r.hole);
+    parts.push(withColor(slabGeo(yTop, SLAB_THICKNESS / 2, holes), colors.floor));
+    parts.push(withColor(slabGeo(yTop - SLAB_THICKNESS / 2, SLAB_THICKNESS / 2, holes), colors.ceiling));
+    slabColliderGeos.push(slabGeo(yTop, SLAB_THICKNESS, holes));
   }
 
   // Top ceiling (solid)
   const topY = (stories - 1) * storyHeight + ch;
-  parts.push(withColor(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, false), colors.ceiling));
-  slabColliderGeos.push(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, false));
+  parts.push(withColor(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []), colors.ceiling));
+  slabColliderGeos.push(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []));
 
   // Ramp flights: one inclined slab per story gap — the SAME box is the
   // visual (merged into the floor geometry) and the collider, so feet and
-  // eyes always agree.
-  if (ramp) {
-    const run = ramp.runEnd - ramp.runStart;
+  // eyes always agree. Built ascending +x, then yawed to the ramp's axis/dir.
+  for (const r of ramps) {
+    const run = Math.abs(r.runEnd - r.runStart);
     const theta = Math.atan2(storyHeight, run);
     const hyp = Math.sqrt(run * run + storyHeight * storyHeight);
-    const cx = (ramp.runStart + ramp.runEnd) / 2;
-    const cz = (ramp.laneZ0 + ramp.laneZ1) / 2;
-    for (let s = 0; s < stories - 1; s++) {
-      // sunk slightly so the top surface meets both floors flush
-      const cy = s * storyHeight + storyHeight / 2 - 0.1;
-      parts.push(
-        withColor(
-          new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).toNonIndexed().rotateZ(theta).translate(cx, cy, cz),
-          colors.ramp,
-        ),
-      );
-      rampColliders.push({
-        position: [cx, cy, cz],
-        rotation: [0, 0, theta],
-        halfExtents: [hyp / 2, RAMP_THICKNESS / 2, RAMP_WIDTH / 2],
-      });
+    const yaw = r.axis === "x" ? (r.dir === 1 ? 0 : Math.PI) : r.dir === 1 ? -Math.PI / 2 : Math.PI / 2;
+    const along = (r.runStart + r.runEnd) / 2;
+    const lane = (r.lane0 + r.lane1) / 2;
+    const cx = r.axis === "x" ? along : lane;
+    const cz = r.axis === "x" ? lane : along;
+    // sunk slightly so the top surface meets both floors flush
+    const cy = r.story * storyHeight + storyHeight / 2 - 0.1;
+    parts.push(
+      withColor(
+        new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).toNonIndexed().rotateZ(theta).rotateY(yaw).translate(cx, cy, cz),
+        colors.ramp,
+      ),
+    );
+    // Euler XYZ applies Z first then Y — same order as the geometry above.
+    rampColliders.push({
+      position: [cx, cy, cz],
+      rotation: [0, yaw, theta],
+      halfExtents: [hyp / 2, RAMP_THICKNESS / 2, RAMP_WIDTH / 2],
+    });
+  }
+
+  // ---- Baked lighting: the interior renders UNLIT (scene light can't reach
+  // inside the shell), so a fixed wrap-lambert is baked into the vertex
+  // colors — faces pointing different ways get distinct shades, so same-color
+  // surfaces still read as separate planes. Zero runtime cost: same single
+  // material and draw call. Light panels are added AFTER the bake so they
+  // stay full-bright (they read as the light source). ----
+  const L = normalize([0.45, 0.8, 0.3]);
+  for (const g of parts) {
+    const pos = g.getAttribute("position").array as ArrayLike<number>;
+    const col = g.getAttribute("color").array as Float32Array;
+    for (let i = 0; i + 8 < pos.length; i += 9) {
+      const a: Vec3 = [pos[i], pos[i + 1], pos[i + 2]];
+      const b: Vec3 = [pos[i + 3], pos[i + 4], pos[i + 5]];
+      const c: Vec3 = [pos[i + 6], pos[i + 7], pos[i + 8]];
+      const n = normalize(cross(sub(b, a), sub(c, a)));
+      const f = 0.62 + 0.38 * ((n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) * 0.5 + 0.5);
+      for (let k = 0; k < 9; k++) col[i + k] *= f;
     }
   }
 

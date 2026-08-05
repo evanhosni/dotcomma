@@ -98,19 +98,30 @@ export interface ChildSlot {
   roomIndex: number;
 }
 
-/** Stacked straight-run ramp shaft, identical on every story: a ramp lane
- *  (the inclined flights + the slab holes above them) beside a solid walkway
- *  lane used to get back to the next flight's start. */
+/** One straight-run ramp flight connecting story `story` to story+1. Each
+ *  story gap gets its OWN independently placed ramp (spot and orientation
+ *  differ per gap), sitting inside a normal room — BSP walls, pillars,
+ *  doorways, light panels, and child slots all avoid its footprint. */
 export interface RampSpec {
-  /** Full ramp-shaft rect (excluded from rooms, lights, and child slots). */
-  room: RoomRect;
-  /** Slab cutout — the ramp lane over the run, on every inter-story slab. */
+  /** The flight climbs from this story's floor to story+1's. */
+  story: number;
+  /** Full shaft footprint on `story`'s floor: bottom landing + run + top
+   *  landing × lane width. */
+  rect: RoomRect;
+  /** Slab cutout in story+1's floor — the lane over the run only. */
   hole: RoomRect;
-  /** Flights ascend +x from runStart (floor) to runEnd (next floor). */
+  /** Top landing on story+1, kept clear of walls so you can step off. */
+  landing: RoomRect;
+  /** Run direction: the flight advances along `axis` in `dir`. */
+  axis: "x" | "z";
+  dir: 1 | -1;
+  /** Coordinates along `axis`: flight bottom (floor of `story`) and top
+   *  (floor of story+1). runEnd − runStart is signed by `dir`. */
   runStart: number;
   runEnd: number;
-  laneZ0: number;
-  laneZ1: number;
+  /** Lane extent across `axis`. */
+  lane0: number;
+  lane1: number;
 }
 
 /** Interior surface color overrides (hex). Unset entries derive from the
@@ -141,7 +152,9 @@ export interface InteriorPlan {
    *  pillars. The interior PERIMETER has no wall boxes — it is the shell's
    *  inner surface (the shell has real thickness). */
   wallBoxesPerStory: WallBox[][];
-  ramp: RampSpec | null;
+  /** One ramp per story gap (ramps[g] climbs story g → g+1); empty for
+   *  single-story buildings. */
+  ramps: RampSpec[];
   /** Ceiling light panel centers [x, z] per story (each floor rolls its own
    *  grid gaps). */
   lightPanelsPerStory: [number, number][][];
