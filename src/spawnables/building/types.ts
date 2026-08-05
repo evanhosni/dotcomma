@@ -90,15 +90,6 @@ export interface WallBox {
   rotY?: number;
 }
 
-/** Exit-door placement on the interior perimeter, in interior-local space.
- *  +z of the portal (yaw) faces INTO the interior (see the pair-transform
- *  convention in buildingAssets). */
-export interface ExitDoor {
-  position: [number, number, number];
-  yaw: number;
-  width: number;
-  height: number;
-}
 
 /** Deterministic spawn placement for a Building child, in interior-local space. */
 export interface ChildSlot {
@@ -122,12 +113,23 @@ export interface RampSpec {
   laneZ1: number;
 }
 
+/** Interior surface color overrides (hex). Unset entries derive from the
+ *  building's exterior ground-segment color. */
+export interface InteriorColors {
+  wall?: number;
+  floor?: number;
+  ceiling?: number;
+  ramp?: number;
+}
+
 export interface InteriorPlan {
   /** Bounding-box size of the interior footprint (the perimeter itself is an
    *  N-gon matching the exterior's side count; 4 = plain rect). */
   width: number;
   depth: number;
   ceilingHeight: number;
+  /** Resolved interior surface colors (defaults derived from the exterior). */
+  colors: { wall: number; floor: number; ceiling: number; ramp: number };
   stories: number;
   /** ceilingHeight + slab thickness — story s floor top sits at s*storyHeight. */
   storyHeight: number;
@@ -135,14 +137,10 @@ export interface InteriorPlan {
    *  interiors, rooms fill an inscribed rect block ringed by a corridor. */
   rooms: RoomRect[];
   /** Walls replicated on every story: BSP splits, shaft walls, block
-   *  boundary walls, pillars. */
+   *  boundary walls, pillars. The interior PERIMETER has no wall boxes — it
+   *  is the shell's inner surface (the shell has real thickness). */
   wallBoxesCommon: WallBox[];
-  /** Ground-story perimeter (carved by the exit doors). */
-  perimeterGround: WallBox[];
-  /** Upper-story perimeter (solid). */
-  perimeterUpper: WallBox[];
   ramp: RampSpec | null;
-  exitDoors: ExitDoor[];
   /** Ceiling light panel centers [x, z] (replicated per story). */
   lightPanels: [number, number][];
   childSlots: ChildSlot[];
@@ -159,19 +157,21 @@ export interface BuildingPlan {
   /** Walls extend this far below y=0 so slight terrain slope doesn't show a gap. */
   foundationDepth: number;
   lofts: ExteriorLoft[];
+  /** lofts[0..bodyLoftCount-1] are the door band + body segments (the masses
+   *  the interior lives inside); the rest are rooftop caps and pipes. */
+  bodyLoftCount: number;
   doors: DoorPlan[];
   windows: WindowSpec[];
   interior: InteriorPlan;
 }
 
-/** Material overrides — future variants plug custom shaders in here. The
- *  default exterior material uses vertex colors (baked per building), so a
- *  custom exterior material should either respect or deliberately ignore them. */
+/** Material overrides — future variants plug custom shaders in here. Both
+ *  defaults use vertex colors (baked per building: exterior segment colors,
+ *  interior wall/floor/ceiling/panel palette), so a custom material should
+ *  either respect or deliberately ignore them. */
 export interface BuildingMaterials {
   exterior?: THREE.Material;
-  wall?: THREE.Material;
-  floor?: THREE.Material;
-  ceiling?: THREE.Material;
+  interior?: THREE.Material;
 }
 
 export enum WINDOW_SHAPE {
@@ -218,11 +218,9 @@ export interface BuildingOptions {
   /** Door opening [width, height]. Height is clamped below the interior ceiling. */
   doorSize?: [number, number];
   ceilingHeight?: number;
-  /** Interior footprint = exterior footprint × this (default 1 — interiors
-   *  match their shell; larger values make the inside bigger than the
-   *  outside, portals hide the lie). Ignored when sizes are derived from
-   *  rooms/stories; applied when `exteriorSize` is given. */
-  interiorScale?: number;
+  /** Interior surface colors — unset entries match the exterior (walls take
+   *  the ground-segment color; floor darker, ceiling lighter). */
+  interiorColors?: InteriorColors;
 }
 
 export interface BuildingProps extends SpawnedObjectProps, BuildingOptions {
@@ -230,8 +228,5 @@ export interface BuildingProps extends SpawnedObjectProps, BuildingOptions {
    *  spot regenerates the same building on every load. */
   seed?: string | number;
   materials?: BuildingMaterials;
-  activationDistance?: number;
-  /** Backrooms-style emissive ceiling panels (default on). */
-  ceilingLights?: boolean;
   children?: React.ReactNode;
 }

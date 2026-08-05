@@ -1,9 +1,8 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import { INDOOR_COLLIDER_PADDING } from "../../portals/constants";
-import { generateBuildingPlan, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS, WALL_THICKNESS } from "./generatePlan";
+import { FLOOR_LIFT, generateBuildingPlan, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
 import { edgeLength, edgePoint, interpRing, ringPoints } from "./rings";
-import { BuildingOptions, BuildingPlan, DoorPlan, ExteriorLoft, RoomRect, WallBox, WindowSpec } from "./types";
+import { BuildingOptions, BuildingPlan, DoorPlan, ExteriorLoft, WallBox, WindowSpec } from "./types";
 
 /**
  * Turns a BuildingPlan into renderable geometry, cached per (seed, options)
@@ -17,11 +16,13 @@ import { BuildingOptions, BuildingPlan, DoorPlan, ExteriorLoft, RoomRect, WallBo
 
 type Vec3 = [number, number, number];
 
-export interface PortalPlacement {
-  name: string;
+export interface DoorPlacement {
+  /** Center of the door opening on the shell (interior-local = building-local). */
   position: Vec3;
-  rotation: Vec3;
-  size: [number, number];
+  /** +z faces out of the building. */
+  yaw: number;
+  width: number;
+  height: number;
 }
 
 export interface RampCollider {
@@ -37,20 +38,45 @@ export interface ProceduralBuildingAssets {
    *  the door openings are walkable with no named-mesh exclusion dance. */
   exteriorVertices: Float32Array;
   exteriorIndices: Uint32Array;
-  wallGeometry: THREE.BufferGeometry;
-  floorGeometry: THREE.BufferGeometry;
-  ceilingGeometry: THREE.BufferGeometry;
-  lightsGeometry: THREE.BufferGeometry | null;
-  /** Every axis-aligned interior collider: walls on all stories, slabs
-   *  (with the ramp-shaft holes), padded bottom floor and top ceiling. */
+  /** The ENTIRE interior (walls, slabs, ramps, light panels) as one
+   *  vertex-colored geometry — rendered at all times alongside the shell so
+   *  exterior and interior are one consistent building. */
+  interiorGeometry: THREE.BufferGeometry;
+  /** Wall/pillar cuboids for every story (slabs are the trimesh below). */
   interiorColliders: WallBox[];
   /** One rotated cuboid per ramp flight. */
   rampColliders: RampCollider[];
-  /** Shared door-opening plane, used by every portal surface of this building. */
+  /** Exact trimesh for all slabs (ground floor, inter-story with shaft
+   *  holes, top ceiling) — clipped to the interior polygon. */
+  interiorSlabVertices: Float32Array;
+  interiorSlabIndices: Uint32Array;
+  /** Swinging door leaf, shared by this building's doors. Origin = hinge
+   *  edge (the leaf extends +x), so rotating the parent group swings it. */
   doorGeometry: THREE.BufferGeometry;
-  enterPortals: PortalPlacement[];
-  exitPortals: PortalPlacement[];
+  doors: DoorPlacement[];
 }
+
+// Interior surface colors come from the plan (derived from the building's
+// exterior palette, overridable via BuildingOptions.interiorColors) — only
+// the glowing panel color is fixed.
+const LIGHT_PANEL_COLOR = 0xfff7d6;
+
+/** Bake a uniform vertex color onto a geometry (converted through
+ *  THREE.Color for correct color management) and drop its uv attribute so
+ *  every interior part merges cleanly with the shader-less sink geometry. */
+const withColor = (geometry: THREE.BufferGeometry, hex: number): THREE.BufferGeometry => {
+  _color.set(hex);
+  const count = geometry.getAttribute("position").count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    colors[i * 3] = _color.r;
+    colors[i * 3 + 1] = _color.g;
+    colors[i * 3 + 2] = _color.b;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.deleteAttribute("uv");
+  return geometry;
+};
 
 const _color = new THREE.Color();
 
@@ -92,11 +118,25 @@ class TriangleSink {
   }
 }
 
-const emitLoft = (sink: TriangleSink, loft: ExteriorLoft, doors: DoorPlan[]): void => {
-  sink.setColor(loft.color);
+/** Emit a loft's wall surface. With `inset`/`flip` it emits the same surface
+ *  pulled inward and wound to face the interior — the shell's INNER face,
+ *  which IS the interior perimeter wall (the shell has real thickness). */
+const emitLoft = (
+  sink: TriangleSink,
+  loft: ExteriorLoft,
+  doors: DoorPlan[],
+  o?: { inset?: number; flip?: boolean; color?: number },
+): void => {
+  sink.setColor(o?.color ?? loft.color);
+  const inset = o?.inset ?? 0;
+  const flip = o?.flip ?? false;
+  const adj = (L: { y: number; cx: number; cz: number; hw: number; hd: number }) =>
+    inset ? { ...L, hw: Math.max(L.hw - inset, 0.4), hd: Math.max(L.hd - inset, 0.4) } : L;
+  const q = (a: Vec3, b: Vec3, c: Vec3, d: Vec3): void => (flip ? sink.quad(d, c, b, a) : sink.quad(a, b, c, d));
+
   for (let i = 0; i < loft.levels.length - 1; i++) {
-    const A = loft.levels[i];
-    const B = loft.levels[i + 1];
+    const A = adj(loft.levels[i]);
+    const B = adj(loft.levels[i + 1]);
     const ptsA = ringPoints(loft.rect, loft.sides, A, loft.phase);
     const ptsB = ringPoints(loft.rect, loft.sides, B, loft.phase);
     const n = ptsA.length;
@@ -104,7 +144,7 @@ const emitLoft = (sink: TriangleSink, loft: ExteriorLoft, doors: DoorPlan[]): vo
       const door = i === 0 ? doors.find((d) => d.edge === j) : undefined;
       if (!door) {
         const j1 = (j + 1) % n;
-        sink.quad(
+        q(
           [ptsA[j][0], A.y, ptsA[j][1]],
           [ptsA[j1][0], A.y, ptsA[j1][1]],
           [ptsB[j1][0], B.y, ptsB[j1][1]],
@@ -117,7 +157,7 @@ const emitLoft = (sink: TriangleSink, loft: ExteriorLoft, doors: DoorPlan[]): vo
       const sq = (t0: number, t1: number, y0: number, y1: number): void => {
         const p0 = edgePoint(ptsA, j, t0);
         const p1 = edgePoint(ptsA, j, t1);
-        sink.quad([p0[0], y0, p0[1]], [p1[0], y0, p1[1]], [p1[0], y1, p1[1]], [p0[0], y1, p0[1]]);
+        q([p0[0], y0, p0[1]], [p1[0], y0, p1[1]], [p1[0], y1, p1[1]], [p0[0], y1, p0[1]]);
       };
       if (door.t0 > 0.001) sq(0, door.t0, A.y, B.y);
       if (door.t1 < 0.999) sq(door.t1, 1, A.y, B.y);
@@ -125,7 +165,7 @@ const emitLoft = (sink: TriangleSink, loft: ExteriorLoft, doors: DoorPlan[]): vo
       if (B.y - door.height > 0.001) sq(door.t0, door.t1, door.height, B.y); // header
     }
   }
-  if (loft.roof) {
+  if (loft.roof && !flip) {
     const top = loft.levels[loft.levels.length - 1];
     const pts = ringPoints(loft.rect, loft.sides, top, loft.phase);
     const c: Vec3 = [top.cx, top.y, top.cz];
@@ -236,82 +276,138 @@ const box = (b: WallBox): THREE.BoxGeometry => {
   return g.translate(b.cx, b.cy, b.cz);
 };
 
-const rectBox = (r: RoomRect, y0: number, y1: number): WallBox => ({
-  cx: (r.x0 + r.x1) / 2,
-  cy: (y0 + y1) / 2,
-  cz: (r.z0 + r.z1) / 2,
-  sx: r.x1 - r.x0,
-  sy: y1 - y0,
-  sz: r.z1 - r.z0,
-});
+/** mergeGeometries returns null when inputs have mismatched attributes or
+ *  mixed indexed/non-indexed — fail loudly instead of caching a null. */
+const mergeOrThrow = (geos: THREE.BufferGeometry[], label: string): THREE.BufferGeometry => {
+  const merged = mergeGeometries(geos, false);
+  if (!merged) throw new Error(`Building geometry merge failed: ${label}`);
+  return merged;
+};
 
 const buildInteriorGeometries = (plan: BuildingPlan) => {
-  const {
-    width,
-    depth,
-    ceilingHeight: ch,
-    stories,
-    storyHeight,
-    wallBoxesCommon,
-    perimeterGround,
-    perimeterUpper,
-    ramp,
-    lightPanels,
-  } = plan.interior;
-  const T = WALL_THICKNESS;
-  const PAD = INDOOR_COLLIDER_PADDING;
-  const X0 = -width / 2 - T;
-  const X1 = width / 2 + T;
-  const Z0 = -depth / 2 - T;
-  const Z1 = depth / 2 + T;
+  const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesCommon, ramp, lightPanels } = plan.interior;
+  const { rect, sides, phase } = plan.lofts[0];
+  const ihw = width / 2;
+  const ihd = depth / 2;
 
-  const wallGeos: THREE.BufferGeometry[] = [];
-  const floorGeos: THREE.BufferGeometry[] = [];
-  const ceilGeos: THREE.BufferGeometry[] = [];
+  // Everything visual goes into ONE vertex-colored parts list (all
+  // non-indexed so the merge succeeds).
+  const parts: THREE.BufferGeometry[] = [];
+  const slabColliderGeos: THREE.BufferGeometry[] = [];
   const interiorColliders: WallBox[] = [];
   const rampColliders: RampCollider[] = [];
 
-  // Walls, replicated per story (ground story carries the exit-door carves)
+  // ---- Walls, replicated per story. There are NO perimeter wall boxes —
+  // the perimeter is the shell's inner surface (emitted below), and split
+  // walls run all the way into it. ----
+  const colors = plan.interior.colors;
   for (let s = 0; s < stories; s++) {
     const yOff = s * storyHeight;
-    for (const b of [...wallBoxesCommon, ...(s === 0 ? perimeterGround : perimeterUpper)]) {
-      const shifted = { ...b, cy: b.cy + yOff };
-      wallGeos.push(box(shifted));
-      interiorColliders.push(shifted);
+    for (const b of wallBoxesCommon) {
+      const wb: WallBox = { ...b, cy: b.cy + yOff };
+      parts.push(withColor(box(wb).toNonIndexed(), colors.wall));
+      interiorColliders.push(wb);
     }
   }
 
-  // Bottom floor slab (solid, collider padded past the walls for portal crossings)
-  floorGeos.push(box(rectBox({ x0: X0, z0: Z0, x1: X1, z1: Z1 }, -SLAB_THICKNESS, 0)));
-  interiorColliders.push({ cx: 0, cy: -SLAB_THICKNESS / 2, cz: 0, sx: width + 2 * PAD, sy: SLAB_THICKNESS, sz: depth + 2 * PAD });
+  // ---- Inner shell surface: a straight PRISM of the interior polygon from
+  // foundation to just above the top floor, wound to face inward. The outer
+  // shell leans/tapers around it — the wall cavity between the two surfaces
+  // simply varies in thickness. A constant inner surface means split walls
+  // can meet it exactly at every story. ----
+  const interiorTop = stories * storyHeight + 0.5;
+  const doorH = plan.doors[0].height;
+  const innerLoft: ExteriorLoft = {
+    rect,
+    sides,
+    phase,
+    color: colors.wall,
+    roof: false,
+    levels: [
+      { y: -0.6, cx: 0, cz: 0, hw: ihw, hd: ihd },
+      { y: doorH + 1, cx: 0, cz: 0, hw: ihw, hd: ihd },
+      { y: interiorTop, cx: 0, cz: 0, hw: ihw, hd: ihd },
+    ],
+  };
+  const innerSink = new TriangleSink();
+  emitLoft(innerSink, innerLoft, plan.doors, { flip: true, color: colors.wall });
 
-  // Inter-story slabs: full rect minus the ramp-shaft hole; each piece split
-  // into a floor-material top layer and a ceiling-material underside.
-  const slabPieces = ((): RoomRect[] => {
-    const full = { x0: X0, z0: Z0, x1: X1, z1: Z1 };
-    if (!ramp) return [full];
-    const h = ramp.hole;
-    return [
-      { x0: X0, z0: Z0, x1: h.x0, z1: Z1 },
-      { x0: h.x1, z0: Z0, x1: X1, z1: Z1 },
-      { x0: h.x0, z0: Z0, x1: h.x1, z1: h.z0 },
-      { x0: h.x0, z0: h.z1, x1: h.x1, z1: Z1 },
-    ].filter((p) => p.x1 - p.x0 > 0.02 && p.z1 - p.z0 > 0.02);
-  })();
+  // Door reveals: close the wall cavity around each opening (double-faced
+  // jamb quads on both sides + the header).
+  const band = plan.lofts[0];
+  const outerPts = ringPoints(band.rect, band.sides, band.levels[0], band.phase);
+  const innerPts = ringPoints(rect, sides, innerLoft.levels[0], phase);
+  for (const d of plan.doors) {
+    const jamb = (t: number): void => {
+      const o = edgePoint(outerPts, d.edge, t);
+      const p = edgePoint(innerPts, d.edge, t);
+      const a: Vec3 = [o[0], 0, o[1]];
+      const b: Vec3 = [o[0], d.height, o[1]];
+      const c: Vec3 = [p[0], d.height, p[1]];
+      const e: Vec3 = [p[0], 0, p[1]];
+      innerSink.quad(a, b, c, e);
+      innerSink.quad(e, c, b, a);
+    };
+    jamb(d.t0);
+    jamb(d.t1);
+    const o0 = edgePoint(outerPts, d.edge, d.t0);
+    const o1 = edgePoint(outerPts, d.edge, d.t1);
+    const p0 = edgePoint(innerPts, d.edge, d.t0);
+    const p1 = edgePoint(innerPts, d.edge, d.t1);
+    const h = d.height;
+    innerSink.quad([o0[0], h, o0[1]], [o1[0], h, o1[1]], [p1[0], h, p1[1]], [p0[0], h, p0[1]]);
+    innerSink.quad([p0[0], h, p0[1]], [p1[0], h, p1[1]], [o1[0], h, o1[1]], [o0[0], h, o0[1]]);
+  }
+  const innerShellGeometry = new THREE.BufferGeometry();
+  innerShellGeometry.setAttribute("position", new THREE.Float32BufferAttribute(innerSink.positions, 3));
+  innerShellGeometry.setAttribute("color", new THREE.Float32BufferAttribute(innerSink.colors, 3));
+  innerShellGeometry.computeVertexNormals();
+  const innerShellVertices = new Float32Array(innerSink.positions);
+  parts.push(innerShellGeometry);
 
+  // ---- Slabs: extruded copies of the interior polygon, slightly oversized
+  // so their edges tuck into the prismatic inner shell at every story. ----
+  const slabPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: ihw + 0.06, hd: ihd + 0.06 }, phase);
+  const slabShape = (withHole: boolean): THREE.Shape => {
+    const shape = new THREE.Shape();
+    slabPts.forEach(([x, z], i) => (i === 0 ? shape.moveTo(x, z) : shape.lineTo(x, z)));
+    shape.closePath();
+    if (withHole && ramp) {
+      const h = ramp.hole;
+      const path = new THREE.Path();
+      path.moveTo(h.x0, h.z0);
+      path.lineTo(h.x1, h.z0);
+      path.lineTo(h.x1, h.z1);
+      path.lineTo(h.x0, h.z1);
+      path.closePath();
+      shape.holes.push(path);
+    }
+    return shape;
+  };
+  /** Slab occupying y ∈ [yTop − thickness, yTop]. */
+  const slabGeo = (yTop: number, thickness: number, withHole: boolean): THREE.BufferGeometry =>
+    new THREE.ExtrudeGeometry(slabShape(withHole), { depth: thickness, bevelEnabled: false })
+      .rotateX(Math.PI / 2) // shape (x,y) → world (x,z); extrusion ends up downward
+      .translate(0, yTop, 0);
+
+  // Bottom floor slab — top surface lifted above grade so terrain never
+  // z-fights through, reaching below grade so no gap shows at the door sill.
+  parts.push(withColor(slabGeo(FLOOR_LIFT, SLAB_THICKNESS + FLOOR_LIFT + 0.4, false), colors.floor));
+  slabColliderGeos.push(slabGeo(FLOOR_LIFT, SLAB_THICKNESS, false));
+
+  // Inter-story slabs (with the ramp-shaft hole): floor-colored top layer +
+  // ceiling-colored underside.
   for (let s = 1; s < stories; s++) {
     const yTop = s * storyHeight; // story s floor surface
-    for (const p of slabPieces) {
-      floorGeos.push(box(rectBox(p, yTop - SLAB_THICKNESS / 2, yTop)));
-      ceilGeos.push(box(rectBox(p, yTop - SLAB_THICKNESS, yTop - SLAB_THICKNESS / 2)));
-      interiorColliders.push(rectBox(p, yTop - SLAB_THICKNESS, yTop));
-    }
+    parts.push(withColor(slabGeo(yTop, SLAB_THICKNESS / 2, true), colors.floor));
+    parts.push(withColor(slabGeo(yTop - SLAB_THICKNESS / 2, SLAB_THICKNESS / 2, true), colors.ceiling));
+    slabColliderGeos.push(slabGeo(yTop, SLAB_THICKNESS, true));
   }
 
   // Top ceiling (solid)
   const topY = (stories - 1) * storyHeight + ch;
-  ceilGeos.push(box(rectBox({ x0: X0, z0: Z0, x1: X1, z1: Z1 }, topY, topY + SLAB_THICKNESS)));
-  interiorColliders.push({ cx: 0, cy: topY + SLAB_THICKNESS / 2, cz: 0, sx: width + 2 * PAD, sy: SLAB_THICKNESS, sz: depth + 2 * PAD });
+  parts.push(withColor(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, false), colors.ceiling));
+  slabColliderGeos.push(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, false));
 
   // Ramp flights: one inclined slab per story gap — the SAME box is the
   // visual (merged into the floor geometry) and the collider, so feet and
@@ -325,7 +421,12 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     for (let s = 0; s < stories - 1; s++) {
       // sunk slightly so the top surface meets both floors flush
       const cy = s * storyHeight + storyHeight / 2 - 0.1;
-      floorGeos.push(new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).rotateZ(theta).translate(cx, cy, cz));
+      parts.push(
+        withColor(
+          new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).toNonIndexed().rotateZ(theta).translate(cx, cy, cz),
+          colors.ramp,
+        ),
+      );
       rampColliders.push({
         position: [cx, cy, cz],
         rotation: [0, 0, theta],
@@ -334,25 +435,44 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     }
   }
 
-  const wallGeometry = mergeGeometries(wallGeos, false);
-  const floorGeometry = mergeGeometries(floorGeos, false);
-  const ceilingGeometry = mergeGeometries(ceilGeos, false);
-  [...wallGeos, ...floorGeos, ...ceilGeos].forEach((g) => g.dispose());
-
-  let lightsGeometry: THREE.BufferGeometry | null = null;
-  if (lightPanels.length > 0) {
-    const panels: THREE.BufferGeometry[] = [];
-    for (let s = 0; s < stories; s++) {
-      for (const [x, z] of lightPanels) {
-        // rotateX(π/2) points the plane's +z normal down at the floor
-        panels.push(new THREE.PlaneGeometry(1.4, 2.8).rotateX(Math.PI / 2).translate(x, s * storyHeight + ch - 0.02, z));
-      }
+  // Ceiling light panels (glowing color baked in)
+  for (let s = 0; s < stories; s++) {
+    for (const [x, z] of lightPanels) {
+      // rotateX(π/2) points the plane's +z normal down at the floor
+      parts.push(
+        withColor(
+          new THREE.PlaneGeometry(1.4, 2.8).toNonIndexed().rotateX(Math.PI / 2).translate(x, s * storyHeight + ch - 0.02, z),
+          LIGHT_PANEL_COLOR,
+        ),
+      );
     }
-    lightsGeometry = mergeGeometries(panels, false);
-    panels.forEach((g) => g.dispose());
   }
 
-  return { wallGeometry, floorGeometry, ceilingGeometry, lightsGeometry, interiorColliders, rampColliders };
+  const interiorGeometry = mergeOrThrow(parts, "interior");
+  parts.forEach((g) => g.dispose());
+
+  // Slab colliders as one exact trimesh — box colliders would poke invisible
+  // ledges out through polygon shells at the bounding-box corners.
+  const slabMerged = mergeOrThrow(slabColliderGeos, "slab colliders");
+  slabColliderGeos.forEach((g) => g.dispose());
+  const interiorSlabVertices = ((slabMerged.getAttribute("position") as THREE.BufferAttribute).array as Float32Array).slice();
+  let interiorSlabIndices: Uint32Array;
+  if (slabMerged.index) {
+    interiorSlabIndices = Uint32Array.from(slabMerged.index.array as ArrayLike<number>);
+  } else {
+    interiorSlabIndices = new Uint32Array(interiorSlabVertices.length / 3);
+    for (let i = 0; i < interiorSlabIndices.length; i++) interiorSlabIndices[i] = i;
+  }
+  slabMerged.dispose();
+
+  return {
+    interiorGeometry,
+    interiorColliders,
+    rampColliders,
+    interiorSlabVertices,
+    interiorSlabIndices,
+    innerShellVertices,
+  };
 };
 
 const cache = new Map<string, ProceduralBuildingAssets>();
@@ -360,10 +480,7 @@ const MAX_CACHE = 64;
 
 const disposeAssets = (a: ProceduralBuildingAssets): void => {
   a.exteriorGeometry.dispose();
-  a.wallGeometry.dispose();
-  a.floorGeometry.dispose();
-  a.ceilingGeometry.dispose();
-  a.lightsGeometry?.dispose();
+  a.interiorGeometry.dispose();
   a.doorGeometry.dispose();
 };
 
@@ -375,35 +492,44 @@ export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions)
   const plan = generateBuildingPlan(seed, opts);
 
   const { geometry: exteriorGeometry, bodyFloats } = buildExteriorGeometry(plan);
+  const interiorBuild = buildInteriorGeometries(plan);
+
+  // Shell collider = outer body triangles (windows excluded) + the inner
+  // shell surface, so the player collides with the wall face they can see
+  // from either side.
   const allVerts = (exteriorGeometry.getAttribute("position") as THREE.BufferAttribute).array as Float32Array;
-  const exteriorVertices = allVerts.slice(0, bodyFloats);
-  const exteriorIndices = new Uint32Array(bodyFloats / 3);
+  const exteriorVertices = new Float32Array(bodyFloats + interiorBuild.innerShellVertices.length);
+  exteriorVertices.set(allVerts.subarray(0, bodyFloats));
+  exteriorVertices.set(interiorBuild.innerShellVertices, bodyFloats);
+  const exteriorIndices = new Uint32Array(exteriorVertices.length / 3);
   for (let i = 0; i < exteriorIndices.length; i++) exteriorIndices[i] = i;
 
-  const doorGeometry = new THREE.PlaneGeometry(plan.doors[0].width, plan.doors[0].height);
+  // Door leaf slightly smaller than the opening; origin at the hinge edge so
+  // rotating the parent group swings it open. Raised so its bottom clears
+  // the lifted interior floor (FLOOR_LIFT) when swung inward.
+  const leafW = plan.doors[0].width - 0.08;
+  const doorGeometry = new THREE.BoxGeometry(leafW, plan.doors[0].height - 0.2, 0.1).translate(
+    leafW / 2,
+    FLOOR_LIFT - 0.02,
+    0,
+  );
 
   const assets: ProceduralBuildingAssets = {
     plan,
     exteriorGeometry,
     exteriorVertices,
     exteriorIndices,
-    ...buildInteriorGeometries(plan),
+    interiorGeometry: interiorBuild.interiorGeometry,
+    interiorColliders: interiorBuild.interiorColliders,
+    rampColliders: interiorBuild.rampColliders,
+    interiorSlabVertices: interiorBuild.interiorSlabVertices,
+    interiorSlabIndices: interiorBuild.interiorSlabIndices,
     doorGeometry,
-    enterPortals: plan.doors.map((d, i) => ({
-      name: `door${i}`,
+    doors: plan.doors.map((d) => ({
       position: d.position,
-      rotation: [0, d.yaw, 0] as Vec3,
-      size: [d.width, d.height] as [number, number],
-    })),
-    // Exit portals face INTO the interior (yaw computed in the plan): the
-    // pair transform (dest · rotY180 · inv(src)) sends you out along the
-    // destination's +z, so outward-facing enter doors paired with
-    // inward-facing exit doors walk through correctly both ways.
-    exitPortals: plan.interior.exitDoors.map((d, i) => ({
-      name: `door${i}`,
-      position: d.position,
-      rotation: [0, d.yaw, 0] as Vec3,
-      size: [d.width, d.height] as [number, number],
+      yaw: d.yaw,
+      width: d.width,
+      height: d.height,
     })),
   };
 

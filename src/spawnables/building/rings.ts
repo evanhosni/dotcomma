@@ -87,6 +87,26 @@ export const inscribedRectFactor = (pts: Pt2[], hw: number, hd: number, inset = 
   return lo;
 };
 
+/** Where the line `axis = at` crosses the ring polygon: the [min, max] of
+ *  the other coordinate. E.g. ("x", at) → the z-range of the polygon at x=at. */
+export const ringSpanAt = (pts: Pt2[], axis: "x" | "z", at: number): [number, number] => {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let j = 0; j < pts.length; j++) {
+    const a = pts[j];
+    const b = pts[(j + 1) % pts.length];
+    const a0 = axis === "x" ? a[0] : a[1];
+    const b0 = axis === "x" ? b[0] : b[1];
+    if ((a0 <= at && b0 >= at) || (b0 <= at && a0 >= at)) {
+      const t = (at - a0) / (b0 - a0 || 1e-9);
+      const v = axis === "x" ? a[1] + (b[1] - a[1]) * t : a[0] + (b[0] - a[0]) * t;
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+  }
+  return [lo, hi];
+};
+
 /** Ring cross-section at height y, lerped between the bracketing levels. */
 export const interpRing = (levels: RingLevel[], y: number): RingLevel => {
   if (y <= levels[0].y) return levels[0];
