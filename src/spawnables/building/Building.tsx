@@ -32,9 +32,10 @@ const DEFAULT_EXTERIOR = new THREE.MeshStandardMaterial({
 });
 
 // ---- Night window lights ----
-// The exterior geometry carries a per-vertex vec2 `aWindow`: a stable
-// per-window random and the building's windowLightChance ((0,0) outside
-// window glass). Each night the random is hashed with a per-night seed —
+// The exterior geometry carries a per-vertex vec3 `aWindow`: a stable
+// per-window random, the building's windowLightChance, and its
+// windowLightIntensity ((0,0,0) outside window glass). Each night the
+// random is hashed with a per-night seed —
 // tonight's roll below the chance means this window lights, and the roll
 // doubles as its turn-on order within the lights transition, so a DIFFERENT
 // subset pops on sporadically every night (and off the same way at dawn).
@@ -54,10 +55,11 @@ DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
     .replace(
       "#include <common>",
       `#include <common>
-      attribute vec2 aWindow;
+      attribute vec3 aWindow;
       uniform float uWindowLights;
       uniform float uNightSeed;
-      varying float vWindowLit;`,
+      varying float vWindowLit;
+      varying float vWindowGlow;`,
     )
     .replace(
       "#include <begin_vertex>",
@@ -68,7 +70,9 @@ DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
       // progress crosses its turn-on order (no per-window fade). The final
       // step gates progress == 0: a hash that lands exactly on 0 would
       // otherwise satisfy step(winOrder, 0) and glow in daylight.
-      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * step(winOrder, uWindowLights) * step(1e-4, uWindowLights);`,
+      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * step(winOrder, uWindowLights) * step(1e-4, uWindowLights);
+      // per-building emissive strength (windowLightIntensity), baked in .z
+      vWindowGlow = vWindowLit * aWindow.z;`,
     )
     .replace(
       "#include <project_vertex>",
@@ -87,21 +91,26 @@ DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
       }`,
     );
   shader.fragmentShader = shader.fragmentShader
-    .replace("#include <common>", "#include <common>\nvarying float vWindowLit;")
+    .replace("#include <common>", "#include <common>\nvarying float vWindowLit;\nvarying float vWindowGlow;")
     .replace(
       "#include <color_fragment>",
       `#include <color_fragment>
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.82, 0.38), vWindowLit);`,
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.78, 0.28), vWindowLit);`,
     )
     .replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(1.0, 0.72, 0.24) * vWindowLit * 0.7;`,
+      totalEmissiveRadiance += vec3(1.0, 0.85, 0.1) * vWindowGlow;`,
     );
 };
 const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
 // Door color is baked into the (per-building) leaf geometry's vertex colors.
-const DOOR_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, metalness: 0.05 });
+const DOOR_MATERIAL = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  vertexColors: true,
+  roughness: 0.9,
+  metalness: 0.05,
+});
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -139,6 +148,7 @@ export const Building = ({
   doorSize,
   ceilingHeight,
   windowLightChance,
+  windowLightIntensity,
   interiorColors,
   materials,
   renderDistance,
@@ -148,7 +158,8 @@ export const Building = ({
 }: BuildingProps) => {
   const { camera } = useThree();
 
-  const resolvedSeed = seed !== undefined ? String(seed) : `${Math.round(coordinates[0])}_${Math.round(coordinates[2])}`;
+  const resolvedSeed =
+    seed !== undefined ? String(seed) : `${Math.round(coordinates[0])}_${Math.round(coordinates[2])}`;
 
   // Keyed on the stringified options so inline array props don't rebuild
   // assets on every parent render (same pattern as the world registrations).
@@ -169,6 +180,7 @@ export const Building = ({
     doorSize,
     ceilingHeight,
     windowLightChance,
+    windowLightIntensity,
     interiorColors,
   };
   const optionsKey = JSON.stringify(opts);
@@ -291,7 +303,11 @@ export const Building = ({
       {assets.doors.map((d, i) => (
         <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
           <group ref={(el) => (hingeRefs.current[i] = el)} position={[-d.width / 2, 0, 0]}>
-            <mesh ref={(el) => (doorMeshRefs.current[i] = el)} geometry={assets.doorGeometry} material={DOOR_MATERIAL} />
+            <mesh
+              ref={(el) => (doorMeshRefs.current[i] = el)}
+              geometry={assets.doorGeometry}
+              material={DOOR_MATERIAL}
+            />
           </group>
         </group>
       ))}

@@ -185,6 +185,8 @@ export interface BuildingPlan {
   doorColor: number;
   /** Fraction (0–1) of this building's windows that light up each night. */
   windowLightChance: number;
+  /** Emissive strength of lit window glass (baked into the geometry). */
+  windowLightIntensity: number;
   windows: WindowSpec[];
   interior: InteriorPlan;
 }
@@ -248,6 +250,8 @@ export interface BuildingOptions {
    *  random subset every night. 0 = never lit. Default 0.2 (Skyscraper
    *  passes 0.8). */
   windowLightChance?: number;
+  /** How strongly lit window glass glows (emissive multiplier). Default 1.4. */
+  windowLightIntensity?: number;
   /** Interior surface colors — unset entries match the exterior (walls take
    *  the ground-segment color; floor darker, ceiling lighter). */
   interiorColors?: InteriorColors;

@@ -96,14 +96,16 @@ const madd = (a: Vec3, b: Vec3, s: number): Vec3 => [a[0] + b[0] * s, a[1] + b[1
 class TriangleSink {
   positions: number[] = [];
   colors: number[] = [];
-  /** Per-vertex night-light data: [per-window random, building light chance].
-   *  (0,0) everywhere except window glass — chance 0 can never light. */
+  /** Per-vertex night-light data: [per-window random (+1 = glass layer),
+   *  building light chance, emissive glow intensity]. (0,0,0) everywhere
+   *  except window parts — chance 0 can never light. */
   windows: number[] = [];
   private r = 1;
   private g = 1;
   private b = 1;
   private winRnd = 0;
   private winChance = 0;
+  private winGlow = 0;
 
   setColor(hex: number): void {
     _color.set(hex); // converts sRGB hex to the working color space
@@ -112,16 +114,17 @@ class TriangleSink {
     this.b = _color.b;
   }
 
-  setWindow(rnd: number, chance: number): void {
+  setWindow(rnd: number, chance: number, glow = 0): void {
     this.winRnd = rnd;
     this.winChance = chance;
+    this.winGlow = glow;
   }
 
   tri(a: Vec3, b: Vec3, c: Vec3): void {
     this.positions.push(...a, ...b, ...c);
     for (let i = 0; i < 3; i++) {
       this.colors.push(this.r, this.g, this.b);
-      this.windows.push(this.winRnd, this.winChance);
+      this.windows.push(this.winRnd, this.winChance, this.winGlow);
     }
   }
 
@@ -189,7 +192,13 @@ const emitLoft = (
   }
 };
 
-const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec, lightChance: number): void => {
+const emitWindow = (
+  sink: TriangleSink,
+  lofts: ExteriorLoft[],
+  spec: WindowSpec,
+  lightChance: number,
+  lightIntensity: number,
+): void => {
   const loft = lofts[spec.loft];
   const ringC = interpRing(loft.levels, spec.y);
   const ptsC = ringPoints(loft.rect, loft.sides, ringC, loft.phase);
@@ -254,7 +263,7 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec,
     const rndR = Math.max(spec.litRnd, 1e-3);
     sink.setWindow(rndR, 0);
     fan(1, bulge + 0.05, spec.frame);
-    sink.setWindow(rndR + 1, lightChance); // only the glass glows at night
+    sink.setWindow(rndR + 1, lightChance, lightIntensity); // only the glass glows at night
     fan(0.7, bulge + 0.1, spec.glass);
     sink.setWindow(0, 0);
   } else {
@@ -276,7 +285,7 @@ const emitWindow = (sink: TriangleSink, lofts: ExteriorLoft[], spec: WindowSpec,
     sink.setWindow(rndQ, 0);
     sink.quad(madd(bl, n, bulge + 0.05), madd(br, n, bulge + 0.05), madd(trS, n, bulge + 0.05), madd(tlS, n, bulge + 0.05));
     sink.setColor(spec.glass);
-    sink.setWindow(rndQ + 1, lightChance); // only the glass glows at night
+    sink.setWindow(rndQ + 1, lightChance, lightIntensity); // only the glass glows at night
     sink.quad(
       madd(shrink(bl, 0.68), n, bulge + 0.1),
       madd(shrink(br, 0.68), n, bulge + 0.1),
@@ -291,13 +300,14 @@ const buildExteriorGeometry = (plan: BuildingPlan): { geometry: THREE.BufferGeom
   const sink = new TriangleSink();
   plan.lofts.forEach((loft, i) => emitLoft(sink, loft, i === 0 ? plan.doors : []));
   const bodyFloats = sink.positions.length; // windows excluded from the collider
-  for (const w of plan.windows) emitWindow(sink, plan.lofts, w, plan.windowLightChance);
+  for (const w of plan.windows) emitWindow(sink, plan.lofts, w, plan.windowLightChance, plan.windowLightIntensity);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(sink.positions, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(sink.colors, 3));
-  // Per-vertex night-light data (per-window random + building light chance),
-  // read by the exterior material's shader patch. (0,0) outside window glass.
-  geometry.setAttribute("aWindow", new THREE.Float32BufferAttribute(sink.windows, 2));
+  // Per-vertex night-light data (per-window random + light chance + glow
+  // intensity), read by the exterior material's shader patch. (0,0,0)
+  // outside window glass.
+  geometry.setAttribute("aWindow", new THREE.Float32BufferAttribute(sink.windows, 3));
   geometry.computeVertexNormals(); // non-indexed → flat faceted shading
   return { geometry, bodyFloats };
 };
