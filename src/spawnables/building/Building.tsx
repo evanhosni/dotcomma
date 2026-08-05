@@ -2,44 +2,51 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
 import { Children, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { DEFAULT_ACTIVATION_DISTANCE } from "../../portals/constants";
-import { allocateIndoorSlot, getIndoorY, releaseIndoorSlot } from "../../portals/indoorSlotAllocator";
-import { Portal } from "../../portals/Portal";
-import { usePortalContext } from "../../portals/PortalContext";
+import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { getDistance2D } from "../../utils/utils";
 import { getProceduralBuildingAssets } from "./buildingAssets";
 import { BuildingOptions, BuildingProps } from "./types";
 
-// Beyond this camera distance the exterior trimesh collider is unmounted
+// Beyond this camera distance all of the building's colliders are unmounted
 // (nothing physical happens to a building 100+ units away).
-const EXTERIOR_COLLIDER_DISTANCE = 120;
+const COLLIDER_DISTANCE = 120;
 const DISTANCE_CHECK_INTERVAL = 15; // frames
 const DESPAWN_BUFFER = 1.1;
+// Children (spawnables placed inside rooms) mount within this distance.
+const CHILDREN_ACTIVE_DISTANCE = 150;
+const DOOR_INTERACT_DISTANCE = 6; // click/hover reach
+const DOOR_HOVER_GATE = 30; // building distance under which the door raycast runs
+const DOOR_OPEN_ANGLE = 1.9; // rad — swings inward
+const DOOR_SWING_RATE = 4;
 
 // Shared default materials — one instance across every Building, so shaders
-// compile once (same variant-stability rule as portalAssets). Variants will
-// eventually swap these out via the `materials` prop.
-// The exterior's per-building colors are baked as vertex colors, so one
-// white material serves every color scheme.
+// compile once. Both use per-building baked vertex colors: the exterior's
+// segment palette, and the interior's flat backrooms palette (unlit — scene
+// light can't reach inside the shell, and it matches the game's flat look).
 const DEFAULT_EXTERIOR = new THREE.MeshStandardMaterial({
   color: 0xffffff,
   vertexColors: true,
   roughness: 0.85,
   metalness: 0.05,
 });
-const DEFAULT_WALL = new THREE.MeshStandardMaterial({ color: 0xb9a763, roughness: 0.95, metalness: 0 });
-const DEFAULT_FLOOR = new THREE.MeshStandardMaterial({ color: 0x7d7350, roughness: 1, metalness: 0 });
-const DEFAULT_CEILING = new THREE.MeshStandardMaterial({ color: 0xd6cfae, roughness: 0.9, metalness: 0 });
-// Unlit so the panels read as glowing fixtures under the IndoorLightRig.
-const LIGHT_PANEL_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xfff7d6 });
+const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
+const DOOR_MATERIAL = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.9, metalness: 0.05 });
+
+const _raycaster = new THREE.Raycaster();
+const _center = new THREE.Vector2(0, 0);
 
 /**
- * Procedurally generated building: a seeded, vaguely-monolithic exterior
- * (leaning, tapering, stacked masses) over a backrooms-style BSP room
- * interior, connected by portal doors. The seed defaults to the spawn
- * coordinates, so the same spot always regrows the same building.
+ * Procedurally generated building — exterior and interior are ONE thing. The
+ * shell is genuinely hollow with the walls, floor slabs, and ramp flights
+ * physically in place, all rendered at all times (shell mesh + one merged
+ * vertex-colored interior mesh), so the two can never disagree. The plan
+ * generator guarantees the shell always wraps the occupied floors — lean and
+ * taper only run free above them.
  *
- * Children are placed at seeded positions inside the interior's rooms.
+ * Each door opening holds a real hinged door leaf: click it (screen-center
+ * raycast, cursor grows on hover) to swing it open. Only dynamic content is
+ * gated: children (spawnables inside rooms) mount within range, and all
+ * colliders mount only near the player.
  */
 export const Building = ({
   id,
@@ -60,15 +67,12 @@ export const Building = ({
   doorCount,
   doorSize,
   ceilingHeight,
-  interiorScale,
+  interiorColors,
   materials,
-  activationDistance = DEFAULT_ACTIVATION_DISTANCE,
-  ceilingLights = true,
   renderDistance,
   onDestroy,
   children,
 }: BuildingProps) => {
-  const { publishIndoorBounds, unpublishIndoorBounds } = usePortalContext();
   const { camera } = useThree();
 
   const resolvedSeed = seed !== undefined ? String(seed) : `${Math.round(coordinates[0])}_${Math.round(coordinates[2])}`;
@@ -91,7 +95,7 @@ export const Building = ({
     doorCount,
     doorSize,
     ceilingHeight,
-    interiorScale,
+    interiorColors,
   };
   const optionsKey = JSON.stringify(opts);
   const assets = useMemo(
@@ -99,138 +103,126 @@ export const Building = ({
     [resolvedSeed, optionsKey],
   );
   const { plan } = assets;
-  const { width: iw, depth: idp, stories: storyCount, storyHeight } = plan.interior;
-  const interiorHeight = storyCount * storyHeight;
 
-  // Unique indoor Y slot for this instance (interiors live above the world)
-  const slotRef = useRef<number | null>(null);
-  if (slotRef.current === null) slotRef.current = allocateIndoorSlot();
-  const indoorY = getIndoorY(slotRef.current);
-  useEffect(() => {
-    return () => {
-      if (slotRef.current !== null) releaseIndoorSlot(slotRef.current);
-    };
-  }, []);
+  // ---- Door state ----
+  const [doorsOpen, setDoorsOpen] = useState<boolean[]>(() => assets.doors.map(() => false));
+  const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
+  const hingeRefs = useRef<(THREE.Group | null)[]>([]);
+  const hoverDoorRef = useRef(-1);
 
-  // World-space interior bounds for the IndoorLightRig (spans all stories)
-  useEffect(() => {
-    publishIndoorBounds(id, {
-      center: new THREE.Vector3(coordinates[0], indoorY + interiorHeight / 2, coordinates[2]),
-      size: new THREE.Vector3(iw, interiorHeight, idp),
-    });
-    return () => unpublishIndoorBounds(id);
-  }, [id, coordinates, indoorY, iw, interiorHeight, idp, publishIndoorBounds, unpublishIndoorBounds]);
-
-  // Distance loop: self-despawn past renderDistance, gate the exterior
-  // collider, and gate the whole interior (GameObject does the first two for
-  // GLTF spawnables; here we own it). 2D distance, so standing INSIDE the
-  // interior (y ≈ indoorY) doesn't count as far away.
-  //
-  // The interior (meshes, exit portals, colliders) only matters near the
-  // doors — portal previews activate within activationDistance and teleports
-  // happen at the door plane. Gating it keeps the physics world and portal
-  // count bounded at high building density.
-  const interiorActiveDistance = activationDistance + 60;
+  // ---- Distance loop: self-despawn, collider gate, children gate. 2D
+  // distance so upper floors don't count as "far". ----
   const positionVec = useRef(new THREE.Vector3(...coordinates)).current;
-  // Both gates start false so a spawn batch of far buildings doesn't mount
-  // colliders for a frame; the first distance check (frame 0) corrects them.
   const [collidersActive, setCollidersActive] = useState(false);
   const collidersActiveRef = useRef(false);
-  const [interiorActive, setInteriorActive] = useState(false);
-  const interiorActiveRef = useRef(false);
+  const [childrenActive, setChildrenActive] = useState(false);
+  const childrenActiveRef = useRef(false);
+  const lastDistanceRef = useRef(Infinity);
   const frameCounter = useRef(0);
-  useFrame(() => {
-    if (frameCounter.current++ % DISTANCE_CHECK_INTERVAL !== 0) return;
-    const distance = getDistance2D(camera.position, positionVec);
-    if (distance > renderDistance * DESPAWN_BUFFER) {
-      onDestroy(id);
-      return;
+
+  useFrame((_, delta) => {
+    const frame = frameCounter.current++;
+
+    if (frame % DISTANCE_CHECK_INTERVAL === 0) {
+      const distance = getDistance2D(camera.position, positionVec);
+      lastDistanceRef.current = distance;
+      if (distance > renderDistance * DESPAWN_BUFFER) {
+        if (hoverDoorRef.current >= 0) hideCursor();
+        onDestroy(id);
+        return;
+      }
+      const shouldCollide = distance < COLLIDER_DISTANCE;
+      if (shouldCollide !== collidersActiveRef.current) {
+        collidersActiveRef.current = shouldCollide;
+        setCollidersActive(shouldCollide);
+      }
+      const near = distance < CHILDREN_ACTIVE_DISTANCE + (childrenActiveRef.current ? 12 : 0);
+      if (near !== childrenActiveRef.current) {
+        childrenActiveRef.current = near;
+        setChildrenActive(near);
+      }
     }
-    const shouldCollide = distance < EXTERIOR_COLLIDER_DISTANCE;
-    if (shouldCollide !== collidersActiveRef.current) {
-      collidersActiveRef.current = shouldCollide;
-      setCollidersActive(shouldCollide);
+
+    // ---- Door hover (screen-center raycast, every 3rd frame, only nearby) ----
+    if (frame % 3 === 0) {
+      let hover = -1;
+      if (lastDistanceRef.current < DOOR_HOVER_GATE) {
+        _raycaster.setFromCamera(_center, camera);
+        _raycaster.far = DOOR_INTERACT_DISTANCE;
+        for (let i = 0; i < doorMeshRefs.current.length; i++) {
+          const mesh = doorMeshRefs.current[i];
+          if (!mesh) continue;
+          if (_raycaster.intersectObject(mesh, false).length > 0) {
+            hover = i;
+            break;
+          }
+        }
+        _raycaster.far = Infinity;
+      }
+      if (hover !== hoverDoorRef.current) {
+        if (hover >= 0 && hoverDoorRef.current < 0) showCursor();
+        if (hover < 0 && hoverDoorRef.current >= 0) hideCursor();
+        hoverDoorRef.current = hover;
+      }
     }
-    // Hysteresis so the interior doesn't flap at the threshold
-    const shouldInterior = distance < interiorActiveDistance + (interiorActiveRef.current ? 12 : 0);
-    if (shouldInterior !== interiorActiveRef.current) {
-      interiorActiveRef.current = shouldInterior;
-      setInteriorActive(shouldInterior);
+
+    // ---- Door swing animation ----
+    for (let i = 0; i < hingeRefs.current.length; i++) {
+      const hinge = hingeRefs.current[i];
+      if (!hinge) continue;
+      const target = doorsOpen[i] ? DOOR_OPEN_ANGLE : 0;
+      hinge.rotation.y += (target - hinge.rotation.y) * Math.min(1, delta * DOOR_SWING_RATE);
     }
   });
+
+  // Click the hovered door to swing it open/closed
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const idx = hoverDoorRef.current;
+      if (idx < 0) return;
+      setDoorsOpen((open) => {
+        const next = [...open];
+        next[idx] = !next[idx];
+        return next;
+      });
+    };
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, []);
+
+  // Make sure a hover-grown cursor never leaks past unmount
+  useEffect(() => {
+    return () => {
+      if (hoverDoorRef.current >= 0) hideCursor();
+    };
+  }, []);
 
   const childArray = Children.toArray(children);
   const slots = plan.interior.childSlots;
 
   return (
     <group position={coordinates}>
-      {/* Exterior shell */}
+      {/* The building: hollow shell + the interior physically inside it,
+          both always rendered */}
       <mesh geometry={assets.exteriorGeometry} material={materials?.exterior ?? DEFAULT_EXTERIOR} />
-      {collidersActive && (
-        <RigidBody type="fixed" colliders={false}>
-          {/* Same triangles as the render mesh — door openings included */}
-          <TrimeshCollider args={[assets.exteriorVertices, assets.exteriorIndices]} />
-        </RigidBody>
-      )}
+      <mesh geometry={assets.interiorGeometry} material={materials?.interior ?? DEFAULT_INTERIOR} />
 
-      {/* Enter portals — outdoor-side doors, flush with the carved openings */}
-      {assets.enterPortals.map((p) => (
-        <Portal
-          key={`enter-${p.name}`}
-          id={`enter-${id}-${p.name}`}
-          pairedId={`exit-${id}-${p.name}`}
-          position={p.position}
-          rotation={p.rotation}
-          size={p.size}
-          geometry={assets.doorGeometry}
-          targetIndoorId={id}
-          activationDistance={activationDistance}
-          direction="enter"
-        />
+      {/* Doors — real leaves hinged at one edge */}
+      {assets.doors.map((d, i) => (
+        <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
+          <group ref={(el) => (hingeRefs.current[i] = el)} position={[-d.width / 2, 0, 0]}>
+            <mesh ref={(el) => (doorMeshRefs.current[i] = el)} geometry={assets.doorGeometry} material={DOOR_MATERIAL} />
+          </group>
+        </group>
       ))}
 
-      {/* Interior — mounted at its indoor Y slot while the player is near
-          enough for a portal preview or teleport (see the distance loop). */}
-      {interiorActive && (
-      <group position={[0, indoorY - coordinates[1], 0]}>
-        <mesh geometry={assets.wallGeometry} material={materials?.wall ?? DEFAULT_WALL} />
-        <mesh geometry={assets.floorGeometry} material={materials?.floor ?? DEFAULT_FLOOR} />
-        <mesh geometry={assets.ceilingGeometry} material={materials?.ceiling ?? DEFAULT_CEILING} />
-        {ceilingLights && assets.lightsGeometry && (
-          <mesh geometry={assets.lightsGeometry} material={LIGHT_PANEL_MATERIAL} />
-        )}
-
-        {/* Exit portals — indoor-side doors on the perimeter walls */}
-        {assets.exitPortals.map((p) => (
-          <Portal
-            key={`exit-${p.name}`}
-            id={`exit-${id}-${p.name}`}
-            pairedId={`enter-${id}-${p.name}`}
-            position={p.position}
-            rotation={p.rotation}
-            size={p.size}
-            geometry={assets.doorGeometry}
-            targetIndoorId={id}
-            activationDistance={activationDistance}
-            direction="exit"
-          />
-        ))}
-
-        {/* Children spawn at seeded slots inside the rooms */}
-        {childArray.map((child, i) => {
-          const slot = slots[i % slots.length];
-          return (
-            <group key={i} position={slot.position} rotation={[0, slot.rotationY, 0]}>
-              {child}
-            </group>
-          );
-        })}
-
-        {/* Interior physics — always mounted so a teleport never lands
-            floorless. Walls on every story, slabs with the ramp-shaft holes,
-            padded bottom floor/top ceiling, plus one rotated cuboid per ramp
-            flight (identical to the visible ramp slab). */}
+      {/* Physics — shell trimesh (door openings walkable), interior walls,
+          slab trimesh, ramps, and the closed door leaves */}
+      {collidersActive && (
         <RigidBody type="fixed" colliders={false}>
+          <TrimeshCollider args={[assets.exteriorVertices, assets.exteriorIndices]} />
+          <TrimeshCollider args={[assets.interiorSlabVertices, assets.interiorSlabIndices]} />
           {assets.interiorColliders.map((b, i) => (
             <CuboidCollider
               key={i}
@@ -242,9 +234,30 @@ export const Building = ({
           {assets.rampColliders.map((r, i) => (
             <CuboidCollider key={`ramp-${i}`} args={r.halfExtents} position={r.position} rotation={r.rotation} />
           ))}
+          {assets.doors.map(
+            (d, i) =>
+              !doorsOpen[i] && (
+                <CuboidCollider
+                  key={`doorcol-${i}`}
+                  args={[d.width / 2, d.height / 2, 0.06]}
+                  position={d.position}
+                  rotation={[0, d.yaw, 0]}
+                />
+              ),
+          )}
         </RigidBody>
-      </group>
       )}
+
+      {/* Children spawn at seeded slots inside the rooms, within range */}
+      {childrenActive &&
+        childArray.map((child, i) => {
+          const slot = slots[i % slots.length];
+          return (
+            <group key={i} position={slot.position} rotation={[0, slot.rotationY, 0]}>
+              {child}
+            </group>
+          );
+        })}
     </group>
   );
 };

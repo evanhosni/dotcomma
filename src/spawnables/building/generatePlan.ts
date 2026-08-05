@@ -8,13 +8,13 @@ import {
   Pt2,
   RECT_EDGE,
   ringPoints,
+  ringSpanAt,
 } from "./rings";
 import {
   BuildingOptions,
   BuildingPlan,
   ChildSlot,
   DoorPlan,
-  ExitDoor,
   ExteriorLoft,
   RampSpec,
   RingLevel,
@@ -26,6 +26,9 @@ import {
 
 export const WALL_THICKNESS = 0.24;
 export const SLAB_THICKNESS = 0.3;
+/** Ground-floor top surface sits this far above grade so flat terrain never
+ *  z-fights or peeks through the interior floor. */
+export const FLOOR_LIFT = 0.12;
 export const RAMP_THICKNESS = 0.25;
 export const RAMP_WIDTH = 2.0; // ramp lane width
 const WALKWAY_WIDTH = 1.8; // solid lane beside the ramp, loops back to the next flight
@@ -35,7 +38,6 @@ const RAMP_RUN_MIN_FACTOR = 1.25; // steepest allowed fit (≈39°) before givin
 const DOORWAY_WIDTH = 2.4; // interior room-to-room openings
 const DOORWAY_HEIGHT = 4.2;
 const MIN_ROOM_DIM = 6; // rooms below 2× this never split again
-const CORRIDOR_WIDTH = 2.2; // ring corridor between the room block and a polygon perimeter
 const LIGHT_PANEL_SPACING = 5.5;
 const CHILD_SLOT_COUNT = 32;
 const FOUNDATION_DEPTH = 1;
@@ -114,10 +116,14 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   let rampRun = storyHeight * RAMP_RUN_FACTOR;
   let shaftLen = rampRun + 2 * RAMP_LANDING;
   const shaftWidth = RAMP_WIDTH + WALKWAY_WIDTH;
-  const interiorScale = opts.interiorScale ?? 1;
   // Multi-story buildings keep a near-square footprint so the room block
   // inscribed in a low-side-count polygon stays big enough for the shaft.
   let aspect = stories > 1 ? range(0.92, 1.08) : range(0.8, 1.25);
+
+  // The interior physically nests inside the shell: interior perimeter =
+  // shell inset by this gap (wall boxes are centered on the interior ring,
+  // so their outer face sits just inside the shell surface).
+  const SHELL_INSET = 0.24;
 
   let ihw: number; // interior perimeter half-extents (polygon radii)
   let ihd: number;
@@ -126,8 +132,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   if (opts.exteriorSize) {
     hw = opts.exteriorSize[0] / 2;
     hd = opts.exteriorSize[2] / 2;
-    ihw = Math.max(4, hw * interiorScale - 0.3);
-    ihd = Math.max(4, hd * interiorScale - 0.3);
+    ihw = Math.max(4, hw - SHELL_INSET);
+    ihd = Math.max(4, hd - SHELL_INSET);
     aspect = ihd / ihw;
   } else {
     // Footprint from the room program: enough inscribed-rect area for the
@@ -136,8 +142,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const needed = roomCount * roomArea + (stories > 1 ? shaftLen * shaftWidth * 1.4 : 0);
     const unitPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: 1, hd: aspect }, phase);
     const f = rect ? 1 : inscribedRectFactor(unitPts, 1, aspect);
-    let s = Math.sqrt(needed / (4 * f * f * aspect));
-    if (!rect) s += CORRIDOR_WIDTH / f;
+    const s = Math.sqrt(needed / (4 * f * f * aspect));
     ihw = s;
     ihd = s * aspect;
     // Cap the footprint so shells never intersect at the spawn spacing
@@ -149,19 +154,20 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     }
   }
 
-  // Resolve the interior perimeter + inscribed room block ONCE, growing the
+  // Resolve the interior perimeter + inscribed BSP domain ONCE, growing the
   // footprint (within the hard 16 half-extent bound) until the ramp shaft
-  // fits — a multi-story request must actually produce stories.
+  // fits — a multi-story request must actually produce stories. The BSP
+  // domain is only room BOOKKEEPING: split walls are later stretched past it
+  // all the way to the shell's inner surface, so rooms genuinely end at the
+  // exterior wall (no enclosed room-within-a-room).
   const computeBlock = () => {
     const pts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: ihw, hd: ihd }, phase);
-    let halfW = ihw;
-    let halfD = ihd;
-    if (!rect) {
-      const f2 = inscribedRectFactor(pts, ihw, ihd, 0.4);
-      halfW = Math.max(4, f2 * ihw - CORRIDOR_WIDTH);
-      halfD = Math.max(4, f2 * ihd - CORRIDOR_WIDTH);
-    }
-    return { pts, halfW, halfD };
+    const f2 = rect ? 1 : inscribedRectFactor(pts, ihw, ihd, 0.4);
+    return {
+      pts,
+      halfW: Math.max(4, f2 * ihw),
+      halfD: Math.max(4, f2 * ihd),
+    };
   };
   let block = computeBlock();
   if (stories > 1 && !opts.exteriorSize) {
@@ -193,8 +199,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   }
 
   if (!opts.exteriorSize) {
-    hw = ihw / interiorScale + 0.3;
-    hd = ihd / interiorScale + 0.3;
+    hw = ihw + SHELL_INSET;
+    hd = ihd + SHELL_INSET;
   }
 
   // Exterior height is LINKED to the FINAL floor count: a collapsed story
@@ -210,21 +216,38 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   }
 
   // ---- Gentle lean (banana-curve via exponent) + overall taper ----
+  // The interior now physically occupies the shell up to interiorTop, so
+  // rings in that band are clamped to always wrap the interior prism (plus
+  // the ring's own lean offset). Above the occupied floors the shell is free
+  // to lean, taper, and pinch as before.
+  const interiorTop = stories * storyHeight + 0.5;
   const leanAngle = range(0, Math.PI * 2);
   const leanMag = range(0, opts.maxLean ?? 0.08) * bh;
   const leanExp = range(1.2, 1.9);
   const topScale = range(0.7, 1.25);
+  // Containment margin: for polygons the nearest face sits at apothem
+  // distance, so extents must be over-provisioned by 1/cos(π/N), and the
+  // FULL lean magnitude is charged to both axes (per-axis lean components
+  // under-cover diagonal lean directions). The generous 0.9 base makes the
+  // shell thick enough through the occupied floors that interior geometry
+  // can never reach the outer surface — the clamp only ever pushes the shell
+  // outward where it would have cut in.
+  const apothem = rect ? 1 : Math.cos(Math.PI / sides);
+  const clampMargin = (lean: number): number => (0.9 + lean) / apothem;
   const ringAt = (y: number, rScale: number): RingLevel => {
     const t = clampNum((y - doorBandTop) / Math.max(bh - doorBandTop, 1e-6), 0, 1);
     const lean = leanMag * Math.pow(t, leanExp);
     const g = 1 + (topScale - 1) * Math.pow(t, 1.15);
-    return {
-      y,
-      cx: Math.cos(leanAngle) * lean,
-      cz: Math.sin(leanAngle) * lean,
-      hw: hw * g * rScale,
-      hd: hd * g * rScale,
-    };
+    const cx = Math.cos(leanAngle) * lean;
+    const cz = Math.sin(leanAngle) * lean;
+    let rhw = hw * g * rScale;
+    let rhd = hd * g * rScale;
+    if (y <= interiorTop) {
+      const m = clampMargin(lean);
+      rhw = Math.max(rhw, ihw + m);
+      rhd = Math.max(rhd, ihd + m);
+    }
+    return { y, cx, cz, hw: rhw, hd: rhd };
   };
 
   // ---- Colors: grayscale by default, with occasional accents ----
@@ -236,9 +259,19 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     rng() < 0.55 ? primary : rng() < accentChance * 0.4 ? pick(accents) : pick(palette);
 
   // ---- Door band: prismatic ground section the doors are carved into ----
+  const bandColor = segColor();
   const bandBot: RingLevel = { y: -FOUNDATION_DEPTH, cx: 0, cz: 0, hw, hd };
   const bandTop: RingLevel = { ...bandBot, y: doorBandTop };
-  const lofts: ExteriorLoft[] = [{ rect, sides, phase, levels: [bandBot, bandTop], color: segColor(), roof: false }];
+  const lofts: ExteriorLoft[] = [{ rect, sides, phase, levels: [bandBot, bandTop], color: bandColor, roof: false }];
+
+  // Interior surface colors: match the exterior unless overridden.
+  const interiorWall = opts.interiorColors?.wall ?? bandColor;
+  const interiorColors = {
+    wall: interiorWall,
+    floor: opts.interiorColors?.floor ?? shade(interiorWall, 0.65),
+    ceiling: opts.interiorColors?.ceiling ?? shade(interiorWall, 1.3),
+    ramp: opts.interiorColors?.ramp ?? shade(interiorWall, 0.8),
+  };
 
   // ---- Body segments: stacked canister sections with lips and bulges ----
   const segCount = rangeInt(2, 4);
@@ -256,6 +289,29 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
       ringAt((y0 + y1) / 2, rScale * range(0.97, 1.1)),
       ringAt(y1, rScale * range(0.92, 1.02)),
     ];
+    // The clamp in ringAt only acts AT ring levels — a wall interpolating
+    // from a clamped ring below interiorTop to a tapered ring above it would
+    // slice diagonally through the interior's top corner. Insert a clamped
+    // ring exactly at the crossing so the shell stays outside the occupied
+    // volume all the way up (the taper still runs free above it).
+    for (let i = 0; i < levels.length - 1; i++) {
+      const A = levels[i];
+      const B = levels[i + 1];
+      if (A.y < interiorTop && B.y > interiorTop) {
+        const t = (interiorTop - A.y) / (B.y - A.y);
+        const cx = A.cx + (B.cx - A.cx) * t;
+        const cz = A.cz + (B.cz - A.cz) * t;
+        const m = clampMargin(Math.hypot(cx, cz));
+        levels.splice(i + 1, 0, {
+          y: interiorTop,
+          cx,
+          cz,
+          hw: Math.max(A.hw + (B.hw - A.hw) * t, ihw + m),
+          hd: Math.max(A.hd + (B.hd - A.hd) * t, ihd + m),
+        });
+        break;
+      }
+    }
     lofts.push({ rect, sides, phase, levels, color: segColor(), roof: k === segCount - 1 });
     segBounds.push({ loft: lofts.length - 1, y0, y1 });
     prevTop = levels[levels.length - 1];
@@ -535,103 +591,90 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     }
   };
 
-  /** Wall along ring edge `edge` (any orientation), optionally carved by a
-   *  door at param `t`. Used for the interior perimeter. */
-  const addRingWall = (boxes: WallBox[], pts: Pt2[], edge: number, door?: { t: number; w: number; h: number }): void => {
-    const a = pts[edge];
-    const b = pts[(edge + 1) % pts.length];
-    const len = edgeLength(pts, edge);
-    const rotY = Math.atan2(-(b[1] - a[1]) / len, (b[0] - a[0]) / len);
-    const seg = (f: number, t: number, sy0: number, sy1: number): void => {
-      if ((t - f) * len <= 0.05) return;
-      const m = edgePoint(pts, edge, (f + t) / 2);
-      boxes.push({ cx: m[0], cy: (sy0 + sy1) / 2, cz: m[1], sx: (t - f) * len, sy: sy1 - sy0, sz: T, rotY });
-    };
-    if (!door) {
-      seg(0, 1, 0, ceilingHeight);
-      return;
-    }
-    const t0 = door.t - door.w / 2 / len;
-    const t1 = door.t + door.w / 2 / len;
-    seg(0, t0, 0, ceilingHeight);
-    seg(t1, 1, 0, ceilingHeight);
-    if (ceilingHeight - door.h > 0.05) seg(Math.max(0, t0), Math.min(1, t1), door.h, ceilingHeight);
-  };
+  // Split walls extend ALL THE WAY to the shell's inner surface — a two-room
+  // floor is one dividing wall running exterior-to-exterior, never an
+  // enclosed room-within-a-room. Any wall end on the BSP domain boundary is
+  // stretched to the interior polygon (+0.12 into the wall cavity; the inner
+  // shell surface is a straight prism, so this fit is exact at every story).
+  for (const w of splitWalls) {
+    const [lo, hi] = ringSpanAt(intPts, w.axis, w.at);
+    const domLo = w.axis === "x" ? bz0 : bx0;
+    const domHi = w.axis === "x" ? bz1 : bx1;
+    if (w.from <= domLo + 0.05) w.from = lo - 0.06;
+    if (w.to >= domHi - 0.05) w.to = hi + 0.06;
+  }
+
+  // Polygon interiors: the ramp shaft sits at the BSP domain's corner, which
+  // is inset from the polygon — seal its outer sides so the lane isn't open
+  // to the leftover sliver between domain and shell.
+  if (ramp && !rect) {
+    const [sxLo] = ringSpanAt(intPts, "z", bz0);
+    const [szLo] = ringSpanAt(intPts, "x", bx0);
+    wallBoxesCommon.push({
+      cx: (sxLo - 0.06 + ramp.room.x1) / 2,
+      cy: ceilingHeight / 2,
+      cz: bz0,
+      sx: ramp.room.x1 - (sxLo - 0.06),
+      sy: ceilingHeight,
+      sz: T,
+    });
+    wallBoxesCommon.push({
+      cx: bx0,
+      cy: ceilingHeight / 2,
+      cz: (szLo - 0.06 + ramp.room.z1) / 2,
+      sx: T,
+      sy: ceilingHeight,
+      sz: ramp.room.z1 - (szLo - 0.06),
+    });
+  }
 
   for (const w of splitWalls) {
     addWallWithDoor(wallBoxesCommon, w.axis, w.at, w.from, w.to, w.doorAt, DOORWAY_WIDTH, DOORWAY_HEIGHT);
   }
 
-  // Polygon interiors: close the room block with boundary walls, each with a
-  // doorway into the surrounding corridor (kept clear of the ramp shaft).
-  // A block holding a single room and no ramp shaft would just be a pointless
-  // box in the middle of the polygon — leave the interior fully open instead.
-  if (!rect && (rooms.length > 1 || ramp)) {
-    const blockDoor = (lo: number, hi: number): number => (hi - lo > 3.6 ? range(lo + 1.8, hi - 1.8) : (lo + hi) / 2);
-    addWallWithDoor(wallBoxesCommon, "z", bz1, bx0, bx1, blockDoor(bx0, bx1), DOORWAY_WIDTH, DOORWAY_HEIGHT);
-    addWallWithDoor(wallBoxesCommon, "z", bz0, bx0, bx1, blockDoor(ramp ? ramp.room.x1 : bx0, bx1), DOORWAY_WIDTH, DOORWAY_HEIGHT);
-    addWallWithDoor(wallBoxesCommon, "x", bx1, bz0, bz1, blockDoor(bz0, bz1), DOORWAY_WIDTH, DOORWAY_HEIGHT);
-    addWallWithDoor(wallBoxesCommon, "x", bx0, bz0, bz1, blockDoor(ramp ? ramp.room.z1 : bz0, bz1), DOORWAY_WIDTH, DOORWAY_HEIGHT);
-  }
-
-  // ---- Exit doors on the interior perimeter ----
-  // Same ring edge + param as the enter door (walk in the front door, arrive
-  // at the front of the interior). Rect interiors nudge the door away from
-  // BSP walls and the ramp shaft; polygon interiors open into the corridor,
-  // which is clear by construction.
-  const exitDoors: ExitDoor[] = [];
-  const doorOnEdge = new Map<number, { t: number; w: number; h: number }>();
+  // ---- Door alignment ----
+  // Keep the opening off the interior edge's corners AND clear of any split
+  // wall that dead-ends into this stretch of the perimeter, then sync the
+  // final position back onto the exterior door so the shell carve,
+  // inner-shell carve, and door leaf always agree.
   for (const d of doors) {
-    let t = (d.t0 + d.t1) / 2;
     const len = edgeLength(intPts, d.edge);
-    if (rect) {
-      const onZ = d.side === "+z" || d.side === "-z";
-      const half = onZ ? ihw : ihd;
-      const lim = half - d.width / 2 - 1;
-      let offset = clampNum(d.offset, -lim, lim);
-      const perimAt = d.side === "+z" ? ihd : d.side === "-z" ? -ihd : d.side === "+x" ? ihw : -ihw;
+    const a = intPts[d.edge];
+    const b = intPts[(d.edge + 1) % intPts.length];
+    const dirX = (b[0] - a[0]) / len;
+    const dirZ = (b[1] - a[1]) / len;
+    const tMargin = (d.width / 2 + 0.6) / len;
+    let t = clampNum((d.t0 + d.t1) / 2, tMargin, 1 - tMargin);
+    for (let pass = 0; pass < 2; pass++) {
       for (const w of splitWalls) {
-        if (w.axis !== (onZ ? "x" : "z")) continue; // only walls perpendicular to this perimeter
-        const touches = perimAt > 0 ? w.to >= perimAt - 0.01 : w.from <= perimAt + 0.01;
-        if (!touches) continue;
-        if (Math.abs(w.at - offset) < d.width / 2 + T + 0.4) {
-          const shifted = w.at + (offset >= w.at ? 1 : -1) * (d.width / 2 + T + 1);
-          offset = clampNum(shifted, -lim, lim);
+        // Wall endpoints in the plane
+        const ends: [number, number][] =
+          w.axis === "x"
+            ? [
+                [w.at, w.from],
+                [w.at, w.to],
+              ]
+            : [
+                [w.from, w.at],
+                [w.to, w.at],
+              ];
+        for (const [ex, ez] of ends) {
+          const tE = ((ex - a[0]) * dirX + (ez - a[1]) * dirZ) / len;
+          const perp = Math.abs((ex - a[0]) * -dirZ + (ez - a[1]) * dirX);
+          if (perp > 0.6 || tE < -0.05 || tE > 1.05) continue;
+          if (Math.abs(tE - t) * len < d.width / 2 + T + 0.4) {
+            const shift = (d.width / 2 + T + 1) / len;
+            t = clampNum(tE + (t >= tE ? shift : -shift), tMargin, 1 - tMargin);
+          }
         }
       }
-      if (ramp) {
-        if (d.side === "-z" && offset < ramp.room.x1 + d.width / 2 + 0.8) {
-          offset = clampNum(ramp.room.x1 + d.width / 2 + 0.8, -lim, lim);
-        }
-        if (d.side === "-x" && offset < ramp.room.z1 + d.width / 2 + 0.8) {
-          offset = clampNum(ramp.room.z1 + d.width / 2 + 0.8, -lim, lim);
-        }
-      }
-      const a = intPts[d.edge];
-      const b = intPts[(d.edge + 1) % intPts.length];
-      const c: Pt2 = onZ ? [offset, a[1]] : [a[0], offset];
-      t = Math.abs(b[0] - a[0]) > Math.abs(b[1] - a[1]) ? (c[0] - a[0]) / (b[0] - a[0]) : (c[1] - a[1]) / (b[1] - a[1]);
-    } else {
-      const tMargin = (d.width / 2 + 0.6) / len;
-      t = clampNum(t, tMargin, 1 - tMargin);
     }
-    doorOnEdge.set(d.edge, { t, w: d.width, h: d.height });
-    const p = edgePoint(intPts, d.edge, t);
-    const n = edgeNormal(intPts, d.edge);
-    exitDoors.push({
-      position: [p[0], d.height / 2, p[1]],
-      yaw: Math.atan2(n[0], n[1]) + Math.PI,
-      width: d.width,
-      height: d.height,
-    });
-  }
-
-  // Perimeter walls: ground story carved by exit doors, upper stories solid.
-  const perimeterGround: WallBox[] = [];
-  const perimeterUpper: WallBox[] = [];
-  for (let e = 0; e < intPts.length; e++) {
-    addRingWall(perimeterGround, intPts, e, doorOnEdge.get(e));
-    addRingWall(perimeterUpper, intPts, e);
+    const extLen = edgeLength(bandPts, d.edge);
+    const pc = edgePoint(bandPts, d.edge, t);
+    d.t0 = t - d.width / 2 / extLen;
+    d.t1 = t + d.width / 2 / extLen;
+    d.position = [pc[0], d.height / 2, pc[1]];
+    d.offset = d.side === "+z" || d.side === "-z" ? pc[0] : pc[1];
   }
 
   // Occasional pillars in big rooms — pure backrooms.
@@ -668,7 +711,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const m = 1.4;
     const x = r.x1 - r.x0 > 2 * m ? range(r.x0 + m, r.x1 - m) : (r.x0 + r.x1) / 2;
     const z = r.z1 - r.z0 > 2 * m ? range(r.z0 + m, r.z1 - m) : (r.z0 + r.z1) / 2;
-    childSlots.push({ position: [x, story * storyHeight, z], rotationY: range(0, Math.PI * 2), roomIndex });
+    const y = story * storyHeight + (story === 0 ? FLOOR_LIFT : 0);
+    childSlots.push({ position: [x, y, z], rotationY: range(0, Math.PI * 2), roomIndex });
   }
 
   return {
@@ -678,20 +722,19 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     doorBandTop,
     foundationDepth: FOUNDATION_DEPTH,
     lofts,
+    bodyLoftCount: 1 + segCount,
     doors,
     windows,
     interior: {
       width: 2 * ihw,
       depth: 2 * ihd,
       ceilingHeight,
+      colors: interiorColors,
       stories,
       storyHeight,
       rooms,
       wallBoxesCommon,
-      perimeterGround,
-      perimeterUpper,
       ramp,
-      exitDoors,
       lightPanels,
       childSlots,
     },
