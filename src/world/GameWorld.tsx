@@ -1,5 +1,6 @@
 import React from "react";
 import { CityRegion, DesertRegion } from "./regions";
+import { DayNightCycle } from "../sky/DayNightCycle";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Material, Skybox, Terrain, World } from "./components";
 
@@ -20,8 +21,13 @@ export const GameWorld = React.memo(() => (
     <Terrain seed="123" />
     {/* Texture blended between regions (rivers) */}
     <Material riverTexture="blue_mud.jpg" />
-    {/* Default sky — regions/biomes can mount their own <Skybox> to override */}
+    {/* Default DAY sky — regions/biomes can mount their own <Skybox> to
+        override; the day/night cycle blends whatever sky is active toward the
+        night palette. */}
     <Skybox topColor="#4a90d9" horizonColor="#87ceeb" bottomColor="#666666" />
+    {/* Jittery low-poly sun/moon + stars; follows the player so the sky never
+        leaves render distance */}
+    <DayNightCycle />
     <PostProcessing quantization={0.025} />
 
     <CityRegion />

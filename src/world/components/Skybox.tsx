@@ -1,6 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useContext, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { getNightBlend, NIGHT_SKY_COLORS } from "../../sky/dayNight";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { getActiveRegions, getWorldTerrainParams } from "../registry";
 import { BiomeContext, RegionContext, SkyboxRecord, SkyboxSettings, useWorldStore, WorldDataContext, WorldStoreContext } from "./context";
@@ -82,6 +83,11 @@ void main() {
 
 const BIOME_POLL_INTERVAL = 0.5; // seconds between voronoi lookups (only when scoped skyboxes exist)
 const COLOR_LERP_RATE = 2; // higher = faster sky cross-fade
+
+// Night palette — the day/night cycle blends every resolved sky toward these
+const _nightTop = new THREE.Color(NIGHT_SKY_COLORS.top);
+const _nightHorizon = new THREE.Color(NIGHT_SKY_COLORS.horizon);
+const _nightBottom = new THREE.Color(NIGHT_SKY_COLORS.bottom);
 
 /**
  * Renders the sky and resolves which registered <Skybox> is active:
@@ -191,6 +197,15 @@ export const SkyboxSystem = () => {
     t.top.set(target.topColor);
     t.horizon.set(target.horizonColor);
     t.bottom.set(target.bottomColor);
+
+    // Day/night cycle: whatever sky is active (world/region/biome scoped),
+    // mix it toward the night palette by the current blend.
+    const nightBlend = getNightBlend();
+    if (nightBlend > 0) {
+      t.top.lerp(_nightTop, nightBlend);
+      t.horizon.lerp(_nightHorizon, nightBlend);
+      t.bottom.lerp(_nightBottom, nightBlend);
+    }
 
     const alpha = 1 - Math.exp(-COLOR_LERP_RATE * delta);
     material.uniforms.topColor.value.lerp(t.top, alpha);
