@@ -77,6 +77,9 @@ void main() {
   vec3 color = h > 0.0
     ? mix(horizonColor, topColor, h)
     : mix(horizonColor, bottomColor, -h);
+  // ±0.5/255 screen-space hash dither — the sky gradient changes so slowly
+  // that raw 8-bit output shows distinct Mach bands, worst at night.
+  color += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
   gl_FragColor = vec4(color, 1.0);
 }
 `;
