@@ -44,53 +44,81 @@ const driveLampLighting = (camera: THREE.Camera, time: number): void => {
   }
 };
 
-// ---- Shared geometry + material templates (cloned per lamp for the edge
-// fade — clones share the same shader program, so this stays one compile) ----
-// Low-poly L-shape: base + pole + arm, with a boxy lamp head hanging at the
-// arm's end. Dark parts and the lamp are separate meshes so the lamp can glow.
+// ---- Shared geometry + material template ----
+// ONE merged low-poly mesh per lamp (base + pole + arm + head): part colors
+// are baked as vertex colors, and an aLampMask attribute (1 on the head, 0
+// elsewhere) gates the material's emissive so only the head glows — one draw
+// call and one material per lamp instead of two of each.
 
-let darkGeometry: THREE.BufferGeometry | null = null;
-let lampGeometry: THREE.BufferGeometry | null = null;
+let lampPostGeometry: THREE.BufferGeometry | null = null;
 
-const getDarkGeometry = (): THREE.BufferGeometry => {
-  if (!darkGeometry) {
-    darkGeometry = mergeGeometries([
-      new THREE.BoxGeometry(0.5, 0.35, 0.5).translate(0, 0.18, 0), // base
-      new THREE.BoxGeometry(0.22, POLE_HEIGHT, 0.22).translate(0, POLE_HEIGHT / 2, 0), // pole
-      new THREE.BoxGeometry(1.5, 0.18, 0.18).translate(0.65, POLE_HEIGHT - 0.1, 0), // arm
+const paintPart = (g: THREE.BufferGeometry, hex: number, lampMask: number): THREE.BufferGeometry => {
+  const color = new THREE.Color(hex);
+  const count = g.getAttribute("position").count;
+  const colors = new Float32Array(count * 3);
+  const mask = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
+    mask[i] = lampMask;
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  g.setAttribute("aLampMask", new THREE.BufferAttribute(mask, 1));
+  g.deleteAttribute("uv");
+  return g;
+};
+
+const getLampPostGeometry = (): THREE.BufferGeometry => {
+  if (!lampPostGeometry) {
+    const DARK = 0x2d3033;
+    lampPostGeometry = mergeGeometries([
+      paintPart(new THREE.BoxGeometry(0.5, 0.35, 0.5).translate(0, 0.18, 0), DARK, 0), // base
+      paintPart(new THREE.BoxGeometry(0.22, POLE_HEIGHT, 0.22).translate(0, POLE_HEIGHT / 2, 0), DARK, 0), // pole
+      paintPart(new THREE.BoxGeometry(1.5, 0.18, 0.18).translate(0.65, POLE_HEIGHT - 0.1, 0), DARK, 0), // arm
+      paintPart(new THREE.BoxGeometry(0.85, 0.3, 0.45).translate(LAMP_ARM_X, POLE_HEIGHT - 0.35, 0), 0xd8d3c2, 1), // head
     ]);
   }
-  return darkGeometry;
+  return lampPostGeometry;
 };
 
-const getLampGeometry = (): THREE.BufferGeometry => {
-  if (!lampGeometry) {
-    lampGeometry = new THREE.BoxGeometry(0.85, 0.3, 0.45).translate(LAMP_ARM_X, POLE_HEIGHT - 0.35, 0);
-  }
-  return lampGeometry;
-};
-
-const POLE_MATERIAL = new THREE.MeshStandardMaterial({ color: 0x2d3033, roughness: 0.9, metalness: 0.1 });
-// Lamp template: emissiveIntensity is driven by the global window-lights
-// progress, so all lamps fade in together at nightfall and out together at
-// dawn (the ramp IS the fade — no per-lamp stagger, unlike windows).
-const LAMP_MATERIAL = new THREE.MeshStandardMaterial({
-  color: 0xd8d3c2,
+// Template: emissiveIntensity is driven per instance by the global
+// window-lights progress, so all lamps fade in together at nightfall and out
+// together at dawn (the ramp IS the fade — no per-lamp stagger, unlike
+// windows). Cloned per lamp for the edge fade; every clone gets the same
+// mask patch, so they all share one compiled shader program.
+const LAMP_POST_MATERIAL = new THREE.MeshStandardMaterial({
+  vertexColors: true,
   emissive: 0xffd166,
   emissiveIntensity: 0,
-  roughness: 0.6,
-  metalness: 0,
+  roughness: 0.8,
+  metalness: 0.05,
 });
 
+const patchLampMask = (material: THREE.MeshStandardMaterial): void => {
+  material.customProgramCacheKey = () => "lamp-post";
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aLampMask;\nvarying float vLampMask;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvLampMask = aLampMask;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vLampMask;")
+      .replace(
+        "#include <emissivemap_fragment>",
+        "#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vLampMask;",
+      );
+  };
+};
+
 /**
- * Low-poly city street light. The lamp head glows via its emissive material —
+ * Low-poly city street light. The lamp head glows via a masked emissive —
  * far brighter than building windows — following the global lights ramp
- * (simultaneous smooth fade at dusk/dawn). Actual illumination comes from the
- * lampGlow shader channel (terrain, buildings, doors) plus a tiny real
- * point-light pool for NPCs — see StreetLightPool. Opacity is tied directly
- * to camera distance (recomputed every frame), so entering/leaving render
- * distance is a perfectly smooth fade. Spawned by the spawn system (city
- * only, high density); colliders mount near the player.
+ * (simultaneous smooth fade at dusk/dawn). Actual illumination comes from
+ * the lampGlow grid texture (terrain, buildings, doors, GLTF spawnables) —
+ * see sky/lampGlow.ts. Opacity is tied directly to camera distance
+ * (recomputed every frame) times a short mount ease-in, so lamps never pop.
+ * Spawned by the spawn system (city only, high density); colliders mount
+ * near the player.
  */
 export const StreetLight = ({ id, coordinates, renderDistance, despawnDistance, onDestroy }: SpawnedObjectProps) => {
   const { camera } = useThree();
@@ -100,16 +128,15 @@ export const StreetLight = ({ id, coordinates, renderDistance, despawnDistance, 
   const appliedOpacityRef = useRef(-1);
   const mountFadeRef = useRef(0); // 0 → 1 over MOUNT_FADE_DURATION after mount
 
-  // Per-instance material clones so this lamp can fade at the render edge
-  // independently (clones reuse the template's compiled shader program).
-  const materials = useMemo(() => ({ pole: POLE_MATERIAL.clone(), lamp: LAMP_MATERIAL.clone() }), []);
-  useEffect(
-    () => () => {
-      materials.pole.dispose();
-      materials.lamp.dispose();
-    },
-    [materials],
-  );
+  // Per-instance material clone so this lamp can fade at the render edge
+  // independently (clone() drops onBeforeCompile, so re-patch — the shared
+  // cache key keeps all clones on one compiled shader program).
+  const material = useMemo(() => {
+    const m = LAMP_POST_MATERIAL.clone();
+    patchLampMask(m);
+    return m;
+  }, []);
+  useEffect(() => () => material.dispose(), [material]);
 
   // Deterministic yaw from the spawn position, so each lamp faces its own way
   // (and the same way on every load).
@@ -128,9 +155,12 @@ export const StreetLight = ({ id, coordinates, renderDistance, despawnDistance, 
     activeLampHeads.set(id, head);
     return () => {
       activeLampHeads.delete(id);
-      // Last lamp gone → nobody drives the grid anymore; clear it so no
-      // ghost light pools linger on the terrain.
-      if (activeLampHeads.size === 0) updateLampGrid([], 0, 0);
+      // Last lamp gone → nobody drives the grid anymore; clear it (and the
+      // shader early-out) so no ghost light pools linger on the terrain.
+      if (activeLampHeads.size === 0) {
+        updateLampGrid([], 0, 0);
+        setLampGlowIntensity(0);
+      }
     };
   }, [id, coordinates, yaw]);
 
@@ -159,22 +189,17 @@ export const StreetLight = ({ id, coordinates, renderDistance, despawnDistance, 
     const t = Math.min(Math.max((distance - (renderDistance - FADE_BAND)) / FADE_BAND, 0), 1);
     const opacity = (1 - t * t * (3 - 2 * t)) * mountFadeRef.current; // smoothstep × ease-in
 
-    const progress = getWindowLightsProgress();
-    const { pole, lamp } = materials;
-    lamp.emissiveIntensity = progress * LAMP_EMISSIVE_STRENGTH;
+    material.emissiveIntensity = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
     if (opacity !== appliedOpacityRef.current) {
       appliedOpacityRef.current = opacity;
-      pole.opacity = opacity;
-      pole.transparent = opacity < 1;
-      lamp.opacity = opacity;
-      lamp.transparent = opacity < 1;
+      material.opacity = opacity;
+      material.transparent = opacity < 1;
     }
   });
 
   return (
     <group position={coordinates} rotation={[0, yaw, 0]}>
-      <mesh geometry={getDarkGeometry()} material={materials.pole} />
-      <mesh geometry={getLampGeometry()} material={materials.lamp} />
+      <mesh geometry={getLampPostGeometry()} material={material} />
       {collidersActive && (
         <RigidBody type="fixed" colliders={false}>
           <CuboidCollider args={[0.12, POLE_HEIGHT / 2, 0.12]} position={[0, POLE_HEIGHT / 2, 0]} />

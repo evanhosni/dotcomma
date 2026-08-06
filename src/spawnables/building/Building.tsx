@@ -1,12 +1,17 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
-import { Children, useEffect, useMemo, useRef, useState } from "react";
+import { Children, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
 import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
+import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { getDistance2D } from "../../utils/utils";
-import { getProceduralBuildingAssets } from "./buildingAssets";
+import {
+  getProceduralBuildingAssets,
+  peekProceduralBuildingAssets,
+  ProceduralBuildingAssets,
+} from "./buildingAssets";
 import { BuildingOptions, BuildingProps } from "./types";
 
 // Beyond this camera distance all of the building's colliders are unmounted
@@ -121,6 +126,10 @@ patchStandardMaterialLampGlow(DOOR_MATERIAL);
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 
+// Building geometry builds run through this queue (time-budgeted slices) so
+// a spawn batch with several unseen seeds never triangulates in one frame.
+const buildQueue = new TaskQueue();
+
 /**
  * Procedurally generated building — exterior and interior are ONE thing. The
  * shell is genuinely hollow with the walls, floor slabs, and ramp flights
@@ -190,14 +199,27 @@ export const Building = ({
     interiorColors,
   };
   const optionsKey = JSON.stringify(opts);
-  const assets = useMemo(
-    () => getProceduralBuildingAssets(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions),
-    [resolvedSeed, optionsKey],
+  // Cache-hit seeds (despawn/respawn churn) mount instantly; NEW seeds build
+  // through the shared task queue so a spawn batch with several unseen
+  // buildings can't stack plan generation + triangulation into one frame.
+  const [assets, setAssets] = useState<ProceduralBuildingAssets | null>(() =>
+    peekProceduralBuildingAssets(resolvedSeed, optionsKey),
   );
-  const { plan } = assets;
+  useEffect(() => {
+    if (assets) return;
+    let cancelled = false;
+    buildQueue.addTask(async () => {
+      if (cancelled) return;
+      const built = getProceduralBuildingAssets(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions);
+      if (!cancelled) setAssets(built);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedSeed, optionsKey]); // assets deliberately omitted: guard exits once built
 
-  // ---- Door state ----
-  const [doorsOpen, setDoorsOpen] = useState<boolean[]>(() => assets.doors.map(() => false));
+  // ---- Door state ---- (indexes default closed until toggled)
+  const [doorsOpen, setDoorsOpen] = useState<boolean[]>([]);
   const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const hingeRefs = useRef<(THREE.Group | null)[]>([]);
   const hoverDoorRef = useRef(-1);
@@ -295,8 +317,11 @@ export const Building = ({
     };
   }, []);
 
+  // Assets still building on the queue (new seed) — render nothing this frame
+  if (!assets) return null;
+
   const childArray = Children.toArray(children);
-  const slots = plan.interior.childSlots;
+  const slots = assets.plan.interior.childSlots;
 
   return (
     <group position={coordinates}>
