@@ -1,4 +1,10 @@
-import { computeVertexData, initCompute, VertexResult } from "../workers/vertexCompute";
+import {
+  computeVertexData,
+  getCityRoadMarkers,
+  initCompute,
+  RoadMarkerPoint,
+  VertexResult,
+} from "../workers/vertexCompute";
 import { getActiveWorldConfig, whenWorldReady } from "./registry";
 
 /**
@@ -13,12 +19,30 @@ import { getActiveWorldConfig, whenWorldReady } from "./registry";
 
 let lastConfig: object | null = null;
 
-export const getVertexData = async (x: number, y: number): Promise<VertexResult> => {
+const ensureInit = async (): Promise<void> => {
   await whenWorldReady();
   const config = getActiveWorldConfig();
   if (config !== lastConfig) {
     initCompute(config);
     lastConfig = config;
   }
+};
+
+export const getVertexData = async (x: number, y: number): Promise<VertexResult> => {
+  await ensureInit();
   return computeVertexData(x, y);
+};
+
+/** Raised-pavement-marker positions along city road centerlines within the
+ *  bounds (used by the RoadMarkers visual component). */
+export const getRoadMarkers = async (
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number,
+  streetSpacing: number,
+  freewaySpacing: number
+): Promise<RoadMarkerPoint[]> => {
+  await ensureInit();
+  return getCityRoadMarkers(minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing);
 };

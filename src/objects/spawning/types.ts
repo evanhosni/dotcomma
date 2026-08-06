@@ -15,6 +15,7 @@ export interface SpawnDescriptor {
   biomeIds?: number[]; // restrict to specific biomes
   heightRange?: [number, number]; // restrict to height band
   slopeRange?: [number, number]; // restrict to slope range (degrees)
+  roadDistanceRange?: [number, number]; // restrict by distance to the road centerline (city: keep buildings off roads / lamps on sidewalks)
   spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
   cursorOverride?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
   quantization?: number; // vertex quantization grid size for this object; defaults to the global grid

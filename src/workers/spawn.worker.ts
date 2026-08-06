@@ -38,6 +38,7 @@ interface SerializedDescriptor {
   biomeIds?: number[];
   heightRange?: [number, number];
   slopeRange?: [number, number];
+  roadDistanceRange?: [number, number];
   spacingOverrides?: Record<string, number>;
 }
 
@@ -205,6 +206,16 @@ const generateForChunk = (
         // Height restriction
         if (desc.heightRange) {
           if (vd.height < desc.heightRange[0] || vd.height > desc.heightRange[1])
+            continue;
+        }
+
+        // Road distance restriction (distance to the road centerline —
+        // in the city: keeps buildings inside blocks, lamps on sidewalks)
+        if (desc.roadDistanceRange) {
+          if (
+            vd.distanceToRoadCenter < desc.roadDistanceRange[0] ||
+            vd.distanceToRoadCenter > desc.roadDistanceRange[1]
+          )
             continue;
         }
 
