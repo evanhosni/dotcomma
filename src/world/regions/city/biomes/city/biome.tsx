@@ -1,6 +1,7 @@
 import { BeebleSpawnable } from "../../../../../spawnables/beeble/spawnable";
 import { SkyscraperSpawnable } from "../../../../../spawnables/building/skyscraper";
 import { BuildingSpawnable } from "../../../../../spawnables/building/spawnable";
+import { StreetLightSpawnable } from "../../../../../spawnables/street-light/spawnable";
 import { Biome, Material, Spawnables } from "../../../../components";
 import { getMaterial } from "./material";
 
@@ -20,6 +21,7 @@ export const CityBiome = () => (
       <XXLElementSpawnable /> */}
       <BuildingSpawnable biomeIds={[CITY_BIOME_ID]} />
       <SkyscraperSpawnable biomeIds={[CITY_BIOME_ID]} />
+      <StreetLightSpawnable biomeIds={[CITY_BIOME_ID]} />
     </Spawnables>
   </Biome>
 );

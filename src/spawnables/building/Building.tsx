@@ -3,6 +3,7 @@ import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier"
 import { Children, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
+import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { getDistance2D } from "../../utils/utils";
 import { getProceduralBuildingAssets } from "./buildingAssets";
@@ -111,6 +112,11 @@ const DOOR_MATERIAL = new THREE.MeshStandardMaterial({
   roughness: 0.9,
   metalness: 0.05,
 });
+
+// Street-lamp glow: walls and doors near a lamp brighten in its color via the
+// shared uLampGlow shader channel (chains after the window-lights patch).
+patchStandardMaterialLampGlow(DEFAULT_EXTERIOR);
+patchStandardMaterialLampGlow(DOOR_MATERIAL);
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);

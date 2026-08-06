@@ -2,6 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { patchStandardMaterialLampGlow } from "../sky/lampGlow";
 import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { getDistance2D } from "../utils/utils";
@@ -174,6 +175,9 @@ export const GameObject = ({
             if (!child.userData?.skipQuantization) {
               _quantization.patchMaterial(mat, quantization);
             }
+            // Street-lamp glow — NPCs/objects near a lamp brighten like the
+            // terrain and buildings do (grid lookup, no real lights)
+            patchStandardMaterialLampGlow(mat);
             allMaterials.push(mat);
           });
 
