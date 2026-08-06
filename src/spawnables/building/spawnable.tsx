@@ -6,11 +6,15 @@ export const BuildingDescriptor: SpawnDescriptor = {
   id: "building",
   component: Building as React.FC<SpawnedObjectProps>,
   footprint: 30,
-  density: 500,
+  // Buildings only place inside block interiors (off roads/sidewalks/ramps),
+  // so density is set high to keep blocks packed — the footprint spacing is
+  // the real limiter, letting buildings front right up against sidewalks.
+  density: 3800,
   clustering: 0,
   renderDistance: 625,
   frustumPadding: 3.25,
   priority: 55,
+  roadDistanceRange: [23, 99999],
 };
 
 /** Mounts the procedural building spawn registration; props override the

@@ -66,6 +66,7 @@ export interface SerializedSpawnDescriptor {
   biomeIds?: number[];
   heightRange?: [number, number];
   slopeRange?: [number, number];
+  roadDistanceRange?: [number, number];
   spacingOverrides?: Record<string, number>;
 }
 
@@ -85,6 +86,7 @@ export const serializeDescriptors = (
     biomeIds: d.biomeIds,
     heightRange: d.heightRange,
     slopeRange: d.slopeRange,
+    roadDistanceRange: d.roadDistanceRange,
     spacingOverrides: d.spacingOverrides,
   }));
 

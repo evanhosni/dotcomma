@@ -21,11 +21,14 @@ export const SkyscraperDescriptor: SpawnDescriptor = {
   id: "skyscraper",
   component: Skyscraper,
   footprint: 36,
-  density: 30,
+  // Restricted to deep block interiors (see roadDistanceRange), so density is
+  // raised to keep the skyline as populated as before the road filter.
+  density: 240,
   clustering: 0,
   renderDistance: 625,
   frustumPadding: 3.25,
   priority: 45,
+  roadDistanceRange: [28, 99999],
 };
 
 /** Mounts the skyscraper spawn registration; props override the descriptor. */
