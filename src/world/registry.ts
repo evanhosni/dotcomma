@@ -92,7 +92,7 @@ export const DEFAULT_WORLD_TERRAIN_PARAMS: WorldTerrainParams = {
     blockCount: 4,
     maxBlockElevation: 4.5,
     curbHeight: 0.3,
-    freewayWidth: 24,
+    freewayWidth: 14,
     districtSize: 7.5,
     triangleChance: 0.12,
     roundaboutChance: 0.1,

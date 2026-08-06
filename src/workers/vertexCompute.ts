@@ -77,6 +77,13 @@ export interface VertexResult {
   distanceToBiomeBoundaryCenter: number;
   distanceToRiverCenter: number;
   distanceToRoadCenter: number;
+  /** REAL distance to the nearest freeway centerline (arterial edge or the
+   *  belt ring) — 99999 outside the city and in junction zones. Drives the
+   *  freeway lane paint. */
+  distanceToFreewayCenter: number;
+  /** Coordinate ALONG that freeway (axis coordinate for arterials, wall
+   *  projection for the belt) — the lane-paint dash phase. 0 outside. */
+  freewayAlong: number;
 }
 
 // Internal types
@@ -328,8 +335,16 @@ const getWalls = (
   return { biomeWalls, riverWalls };
 };
 
+/** Side-channel of the last distanceToWall call: a pseudo-arc coordinate
+ *  along the WINNING wall (projection distance + a per-segment phase from
+ *  the segment's start point). Continuous within a segment; jumps at wall
+ *  joints — used for the belt freeway's dash phase (the shader's fwidth
+ *  guard drops the paint over the jump slivers). */
+let lastWallAlong = 0;
+
 const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
   let minDistSq = Infinity;
+  lastWallAlong = 0;
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
     const dx = w.ex - w.sx;
@@ -342,7 +357,10 @@ const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
     const cy = w.sy + t * dy;
     const ddx = px - cx, ddy = py - cy;
     const distSq = ddx * ddx + ddy * ddy;
-    if (distSq < minDistSq) minDistSq = distSq;
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
+      lastWallAlong = t * Math.sqrt(lenSq) + w.sx + w.sy;
+    }
   }
   return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
 };
@@ -379,6 +397,8 @@ const cityBlockElevation = (
 interface CityTerrain {
   dist: number; // distance to the nearest road centerline, in street units (0 = on it)
   elevation: number; // plateau height incl. road ramps + curb dip
+  paintDist: number; // REAL distance to the nearest freeway centerline (paint channel)
+  paintAlong: number; // dash-phase coordinate along that freeway
 }
 
 // Ramps between block plateaus start this far inside the road edge, so the
@@ -468,7 +488,7 @@ const baseCityLabel = (ix: number, iy: number, walls: Wall[], d: CityDistrict): 
   const px = (ix + 0.5) * gs;
   const py = (iy + 0.5) * gs;
   const w = cityLocalToWorld(px, py, d);
-  if (distanceToWall(w.x, w.y, walls) < gs * 0.65) return -1;
+  if (distanceToWall(w.x, w.y, walls) < gs * 0.15) return -1;
   const sx = Math.floor(ix / 2);
   const sy = Math.floor(iy / 2);
   const superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sy}`);
@@ -498,7 +518,10 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
     const px = (ix + 0.5) * gs;
     const py = (iy + 0.5) * gs;
     const w = cityLocalToWorld(px, py, d);
-    if (distanceToWall(w.x, w.y, walls) < gs * 0.65) {
+    // Only cells basically ON the boundary go full-road: the BELT freeway
+    // now owns the rim zone (it melts any block it clips), so blocks run
+    // right up to the beltway instead of a wide rim plaza.
+    if (distanceToWall(w.x, w.y, walls) < gs * 0.15) {
       cell = { label: -1, shape: CITY_SHAPE_SQUARE };
     } else {
       // Roundabouts AND triangles roll per 2×2 SUPER-CELL — each feature
@@ -726,7 +749,8 @@ const getCityTerrain = (
   vy: number,
   city: WorldConfig["cityConfig"],
   walls: Wall[],
-  biomeBoundaryDist: number
+  biomeBoundaryDist: number,
+  biomeWallAlong: number
 ): CityTerrain => {
   const gs = city.gridSize;
 
@@ -902,20 +926,24 @@ const getCityTerrain = (
   let arterialReal = aS;
   let aUx = 0;
   let aUz = -1;
+  let arterialAlong = vx; // row boundaries run along x
   if (aN < arterialReal) {
     arterialReal = aN;
     aUx = 0;
     aUz = 1;
+    arterialAlong = vx;
   }
   if (aW < arterialReal) {
     arterialReal = aW;
     aUx = -1;
     aUz = 0;
+    arterialAlong = vy; // segment boundaries run along z
   }
   if (aE < arterialReal) {
     arterialReal = aE;
     aUx = 1;
     aUz = 0;
+    arterialAlong = vy;
   }
   arterialReal = Math.max(0, arterialReal);
   // Normalized (× roadWidth/freewayWidth) through the visual bands so the
@@ -936,12 +964,22 @@ const getCityTerrain = (
     aUz
   );
 
-  // Rim: treat the biome-boundary band as a road edge. Blocks near the city
-  // rim melt/chamfer against the CURVED boundary exactly like against a
-  // street, so no curved slivers survive between the rim and the street grid
-  // — and spawns keep the same clearances from the rim that they keep from
-  // roads. No direction is available for the rim, so it pairs with anything.
-  considerWorld(Math.max(0, biomeBoundaryDist - cfg!.boundaryWidth), NaN, 0);
+  // BELT freeway: the city rim is a freeway RING surrounding the whole biome
+  // — the arterials running outward empty into it. Its centerline sits
+  // boundaryWidth + freewayWidth inside the biome boundary, so the belt's
+  // outer road edge exactly abuts the boundary band. Same normalization +
+  // spawn recovery as arterials; blocks melt/chamfer against the curved belt
+  // like against any road. No direction is available (the boundary curves),
+  // so it pairs with anything in the chamfer.
+  const beltReal = Math.abs(biomeBoundaryDist - (cfg!.boundaryWidth + city.freewayWidth));
+  considerWorld(
+    Math.max(
+      beltReal * fwScale,
+      (beltReal - recoverNorm / fwScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
+    ),
+    NaN,
+    0
+  );
 
   // ── Plateau elevation ──
   // Bilinear plateau interpolation toward the neighbors the vertex leans
@@ -971,8 +1009,10 @@ const getCityTerrain = (
   // Arterials sit at grade 0: block plateaus ramp up from the district
   // boundary roads. Both sides of a boundary ramp to the same value, so
   // elevation stays continuous across the district (and rotation) switch —
-  // the ramp is confined inside the arterial road surface.
+  // the ramp is confined inside the arterial road surface. The belt freeway
+  // sits at grade 0 the same way.
   elevation *= smoothstepVal(2, city.freewayWidth - 4, arterialReal);
+  elevation *= smoothstepVal(2, city.freewayWidth - 4, beltReal);
 
   // Roundabout island: its own flat plateau, independent of the (possibly
   // differing) wrap-around block heights — blended in UNDER the inner ring
@@ -1021,7 +1061,35 @@ const getCityTerrain = (
   // Curb: the road surface sits a step below the sidewalk.
   elevation -= city.curbHeight * (1 - smoothstepVal(city.roadWidth - 2, city.roadWidth, dist));
 
-  return { dist, elevation };
+  // Lane-paint channels: distance to the NEAREST freeway centerline
+  // (arterial edge or belt) + the dash-phase coordinate along it (axis
+  // coordinate for arterials; biome-wall projection for the belt — its
+  // per-segment phase seams are dropped by the shader's fwidth guard).
+  // JUNCTION ZONES — anywhere a second freeway feature is within reach
+  // (arterial corners, tees into the belt, merges) — export "no paint", so
+  // lines end cleanly before interchanges instead of wandering across them.
+  let paintDist = arterialReal;
+  let paintAlong = arterialAlong;
+  if (beltReal < paintDist) {
+    paintDist = beltReal;
+    paintAlong = biomeWallAlong;
+  }
+  let m1 = 99999;
+  let m2 = 99999;
+  for (const v of [Math.max(0, aS), Math.max(0, aN), Math.max(0, aW), Math.max(0, aE), beltReal]) {
+    if (v < m1) {
+      m2 = m1;
+      m1 = v;
+    } else if (v < m2) {
+      m2 = v;
+    }
+  }
+  if (m2 < city.freewayWidth + 10) {
+    paintDist = 99999;
+    paintAlong = 0;
+  }
+
+  return { dist, elevation, paintDist, paintAlong };
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1085,6 +1153,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // Step 2: Voronoi — region grid, biome grid, walls
   const { biome, biomeWalls, riverWalls } = getBiomeContext(currentVertex);
   const distanceToBiomeBoundary = distanceToWall(cvx, cvz, biomeWalls);
+  const biomeWallAlong = lastWallAlong; // capture before the river call overwrites
   const distanceToRiver = distanceToWall(cvx, cvz, riverWalls);
 
   // Step 3: Blend
@@ -1095,6 +1164,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // Step 4: Biome height
   let biomeHeight = 0;
   let distanceToRoadCenter = distanceToBiomeBoundary;
+  let distanceToFreewayCenter = 99999;
+  let freewayAlong = 0;
 
   if (distanceToRiver > cfg.riverWidth) {
     const riverFade = Math.min(1.0, (distanceToRiver - cfg.riverWidth) / cfg.riverWidth);
@@ -1110,8 +1181,10 @@ export function computeVertexData(x: number, z: number): VertexResult {
       biomeHeight = h * blend * riverFade;
     } else if (cfg.cityConfig && biomeId === 1) {
       // City biome — internal road distance + per-block plateau elevation
-      const city = getCityTerrain(x, z, cfg.cityConfig, biomeWalls, distanceToBiomeBoundary);
+      const city = getCityTerrain(x, z, cfg.cityConfig, biomeWalls, distanceToBiomeBoundary, biomeWallAlong);
       distanceToRoadCenter = Math.min(city.dist, distanceToRiver);
+      distanceToFreewayCenter = city.paintDist;
+      freewayAlong = city.paintAlong;
       // The biome height cancels the global base noise, then sits each block
       // on its own flat plateau (roads ramp between neighboring plateaus and
       // dip a curb's depth below the sidewalk). Blends smoothly back to the
@@ -1131,6 +1204,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
     distanceToBiomeBoundaryCenter: distanceToBiomeBoundary,
     distanceToRiverCenter: distanceToRiver,
     distanceToRoadCenter,
+    distanceToFreewayCenter,
+    freewayAlong,
   };
 }
 
@@ -1176,6 +1251,13 @@ export function getCityRoadMarkers(
     if (vd.biomeId !== 1) return; // city biome only
     if (vd.distanceToRiverCenter < 45) return;
     if (vd.distanceToRoadCenter > 2) return; // melted/chamfered zones drop out
+    // Stay clear of the BELT freeway corridor around the rim (centerline at
+    // boundaryWidth + freewayWidth) — streets tee into it like arterials.
+    if (
+      Math.abs(vd.distanceToBiomeBoundaryCenter - (cfg!.boundaryWidth + city.freewayWidth)) <
+      city.freewayWidth + 5
+    )
+      return;
     out.push({ x: mx, y: vd.height, z: mz, dirX, dirZ });
   };
 
@@ -1378,6 +1460,56 @@ export function getCityRoadMarkers(
         const slope = cityWiggleSlope(`s${r}:${m}`, mz);
         const norm = Math.hypot(1, slope);
         tryEmit(mx, mz, slope / norm, 1 / norm);
+      }
+    }
+  }
+
+  // ── Belt freeway median markers (the ring around the city rim) ──
+  // The belt centerline is the offset curve (boundaryWidth + freewayWidth)
+  // inside the biome boundary. Enumerate by stepping along the biome WALL
+  // segments (warped space), offsetting perpendicular to BOTH sides, and
+  // inverting the road-noise warp back to real space; the off-city candidate
+  // and any drift die in the validity filters. Positions are deterministic
+  // per wall, so chunk-bounds ownership stays duplicate-free.
+  const beltR = cfg.boundaryWidth + city.freewayWidth;
+  const wcx = (minX + maxX) / 2;
+  const wcz = (minZ + maxZ) / 2;
+  const beltWalls = getBiomeContext({
+    x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
+    y: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+  }).biomeWalls;
+  for (const wall of beltWalls) {
+    // getWalls emits each voronoi wall twice (once per Delaunay halfedge,
+    // endpoints swapped) — keep the canonical orientation only.
+    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ey < wall.sy)) continue;
+    const wdx = wall.ex - wall.sx;
+    const wdz = wall.ey - wall.sy;
+    const wlen = Math.hypot(wdx, wdz);
+    if (wlen < freewaySpacing) continue;
+    const ux = wdx / wlen;
+    const uz = wdz / wlen;
+    for (let t = freewaySpacing / 2; t < wlen; t += freewaySpacing) {
+      for (const side of [1, -1]) {
+        // Warped-space point on the belt centerline
+        const twx = wall.sx + ux * t - uz * beltR * side;
+        const twz = wall.sy + uz * t + ux * beltR * side;
+        // Invert the road-noise warp (fixed point; the warp is smooth and
+        // large-scale, so a few iterations land within the sanity filters)
+        let mx = twx;
+        let mz = twz;
+        for (let it = 0; it < 3; it++) {
+          mx = twx - terrainNoise(cfg.roadNoiseParams, mz, 0);
+          mz = twz - terrainNoise(cfg.roadNoiseParams, mx, 0);
+        }
+        if (mx < minX || mx >= maxX || mz < minZ || mz >= maxZ) continue; // chunk ownership
+        const vd = computeVertexData(mx, mz);
+        if (vd.biomeId !== 1) continue; // kills the outward-side candidate
+        if (Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) > 2.5) continue;
+        if (vd.distanceToRoadCenter > 2) continue;
+        if (vd.distanceToRiverCenter < 45) continue;
+        // yield to arterial junctions like all markers do
+        if (cityArterialDist(mx, mz, getCityDistrict(mx, mz)) < city.freewayWidth + 6) continue;
+        out.push({ x: mx, y: vd.height, z: mz, dirX: ux, dirZ: uz });
       }
     }
   }

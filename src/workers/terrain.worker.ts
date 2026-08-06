@@ -40,6 +40,8 @@ self.onmessage = (e: MessageEvent) => {
     const distBiome = new Float32Array(count);
     const distRegion = new Float32Array(count);
     const distRoad = new Float32Array(count);
+    const distFreeway = new Float32Array(count);
+    const freewayAlong = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
       const result = computeVertexData(vertexX[i] + offsetX, -vertexY[i] + offsetZ);
@@ -48,11 +50,13 @@ self.onmessage = (e: MessageEvent) => {
       distBiome[i] = result.distanceToBiomeBoundaryCenter;
       distRegion[i] = result.distanceToRiverCenter;
       distRoad[i] = result.distanceToRoadCenter;
+      distFreeway[i] = result.distanceToFreewayCenter;
+      freewayAlong[i] = result.freewayAlong;
     }
 
     (self as any).postMessage(
-      { type: "CHUNK_BUILT", id, heights, biomeIds, distBiome, distRegion, distRoad },
-      [heights.buffer, biomeIds.buffer, distBiome.buffer, distRegion.buffer, distRoad.buffer]
+      { type: "CHUNK_BUILT", id, heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong },
+      [heights.buffer, biomeIds.buffer, distBiome.buffer, distRegion.buffer, distRoad.buffer, distFreeway.buffer, freewayAlong.buffer]
     );
   }
 };

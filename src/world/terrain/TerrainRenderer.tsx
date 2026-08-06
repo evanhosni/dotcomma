@@ -93,6 +93,8 @@ const buildChunkInWorker = (
   distBiome: Float32Array;
   distRegion: Float32Array;
   distRoad: Float32Array;
+  distFreeway: Float32Array;
+  freewayAlong: Float32Array;
 }> => {
   return new Promise((resolve) => {
     pendingChunkResolve = resolve;
@@ -635,7 +637,7 @@ export const TerrainRenderer = () => {
 
     // Send all vertex positions to the terrain worker in a single message
     const workerResult = await buildChunkInWorker(vertX, vertY, offset.x, offset.y);
-    const { heights, biomeIds, distBiome, distRegion, distRoad } = workerResult;
+    const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
 
     // Reuse attribute arrays from pooled geometry when available, else allocate
     const totalVerts = pos.count;
@@ -651,6 +653,8 @@ export const TerrainRenderer = () => {
     const attrDistBiome = ensureAttr("distanceToBiomeBoundaryCenter");
     const attrDistRegion = ensureAttr("distanceToRiverCenter");
     const attrDistRoad = ensureAttr("distanceToRoadCenter");
+    const attrDistFreeway = ensureAttr("distanceToFreewayCenter");
+    const attrFreewayAlong = ensureAttr("freewayAlong");
 
     // Write main grid heights + attributes via direct array access
     // (X/Y positions remain from geometry creation; vertX/vertY were transferred to worker)
@@ -660,6 +664,8 @@ export const TerrainRenderer = () => {
       attrDistBiome[i] = distBiome[i];
       attrDistRegion[i] = distRegion[i];
       attrDistRoad[i] = distRoad[i];
+      attrDistFreeway[i] = distFreeway[i];
+      attrFreewayAlong[i] = freewayAlong[i];
     }
 
     // Update skirt vertices via direct array access
@@ -689,6 +695,10 @@ export const TerrainRenderer = () => {
       attrDistRegion[skirtBotStart + i] = attrDistRegion[srcIdx];
       attrDistRoad[skirtTopStart + i] = attrDistRoad[srcIdx];
       attrDistRoad[skirtBotStart + i] = attrDistRoad[srcIdx];
+      attrDistFreeway[skirtTopStart + i] = attrDistFreeway[srcIdx];
+      attrDistFreeway[skirtBotStart + i] = attrDistFreeway[srcIdx];
+      attrFreewayAlong[skirtTopStart + i] = attrFreewayAlong[srcIdx];
+      attrFreewayAlong[skirtBotStart + i] = attrFreewayAlong[srcIdx];
     }
 
     // Mark reused attributes for GPU upload
@@ -696,6 +706,8 @@ export const TerrainRenderer = () => {
     (geom.getAttribute("distanceToBiomeBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToRiverCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToRoadCenter") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("distanceToFreewayCenter") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("freewayAlong") as THREE.BufferAttribute).needsUpdate = true;
 
     // Apply material and update geometry immediately
     chunk.plane.material = material;
