@@ -542,6 +542,12 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
 const cache = new Map<string, ProceduralBuildingAssets>();
 const MAX_CACHE = 64;
 
+/** Cache-only lookup (no build). Lets <Building> mount instantly for seeds
+ *  it has already built (despawn/respawn churn) while NEW seeds build
+ *  through the task queue without blocking the spawn frame. */
+export const peekProceduralBuildingAssets = (seed: string, optionsKey: string): ProceduralBuildingAssets | null =>
+  cache.get(`${seed}|${optionsKey}`) ?? null;
+
 const disposeAssets = (a: ProceduralBuildingAssets): void => {
   a.exteriorGeometry.dispose();
   a.interiorGeometry.dispose();

@@ -81,8 +81,10 @@ src/
                        #   player distance (a pool of real lights was tried and
                        #   scrapped: nearest-N lights visibly ignite on approach). Edge
                        #   fade = smoothstep of camera distance × a short mount fade
-                       #   (spawn chunks can mount lamps mid-band); per-instance
-                       #   material clones, same shader program. City-only spawn.
+                       #   (spawn chunks can mount lamps mid-band). Each lamp is ONE
+                       #   merged vertex-colored mesh + ONE material clone (aLampMask
+                       #   attribute gates the emissive to the head; clones share one
+                       #   program via a fixed cache key). City-only spawn.
     building/          # Procedural building: seeded exterior massing with the
                        #   backrooms-style BSP interior physically nested inside;
                        #   clickable hinged doors gate interior mounting
@@ -308,6 +310,9 @@ Mount `<Skybox topColor=… horizonColor=… bottomColor=… />` inside a `<Regi
 - **Beeble physics LOD** (`Beeble.tsx`): idle grounded beebles skip the character-controller shape cast entirely; beyond `PHYSICS_FULL_RATE_DIST` (80u) moving beebles resolve collisions every 3rd frame with accumulated dt (speed preserved).
 - **GameObject fades** write material opacity only when it changes (steady-state objects skip the loop).
 - Skeleton cloning on spawn indexes bones by name in one pass (`cloneModelWithAnimations`) — avoid per-bone scene traversals.
+- **TaskQueue is time-budgeted** (6ms slices, then yields a macrotask): awaiting a synchronous task only yields a MICROtask, so without the budget a burst of queued work (collider builds, building geometry) would still run inside one frame.
+- **Procedural building assets build through a TaskQueue** (`Building.tsx`): cache-hit seeds mount synchronously (despawn/respawn churn), NEW seeds render null for a frame or two while plan generation + triangulation run in budgeted slices — a spawn batch with several unseen buildings can't stack builds into one frame. Full off-thread (worker) geometry building was evaluated and deferred: the pipeline leans on THREE triangulators (ExtrudeGeometry with holes, mergeGeometries), so a worker port means serializing every buffer back — revisit only if the sliced builds still hitch.
+- **Street lights are ONE mesh + ONE material clone each** (vertex-colored parts, `aLampMask` attribute gates the emissive to the head) — one draw call per lamp; all clones share one compiled program via a fixed customProgramCacheKey.
 
 ## UI / Overlay Styling
 
