@@ -1,3 +1,4 @@
+import { CityLights } from "../../../../../objects/city-lights/CityLights";
 import { RoadMarkers } from "../../../../../objects/road-markers/RoadMarkers";
 import { BeebleSpawnable } from "../../../../../spawnables/beeble/spawnable";
 import { SkyscraperSpawnable } from "../../../../../spawnables/building/skyscraper";
@@ -30,5 +31,7 @@ export const CityBiome = () => (
     </Spawnables>
     {/* Raised pavement markers along road centerlines (3D studs, no paint) */}
     <RoadMarkers />
+    {/* One far-reaching beacon light at each city's voronoi center */}
+    <CityLights />
   </Biome>
 );

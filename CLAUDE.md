@@ -142,6 +142,16 @@ src/
     road-markers/
       RoadMarkers.tsx  # Raised pavement markers on city road centerlines (instanced
                        #   unlit studs from the voronoi road edges; no paint, no colliders)
+    city-lights/
+      CityLights.tsx   # One bright, far-throw point light at each city-biome cell's
+                       #   voronoi center (sites from getCityVoronoiSites in
+                       #   vertexCompute.ts, warp-inverted to world space). FIXED pool
+                       #   of parked lights (IndoorLightRig pattern) so the scene light
+                       #   count never changes — no shader recompiles. Only lit
+                       #   materials receive it (terrain/grass shaders are unlit) —
+                       #   EXCEPT while the TERRAIN_POINT_LIGHTS experiment flag in
+                       #   utils/material/_material.ts is on: it adds a per-fragment
+                       #   point-light lambert loop to the terrain shader (lights: true).
     spawning/
       ObjectPool.tsx   # Spawn management, frustum culling, pooling
       collectDescriptors.ts # Aggregates SpawnDescriptors from regions/biomes

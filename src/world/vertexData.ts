@@ -1,6 +1,8 @@
 import {
+  CitySitePoint,
   computeVertexData,
   getCityRoadMarkers,
+  getCityVoronoiSites,
   initCompute,
   RoadMarkerPoint,
   VertexResult,
@@ -45,4 +47,17 @@ export const getRoadMarkers = async (
 ): Promise<RoadMarkerPoint[]> => {
   await ensureInit();
   return getCityRoadMarkers(minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing);
+};
+
+/** Voronoi site point (one per city-biome cell) within the bounds — the
+ *  seeded center of each city, in real world coordinates (used by the
+ *  CityLights visual component). */
+export const getCityLightSites = async (
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number
+): Promise<CitySitePoint[]> => {
+  await ensureInit();
+  return getCityVoronoiSites(minX, minZ, maxX, maxZ);
 };

@@ -1516,3 +1516,70 @@ export function getCityRoadMarkers(
 
   return out;
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// City voronoi sites (one per city-biome cell — used by CityLights)
+// ══════════════════════════════════════════════════════════════════════
+
+export interface CitySitePoint {
+  key: string; // biome-grid cell key — stable identity across queries
+  x: number;
+  y: number; // terrain height at the site
+  z: number;
+}
+
+/**
+ * The voronoi SITE point (jittered seed point) of every biome-grid cell
+ * inside the bounds that rolled the CITY biome — i.e. one point per city.
+ * Rolls the exact same seeds as the biome grid (getVoronoiGrid + biomeGridFn),
+ * so the result matches the pipeline's assignment without touching its caches'
+ * semantics. Sites live in road-noise-warped space (where the biome voronoi is
+ * evaluated), so each is warp-inverted back to real world coordinates — the
+ * returned point is where the cell's visual voronoi center actually sits.
+ */
+export function getCityVoronoiSites(
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number
+): CitySitePoint[] {
+  if (!cfg) throw new Error("vertexCompute not initialized");
+  const gs = cfg.gridSize;
+  const seed = `${cfg.seed} - grid`;
+  const out: CitySitePoint[] = [];
+  // Pad one cell ring: the road-noise warp shifts world↔warped by less than a
+  // cell, so sites belonging just outside the bounds can land inside them.
+  const ix0 = Math.floor(minX / gs) - 1;
+  const ix1 = Math.floor(maxX / gs) + 1;
+  const iy0 = Math.floor(minZ / gs) - 1;
+  const iy1 = Math.floor(maxZ / gs) + 1;
+
+  for (let ix = ix0; ix <= ix1; ix++) {
+    for (let iy = iy0; iy <= iy1; iy++) {
+      const px = seedRand(`${seed} - ${ix}X${iy}`);
+      const py = seedRand(`${seed} - ${ix}Y${iy}`);
+      const site: Vec2 = { x: (ix + px) * gs, y: (iy + py) * gs };
+      // Same biome roll the grid makes for this cell: nearest region point →
+      // seeded pick among that region's biomes.
+      const regionGrid = getVoronoiGrid(
+        `${cfg.seed} - regionGrid`,
+        site,
+        cfg.regions,
+        cfg.regionGridSize,
+        regionGridFn
+      );
+      const biome: SerializedBiome = biomeGridFn(site, regionGrid);
+      if (biome.id !== 1) continue;
+      // Invert the road-noise warp (fixed point — same as the belt markers)
+      let wx = site.x;
+      let wz = site.y;
+      for (let it = 0; it < 3; it++) {
+        wx = site.x - terrainNoise(cfg.roadNoiseParams, wz, 0);
+        wz = site.y - terrainNoise(cfg.roadNoiseParams, wx, 0);
+      }
+      out.push({ key: `${ix},${iy}`, x: wx, y: computeVertexData(wx, wz).height, z: wz });
+    }
+  }
+
+  return out;
+}
