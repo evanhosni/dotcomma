@@ -36,7 +36,21 @@ export const RoadMarkers = ({ renderDistance = 340 }: RoadMarkersProps) => {
   const chunks = useRef(new Map<string, MarkerChunk>()).current;
   const frameCount = useRef(0);
 
-  const geometry = useMemo(() => new THREE.BoxGeometry(0.6, MARKER_HEIGHT, 0.38), []);
+  const geometry = useMemo(() => {
+    // Tapered stud: pull the top face's four vertices inward so the marker
+    // reads as a low "turtle" dome (frustum) instead of a perfect box.
+    // Material is unlit, so no normal recompute needed.
+    const g = new THREE.BoxGeometry(0.6, MARKER_HEIGHT, 0.38);
+    const pos = g.getAttribute("position") as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) > 0) {
+        pos.setX(i, pos.getX(i) * 0.5);
+        pos.setZ(i, pos.getZ(i) * 0.5);
+      }
+    }
+    pos.needsUpdate = true;
+    return g;
+  }, []);
   const material = useMemo(() => new THREE.MeshBasicMaterial({ color: "#c9a83e" }), []);
 
   useEffect(() => {
