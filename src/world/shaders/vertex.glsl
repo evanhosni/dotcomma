@@ -1,9 +1,13 @@
 attribute float distanceToBiomeBoundaryCenter;
 attribute float distanceToRiverCenter;
 attribute float distanceToRoadCenter;
+attribute float distanceToFreewayCenter;
+attribute float freewayAlong;
 varying float vDistanceToBiomeBoundaryCenter;
 varying float vDistanceToRiverCenter;
 varying float vDistanceToRoadCenter;
+varying float vDistanceToFreewayCenter;
+varying float vFreewayAlong;
 attribute float biomeId;
 flat varying int vBiomeId;
 varying vec2 vUv;
@@ -24,6 +28,8 @@ void main() {
   vDistanceToBiomeBoundaryCenter = distanceToBiomeBoundaryCenter;
   vDistanceToRiverCenter = distanceToRiverCenter;
   vDistanceToRoadCenter = distanceToRoadCenter;
+  vDistanceToFreewayCenter = distanceToFreewayCenter;
+  vFreewayAlong = freewayAlong;
   vBiomeId = int(biomeId);
   vUv = uv;
 

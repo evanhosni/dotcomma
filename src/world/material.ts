@@ -31,6 +31,8 @@ export const getMaterial = async () => {
       "varying float vDistanceToBiomeBoundaryCenter;",
       "varying float vDistanceToRiverCenter;",
       "varying float vDistanceToRoadCenter;",
+      "varying float vDistanceToFreewayCenter;",
+      "varying float vFreewayAlong;",
       "flat varying int vBiomeId;",
       "varying vec2 vUv;",
       "varying vec2 vWorldUv;",
@@ -42,6 +44,9 @@ export const getMaterial = async () => {
   });
 
   material.uniforms.uGridSize = _quantization.uniforms.uGridSize;
+  // fwidth() in the city shader guards the freeway lane paint against
+  // dash-phase interpolation sweeps (GLSL1 needs the derivatives extension).
+  material.extensions.derivatives = true;
 
   return material;
 };

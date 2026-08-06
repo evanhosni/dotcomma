@@ -1,5 +1,7 @@
 varying float vDistanceToBiomeBoundaryCenter;
 varying float vDistanceToRoadCenter;
+varying float vDistanceToFreewayCenter;
+varying float vFreewayAlong;
 varying vec3 vWorldNormal;
 varying vec3 vWorldPos;
 uniform sampler2D biometexture;
@@ -37,6 +39,22 @@ void main() {
   vec3 groundColor = mix(roadColor.rgb, curbColor, smoothstep(6.7, 7.5, roadDist));
   groundColor = mix(groundColor, sidewalkColor.rgb, smoothstep(7.9, 8.9, roadDist));
   groundColor = mix(groundColor, interiorColor, smoothstep(12.0, 14.2, roadDist));
+
+  // Freeway lane paint: 4 lanes — raised markers stud the median (3D
+  // instances), and each side splits with a white DASHED line at ± half the
+  // freeway half-width (real units via vDistanceToFreewayCenter; junction
+  // zones export "no paint" so lines end before interchanges). Dash phase
+  // runs along vFreewayAlong (perpendicular dash ends). Wherever either
+  // varying JUMPS between vertices (wall-segment seams, axis switches, mask
+  // boundaries) interpolation would sweep mod() into zebra stripes — the
+  // fwidth guards detect those slivers by their absurd world-space gradient
+  // (healthy roads sit near 1) and drop the paint there.
+  float worldPx = max(fwidth(vWorldPos.x) + fwidth(vWorldPos.z), 1e-4);
+  float seamOk = step(fwidth(vFreewayAlong) / worldPx, 4.0) *
+                 step(fwidth(vDistanceToFreewayCenter) / worldPx, 4.0);
+  float laneLine = 1.0 - smoothstep(0.22, 0.4, abs(vDistanceToFreewayCenter - 7.0));
+  float laneDash = step(mod(vFreewayAlong, 10.0), 5.0);
+  groundColor = mix(groundColor, vec3(0.82, 0.82, 0.8), laneLine * laneDash * seamOk * 0.52);
 
   // Biome boundary: ring road around the biome edge
   if (vDistanceToBiomeBoundaryCenter < 14.0) {
