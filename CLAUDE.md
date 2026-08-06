@@ -66,6 +66,23 @@ src/
     xl-element/        #   (SpawnDescriptor + <XxxSpawnable> wrapper component)
     xxl-element/
     apartment/
+    street-light/      # Procedural low-poly lamp post (no GLTF), all lamps fade
+                       #   in/out together with getWindowLightsProgress(). Lighting =
+                       #   sky/lampGlow.ts GRID DATA TEXTURE: world binned into 24u
+                       #   cells (one lamp head per texel; falloff radius = cell size),
+                       #   rewritten from ALL mounted lamps every few frames by the
+                       #   FIRST lamp instance per frame (module-level time guard, same
+                       #   pattern as GameObject's shared frustum update — no separate
+                       #   system component to mount) — the terrain shader and
+                       #   patched building/door/GLTF-spawnable materials sample their
+                       #   3×3 cell neighborhood (9 reads/fragment, CONSTANT cost for
+                       #   any lamp count), so if a lamp is rendered its light is
+                       #   rendered — NO real point lights anywhere, nothing depends on
+                       #   player distance (a pool of real lights was tried and
+                       #   scrapped: nearest-N lights visibly ignite on approach). Edge
+                       #   fade = smoothstep of camera distance × a short mount fade
+                       #   (spawn chunks can mount lamps mid-band); per-instance
+                       #   material clones, same shader program. City-only spawn.
     building/          # Procedural building: seeded exterior massing with the
                        #   backrooms-style BSP interior physically nested inside;
                        #   clickable hinged doors gate interior mounting

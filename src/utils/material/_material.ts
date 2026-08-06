@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
+import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../sky/lampGlow";
 import { Biome } from "../../world/types";
 import commonShader from "../../world/shaders/common.glsl";
 
@@ -46,9 +47,10 @@ export namespace _material {
   ): Promise<THREE.ShaderMaterial> => {
     const { riverTexture, biomeTexture, varyingDeclarations = [] } = options;
     // Collect all uniforms and fragment shaders from biomes
-    // uNightBlend is the SHARED day/night uniform object — updated once per
-    // frame by the cycle, so every terrain material dims in lockstep.
-    const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM };
+    // uNightBlend / the lamp-grid uniforms are SHARED objects — updated by
+    // the day/night cycle and StreetLightPool, so every terrain material
+    // dims and catches lamp light in lockstep.
+    const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS };
 
     // Add river texture if provided (between regions)
     if (riverTexture) {
@@ -117,6 +119,11 @@ export namespace _material {
       // Day/night: terrain is unlit, so scene-light dimming can't reach it —
       // darken directly by the shared night blend.
       gl_FragColor.rgb *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
+
+      // Street-lamp glow: real gradient pools of light on the road (added
+      // AFTER the night dim so lamps genuinely brighten the ground).
+      ${lampGlowAccumGLSL("vWorldPos")}
+      gl_FragColor.rgb += lampGlowSum * 0.25;
     }
   `;
 
