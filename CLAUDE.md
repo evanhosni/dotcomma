@@ -44,14 +44,16 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
         <StreetLamps/>       //     group props (renderDistance) are shared defaults; children
         <RoadMarkers/>       //     take their placement knobs as props
       </Dressing>
-      <GrassField/>          //   always-mounted visuals (auto-scoped to the biome)
+      <Foliage>              //   FOLIAGE class: mass GPU vegetation (per-instance attributes,
+        <GrassField/>        //     shader animation); same group-defaults pattern
+      </Foliage>
       <Skybox/>              //   optional per-biome sky override (also valid at Region level)
     </Biome>
   </Region>
 </World>
 ```
 
-**The two spawn classes** (industry terms): **ACTORS** are objects with their own identity, state, or interaction — creatures, buildings — each mounted as its own React component through the spawn lifecycle (`ObjectPool`). **DRESSING** is mass stateless identical scenery — street lamps, road markers, traffic lights, power lines — rendered as InstancedMeshes per 256u chunk with zero per-object components. Both get off-thread deterministic placement (spawn.worker / cityDressing.worker). Rule of thumb: many + identical + stateless → dressing; unique geometry, interaction, or behavior → actor. Grass is dressing taken further (GPU-side placement/sway, `GrassField`).
+**The three spawn classes** (industry terms): **ACTORS** are objects with their own identity, state, or interaction — creatures, buildings — each mounted as its own React component through the spawn lifecycle (`ObjectPool`). **DRESSING** is mass stateless identical scenery — street lamps, road markers, traffic lights, power lines — rendered as InstancedMeshes per 256u chunk with zero per-object components. **FOLIAGE** is vegetation at another order of magnitude — up to ~16k instances per 32u chunk, placement streamed as Float32Arrays straight into GPU instance attributes, animation (billboarding/sway) in the vertex shader (`src/foliage/`). All three get off-thread deterministic placement (spawn.worker / cityDressing.worker / grass.worker). Rule of thumb: unique geometry, interaction, or behavior → actor; many + identical + stateless → dressing; thousands-per-chunk vegetation → foliage.
 
 The world is defined by the `GameWorld` component tree in `src/world/world.tsx`. Config components (`Region`, `Biome`, `Terrain`, `Material`, `Skybox`, `Actor` — all in `src/world/components/`) register into a store during layout effects; `<World>` then **commits** the assembled `Region[]` data + serializable `WorldConfig` to a module-level registry (`src/world/registry.ts`) and mounts the global systems (`TerrainRenderer`, `ObjectPool`, `SkyboxSystem`). Non-React code (workers init, voronoi client, Player) reads from the registry — `getActiveRegions()`, `getActiveWorldConfig()`, `getWorldTerrainParams()`, or `await whenWorldReady()`.
 
@@ -176,6 +178,20 @@ src/
                        #   dedupe, sidewalk/off-road validity). (Freeway BARRIERS also
                        #   used this enumerator — built, then removed by preference;
                        #   both sides at lateral ≈ freewayWidth + 1.3 worked fine)
+  foliage/             # FOLIAGE class (mass GPU vegetation — the third spawn class).
+    Foliage.tsx        #   Class definition + <Foliage> group (shared default props,
+                       #   mirrors <Actors>/<Dressing>). Deliberately NOT built on the
+                       #   Dressing base: foliage runs ~16k instances per 32u chunk, so
+                       #   placement streams from its worker as transferable
+                       #   Float32Arrays straight into GPU instance attributes and all
+                       #   animation (billboarding, wind sway) runs in the vertex
+                       #   shader; per-chunk bounding spheres keep frustum culling
+                       #   effective. A foliage feature owns its chunk pipeline.
+    grass/
+      GrassField.tsx   # Reference implementation: instanced billboard grass (GPU sway,
+                       #   one draw call per 32u chunk, spawn-style filter props)
+      grassWorker.ts   # Worker client for grass.worker.ts (shared across GrassField instances)
+      types.ts         # GrassFieldProps
   world/
     GameWorld.tsx      # GameWorld — the <World> tree, single source of truth for active content
     registry.ts        # Module-level active world (regions/params/WorldConfig) + whenWorldReady()
@@ -227,10 +243,6 @@ src/
                        #   for mass static dressing rendered instanced (street lamps)
   objects/
     GameObject.tsx     # GLTF model loader with colliders + animations (handles own position when no positionRef)
-    vegetation/
-      GrassField.tsx   # Instanced billboard grass (GPU sway, per-chunk draw calls, spawn-style filter props)
-      grassWorker.ts   # Worker client for grass.worker.ts (shared across GrassField instances)
-      types.ts         # GrassFieldProps
     city-lights/
       CityLights.tsx   # One bright, far-throw point light at each city-biome cell's
                        #   voronoi center (sites from getCityVoronoiSites in
@@ -349,7 +361,7 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
      <Biome name="name" id={N} joinable blendable>
        <Terrain noise={{ params: {...} }} />
        <Material getMaterial={getMaterial} />
-       {/* <Actors>…</Actors>, <Dressing>…</Dressing>, <GrassField … />, <Skybox … /> as needed */}
+       {/* <Actors>…</Actors>, <Dressing>…</Dressing>, <Foliage>…</Foliage>, <Skybox … /> as needed */}
      </Biome>
    );
    ```
@@ -382,8 +394,8 @@ Pick the class first: unique geometry, interaction, or behavior → ACTOR (below
 2. Mount it inside a biome's `<Actors>` group (props on `<Actors>` are shared defaults for all children; a child's own props win)
 3. Place GLTF model in `public/models/`
 
-**Grass / mass vegetation** (thousands of instances — too many for the spawn system):
-1. Mount `<GrassField>` (`src/objects/vegetation/GrassField.tsx`) directly inside the biome component — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
+**Foliage** (mass vegetation — thousands of instances per chunk, its own class; see `src/foliage/Foliage.tsx` for a new-feature guide by example):
+1. Mount `<GrassField>` (`src/foliage/grass/GrassField.tsx`) inside the biome's `<Foliage>` group — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
 2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`, `quantization` to override the global vertex-quantization grid)
 3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
 

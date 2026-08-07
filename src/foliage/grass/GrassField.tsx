@@ -6,6 +6,7 @@ import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
 import { _quantization } from "../../utils/quantization/quantization";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
+import { useFoliageRenderDistance } from "../Foliage";
 import { generateGrassChunk, GrassChunkParams, initGrassWorker } from "./grassWorker";
 import { GrassFieldProps } from "./types";
 
@@ -136,10 +137,11 @@ const getBaseBladeGeometry = (): THREE.PlaneGeometry => {
 };
 
 /**
- * Instanced, billboarded grass cover. Blade placement runs in grass.worker.ts
- * per 32-unit chunk (deterministic, filtered by biome/height/slope); each
- * chunk is one alpha-tested instanced draw call. Billboarding and wind sway
- * run entirely on the GPU.
+ * FOLIAGE: instanced, billboarded grass cover — the class's reference
+ * implementation (see ../Foliage.tsx for why foliage is its own class).
+ * Blade placement runs in grass.worker.ts per 32-unit chunk (deterministic,
+ * filtered by biome/height/slope); each chunk is one alpha-tested instanced
+ * draw call. Billboarding and wind sway run entirely on the GPU.
  */
 export const GrassField: React.FC<GrassFieldProps> = ({
   density = 800_000,
@@ -153,10 +155,11 @@ export const GrassField: React.FC<GrassFieldProps> = ({
   bladeHeight = 1.2,
   sway = 0.15,
   swaySpeed = 1.2,
-  renderDistance = 120,
+  renderDistance: renderDistanceProp,
   seed = "grass",
   quantization,
 }) => {
+  const renderDistance = useFoliageRenderDistance(renderDistanceProp, 120);
   const groupRef = useRef<THREE.Group>(null);
   const chunksRef = useRef(new Map<string, THREE.Mesh | null>()); // null = built but empty
   const pendingRef = useRef(new Set<string>());
