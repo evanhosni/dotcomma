@@ -274,7 +274,13 @@ src/
     indoorSlotAllocator.ts # Unique Y slot per building instance (INDOOR_Y_OFFSET + slot spacing)
     constants.ts       # Teleport thresholds, render perf tuning
   sky/
-    DayNightCycle.tsx  # Jittery low-poly sun (flat irregular disc) + crescent moon +
+    DayNightCycle.tsx  # NOTE: gl.compile()s the celestial group at mount — the moon
+                       #   and stars first render at the exact frame dusk begins, and
+                       #   the lazy shader compile+link there (expensive under
+                       #   Windows/ANGLE) caused a visible NIGHTFALL HITCH. Anything
+                       #   else added that first renders at a phase boundary must be
+                       #   precompiled the same way.
+                       # Jittery low-poly sun (flat irregular disc) + crescent moon +
                        #   stars; follows the camera; drives the night blend
     dayNight.ts        # Cycle durations, DAY_NIGHT_CYCLE_TRANSITION_MS, night palette,
                        #   nightBlend + phase + window-lights channels (getNightBlend /

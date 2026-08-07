@@ -126,7 +126,7 @@ export const DayNightCycle = ({
   nightDurationMs = NIGHT_DURATION_MS,
   transitionMs = DAY_NIGHT_CYCLE_TRANSITION_MS,
 }: DayNightCycleProps) => {
-  const { camera } = useThree();
+  const { camera, gl } = useThree();
 
   const groupRef = useRef<THREE.Group>(null);
   const sunRef = useRef<THREE.Mesh>(null);
@@ -184,6 +184,17 @@ export const DayNightCycle = ({
       starMaterial.dispose();
     };
   }, [sun, moon, stars, sunMaterial, moonMaterial, starMaterial]);
+
+  // Precompile the night-only shader programs (moon, stars) at MOUNT.
+  // Materials compile lazily on their first visible render, which otherwise
+  // lands at the exact frame the first dusk begins — a synchronous program
+  // compile+link (expensive under Windows/ANGLE) that read as a "large frame
+  // drop right at nightfall". gl.compile traverses regardless of `visible`,
+  // and all three materials are unlit, so compiling against the celestial
+  // group alone builds the same programs the scene render will use.
+  useEffect(() => {
+    if (groupRef.current) gl.compile(groupRef.current, camera);
+  }, [gl, camera]);
 
   const startRef = useRef(performance.now());
   const jitterTimer = useRef(0);
