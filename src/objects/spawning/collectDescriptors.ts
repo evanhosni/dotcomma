@@ -1,18 +1,17 @@
 import { Region } from "../../world/types";
-import { SpawnDescriptor } from "./types";
+import { ActorDescriptor } from "./types";
 
 /**
- * Walks regions → biomes to aggregate all SpawnDescriptors.
+ * Walks regions → biomes to aggregate all ActorDescriptors.
  * Deduplicates by descriptor id (last-registered wins).
  */
-export const collectDescriptors = (regions: Region[]): SpawnDescriptor[] => {
-  const byId = new Map<string, SpawnDescriptor>();
+export const collectDescriptors = (regions: Region[]): ActorDescriptor[] => {
+  const byId = new Map<string, ActorDescriptor>();
 
-  // Region → Biome level spawnables
   for (const region of regions) {
     for (const biome of region.biomes) {
-      if (biome.spawnables) {
-        for (const desc of biome.spawnables) {
+      if (biome.actors) {
+        for (const desc of biome.actors) {
           byId.set(desc.id, desc);
         }
       }

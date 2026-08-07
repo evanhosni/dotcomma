@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { SpawnDescriptor } from "../../objects/spawning/types";
+import { ActorDescriptor } from "../../objects/spawning/types";
 import { WorldTerrainParams } from "../registry";
 import { BiomeNoiseConfig, MaterialData, RegionMaterialData } from "../types";
 
@@ -7,7 +7,7 @@ import { BiomeNoiseConfig, MaterialData, RegionMaterialData } from "../types";
  * Registration store backing the <World> component tree.
  *
  * Config components (<Region>, <Biome>, <Terrain>, <Material>, <Skybox>,
- * <Spawnable>) write into these maps from useLayoutEffect and call
+ * <Actor>) write into these maps from useLayoutEffect and call
  * invalidate(); <World> commits the assembled world after layout effects
  * settle. Map insertion order follows JSX tree order, which preserves
  * region/biome ordering (voronoi assignment depends on it).
@@ -59,7 +59,7 @@ export interface WorldStore {
   /** key: `${regionId}/${biomeId}` */
   biomeMaterials: Map<string, { biomeId: number; getMaterial: () => Promise<MaterialData> }>;
   /** key: `${regionId}/${biomeId}/${descriptorId}` */
-  spawnables: Map<string, { biomeId: number; descriptor: SpawnDescriptor }>;
+  actors: Map<string, { biomeId: number; descriptor: ActorDescriptor }>;
   /** key: `${scope}/${scopeId ?? "world"}` */
   skyboxes: Map<string, SkyboxRecord>;
   /** Schedules a <World> re-commit. Safe to call from effects/cleanups. */
@@ -75,7 +75,7 @@ export const createWorldStore = (invalidate: () => void): WorldStore => ({
   biomes: new Map(),
   biomeTerrain: new Map(),
   biomeMaterials: new Map(),
-  spawnables: new Map(),
+  actors: new Map(),
   skyboxes: new Map(),
   invalidate,
 });

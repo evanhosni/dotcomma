@@ -47,7 +47,7 @@ export interface CityLightsProps {
  * positions come from the shared vertex pipeline (getCityLightSites), so the
  * light sits exactly at the cell's seeded voronoi center. Note the terrain
  * and grass shaders are unlit — the light lands on lit materials (GLTF
- * spawnables, building exteriors, etc.).
+ * actors, building exteriors, etc.).
  */
 export const CityLights = ({
   color = "#ffdb8d",

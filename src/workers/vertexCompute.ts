@@ -1210,6 +1210,60 @@ export function computeVertexData(x: number, z: number): VertexResult {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// City feature enumeration helpers (shared by the road-marker /
+// traffic-light / freeway-side enumerations)
+// ══════════════════════════════════════════════════════════════════════
+
+/** District-local cell lookup with the local biome walls (rim detection),
+ *  mirroring computeVertexData's road-noise warp for the context. */
+const cityCellAtLocal = (ix: number, iy: number, d: CityDistrict): CityCell => {
+  const gs = cfg!.cityConfig.gridSize;
+  const w = cityLocalToWorld((ix + 0.5) * gs, (iy + 0.5) * gs, d);
+  const warped: Vec2 = {
+    x: w.x + terrainNoise(cfg!.roadNoiseParams, w.y, 0),
+    y: w.y + terrainNoise(cfg!.roadNoiseParams, w.x, 0),
+  };
+  return getCityCell(ix, iy, getBiomeContext(warped).biomeWalls, d);
+};
+
+/** Local AABB of the chunk∩district overlap (rotate the overlap's corners
+ *  into the district frame). District extent padded by the boundary wiggle
+ *  amplitude. Null when chunk and district don't overlap. */
+const cityChunkLocalAABB = (
+  d: CityDistrict,
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number
+): { lminX: number; lmaxX: number; lminZ: number; lmaxZ: number } | null => {
+  const wx0 = Math.max(minX, d.minX - CITY_WIGGLE_AMP);
+  const wx1 = Math.min(maxX, d.maxX + CITY_WIGGLE_AMP);
+  const wz0 = Math.max(minZ, d.minZ - CITY_WIGGLE_AMP);
+  const wz1 = Math.min(maxZ, d.maxZ + CITY_WIGGLE_AMP);
+  if (wx0 >= wx1 || wz0 >= wz1) return null;
+  let lminX = Infinity;
+  let lmaxX = -Infinity;
+  let lminZ = Infinity;
+  let lmaxZ = -Infinity;
+  for (const [cxw, czw] of [
+    [wx0, wz0],
+    [wx0, wz1],
+    [wx1, wz0],
+    [wx1, wz1],
+  ]) {
+    const dx = cxw - d.px;
+    const dz = czw - d.py;
+    const lcx = d.px + dx * d.cos + dz * d.sin;
+    const lcz = d.py - dx * d.sin + dz * d.cos;
+    if (lcx < lminX) lminX = lcx;
+    if (lcx > lmaxX) lmaxX = lcx;
+    if (lcz < lminZ) lminZ = lcz;
+    if (lcz > lmaxZ) lmaxZ = lcz;
+  }
+  return { lminX, lmaxX, lminZ, lmaxZ };
+};
+
+// ══════════════════════════════════════════════════════════════════════
 // Road markers (raised pavement markers along road centerlines)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1280,14 +1334,7 @@ export function getCityRoadMarkers(
 
       // Cell lookup with the local biome walls (rim detection), mirroring
       // computeVertexData's road-noise warp for the context.
-      const cellAt = (ix: number, iy: number): CityCell => {
-        const w = cityLocalToWorld((ix + 0.5) * gs, (iy + 0.5) * gs, d);
-        const warped: Vec2 = {
-          x: w.x + terrainNoise(cfg!.roadNoiseParams, w.y, 0),
-          y: w.y + terrainNoise(cfg!.roadNoiseParams, w.x, 0),
-        };
-        return getCityCell(ix, iy, getBiomeContext(warped).biomeWalls, d);
-      };
+      const cellAt = (ix: number, iy: number): CityCell => cityCellAtLocal(ix, iy, d);
 
       const emitLocal = (lmx: number, lmz: number, ldx: number, ldz: number) => {
         const p = cityLocalToWorld(lmx, lmz, d);
@@ -1316,33 +1363,9 @@ export function getCityRoadMarkers(
         return false;
       };
 
-      // Local AABB of the chunk∩district overlap (rotate the overlap's
-      // corners into the district frame). District extent padded by the
-      // boundary wiggle amplitude.
-      const wx0 = Math.max(minX, d.minX - CITY_WIGGLE_AMP);
-      const wx1 = Math.min(maxX, d.maxX + CITY_WIGGLE_AMP);
-      const wz0 = Math.max(minZ, d.minZ - CITY_WIGGLE_AMP);
-      const wz1 = Math.min(maxZ, d.maxZ + CITY_WIGGLE_AMP);
-      if (wx0 >= wx1 || wz0 >= wz1) continue;
-      let lminX = Infinity;
-      let lmaxX = -Infinity;
-      let lminZ = Infinity;
-      let lmaxZ = -Infinity;
-      for (const [cxw, czw] of [
-        [wx0, wz0],
-        [wx0, wz1],
-        [wx1, wz0],
-        [wx1, wz1],
-      ]) {
-        const dx = cxw - d.px;
-        const dz = czw - d.py;
-        const lcx = d.px + dx * d.cos + dz * d.sin;
-        const lcz = d.py - dx * d.sin + dz * d.cos;
-        if (lcx < lminX) lminX = lcx;
-        if (lcx > lmaxX) lmaxX = lcx;
-        if (lcz < lminZ) lminZ = lcz;
-        if (lcz > lmaxZ) lmaxZ = lcz;
-      }
+      const aabb = cityChunkLocalAABB(d, minX, minZ, maxX, maxZ);
+      if (!aabb) continue;
+      const { lminX, lmaxX, lminZ, lmaxZ } = aabb;
 
       const inset = city.roadWidth + 4; // keep markers out of grid intersections
       const ix0 = Math.floor(lminX / gs) - 1;
@@ -1578,6 +1601,367 @@ export function getCityVoronoiSites(
         wz = site.y - terrainNoise(cfg.roadNoiseParams, wx, 0);
       }
       out.push({ key: `${ix},${iy}`, x: wx, y: computeVertexData(wx, wz).height, z: wz });
+    }
+  }
+
+  return out;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Traffic lights (signalized street intersections)
+// ══════════════════════════════════════════════════════════════════════
+
+export interface CityTrafficLightPoint {
+  x: number;
+  y: number; // terrain height at the pole base (sidewalk corner)
+  z: number;
+  dirX: number; // unit direction the signal head faces (toward the intersection)
+  dirZ: number;
+  phase: number; // seeded [0,1) — desynchronizes the per-light signal cycles
+}
+
+/**
+ * Pole positions for traffic lights at SOME street intersections (seeded
+ * per-intersection roll against `chance`). An intersection is a district-grid
+ * corner where at least 3 road arms meet (labels differ across ≥3 of the 4
+ * edges radiating from the corner). Each selected intersection gets a pole on
+ * every block corner that survives validation: the pole is pushed diagonally
+ * outward from the corner until it lands in the sidewalk band of the road
+ * field (the corner chamfer means the diagonal offset varies), facing back
+ * toward the intersection center.
+ *
+ * Ownership is by the CORNER's world position (a single deterministic point),
+ * so calls over non-overlapping chunks never emit duplicate poles even when
+ * an intersection's poles straddle a chunk border.
+ */
+export function getCityTrafficLightPoints(
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number,
+  chance: number
+): CityTrafficLightPoint[] {
+  if (!cfg || !cfg.cityConfig) return [];
+  const city = cfg.cityConfig;
+  const gs = city.gridSize;
+  const beltR = cfg.boundaryWidth + city.freewayWidth;
+  const out: CityTrafficLightPoint[] = [];
+
+  const midX = (minX + maxX) / 2;
+  const midZ = (minZ + maxZ) / 2;
+  const rows0 = findCityRow(minZ, midX) - 1;
+  const rows1 = findCityRow(maxZ - 0.001, midX) + 1;
+  for (let r = rows0; r <= rows1; r++) {
+    const m0 = findCitySeg(r, minX, midZ) - 1;
+    const m1 = findCitySeg(r, maxX - 0.001, midZ) + 1;
+    for (let m = m0; m <= m1; m++) {
+      const d = cityDistrictByIndex(r, m);
+      const aabb = cityChunkLocalAABB(d, minX, minZ, maxX, maxZ);
+      if (!aabb) continue;
+
+      const ix0 = Math.floor(aabb.lminX / gs) - 1;
+      const ix1 = Math.floor(aabb.lmaxX / gs) + 2;
+      const iy0 = Math.floor(aabb.lminZ / gs) - 1;
+      const iy1 = Math.floor(aabb.lmaxZ / gs) + 2;
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+          // Corner at local (ix·gs, iy·gs); the four cells around it.
+          const A = cityCellAtLocal(ix - 1, iy - 1, d);
+          const B = cityCellAtLocal(ix, iy - 1, d);
+          const C = cityCellAtLocal(ix - 1, iy, d);
+          const D = cityCellAtLocal(ix, iy, d);
+          // Rim cells (whole cell = ring road) and roundabout territory
+          // (curved ring roads, radiating tees) never get signals.
+          if (A.label < 0 || B.label < 0 || C.label < 0 || D.label < 0) continue;
+          if (
+            A.shape === CITY_SHAPE_CIRCLE ||
+            B.shape === CITY_SHAPE_CIRCLE ||
+            C.shape === CITY_SHAPE_CIRCLE ||
+            D.shape === CITY_SHAPE_CIRCLE
+          )
+            continue;
+          const arms =
+            (A.label !== B.label ? 1 : 0) + // south arm
+            (C.label !== D.label ? 1 : 0) + // north arm
+            (A.label !== C.label ? 1 : 0) + // west arm
+            (B.label !== D.label ? 1 : 0); // east arm
+          if (arms < 3) continue;
+          if (seedRand(`${city.seed}-tl-${d.key}|${ix},${iy}`) >= chance) continue;
+
+          const pc = cityLocalToWorld(ix * gs, iy * gs, d);
+          // Ownership by the corner's world position — one deterministic
+          // point decides which chunk emits the whole intersection.
+          if (pc.x < minX || pc.x >= maxX || pc.y < minZ || pc.y >= maxZ) continue;
+          if (getCityDistrict(pc.x, pc.y).key !== d.key) continue; // wiggly district clip
+          // Intersections near arterials lose their corners to the wide
+          // chamfer — skip them entirely.
+          if (cityArterialDist(pc.x, pc.y, d) < city.freewayWidth + 16) continue;
+
+          const lx = ix * gs;
+          const lz = iy * gs;
+          for (const [sx, sz] of [
+            [1, 1],
+            [1, -1],
+            [-1, 1],
+            [-1, -1],
+          ]) {
+            // March diagonally out from the corner until the road field says
+            // sidewalk (the chamfer cuts corners at varying depths).
+            for (let off = 16; off <= 26; off += 2) {
+              const p = cityLocalToWorld(
+                lx + sx * off * Math.SQRT1_2,
+                lz + sz * off * Math.SQRT1_2,
+                d
+              );
+              const vd = computeVertexData(p.x, p.y);
+              if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) break;
+              if (
+                Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) <
+                city.freewayWidth + 5
+              )
+                break; // belt freeway corridor
+              if (vd.distanceToRoadCenter < 8.4) continue; // still on road/curb
+              if (vd.distanceToRoadCenter > 11.6) break; // past the sidewalk — no footing
+              // Face back toward the intersection center (local diagonal,
+              // rotated into the world frame).
+              const fx = -sx * Math.SQRT1_2;
+              const fz = -sz * Math.SQRT1_2;
+              out.push({
+                x: p.x,
+                y: vd.height,
+                z: p.y,
+                dirX: fx * d.cos - fz * d.sin,
+                dirZ: fx * d.sin + fz * d.cos,
+                phase: seedRand(`${city.seed}-tlph-${d.key}|${ix},${iy}|${sx},${sz}`),
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Freeway-side features (power lines / barriers along arterials + belt)
+// ══════════════════════════════════════════════════════════════════════
+
+export interface CityFreewaySidePoint {
+  x: number;
+  y: number; // terrain height at the point
+  z: number;
+  dirX: number; // unit tangent along the freeway
+  dirZ: number;
+  side: number; // +1 / −1: which side of the centerline (belt: +1 = city side)
+  next?: { x: number; y: number; z: number }; // next point along the run (wire spans)
+}
+
+/**
+ * Points offset `lateral` real units to BOTH sides of every freeway
+ * centerline — the wiggly arterial district boundaries and the belt ring —
+ * spaced `spacing` apart along the run, with the freeway tangent direction.
+ * Candidates within `junctionClear` of a crossing freeway feature are
+ * skipped (runs end cleanly before interchanges), and candidates whose road
+ * field says they'd sit on road surface (street tees, merge chamfers) drop
+ * out, leaving natural gaps at street mouths.
+ *
+ * Positions sit on global parameter lattices (arterials) / deterministic
+ * per-wall steps (belt), so chunked calls never emit duplicates. With
+ * `withNext`, each point carries the position of the NEXT valid point along
+ * its run (the same point the neighboring lattice step would emit) so a
+ * caller can hang wires across chunk borders without coordination.
+ *
+ * NOTE: belt candidates come from the wall set visible from the QUERY CENTER
+ * (same caveat as the belt median markers) — call with a consistent chunk
+ * size for stable belt coverage; ownership keeps disjoint queries
+ * duplicate-free regardless.
+ */
+export function getCityFreewaySidePoints(
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number,
+  spacing: number,
+  lateral: number,
+  junctionClear: number,
+  withNext: boolean
+): CityFreewaySidePoint[] {
+  if (!cfg || !cfg.cityConfig) return [];
+  const city = cfg.cityConfig;
+  const fwScale = city.roadWidth / city.freewayWidth;
+  const beltR = cfg.boundaryWidth + city.freewayWidth;
+  const minField = lateral * fwScale - 1.5; // reject points melted into road
+  const out: CityFreewaySidePoint[] = [];
+
+  type Candidate = { x: number; y: number; z: number; dirX: number; dirZ: number } | null;
+
+  // Ownership filter, applied BEFORE any expensive validation: candidates a
+  // chunk doesn't own must cost only the position arithmetic (the belt scan
+  // especially visits every nearby wall for EVERY city chunk — validating
+  // out-of-bounds candidates there made chunk builds an order of magnitude
+  // slower than the road markers). Next-link lookups (`owned = false`) skip
+  // it: a successor usually lives in the neighboring chunk.
+  const owns = (px: number, pz: number): boolean =>
+    px >= minX && px < maxX && pz >= minZ && pz < maxZ;
+
+  const validate = (px: number, pz: number, ux: number, uz: number): Candidate => {
+    const vd = computeVertexData(px, pz);
+    if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) return null;
+    // Stay clear of the belt corridor (arterials empty into it).
+    if (Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) < city.freewayWidth + junctionClear)
+      return null;
+    if (vd.distanceToRoadCenter < minField) return null;
+    return { x: px, y: vd.height, z: pz, dirX: ux, dirZ: uz };
+  };
+
+  // ── Arterial rows (horizontal boundary curves) ──
+  const evalRow = (k: number, j: number, side: number, owned: boolean): Candidate => {
+    const mx = j * spacing;
+    const mz = cityRowEdgeZ(k, mx);
+    const slope = cityWiggleSlope(`r${k}`, mx);
+    const norm = Math.hypot(1, slope);
+    const ux = 1 / norm;
+    const uz = slope / norm;
+    // Left normal of the tangent, flipped by side.
+    const px = mx - uz * lateral * side;
+    const pz = mz + ux * lateral * side;
+    if (owned && !owns(px, pz)) return null;
+    // Skip T-junctions with the vertical boundaries of both adjacent rows.
+    for (const rr of [k - 1, k]) {
+      const mm = findCitySeg(rr, mx, mz);
+      if (
+        Math.abs(mx - citySegEdgeX(rr, mm, mz)) < junctionClear ||
+        Math.abs(mx - citySegEdgeX(rr, mm + 1, mz)) < junctionClear
+      )
+        return null;
+    }
+    return validate(px, pz, ux, uz);
+  };
+
+  const pitch = cityDistrictPitch();
+  const pad = CITY_WIGGLE_AMP + lateral + spacing;
+  for (let k = Math.floor(minZ / pitch) - 1; k <= Math.floor(maxZ / pitch) + 2; k++) {
+    const bzBase = cityRowBoundary(k);
+    if (bzBase < minZ - pad || bzBase >= maxZ + pad) continue;
+    // Lattice scan padded by `lateral`: the side offset shifts a point up to
+    // lateral·slope ALONG the row, so a point owned by these bounds can hang
+    // off a lattice step outside them (ownership dedupes the overlap).
+    for (let j = Math.ceil((minX - lateral) / spacing); j * spacing < maxX + lateral; j++) {
+      for (const side of [1, -1]) {
+        const p = evalRow(k, j, side, true);
+        if (!p) continue;
+        const point: CityFreewaySidePoint = { ...p, side };
+        if (withNext) {
+          const n = evalRow(k, j + 1, side, false);
+          if (n) point.next = { x: n.x, y: n.y, z: n.z };
+        }
+        out.push(point);
+      }
+    }
+  }
+
+  // ── Arterial segments (vertical boundary curves, within each row) ──
+  const evalSeg = (r: number, m: number, j: number, side: number, owned: boolean): Candidate => {
+    const mz = j * spacing;
+    const mx = citySegEdgeX(r, m, mz);
+    const slope = cityWiggleSlope(`s${r}:${m}`, mz);
+    const norm = Math.hypot(1, slope);
+    const ux = slope / norm;
+    const uz = 1 / norm;
+    const px = mx - uz * lateral * side;
+    const pz = mz + ux * lateral * side;
+    if (owned && !owns(px, pz)) return null;
+    // Clamp to this row's (wiggled) span, clear of the row-boundary junctions.
+    const rz0 = cityRowEdgeZ(r, mx);
+    const rz1 = cityRowEdgeZ(r + 1, mx);
+    if (mz - rz0 < junctionClear || rz1 - mz < junctionClear) return null;
+    return validate(px, pz, ux, uz);
+  };
+
+  const midXf = (minX + maxX) / 2;
+  const midZf = (minZ + maxZ) / 2;
+  const frows0 = findCityRow(minZ, midXf) - 1;
+  const frows1 = findCityRow(maxZ - 0.001, midXf) + 1;
+  for (let r = frows0; r <= frows1; r++) {
+    const m0 = findCitySeg(r, minX, midZf) - 1;
+    const m1 = findCitySeg(r, maxX - 0.001, midZf) + 1;
+    for (let m = m0; m <= m1 + 1; m++) {
+      const bxBase = citySegBoundary(r, m);
+      if (bxBase < minX - pad || bxBase >= maxX + pad) continue;
+      // Same `lateral` scan pad as the row lattice above.
+      for (let j = Math.ceil((minZ - lateral) / spacing); j * spacing < maxZ + lateral; j++) {
+        for (const side of [1, -1]) {
+          const p = evalSeg(r, m, j, side, true);
+          if (!p) continue;
+          const point: CityFreewaySidePoint = { ...p, side };
+          if (withNext) {
+            const n = evalSeg(r, m, j + 1, side, false);
+            if (n) point.next = { x: n.x, y: n.y, z: n.z };
+          }
+          out.push(point);
+        }
+      }
+    }
+  }
+
+  // ── Belt freeway (the ring around the city rim) ──
+  // Same wall-stepping + warp-inversion approach as the belt median markers:
+  // offset each candidate beltR ± lateral from the biome wall in warped
+  // space, invert the road-noise warp, and let the validity filters kill the
+  // off-city candidates. side +1 = the city side of the belt.
+  const wcx = (minX + maxX) / 2;
+  const wcz = (minZ + maxZ) / 2;
+  const beltWalls = getBiomeContext({
+    x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
+    y: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+  }).biomeWalls;
+  const evalBelt = (wall: Wall, t: number, s: number, side: number, owned: boolean): Candidate => {
+    if (t <= 0 || t >= Math.hypot(wall.ex - wall.sx, wall.ey - wall.sy)) return null;
+    const wdx = wall.ex - wall.sx;
+    const wdz = wall.ey - wall.sy;
+    const wlen = Math.hypot(wdx, wdz);
+    const ux = wdx / wlen;
+    const uz = wdz / wlen;
+    const o = beltR + side * lateral;
+    const twx = wall.sx + ux * t - uz * o * s;
+    const twz = wall.sy + uz * t + ux * o * s;
+    let mx = twx;
+    let mz = twz;
+    for (let it = 0; it < 3; it++) {
+      mx = twx - terrainNoise(cfg!.roadNoiseParams, mz, 0);
+      mz = twz - terrainNoise(cfg!.roadNoiseParams, mx, 0);
+    }
+    if (owned && !owns(mx, mz)) return null;
+    const vd = computeVertexData(mx, mz);
+    if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) return null;
+    if (Math.abs(vd.distanceToBiomeBoundaryCenter - o) > 2.5) return null; // drift / wrong side
+    if (vd.distanceToRoadCenter < minField) return null;
+    // Yield to the arterials teeing into the belt.
+    if (cityArterialDist(mx, mz, getCityDistrict(mx, mz)) < city.freewayWidth + junctionClear)
+      return null;
+    return { x: mx, y: vd.height, z: mz, dirX: ux, dirZ: uz };
+  };
+  for (const wall of beltWalls) {
+    // getWalls emits each wall twice endpoint-swapped — canonical orientation only.
+    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ey < wall.sy)) continue;
+    const wlen = Math.hypot(wall.ex - wall.sx, wall.ey - wall.sy);
+    if (wlen < spacing) continue;
+    for (let t = spacing / 2; t < wlen; t += spacing) {
+      for (const s of [1, -1]) {
+        for (const side of [1, -1]) {
+          const p = evalBelt(wall, t, s, side, true);
+          if (!p) continue;
+          const point: CityFreewaySidePoint = { ...p, side };
+          if (withNext) {
+            const n = evalBelt(wall, t + spacing, s, side, false);
+            if (n) point.next = { x: n.x, y: n.y, z: n.z };
+          }
+          out.push(point);
+        }
+      }
     }
   }
 

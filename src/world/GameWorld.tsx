@@ -11,7 +11,7 @@ import { Material, Skybox, Terrain, World } from "./components";
  * (terrain rules, materials, skybox, post-processing) and mounts the global
  * systems (terrain chunk system, spawn system, skybox system); each <Region>
  * child declares its biomes; each biome declares its terrain, material,
- * spawnables, and always-mounted visuals.
+ * actors, dressing, and always-mounted visuals.
  *
  * To add a region: create a component in src/regions/ and mount it here.
  */

@@ -32,6 +32,11 @@
       "react-app/jest"
     ]
   },
+  "jest": {
+    "transformIgnorePatterns": [
+      "node_modules/(?!(delaunator|robust-predicates|noise-ts)/)"
+    ]
+  },
   "browserslist": {
     "production": [
       ">0.2%",

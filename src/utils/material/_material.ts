@@ -56,7 +56,7 @@ export namespace _material {
     const { riverTexture, biomeTexture, varyingDeclarations = [] } = options;
     // Collect all uniforms and fragment shaders from biomes
     // uNightBlend / the lamp-grid uniforms are SHARED objects — updated by
-    // the day/night cycle and StreetLightPool, so every terrain material
+    // the day/night cycle and StreetLampPool, so every terrain material
     // dims and catches lamp light in lockstep.
     const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS };
 
