@@ -14,7 +14,7 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { WorldConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
+import { WorldConfig, initCompute, computeVertexData, getFlattenPoints, seedRand } from "./vertexCompute";
 
 const SPAWN_CHUNK_SIZE = 250;
 
@@ -40,6 +40,7 @@ interface SerializedDescriptor {
   slopeRange?: [number, number];
   roadDistanceRange?: [number, number];
   spacingOverrides?: Record<string, number>;
+  flattenGround?: boolean;
 }
 
 // ── Inline Spatial Hash ──
@@ -156,6 +157,33 @@ const generateForChunk = (
   const chunkPoints: SpawnPoint[] = [];
 
   for (const desc of sorted) {
+    // flattenGround actors: placement comes from the DETERMINISTIC flatten
+    // engine (workers/vertexCompute.ts) — the same function the terrain uses
+    // to put a flat pad under every instance, so points and pads can never
+    // disagree. Points still enter the spatial hash so OTHER descriptors
+    // space against them; their own spacing was already resolved by the
+    // engine's stateless greedy.
+    if (desc.flattenGround) {
+      for (const p of getFlattenPoints(
+        chunkMinX,
+        chunkMinZ,
+        chunkMinX + SPAWN_CHUNK_SIZE,
+        chunkMinZ + SPAWN_CHUNK_SIZE
+      )) {
+        if (p.descId !== desc.id) continue;
+        const point: SpawnPoint = {
+          x: p.x,
+          z: p.z,
+          height: p.y,
+          biomeId: p.biomeId,
+          descriptorId: desc.id,
+        };
+        spatialHash!.insert(point);
+        chunkPoints.push(point);
+      }
+      continue;
+    }
+
     if (desc.density <= 0) continue;
 
     const cellSize = Math.sqrt(1_000_000 / desc.density);

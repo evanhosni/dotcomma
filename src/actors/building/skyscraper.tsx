@@ -29,6 +29,8 @@ export const SkyscraperDescriptor: ActorDescriptor = {
   density: 240,
   priority: 45,
   roadDistanceRange: [28, 99999],
+  // flattenGround inherited from BuildingDescriptor — skyscrapers get their
+  // own (larger, footprint-derived) pad via the flattenRadius default.
 };
 
 export const SkyscraperActor = createActor(SkyscraperDescriptor);

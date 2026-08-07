@@ -87,6 +87,7 @@ const buildChunkInWorker = (
   vertexY: Float32Array,
   offsetX: number,
   offsetZ: number,
+  skipPads: boolean,
 ): Promise<{
   heights: Float32Array;
   biomeIds: Float32Array;
@@ -99,7 +100,7 @@ const buildChunkInWorker = (
   return new Promise((resolve) => {
     pendingChunkResolve = resolve;
     terrainWorker!.postMessage(
-      { type: "BUILD_CHUNK", id: 0, vertexX, vertexY, offsetX, offsetZ },
+      { type: "BUILD_CHUNK", id: 0, vertexX, vertexY, offsetX, offsetZ, skipPads },
       [vertexX.buffer, vertexY.buffer]
     );
   });
@@ -636,7 +637,17 @@ export const TerrainRenderer = () => {
     }
 
     // Send all vertex positions to the terrain worker in a single message
-    const workerResult = await buildChunkInWorker(vertX, vertY, offset.x, offset.y);
+    // Flatten pads (13–24u features) only matter where they can be SEEN and
+    // WALKED ON — collider-bearing LODs. Far visual-only chunks skip them: a
+    // LOD5 chunk spans ~256 pad tiles, and computing them exploded far city
+    // chunk builds ~9× (which stalled terrain, which stalled spawning).
+    const workerResult = await buildChunkInWorker(
+      vertX,
+      vertY,
+      offset.x,
+      offset.y,
+      !chunk.lod.hasCollider
+    );
     const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
 
     // Reuse attribute arrays from pooled geometry when available, else allocate

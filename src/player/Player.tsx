@@ -7,7 +7,7 @@ import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { usePortalContext } from "../portals/PortalContext";
-import { getVertexData } from "../world/vertexData";
+import { getVertexData, getVertexDataRaw } from "../world/vertexData";
 import { useInput } from "./useInput";
 
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
@@ -406,7 +406,10 @@ export const Player = () => {
           unsticking.current = true;
           const sx = fx;
           const sz = fz;
-          getVertexData(sx, sz).then((vd) => {
+          // Raw (pad-free) height: pads sit ABOVE raw terrain, so the
+          // below-surface test stays sound — and the padded path would
+          // compute flatten tiles synchronously on the main thread.
+          getVertexDataRaw(sx, sz).then((vd) => {
             unsticking.current = false;
             const body = rigidBodyRef.current;
             if (!body) return;
@@ -447,7 +450,8 @@ export const Player = () => {
       if (groundCheckFrame.current % GROUND_CHECK_INTERVAL === 0) {
         const cx = finalPos.x;
         const cz = finalPos.z;
-        getVertexData(cx, cz).then((vd) => {
+        // Raw (pad-free) height — see the stuck-escape note above.
+        getVertexDataRaw(cx, cz).then((vd) => {
           const body = rigidBodyRef.current;
           if (!body) return;
           const cur = body.translation();

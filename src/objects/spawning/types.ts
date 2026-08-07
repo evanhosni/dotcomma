@@ -28,6 +28,13 @@ export interface ActorDescriptor {
   spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
   cursorOverride?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
   quantization?: number; // vertex quantization grid size for this object; defaults to the global grid
+  /** The terrain flattens a PAD under every instance (buildings, houses — any
+   *  biome). Placement becomes fully DETERMINISTIC (stateless greedy spacing
+   *  instead of the spatial hash) so the height function can replicate it —
+   *  see the flatten-pad engine in workers/vertexCompute.ts. */
+  flattenGround?: boolean;
+  flattenRadius?: number; // flat pad radius; default footprint * 0.45
+  flattenSkirt?: number; // blend ring back to raw terrain; default footprint * 0.35
 }
 
 /** Props every spawned actor component receives from ObjectPool. */

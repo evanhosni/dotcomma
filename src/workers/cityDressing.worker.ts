@@ -18,6 +18,7 @@
  *   IN:  { type: "TRAFFIC_LIGHTS", id, minX, minZ, maxX, maxZ, chance }
  *   IN:  { type: "FREEWAY_SIDES",  id, minX, minZ, maxX, maxZ, spacing, lateral, junctionClear, withNext }
  *   IN:  { type: "DENSITY_POINTS", id, minX, minZ, maxX, maxZ, params: DensityPointParams }
+ *   IN:  { type: "CITY_SITES",     id, minX, minZ, maxX, maxZ } (no biome probe — big windows)
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "DRESSING_RESULT", id, points }
  */
@@ -27,6 +28,7 @@ import {
   getCityFreewaySidePoints,
   getCityRoadMarkers,
   getCityTrafficLightPoints,
+  getCityVoronoiSites,
   initCompute,
   seedRand,
   WorldConfig,
@@ -130,6 +132,15 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   const { id, minX, minZ, maxX, maxZ } = e.data;
+
+  // City-site scans use HUGE windows (scan radius ~1800) — the chunk-center
+  // biome probe doesn't apply, and the site enumeration self-filters cheaply.
+  if (type === "CITY_SITES") {
+    const points = initialized ? getCityVoronoiSites(minX, minZ, maxX, maxZ) : [];
+    (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
+    return;
+  }
+
   const empty = !initialized || probeEmpty(minX, minZ, maxX, maxZ);
   let points: unknown[] = [];
 

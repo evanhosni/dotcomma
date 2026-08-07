@@ -1,7 +1,7 @@
 import { getAllBiomes } from "../utils/utils";
 import { WorldTerrainParams } from "../world/registry";
 import { Region } from "../world/types";
-import { SerializedRegion, WorldConfig } from "./vertexCompute";
+import { FlattenDescriptor, SerializedRegion, WorldConfig } from "./vertexCompute";
 
 /**
  * Builds a serializable WorldConfig from regions + global terrain params.
@@ -29,7 +29,31 @@ export function buildWorldConfig(regions: Region[], params: WorldTerrainParams):
     if (biome.noise) biomeNoiseConfigs[biome.id] = biome.noise;
   }
 
+  // Actors with flattenGround get their placement rules serialized into the
+  // config so the height function can flatten a pad under every instance
+  // (deduped by id, like collectDescriptors).
+  const flattenById = new Map<string, FlattenDescriptor>();
+  for (const biome of getAllBiomes(regions)) {
+    for (const d of biome.actors ?? []) {
+      if (!d.flattenGround) continue;
+      flattenById.set(d.id, {
+        id: d.id,
+        density: d.density,
+        clustering: d.clustering,
+        footprint: d.footprint,
+        priority: d.priority ?? 50,
+        biomeIds: d.biomeIds,
+        heightRange: d.heightRange,
+        roadDistanceRange: d.roadDistanceRange,
+        radius: d.flattenRadius ?? d.footprint * 0.45,
+        skirt: d.flattenSkirt ?? d.footprint * 0.35,
+      });
+    }
+  }
+  const flattenDescriptors = Array.from(flattenById.values());
+
   return {
+    flattenDescriptors,
     seed: params.seed,
     regions: serializedRegions,
     gridSize: params.gridSize,

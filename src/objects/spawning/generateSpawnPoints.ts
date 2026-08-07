@@ -68,6 +68,7 @@ export interface SerializedActorDescriptor {
   slopeRange?: [number, number];
   roadDistanceRange?: [number, number];
   spacingOverrides?: Record<string, number>;
+  flattenGround?: boolean;
 }
 
 /**
@@ -88,6 +89,7 @@ export const serializeDescriptors = (
     slopeRange: d.slopeRange,
     roadDistanceRange: d.roadDistanceRange,
     spacingOverrides: d.spacingOverrides,
+    flattenGround: d.flattenGround,
   }));
 
 // ── Client-side chunk cache ──

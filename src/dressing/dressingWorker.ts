@@ -10,12 +10,13 @@
 
 import {
   CityFreewaySidePoint,
+  CitySitePoint,
   CityTrafficLightPoint,
   RoadMarkerPoint,
 } from "../workers/vertexCompute";
 import { getActiveWorldConfig, whenWorldReady } from "../world/registry";
 
-export type { CityFreewaySidePoint, CityTrafficLightPoint, RoadMarkerPoint };
+export type { CityFreewaySidePoint, CitySitePoint, CityTrafficLightPoint, RoadMarkerPoint };
 
 let worker: Worker | null = null;
 let initPromise: Promise<void> | null = null;
@@ -124,3 +125,13 @@ export const getDensityPoints = (
   params: DensityPointParams
 ): Promise<DensityPoint[]> =>
   request({ type: "DENSITY_POINTS", minX, minZ, maxX, maxZ, params });
+
+/** Voronoi site point of every city-biome cell in the bounds (CityLights
+ *  beacons). Ran on the main thread before and each site could compute a
+ *  flatten-pad tile synchronously — a periodic lag spike while roaming. */
+export const getCityLightSites = (
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number
+): Promise<CitySitePoint[]> => request({ type: "CITY_SITES", minX, minZ, maxX, maxZ });
