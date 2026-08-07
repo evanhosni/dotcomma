@@ -20,6 +20,14 @@ const FALL_RESET_Y = -500;
 const GROUND_CHECK_INTERVAL = 3; // frames
 const EMBED_TOLERANCE = 2;
 
+// Stuck (wedged-in-the-ground) escape: sustained input with ~no resulting
+// movement for this many frames triggers an analytic-height check; if the
+// capsule is even slightly below the surface it lifts back onto it. The
+// backoff keeps the probe cheap while the player pushes against walls.
+const STUCK_FRAMES_TRIGGER = 12; // ~0.2s of blocked input
+const STUCK_EMBED_MIN = 0.1;
+const STUCK_RECHECK_BACKOFF = 45; // frames
+
 // Normal mode speeds
 const WALK_SPEED = 15;
 const SPRINT_SPEED = 45;
@@ -67,8 +75,14 @@ const PLAYER_HEIGHT = 2;
 const PLAYER_RADIUS = 0.5;
 const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
-// Ground-normal probe: capsule center → just past the feet + snap distance.
-const GROUND_RAY_LENGTH = PLAYER_HEIGHT / 2 + SNAP_TO_GROUND + 0.4;
+// Ground-normal probe: cast long, then accept the hit adaptively by SLOPE —
+// the vertical distance from the capsule center to the surface grows as
+// 1/cos(angle) on inclines (the capsule rests against them sideways). A
+// fixed feet-length reach was used before and REJECTED: beyond ~55° the ray
+// stopped reaching the ground, so the steep-slope slide never engaged and
+// jumping stayed possible exactly on the slopes that should forbid it.
+const GROUND_RAY_LENGTH = 5;
+const GROUND_RAY_SLACK = SNAP_TO_GROUND + 0.4;
 
 // Camera
 const CAMERA_FAR = 7200;
@@ -116,6 +130,8 @@ export const Player = () => {
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
   const groundRayRef = useRef<Rapier.Ray | null>(null);
   const groundCheckFrame = useRef(0);
+  const stuckFrames = useRef(0);
+  const unsticking = useRef(false);
 
   const { world, rapier } = useRapier();
 
@@ -230,13 +246,23 @@ export const Player = () => {
           (c) => !c.isSensor()
         );
         if (hit) {
-          nearGround = true;
           // Trimesh normals can face either way — orient upward.
           const flip = hit.normal.y < 0 ? -1 : 1;
-          nX = hit.normal.x * flip;
-          nY = hit.normal.y * flip;
-          nZ = hit.normal.z * flip;
-          groundAngle = Math.acos(Math.min(Math.max(nY, -1), 1));
+          const hnX = hit.normal.x * flip;
+          const hnY = hit.normal.y * flip;
+          const hnZ = hit.normal.z * flip;
+          // Slope-adaptive acceptance: on an incline the surface sits
+          // 1/cos(angle) farther below the center, so the allowed distance
+          // scales with the hit's own normal (flat ground: feet + snap, same
+          // as the old fixed reach; ~76°+ counts as wall, not ground).
+          const allowed = PLAYER_HEIGHT / 2 / Math.max(hnY, 0.25) + GROUND_RAY_SLACK;
+          if (hit.timeOfImpact <= allowed) {
+            nearGround = true;
+            nX = hnX;
+            nY = hnY;
+            nZ = hnZ;
+            groundAngle = Math.acos(Math.min(Math.max(nY, -1), 1));
+          }
         }
       }
       const onSlideSlope = nearGround && groundAngle > SLOPE_SOFT_END;
@@ -352,6 +378,54 @@ export const Player = () => {
           world.propagateModifiedBodyPositionsToColliders();
         }
         rb.setNextKinematicTranslation({ x: fx, y: fy, z: fz });
+
+        // ---- Stuck detection (wedged-in-the-ground escape) ----
+        // A capsule SLIGHTLY embedded in the terrain (below the backstop's
+        // tolerance — e.g. a LOD swap raised the heightfield a hair) makes
+        // every sweep start inside the surface and return ~zero: the player
+        // is wedged. Signal: sustained input with almost no resulting
+        // horizontal movement. Confirmed against the analytic height (so
+        // pushing against a building wall — legitimately blocked — never
+        // triggers), the fix is lifting exactly to the surface.
+        const wantSq = desiredMovement.x * desiredMovement.x + desiredMovement.z * desiredMovement.z;
+        const gotX = fx - pos.x;
+        const gotZ = fz - pos.z;
+        const gotSq = gotX * gotX + gotZ * gotZ;
+        if (wantSq > 1e-6 && gotSq < wantSq * 0.0025) {
+          stuckFrames.current++;
+        } else {
+          stuckFrames.current = 0;
+        }
+        if (
+          stuckFrames.current >= STUCK_FRAMES_TRIGGER &&
+          !unsticking.current &&
+          !activeIndoorId &&
+          terrain_loaded &&
+          !respawning.current
+        ) {
+          unsticking.current = true;
+          const sx = fx;
+          const sz = fz;
+          getVertexData(sx, sz).then((vd) => {
+            unsticking.current = false;
+            const body = rigidBodyRef.current;
+            if (!body) return;
+            const cur = body.translation();
+            if (Math.abs(cur.x - sx) > 3 || Math.abs(cur.z - sz) > 3) return; // stale
+            const bottom = cur.y - PLAYER_HEIGHT / 2;
+            if (bottom < vd.height - STUCK_EMBED_MIN) {
+              body.setTranslation({ x: cur.x, y: vd.height + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
+              verticalVelocity.current = 0;
+              slideSpeed.current = 0;
+              stuckFrames.current = 0;
+            } else {
+              // Not embedded — blocked by a wall or similar. Back off before
+              // re-checking so the probe doesn't run every frame while the
+              // player leans on a building.
+              stuckFrames.current = -STUCK_RECHECK_BACKOFF;
+            }
+          });
+        }
       }
     }
 
