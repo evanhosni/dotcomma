@@ -1305,11 +1305,15 @@ export function getCityRoadMarkers(
     if (vd.biomeId !== 1) return; // city biome only
     if (vd.distanceToRiverCenter < 45) return;
     if (vd.distanceToRoadCenter > 2) return; // melted/chamfered zones drop out
-    // Stay clear of the BELT freeway corridor around the rim (centerline at
-    // boundaryWidth + freewayWidth) — streets tee into it like arterials.
+    // Street/arterial markers exist only strictly INSIDE the belt freeway
+    // ring (centerline at boundaryWidth + freewayWidth): one-sided check so
+    // it skips the belt corridor AND everything beyond it. (An abs-window
+    // corridor check was used before and LEAKED — the strip between the
+    // belt's outer edge and the biome boundary sits outside the window, and
+    // rim ring-road cell boundaries emitted markers past the city edge.)
     if (
-      Math.abs(vd.distanceToBiomeBoundaryCenter - (cfg!.boundaryWidth + city.freewayWidth)) <
-      city.freewayWidth + 5
+      vd.distanceToBiomeBoundaryCenter <
+      cfg!.boundaryWidth + city.freewayWidth * 2 + 5
     )
       return;
     out.push({ x: mx, y: vd.height, z: mz, dirX, dirZ });
@@ -1715,11 +1719,10 @@ export function getCityTrafficLightPoints(
               );
               const vd = computeVertexData(p.x, p.y);
               if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) break;
-              if (
-                Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) <
-                city.freewayWidth + 5
-              )
-                break; // belt freeway corridor
+              // One-sided like the road markers: only strictly inside the belt
+              // ring (skips the corridor AND the strip beyond it).
+              if (vd.distanceToBiomeBoundaryCenter < beltR + city.freewayWidth + 5)
+                break;
               if (vd.distanceToRoadCenter < 8.4) continue; // still on road/curb
               if (vd.distanceToRoadCenter > 11.6) break; // past the sidewalk — no footing
               // Face back toward the intersection center (local diagonal,

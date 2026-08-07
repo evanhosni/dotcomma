@@ -8,6 +8,7 @@ import { DEFAULT_WORLD_TERRAIN_PARAMS } from "../world/registry";
 import {
   computeVertexData,
   getCityFreewaySidePoints,
+  getCityRoadMarkers,
   getCityTrafficLightPoints,
   initCompute,
   WorldConfig,
@@ -97,6 +98,24 @@ describe("getCityTrafficLightPoints", () => {
 
   it("respects the chance roll (0 → nothing)", () => {
     expect(getCityTrafficLightPoints(cx - R, cz - R, cx + R, cz + R, 0)).toHaveLength(0);
+  });
+});
+
+describe("getCityRoadMarkers", () => {
+  it("never emits street/arterial markers beyond the belt freeway", () => {
+    // Window sized to reach past the city cell's rim, so the strip between
+    // the belt and the biome boundary is covered.
+    const R = 700;
+    const beltR = P.boundaryWidth + P.cityConfig.freewayWidth;
+    const points = getCityRoadMarkers(cx - R, cz - R, cx + R, cz + R, 9, 11);
+    expect(points.length).toBeGreaterThan(0);
+    for (const p of points) {
+      const d = computeVertexData(p.x, p.z).distanceToBiomeBoundaryCenter;
+      // Belt MEDIAN markers sit on the belt centerline (≈ beltR); everything
+      // else must be strictly inside the ring. Nothing may sit in the strip
+      // beyond the belt (d < beltR − 3).
+      expect(d).toBeGreaterThan(beltR - 3);
+    }
   });
 });
 
