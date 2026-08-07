@@ -1,0 +1,184 @@
+import { useFrame, useThree } from "@react-three/fiber";
+import React from "react";
+import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
+import {
+  activeLampHeads,
+  clearLampGridIfEmpty,
+  driveLampLighting,
+} from "../../actors/street-lamp/StreetLamp";
+import {
+  LAMP_COLOR_GREEN,
+  LAMP_COLOR_RED,
+  LAMP_COLOR_YELLOW,
+  LampHead,
+} from "../../sky/lampGlow";
+import {
+  instancedFromPoints,
+  useChunkRegistry,
+  useDressingAssets,
+  useDressingChunks,
+  useDressingRenderDistance,
+  yawFromDir,
+} from "../Dressing";
+import { getTrafficLightPoints } from "../dressingWorker";
+
+const POLE_HEIGHT = 7.6;
+const ARM_LENGTH = 3.2; // toward the intersection — hangs the head over the curb
+const LAMP_OFFSET = ARM_LENGTH + 0.26; // lamps proud of the head's front face
+
+// Lamp order per light: instances 3i / 3i+1 / 3i+2 = red / yellow / green
+// (top to bottom on the head). state: 0 = green, 1 = yellow, 2 = red.
+const LIT = [new THREE.Color("#ff2418"), new THREE.Color("#ffb400"), new THREE.Color("#19ff5a")];
+const DIM = [new THREE.Color("#3a0c08"), new THREE.Color("#402d04"), new THREE.Color("#06401a")];
+const STATE_TO_LAMP = [2, 1, 0]; // green state lights the bottom lamp, etc.
+const STATE_TO_GLOW = [LAMP_COLOR_GREEN, LAMP_COLOR_YELLOW, LAMP_COLOR_RED];
+
+/** CHAOTIC hold time: heavily skewed toward quick flips (0.2s), capped at
+ *  ~1.5s — no steady rhythm, no per-color timing. */
+const holdFor = (): number => 0.2 + Math.pow(Math.random(), 2.2) * 1.3;
+
+/** CHAOTIC transition: jump to either of the OTHER two states at random —
+ *  not a green → yellow → red cycle. */
+const nextState = (state: number): number => (state + 1 + Math.floor(Math.random() * 2)) % 3;
+
+interface LightAnim {
+  state: number; // 0 green, 1 yellow, 2 red
+  remaining: number; // seconds until the next switch
+  head: LampHead; // registered glow source — mutate .color on switch
+}
+
+interface SignalChunk {
+  group: THREE.Group;
+  lamps: THREE.InstancedMesh;
+  lights: LightAnim[];
+  headKeys: string[];
+}
+
+export interface TrafficLightsProps {
+  renderDistance?: number;
+  /** Seeded fraction of eligible intersections that get signals. */
+  chance?: number;
+}
+
+/**
+ * DRESSING: traffic lights at SOME city street intersections (seeded
+ * per-intersection roll): a pole on each surviving sidewalk corner with a
+ * mast arm hanging a three-lamp head over the curb, facing the intersection.
+ * Lamps flip between green/yellow/red CHAOTICALLY — random next state,
+ * random skewed hold times — via per-lamp instanceColor writes (two
+ * InstancedMeshes per chunk, no colliders). Each signal also registers a
+ * lamp-grid glow source in its CURRENT color, so at night the pavement below
+ * washes red/yellow/green and follows the switches (grid rewrites every few
+ * frames; the glow intensity rides the global dusk/dawn ramp).
+ */
+export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsProps) => {
+  const resolvedDistance = useDressingRenderDistance(renderDistance, 340);
+  const { camera } = useThree();
+  const registry = useChunkRegistry<SignalChunk>((chunk) => {
+    for (const key of chunk.headKeys) activeLampHeads.delete(key);
+    clearLampGridIfEmpty();
+  });
+
+  const assets = useDressingAssets(() => ({
+    bodyGeometry: mergeGeometries([
+      new THREE.BoxGeometry(0.5, 0.4, 0.5).translate(0, 0.2, 0), // base
+      new THREE.BoxGeometry(0.2, POLE_HEIGHT, 0.2).translate(0, POLE_HEIGHT / 2, 0), // pole
+      new THREE.BoxGeometry(ARM_LENGTH, 0.15, 0.15).translate(ARM_LENGTH / 2, POLE_HEIGHT - 0.15, 0), // arm
+      new THREE.BoxGeometry(0.45, 2.0, 0.75).translate(ARM_LENGTH, POLE_HEIGHT - 1.25, 0), // head
+    ]),
+    lampGeometry: new THREE.BoxGeometry(0.18, 0.48, 0.48),
+    bodyMaterial: new THREE.MeshStandardMaterial({ color: 0x23262a, roughness: 0.9, metalness: 0.2 }),
+    // Unlit + untonemapped: lit lamps read as light sources day and night.
+    lampMaterial: new THREE.MeshBasicMaterial({ toneMapped: false }),
+  }));
+
+  const groupRef = useDressingChunks({
+    renderDistance: resolvedDistance,
+    build: async (bounds) => {
+      const points = await getTrafficLightPoints(
+        bounds.minX,
+        bounds.minZ,
+        bounds.maxX,
+        bounds.maxZ,
+        chance
+      );
+      if (points.length === 0) return null;
+
+      // Poles + heads: standard instancing, local +X facing the intersection.
+      const bodies = instancedFromPoints(assets.bodyGeometry, assets.bodyMaterial, points, (p) => ({
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        yaw: yawFromDir(p.dirX, p.dirZ),
+      }));
+
+      // Three lamps per light on the head's front face (top red → bottom
+      // green), colored per instance.
+      const lampY = (l: number) => POLE_HEIGHT - 0.6 - l * 0.65;
+      const lampPoints = points.flatMap((p) => [0, 1, 2].map((l) => ({ p, l })));
+      const lamps = instancedFromPoints(assets.lampGeometry, assets.lampMaterial, lampPoints, ({ p, l }) => ({
+        x: p.x + p.dirX * LAMP_OFFSET,
+        y: p.y + lampY(l),
+        z: p.z + p.dirZ * LAMP_OFFSET,
+        yaw: yawFromDir(p.dirX, p.dirZ),
+      }));
+
+      // Seeded phase desynchronizes the initial states; runtime randomness
+      // takes over from there (timing is visual-only, nothing depends on it).
+      const headKeys: string[] = [];
+      const lights: LightAnim[] = points.map((p, i) => {
+        const state = Math.floor(p.phase * 3) % 3;
+        const lit = STATE_TO_LAMP[state];
+        for (let l = 0; l < 3; l++) lamps.setColorAt(i * 3 + l, l === lit ? LIT[l] : DIM[l]);
+
+        // Glow source at the signal head, in the current color.
+        const head: LampHead = {
+          position: new THREE.Vector3(
+            p.x + p.dirX * ARM_LENGTH,
+            p.y + POLE_HEIGHT - 1.25,
+            p.z + p.dirZ * ARM_LENGTH
+          ),
+          color: STATE_TO_GLOW[state],
+        };
+        const key = `tl_${p.x}_${p.z}`;
+        activeLampHeads.set(key, head);
+        headKeys.push(key);
+
+        return { state, remaining: (p.phase * 7.13) % holdFor(), head };
+      });
+      if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
+
+      const group = new THREE.Group();
+      group.add(bodies);
+      group.add(lamps);
+      registry.add({ group, lamps, lights, headKeys });
+      return group;
+    },
+  });
+
+  useFrame((state, delta) => {
+    // Shared lamp-grid driver (deduped per frame with the street lamps).
+    driveLampLighting(camera, state.clock.elapsedTime);
+
+    registry.forEachAlive((chunk) => {
+      let changed = false;
+      for (let i = 0; i < chunk.lights.length; i++) {
+        const light = chunk.lights[i];
+        light.remaining -= delta;
+        if (light.remaining > 0) continue;
+        light.state = nextState(light.state);
+        light.remaining = holdFor();
+        light.head.color = STATE_TO_GLOW[light.state]; // grid picks it up next rewrite
+        const lit = STATE_TO_LAMP[light.state];
+        for (let l = 0; l < 3; l++) {
+          chunk.lamps.setColorAt(i * 3 + l, l === lit ? LIT[l] : DIM[l]);
+        }
+        changed = true;
+      }
+      if (changed && chunk.lamps.instanceColor) chunk.lamps.instanceColor.needsUpdate = true;
+    });
+  });
+
+  return <group ref={groupRef} />;
+};

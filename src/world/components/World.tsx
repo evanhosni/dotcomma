@@ -10,7 +10,7 @@ import { SkyboxSystem } from "./Skybox";
 /**
  * Root of the declarative world tree.
  *
- * Children (<Region> → <Biome> → <Terrain>/<Material>/<Spawnable>/<Skybox>/
+ * Children (<Region> → <Biome> → <Terrain>/<Material>/<Actor>/<Skybox>/
  * visual components) register themselves into the world store during their
  * layout effects; this component's own layout effect runs last (parent after
  * children), assembles the same Region[]/WorldConfig data the workers have
@@ -75,7 +75,7 @@ const commitWorld = (store: WorldStore) => {
         joinable: record.joinable,
         blendable: record.blendable,
         blendWidth: record.blendWidth,
-        spawnables: [],
+        actors: [],
       };
       biomeById.set(record.id, data);
     }
@@ -92,10 +92,10 @@ const commitWorld = (store: WorldStore) => {
     const data = biomeById.get(biomeId);
     if (data) data.getMaterial = getMaterial;
   }
-  for (const { biomeId, descriptor } of store.spawnables.values()) {
+  for (const { biomeId, descriptor } of store.actors.values()) {
     const data = biomeById.get(biomeId);
     if (!data) continue;
-    if (!data.spawnables!.some((d) => d.id === descriptor.id)) data.spawnables!.push(descriptor);
+    if (!data.actors!.some((d) => d.id === descriptor.id)) data.actors!.push(descriptor);
   }
 
   // Regions in JSX order; each region's biomes in JSX order.

@@ -1,5 +1,5 @@
 export interface GrassFieldProps {
-  density?: number; // blades per 1,000,000 sq units (same scale as SpawnDescriptor.density). Default 800,000
+  density?: number; // blades per 1,000,000 sq units (same scale as ActorDescriptor.density). Default 800,000
   biomeIds?: number[]; // restrict to specific biomes
   heightRange?: [number, number]; // restrict to height band
   slopeRange?: [number, number]; // restrict to slope range (degrees). Default [0, 35]

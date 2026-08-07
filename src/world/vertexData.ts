@@ -1,10 +1,8 @@
 import {
   CitySitePoint,
   computeVertexData,
-  getCityRoadMarkers,
   getCityVoronoiSites,
   initCompute,
-  RoadMarkerPoint,
   VertexResult,
 } from "../workers/vertexCompute";
 import { getActiveWorldConfig, whenWorldReady } from "./registry";
@@ -33,20 +31,6 @@ const ensureInit = async (): Promise<void> => {
 export const getVertexData = async (x: number, y: number): Promise<VertexResult> => {
   await ensureInit();
   return computeVertexData(x, y);
-};
-
-/** Raised-pavement-marker positions along city road centerlines within the
- *  bounds (used by the RoadMarkers visual component). */
-export const getRoadMarkers = async (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number,
-  streetSpacing: number,
-  freewaySpacing: number
-): Promise<RoadMarkerPoint[]> => {
-  await ensureInit();
-  return getCityRoadMarkers(minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing);
 };
 
 /** Voronoi site point (one per city-biome cell) within the bounds — the

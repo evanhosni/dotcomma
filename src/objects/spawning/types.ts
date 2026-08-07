@@ -1,6 +1,15 @@
-export interface SpawnDescriptor {
+/**
+ * ACTOR types — the per-object spawn class.
+ *
+ * Actors (beebles, buildings, …) are objects with their own identity, state,
+ * or interaction: each mounts as its own React component through ObjectPool's
+ * spawn lifecycle. Mass stateless scenery belongs to the other class — see
+ * src/dressing/ (instanced chunks, no per-object components).
+ */
+
+export interface ActorDescriptor {
   id: string; // unique key, e.g. "beeble"
-  component: React.FC<SpawnedObjectProps>;
+  component: React.FC<ActorProps>;
   model?: string; // GLTF path for preloading
   scale?: THREE.Vector3Tuple; // render scale, defaults to [1,1,1]
   footprint: number; // radius in world units for spacing
@@ -21,7 +30,8 @@ export interface SpawnDescriptor {
   quantization?: number; // vertex quantization grid size for this object; defaults to the global grid
 }
 
-export interface SpawnedObjectProps {
+/** Props every spawned actor component receives from ObjectPool. */
+export interface ActorProps {
   id: string;
   model?: string;
   coordinates: THREE.Vector3Tuple;

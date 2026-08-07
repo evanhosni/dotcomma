@@ -3,14 +3,14 @@ import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GameObject } from "../objects/GameObject";
-import { SpawnedObjectProps } from "../objects/spawning/types";
+import { ActorProps } from "../objects/spawning/types";
 import { Portal } from "./Portal";
 import { usePortalContext } from "./PortalContext";
 import { DEFAULT_ACTIVATION_DISTANCE, INDOOR_COLLIDER_PADDING } from "./constants";
 import { allocateIndoorSlot, getIndoorY, releaseIndoorSlot } from "./indoorSlotAllocator";
 import { getBuildingAssets } from "./portalAssets";
 
-interface BuildingProps extends SpawnedObjectProps {
+interface BuildingProps extends ActorProps {
   exteriorModel: string;
   interiorModel: string;
   portals: string[];

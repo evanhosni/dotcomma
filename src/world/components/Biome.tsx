@@ -12,7 +12,7 @@ export interface BiomeProps extends React.PropsWithChildren {
 
 /**
  * Declares a biome inside a <Region>. Children are config components
- * (<Terrain>, <Material>, <Spawnable>, <Skybox>) plus always-mounted visual
+ * (<Terrain>, <Material>, <Actor>, <Skybox>) plus always-mounted visual
  * components (e.g. <GrassField>) that gate their own placement by biome.
  */
 export const Biome = ({ name, id, joinable = true, blendable = true, blendWidth, children }: BiomeProps) => {

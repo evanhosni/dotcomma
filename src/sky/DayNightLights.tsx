@@ -13,7 +13,7 @@ const _dir = new THREE.Vector3();
 
 /**
  * The scene's ambient + directional lights, dimmed with the day/night cycle
- * so lit materials (building exteriors, doors, GLTF spawnables) genuinely
+ * so lit materials (building exteriors, doors, GLTF actors) genuinely
  * darken at night. The directional light shines FROM the sun by day and FROM
  * the moon by night (swinging between them through the transitions), so
  * shading always agrees with the visible celestial body. Unlit shaders

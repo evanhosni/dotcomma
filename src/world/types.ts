@@ -35,5 +35,8 @@ export interface Biome {
   /** Height definition (see BiomeNoiseConfig). Biomes with bespoke height
    *  logic (city) omit this — their branch lives in vertexCompute.ts. */
   noise?: BiomeNoiseConfig;
-  spawnables?: import("../objects/spawning/types").SpawnDescriptor[];
+  /** Per-object spawn class registered by <Actor> components (see
+   *  src/world/components/Actor.tsx). Instanced dressing is NOT part of the
+   *  biome data model — dressing components render directly. */
+  actors?: import("../objects/spawning/types").ActorDescriptor[];
 }

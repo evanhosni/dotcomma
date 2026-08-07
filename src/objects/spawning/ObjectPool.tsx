@@ -12,7 +12,7 @@ import {
   serializeDescriptors,
   updateSpawnFootprint,
 } from "./generateSpawnPoints";
-import { SpawnDescriptor, SpawnedObjectProps } from "./types";
+import { ActorDescriptor, ActorProps } from "./types";
 
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps — responsive to player movement
 const RESPAWN_COOLDOWN_MS = 1000; // min age of a despawn ledger entry before it can be cleared
@@ -40,10 +40,10 @@ const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius * this
  * permanently despawned.
  */
 
-const getSpawnRadius = (desc: SpawnDescriptor): number => desc.renderDistance + desc.footprint / 2;
-const getDespawnRadius = (desc: SpawnDescriptor): number =>
+const getSpawnRadius = (desc: ActorDescriptor): number => desc.renderDistance + desc.footprint / 2;
+const getDespawnRadius = (desc: ActorDescriptor): number =>
   desc.despawnDistance ?? getSpawnRadius(desc) * DESPAWN_HYSTERESIS;
-const getImmediateRadius = (desc: SpawnDescriptor): number =>
+const getImmediateRadius = (desc: ActorDescriptor): number =>
   desc.immediateRadius ?? getSpawnRadius(desc) * IMMEDIATE_RADIUS_FACTOR;
 
 interface MountedObject {
@@ -77,12 +77,12 @@ export const ObjectPool = () => {
   const { terrain_loaded, progress, terrainHighLODPending, spawnPending } = useGameContext();
 
   // Collect all spawn descriptors from the active world (registered by
-  // <Spawnable> components; mounted by <World> after the first commit)
+  // <Actor> components; mounted by <World> after the first commit)
   const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
 
   // Build descriptor lookup map
   const descriptorMap = useMemo(() => {
-    const map = new Map<string, SpawnDescriptor>();
+    const map = new Map<string, ActorDescriptor>();
     for (const d of descriptors) map.set(d.id, d);
     return map;
   }, [descriptors]);
@@ -215,7 +215,7 @@ export const ObjectPool = () => {
 
         const Component = desc.component;
         const despawnRadius = getDespawnRadius(desc);
-        const props: SpawnedObjectProps = {
+        const props: ActorProps = {
           id: objId,
           model: desc.model,
           coordinates: [point.x, point.height, point.z],

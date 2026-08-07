@@ -18,7 +18,7 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 
 - `npm start` — dev server (craco)
 - `npm run build` — production build
-- `npm test` — jest tests
+- `npm test` — jest tests (package.json sets `transformIgnorePatterns` so ESM deps — delaunator, robust-predicates, noise-ts — transform; run headless with `$env:CI="true"; npm test -- --watchAll=false`)
 - `npx tsc --noEmit` — type check
 
 ## Architecture
@@ -36,9 +36,14 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
     <Biome>                  // one per biome (flags: joinable/blendable/blendWidth)
       <Terrain/>             //   biome height config (noise params — single source of truth)
       <Material/>            //   biome fragment shader (getMaterial)
-      <Spawnables>           //   groups spawnables; its props are shared defaults for children
-        <BeebleSpawnable/>   //   per-object component wrapping <Spawnable> (props = overrides)
-      </Spawnables>
+      <Actors>               //   ACTOR class: per-object spawns (identity/state/interaction);
+        <BeebleActor/>       //     group props are shared defaults; children wrap <Actor>
+        <BuildingActor/>     //     via createActor(descriptor) (props = overrides)
+      </Actors>
+      <Dressing>             //   DRESSING class: mass stateless scenery, instanced per chunk;
+        <StreetLamps/>       //     group props (renderDistance) are shared defaults; children
+        <RoadMarkers/>       //     take their placement knobs as props
+      </Dressing>
       <GrassField/>          //   always-mounted visuals (auto-scoped to the biome)
       <Skybox/>              //   optional per-biome sky override (also valid at Region level)
     </Biome>
@@ -46,7 +51,9 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 </World>
 ```
 
-The world is defined by the `GameWorld` component tree in `src/world/world.tsx`. Config components (`Region`, `Biome`, `Terrain`, `Material`, `Skybox`, `Spawnable` — all in `src/world/components/`) register into a store during layout effects; `<World>` then **commits** the assembled `Region[]` data + serializable `WorldConfig` to a module-level registry (`src/world/registry.ts`) and mounts the global systems (`TerrainRenderer`, `ObjectPool`, `SkyboxSystem`). Non-React code (workers init, voronoi client, Player) reads from the registry — `getActiveRegions()`, `getActiveWorldConfig()`, `getWorldTerrainParams()`, or `await whenWorldReady()`.
+**The two spawn classes** (industry terms): **ACTORS** are objects with their own identity, state, or interaction — creatures, buildings — each mounted as its own React component through the spawn lifecycle (`ObjectPool`). **DRESSING** is mass stateless identical scenery — street lamps, road markers, traffic lights, power lines — rendered as InstancedMeshes per 256u chunk with zero per-object components. Both get off-thread deterministic placement (spawn.worker / cityDressing.worker). Rule of thumb: many + identical + stateless → dressing; unique geometry, interaction, or behavior → actor. Grass is dressing taken further (GPU-side placement/sway, `GrassField`).
+
+The world is defined by the `GameWorld` component tree in `src/world/world.tsx`. Config components (`Region`, `Biome`, `Terrain`, `Material`, `Skybox`, `Actor` — all in `src/world/components/`) register into a store during layout effects; `<World>` then **commits** the assembled `Region[]` data + serializable `WorldConfig` to a module-level registry (`src/world/registry.ts`) and mounts the global systems (`TerrainRenderer`, `ObjectPool`, `SkyboxSystem`). Non-React code (workers init, voronoi client, Player) reads from the registry — `getActiveRegions()`, `getActiveWorldConfig()`, `getWorldTerrainParams()`, or `await whenWorldReady()`.
 
 `Terrain`/`Material`/`Skybox` are **scope-aware**: their meaning depends on whether they're mounted under `World`, `Region`, or `Biome` (see the tree above). Skyboxes cross-fade as the player moves between scopes (biome wins over region wins over world); the current biome is polled off-thread via the voronoi worker only when scoped skyboxes exist.
 
@@ -54,7 +61,7 @@ Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at b
 
 **Heights have a single source of truth**: `src/workers/vertexCompute.ts` is the ONLY height implementation. The terrain, spawn, and grass workers run it off-thread; the main thread (`src/world/vertexData.ts`, used by Player respawn) imports and runs the SAME module, initialized with the same serialized `WorldConfig` from the registry. Biome heights are defined declaratively via the biome-level `<Terrain noise={…}>` config; biomes with bespoke height logic (city — base-noise-cancelling flat block plateaus) have their branch inside `vertexCompute.ts`. Never add a second height code path.
 
-**City terrain** (city branch of `vertexCompute.ts`, tuned via `cityConfig` in `registry.ts`): the city is partitioned into large STAGGERED DISTRICTS (jittered rows ~`districtSize` cells tall split into staggered jittered segments — sizes ~0.6–1.4×; `cityDistrictByIndex`), and EACH DISTRICT ROTATES its entire block grid by a seeded multiple of 15° (15°–75°; 0° is deliberately excluded so every district reads as rotated) about its own center (`getCityTerrain` transforms the vertex into the district-local frame; distances/heights are rotation-invariant so nothing needs back-transforming). District boundaries carry the ARTERIAL roads (`freewayWidth` half-width, normalized into street units like everything else) and are WIGGLY — each boundary bends with two seeded sine octaves (`cityWiggle`, amp `CITY_WIGGLE_AMP`), and district ASSIGNMENT follows the same curve so the rotated-grid frame switch always stays buried under the arterial surface; arterials also absorb the seams between differently-rotated grids, and block plateaus ramp to grade 0 at arterials so elevation stays continuous across districts. Arterial markers follow the curve, oriented along its tangent (`cityWiggleSlope`). Within a district the layout is a square BLOCK GRID (`gridSize` per cell; NOT voronoi — a voronoi partition was tried and rejected as too round/organic) — each cell rolls a block index in `[0, blockCount)` (cached per cell in `getCityCell`, seeds salted by district key; −1 near the biome wall = whole cell is the rim ring road, plateau 0); neighbors that roll the same index merge into larger polyomino blocks. (1) STREETS run along boundaries of differing-label cells, computed as boundary SEGMENTS over the full 3×3 neighborhood rather than per-cell infinite lines — segments entering/leaving the set at a cell border are always ≥ ~half a cell away, keeping the field AND the s1+s2 chamfer continuous (per-cell line constraints were tried and REJECTED: the chamfer's second constraint popped identity at cell borders, leaving jagged notches in road edges). Contiguous collinear segments along one boundary line are MERGED into single runs before being considered — otherwise a straight road along two merged same-label cells is two collinear segments and the chamfer pairs them (two pieces of the SAME road), undercutting the field and notching the sidewalk at every merged-block cell seam; (2) SHAPE FEATURES rolled per 2×2 SUPER-CELL in `getCityCell` (each replaces FOUR normal blocks) — TRIANGLE super-cells (`triangleChance`): one unique label across the super-cell (boundary streets guaranteed) with a corner-to-corner diagonal road splitting it into two large flatiron halves that always terminate in intersections; ROUNDABOUT super-cells (`roundaboutChance`): a large circular block (island) inside a ring road centered on the super-cell — member cells COPY an outward neighbor's label (`baseCityLabel`, non-recursive), so the wrap-around blocks outside the ring MERGE seamlessly with the surrounding grid (only the ring road separates them from the island); internal member boundaries whose copied labels differ become the streets radiating from the roundabout — inside the ring, boundary constraints are suppressed (the toggle hides under the ring road) so those streets tee into the ring instead of crossing the island, and the island's height is overridden to its own flat plateau (blended in under the inner ring road). The island's field is compressed ×0.75 so buildings keep a safe margin from the curved curb. Features only spawn when `superCellHasRoom` passes — the whole super-cell must be clear of the biome rim AND of the district's arterial boundaries, so no half circles or clipped diagonals at boundaries. Features are CONFINED to their own super-cell — the core no-tiny-pieces guarantee (cross-block avenue lattices were tried and REJECTED: lines crossing many blocks manufacture fragments). The biome RIM is a BELT FREEWAY — a freeway ring surrounding the whole city that the outbound arterials empty into: its centerline sits at `boundaryWidth + freewayWidth` inside the biome boundary (outer road edge abutting the boundary band), fed into the road field with the same freeway normalization + spawn recovery as arterials, at grade 0, and dressed EXACTLY like the other freeways: dashed lane lines (dash phase = the biome-wall projection) and median raised markers (enumerated by stepping the biome wall segments in warped space, offsetting ±(boundaryWidth+freewayWidth), and INVERTING the road-noise warp by fixed-point iteration; validity filtered through computeVertexData; getWalls emits each wall twice endpoint-swapped, so only the canonical orientation is processed); blocks melt/chamfer against it like any road, rim −1 cells only trigger basically ON the boundary (`gs × 0.15`), and street markers stay clear of the belt corridor; (3) ARTERIALS — the district boundary roads described above (there is no separate freeway lattice anymore), normalized into street units (× `roadWidth / freewayWidth`) so ONE road field drives the shader bands, curb dip, and spawn filters (arterial features just render stretched). The normalization only applies through the visual bands: past `CITY_ARTERIAL_RECOVER_NORM` (12.2 normalized, just beyond the interior-band start) the arterial constraint RECOVERS at `CITY_ARTERIAL_RECOVER_SLOPE` (steep) via a continuous max() of the two slopes — without the recovery, the squash held the field below the building-spawn threshold for ~11×roadWidth real units and left the blocks along every arterial empty; with it, buildings reach a near-normal setback (~21u) from the freeway curb. The road field is min over all constraints — pure closed-form arithmetic per vertex (cached cell lookups + a handful of line distances), no voronoi/Delaunay. Constraints are collected with their toward-road unit DIRECTIONS (world frame; rim = NaN, pairable with anything) and feed a fully PAIRWISE linear chamfer/melt: `min over pairs of (dᵢ + dⱼ + penalty) × CITY_CHAMFER_SCALE` — block corners at intersections get straight 45° cuts and fragments pinched under ~`roadWidth / scale` span become road entirely. The penalty fades in smoothly (`CITY_CHAMFER_DOT_LO/HI/PENALTY`) as the two directions align: inside a corner wedge or pinch they are ≥ 90° apart (no penalty), while a road event ACROSS the street — a T-junction stem or far-side bend — points the same way as the near road and must NOT notch the block edge (pairing s1-with-s2 without the direction test was tried and REJECTED: it bit cutouts into straight edges opposite every T-junction). Kept LINEAR and fully pairwise deliberately (a smoothstep-SCALED melt bends band contours into blobs; argmin-based pairing switches identity discontinuously). Each block index has a seeded plateau elevation in `[0, maxBlockElevation]`; elevation is bilinear plateau interpolation toward the neighbors the vertex leans into, ramping only within the inner road span where labels differ — block interiors are DEAD FLAT (buildings need flat footing), avenues/freeways don't move plateaus (they just carve road surface across flat tops), and the road surface dips `curbHeight` below the sidewalk. `cityConfig.roadWidth` (7) is the street HALF-width (centerline → curb) and must match the band constants in the city fragment shader, which paints asphalt + gutters (0–7), curb strip (7–8), sidewalk (8–12), and plaza-concrete block interior (12+), plus fake directional shading from `vWorldNormal` so ramps/curbs read on the unlit terrain. FREEWAYS (`freewayWidth` 14 = 2× streets) are 4 LANES: raised markers stud the median, and each side splits with a white DASHED painted line at ±freewayWidth/2 — drawn from `vDistanceToFreewayCenter` (REAL-units distance to the nearest freeway centerline, arterial edge OR belt; 99999 outside the city and in JUNCTION ZONES — wherever a second freeway feature is within `freewayWidth + 10` — so paint ends cleanly before interchanges) plus `vFreewayAlong` (the dash-phase coordinate: axis coordinate for arterials, biome-wall projection via `lastWallAlong` for the belt), both plumbed VertexResult → terrain.worker → TerrainRenderer attributes → vertex.glsl varyings → city fragment shader because the shared normalized road field cannot distinguish freeway surface from street surface. CRITICAL: both varyings JUMP between adjacent vertices at wall-segment seams / axis switches / mask boundaries, and interpolation would sweep mod() into ZEBRA-STRIPE artifacts — the shader's fwidth() guards (requires `material.extensions.derivatives`, set in `_material`… world/material.ts) detect those slivers by their absurd world-space gradient and drop the paint there; do NOT paint from a phase varying without this guard. NO painted centerline — road centers get RAISED PAVEMENT MARKERS instead (paint shimmered): `objects/road-markers/RoadMarkers.tsx` (mounted in the city biome) builds one InstancedMesh of unlit yellow studs per 256u chunk, no colliders; positions come from `getCityRoadMarkers` in `vertexCompute.ts` (via `world/vertexData.ts`), which enumerates grid boundaries (owned by midpoint bounds) and lattice lines (markers on a global parameter lattice) — both duplicate-free across chunks — insets markers away from intersections, and filters per-marker by biome/river/on-road-center checks. Spawn placement uses the `roadDistanceRange` descriptor filter (also in normalized street units): buildings `[23, ∞)` / skyscrapers `[28, ∞)` (block interiors only — densities are raised to offset the smaller candidate area; footprint spacing is the packing limiter), street lights `[8.2, 11.8]` (the sidewalk band).
+**City terrain** (city branch of `vertexCompute.ts`, tuned via `cityConfig` in `registry.ts`): the city is partitioned into large STAGGERED DISTRICTS (jittered rows ~`districtSize` cells tall split into staggered jittered segments — sizes ~0.6–1.4×; `cityDistrictByIndex`), and EACH DISTRICT ROTATES its entire block grid by a seeded multiple of 15° (15°–75°; 0° is deliberately excluded so every district reads as rotated) about its own center (`getCityTerrain` transforms the vertex into the district-local frame; distances/heights are rotation-invariant so nothing needs back-transforming). District boundaries carry the ARTERIAL roads (`freewayWidth` half-width, normalized into street units like everything else) and are WIGGLY — each boundary bends with two seeded sine octaves (`cityWiggle`, amp `CITY_WIGGLE_AMP`), and district ASSIGNMENT follows the same curve so the rotated-grid frame switch always stays buried under the arterial surface; arterials also absorb the seams between differently-rotated grids, and block plateaus ramp to grade 0 at arterials so elevation stays continuous across districts. Arterial markers follow the curve, oriented along its tangent (`cityWiggleSlope`). Within a district the layout is a square BLOCK GRID (`gridSize` per cell; NOT voronoi — a voronoi partition was tried and rejected as too round/organic) — each cell rolls a block index in `[0, blockCount)` (cached per cell in `getCityCell`, seeds salted by district key; −1 near the biome wall = whole cell is the rim ring road, plateau 0); neighbors that roll the same index merge into larger polyomino blocks. (1) STREETS run along boundaries of differing-label cells, computed as boundary SEGMENTS over the full 3×3 neighborhood rather than per-cell infinite lines — segments entering/leaving the set at a cell border are always ≥ ~half a cell away, keeping the field AND the s1+s2 chamfer continuous (per-cell line constraints were tried and REJECTED: the chamfer's second constraint popped identity at cell borders, leaving jagged notches in road edges). Contiguous collinear segments along one boundary line are MERGED into single runs before being considered — otherwise a straight road along two merged same-label cells is two collinear segments and the chamfer pairs them (two pieces of the SAME road), undercutting the field and notching the sidewalk at every merged-block cell seam; (2) SHAPE FEATURES rolled per 2×2 SUPER-CELL in `getCityCell` (each replaces FOUR normal blocks) — TRIANGLE super-cells (`triangleChance`): one unique label across the super-cell (boundary streets guaranteed) with a corner-to-corner diagonal road splitting it into two large flatiron halves that always terminate in intersections; ROUNDABOUT super-cells (`roundaboutChance`): a large circular block (island) inside a ring road centered on the super-cell — member cells COPY an outward neighbor's label (`baseCityLabel`, non-recursive), so the wrap-around blocks outside the ring MERGE seamlessly with the surrounding grid (only the ring road separates them from the island); internal member boundaries whose copied labels differ become the streets radiating from the roundabout — inside the ring, boundary constraints are suppressed (the toggle hides under the ring road) so those streets tee into the ring instead of crossing the island, and the island's height is overridden to its own flat plateau (blended in under the inner ring road). The island's field is compressed ×0.75 so buildings keep a safe margin from the curved curb. Features only spawn when `superCellHasRoom` passes — the whole super-cell must be clear of the biome rim AND of the district's arterial boundaries, so no half circles or clipped diagonals at boundaries. Features are CONFINED to their own super-cell — the core no-tiny-pieces guarantee (cross-block avenue lattices were tried and REJECTED: lines crossing many blocks manufacture fragments). The biome RIM is a BELT FREEWAY — a freeway ring surrounding the whole city that the outbound arterials empty into: its centerline sits at `boundaryWidth + freewayWidth` inside the biome boundary (outer road edge abutting the boundary band), fed into the road field with the same freeway normalization + spawn recovery as arterials, at grade 0, and dressed EXACTLY like the other freeways: dashed lane lines (dash phase = the biome-wall projection) and median raised markers (enumerated by stepping the biome wall segments in warped space, offsetting ±(boundaryWidth+freewayWidth), and INVERTING the road-noise warp by fixed-point iteration; validity filtered through computeVertexData; getWalls emits each wall twice endpoint-swapped, so only the canonical orientation is processed); blocks melt/chamfer against it like any road, rim −1 cells only trigger basically ON the boundary (`gs × 0.15`), and street markers stay clear of the belt corridor; (3) ARTERIALS — the district boundary roads described above (there is no separate freeway lattice anymore), normalized into street units (× `roadWidth / freewayWidth`) so ONE road field drives the shader bands, curb dip, and spawn filters (arterial features just render stretched). The normalization only applies through the visual bands: past `CITY_ARTERIAL_RECOVER_NORM` (12.2 normalized, just beyond the interior-band start) the arterial constraint RECOVERS at `CITY_ARTERIAL_RECOVER_SLOPE` (steep) via a continuous max() of the two slopes — without the recovery, the squash held the field below the building-spawn threshold for ~11×roadWidth real units and left the blocks along every arterial empty; with it, buildings reach a near-normal setback (~21u) from the freeway curb. The road field is min over all constraints — pure closed-form arithmetic per vertex (cached cell lookups + a handful of line distances), no voronoi/Delaunay. Constraints are collected with their toward-road unit DIRECTIONS (world frame; rim = NaN, pairable with anything) and feed a fully PAIRWISE linear chamfer/melt: `min over pairs of (dᵢ + dⱼ + penalty) × CITY_CHAMFER_SCALE` — block corners at intersections get straight 45° cuts and fragments pinched under ~`roadWidth / scale` span become road entirely. The penalty fades in smoothly (`CITY_CHAMFER_DOT_LO/HI/PENALTY`) as the two directions align: inside a corner wedge or pinch they are ≥ 90° apart (no penalty), while a road event ACROSS the street — a T-junction stem or far-side bend — points the same way as the near road and must NOT notch the block edge (pairing s1-with-s2 without the direction test was tried and REJECTED: it bit cutouts into straight edges opposite every T-junction). Kept LINEAR and fully pairwise deliberately (a smoothstep-SCALED melt bends band contours into blobs; argmin-based pairing switches identity discontinuously). Each block index has a seeded plateau elevation in `[0, maxBlockElevation]`; elevation is bilinear plateau interpolation toward the neighbors the vertex leans into, ramping only within the inner road span where labels differ — block interiors are DEAD FLAT (buildings need flat footing), avenues/freeways don't move plateaus (they just carve road surface across flat tops), and the road surface dips `curbHeight` below the sidewalk. `cityConfig.roadWidth` (7) is the street HALF-width (centerline → curb) and must match the band constants in the city fragment shader, which paints asphalt + gutters (0–7), curb strip (7–8), sidewalk (8–12), and plaza-concrete block interior (12+), plus fake directional shading from `vWorldNormal` so ramps/curbs read on the unlit terrain. FREEWAYS (`freewayWidth` 14 = 2× streets) are 4 LANES: raised markers stud the median, and each side splits with a white DASHED painted line at ±freewayWidth/2 — drawn from `vDistanceToFreewayCenter` (REAL-units distance to the nearest freeway centerline, arterial edge OR belt; 99999 outside the city and in JUNCTION ZONES — wherever a second freeway feature is within `freewayWidth + 10` — so paint ends cleanly before interchanges) plus `vFreewayAlong` (the dash-phase coordinate: axis coordinate for arterials, biome-wall projection via `lastWallAlong` for the belt), both plumbed VertexResult → terrain.worker → TerrainRenderer attributes → vertex.glsl varyings → city fragment shader because the shared normalized road field cannot distinguish freeway surface from street surface. CRITICAL: both varyings JUMP between adjacent vertices at wall-segment seams / axis switches / mask boundaries, and interpolation would sweep mod() into ZEBRA-STRIPE artifacts — the shader's fwidth() guards (requires `material.extensions.derivatives`, set in `_material`… world/material.ts) detect those slivers by their absurd world-space gradient and drop the paint there; do NOT paint from a phase varying without this guard. NO painted centerline — road centers get RAISED PAVEMENT MARKERS instead (paint shimmered): `dressing/road-markers/RoadMarkers.tsx` (mounted in the city biome) builds one InstancedMesh of unlit yellow studs per 256u chunk, no colliders; positions come from `getCityRoadMarkers` in `vertexCompute.ts` (via `world/vertexData.ts`), which enumerates grid boundaries (owned by midpoint bounds) and lattice lines (markers on a global parameter lattice) — both duplicate-free across chunks — insets markers away from intersections, and filters per-marker by biome/river/on-road-center checks. Spawn placement uses the `roadDistanceRange` descriptor filter (also in normalized street units): buildings `[23, ∞)` / skyscrapers `[28, ∞)` (block interiors only — densities are raised to offset the smaller candidate area; footprint spacing is the packing limiter), street lamps `[8.2, 11.8]` (the sidewalk band).
 
 **Performance note:** this is a *declarative shell* over the same pipeline as before — all heavy work still runs in web workers, and worker configs are built once at commit. Workers are initialized with the first committed config; registrations added after the first commit update the registry but do not re-init running workers.
 
@@ -62,21 +69,23 @@ Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at b
 
 ```
 src/
-  spawnables/          # Spawnable objects — kept separate from biomes because one
-    beeble/            #   spawnable may exist in multiple biomes. Each folder has the
-    big-beeble/        #   object component (+ optional stateMachine.ts) and spawnable.tsx
-    xl-element/        #   (SpawnDescriptor + <XxxSpawnable> wrapper component)
-    xxl-element/
-    apartment/
-    street-light/      # Procedural low-poly lamp post (no GLTF), all lamps fade
+  actors/              # ACTOR class (per-object spawns) — kept separate from biomes
+    beeble/            #   because one actor may exist in multiple biomes. Each folder
+    big-beeble/        #   has the object component (+ optional stateMachine.ts) and
+    xl-element/        #   actor.tsx: an ActorDescriptor + `export const XxxActor =
+    xxl-element/       #   createActor(XxxDescriptor)` (props at the mount site are
+    apartment/         #   overrides). Variants EXTEND a base descriptor by spreading
+                       #   it (see building/skyscraper.tsx).
+    street-lamp/       # Procedural low-poly lamp post (no GLTF), all lamps fade
                        #   in/out together with getWindowLightsProgress(). Lighting =
                        #   sky/lampGlow.ts GRID DATA TEXTURE: world binned into 24u
-                       #   cells (one lamp head per texel; falloff radius = cell size),
-                       #   rewritten from ALL mounted lamps every few frames by the
+                       #   cells (one lamp head per texel — xyz + color index; falloff radius =
+                       #   cell size), rewritten from ALL glow sources (lamps + traffic
+                       #   signals, each in its own color) every few frames by the
                        #   FIRST lamp instance per frame (module-level time guard, same
                        #   pattern as GameObject's shared frustum update — no separate
                        #   system component to mount) — the terrain shader and
-                       #   patched building/door/GLTF-spawnable materials sample their
+                       #   patched building/door/GLTF-actor materials sample their
                        #   3×3 cell neighborhood (9 reads/fragment, CONSTANT cost for
                        #   any lamp count), so if a lamp is rendered its light is
                        #   rendered — NO real point lights anywhere, nothing depends on
@@ -86,12 +95,87 @@ src/
                        #   (spawn chunks can mount lamps mid-band). Each lamp is ONE
                        #   merged vertex-colored mesh + ONE material clone (aLampMask
                        #   attribute gates the emissive to the head; clones share one
-                       #   program via a fixed cache key). City-only spawn.
+                       #   program via a fixed cache key). NOTE: the CITY no longer
+                       #   mounts this actor — it uses the INSTANCED dressing variant
+                       #   (dressing/street-lamps/StreetLamps.tsx, sharing this file's
+                       #   geometry/lighting exports); the per-object actor remains for
+                       #   lower-density uses elsewhere.
     building/          # Procedural building: seeded exterior massing with the
                        #   backrooms-style BSP interior physically nested inside;
                        #   clickable hinged doors gate interior mounting
-                       #   (generatePlan.ts → buildingAssets.ts cache → Building.tsx)
+                       #   (generatePlan.ts → buildingAssets.ts cache → Building.tsx).
+                       #   skyscraper.tsx: variant descriptor spreading BuildingDescriptor
     building1/
+  dressing/            # DRESSING class (instanced stateless scenery). Dressing.tsx is
+    Dressing.tsx       #   the base: <Dressing> group (shared default props, mirrors
+                       #   <Actors>), useDressingChunks (camera-following 256u chunk
+                       #   lifecycle: ONE shared budgeted TaskQueue, 1.3× removal
+                       #   hysteresis, instance buffers disposed on drop),
+                       #   useDressingAssets (geometry/material creation + disposal),
+                       #   instancedFromPoints / setInstanceTransform (chunk assembly),
+                       #   useChunkRegistry (per-chunk side-state pruned on unmount).
+                       #   Feature components contain ONLY their unique logic (points to
+                       #   fetch, geometry/materials, optional animation); placement
+                       #   knobs are PROPS with defaults, tunable at the biome mount.
+                       #   Placement runs OFF-THREAD in cityDressing.worker.ts via
+                       #   dressingWorker.ts (which also runs the per-chunk biome probe)
+                       #   — the main thread only assembles InstancedMeshes. These are
+                       #   deliberately NOT actors: markers/lamps number in the
+                       #   thousands (per-object components would explode draw calls —
+                       #   measured ~10-20 fps; same reason grass bypasses the spawn
+                       #   system), and intersection/lattice placement can't be
+                       #   expressed as descriptor filters.
+    dressingWorker.ts  # Worker client for cityDressing.worker.ts (shared across all
+                       #   dressing features; init from the registry's WorldConfig)
+    street-lamps/
+      StreetLamps.tsx  # INSTANCED street lamps — the city's lamp path: DENSITY_POINTS
+                       #   placement (density/footprint/roadDistanceRange props), one
+                       #   InstancedMesh per chunk sharing ONE aLampMask-patched material
+                       #   (global night ramp written once per frame), lamp heads
+                       #   registered in the street-lamp actor's activeLampHeads so the
+                       #   lamp-grid lighting is unchanged, and real cuboid colliders
+                       #   mounted only for lamps within LAMP_COLLIDER_DISTANCE of the
+                       #   camera. No per-lamp edge fade (pops at 440u)
+    road-markers/
+      RoadMarkers.tsx  # Raised pavement markers on city road centerlines (instanced
+                       #   unlit studs; no paint, no colliders). streetSpacing /
+                       #   freewaySpacing props
+    traffic-lights/
+      TrafficLights.tsx # Signals at SOME street intersections (seeded roll, `chance`
+                       #   prop): pole per surviving sidewalk corner, mast arm + 3-lamp
+                       #   head facing the intersection. Lamps flip CHAOTICALLY — random
+                       #   next state (not a green→yellow→red cycle) on heavily skewed
+                       #   random holds (0.2–1.5s, mostly quick) — via per-lamp
+                       #   instanceColor writes; 2 InstancedMeshes per chunk, no
+                       #   colliders. Each signal registers a lamp-grid glow source
+                       #   (sky/lampGlow.ts) whose COLOR follows the current state, so
+                       #   at night the pavement washes red/yellow/green under each
+                       #   signal (intensity rides the dusk/dawn ramp; grid rewrites
+                       #   every ~20 frames, so the glow trails a switch by ≤ ~0.3s).
+                       #   Placement = getCityTrafficLightPoints (vertexCompute.ts):
+                       #   district grid corners with ≥3 differing-label arms
+                       #   (rim/roundabout cells excluded, arterial-adjacent corners
+                       #   skipped), pole marched diagonally out from the corner until
+                       #   the road field says sidewalk; ownership by the corner's world
+                       #   position so chunked calls never duplicate
+    power-lines/
+      PowerLines.tsx   # Utility poles + sagging wires (3 wires × 3 segments per span)
+                       #   along ONE side (side === 1) of every freeway (arterials +
+                       #   belt), ~55u apart just past the freeway edge. Wire spans use
+                       #   the enumerator's next-link so runs stay continuous across
+                       #   chunk borders (each pole owns the span to its successor).
+                       #   Uses getCityFreewaySidePoints (vertexCompute.ts): points
+                       #   offset `lateral` real units from the wiggly arterial curves
+                       #   (global lattice, scan padded by `lateral` for the side-offset
+                       #   shift) and the belt ring (wall-stepping + warp inversion, same
+                       #   as belt median markers — belt coverage depends on the query
+                       #   center's wall set, so keep chunk size consistent); candidates
+                       #   near crossing freeways (junctionClear) or whose road field
+                       #   says they'd sit on road surface drop out. Smoke tests:
+                       #   src/workers/cityFeatures.test.ts (determinism, chunk-split
+                       #   dedupe, sidewalk/off-road validity). (Freeway BARRIERS also
+                       #   used this enumerator — built, then removed by preference;
+                       #   both sides at lateral ≈ freewayWidth + 1.3 worked fine)
   world/
     GameWorld.tsx      # GameWorld — the <World> tree, single source of truth for active content
     registry.ts        # Module-level active world (regions/params/WorldConfig) + whenWorldReady()
@@ -118,7 +202,8 @@ src/
       Terrain.tsx      # Scope-aware terrain rules (world params / biome noise config)
       Material.tsx     # Scope-aware materials (river / region boundary / biome shader)
       Skybox.tsx       # Scope-aware skybox registration + SkyboxSystem (cross-fading sky)
-      Spawnable.tsx    # <Spawnable> descriptor registration + <Spawnables> defaults group
+      Actor.tsx        # <Actor> descriptor registration + <Actors> defaults group +
+                       #   createActor(descriptor) wrapper factory
       context.ts       # WorldStore, WorldStoreContext, RegionContext, BiomeContext
     vertexData.ts      # Main-thread adapter over workers/vertexCompute.ts (same pipeline, same config)
     material.ts        # Combines all biome fragment shaders, reads registry
@@ -133,15 +218,19 @@ src/
     terrain.worker.ts  # Off-thread chunk height computation
     spawn.worker.ts    # Off-thread spawn point generation
     grass.worker.ts    # Off-thread grass blade placement (coarse height grid + bilinear interp)
+    cityDressing.worker.ts # Off-thread city dressing placement (road markers, traffic
+                       #   lights, freeway-side points) — runs the vertexCompute
+                       #   enumerators + the per-chunk biome probe. Also DENSITY_POINTS:
+                       #   a STATELESS deterministic spawn-style density placement
+                       #   (density cells + seeded rolls + greedy footprint spacing over
+                       #   a padded window instead of the spawn worker's stateful hash)
+                       #   for mass static dressing rendered instanced (street lamps)
   objects/
     GameObject.tsx     # GLTF model loader with colliders + animations (handles own position when no positionRef)
     vegetation/
       GrassField.tsx   # Instanced billboard grass (GPU sway, per-chunk draw calls, spawn-style filter props)
       grassWorker.ts   # Worker client for grass.worker.ts (shared across GrassField instances)
       types.ts         # GrassFieldProps
-    road-markers/
-      RoadMarkers.tsx  # Raised pavement markers on city road centerlines (instanced
-                       #   unlit studs from the voronoi road edges; no paint, no colliders)
     city-lights/
       CityLights.tsx   # One bright, far-throw point light at each city-biome cell's
                        #   voronoi center (sites from getCityVoronoiSites in
@@ -154,15 +243,15 @@ src/
                        #   point-light lambert loop to the terrain shader (lights: true).
     spawning/
       ObjectPool.tsx   # Spawn management, frustum culling, pooling
-      collectDescriptors.ts # Aggregates SpawnDescriptors from regions/biomes
+      collectDescriptors.ts # Aggregates ActorDescriptors from regions/biomes
       generateSpawnPoints.ts # Worker client for spawn generation
       SpawnSpatialHash.ts # Grid-based spatial hash for spacing
-      types.ts         # SpawnDescriptor, SpawnPoint, SpawnedObjectProps
+      types.ts         # ActorDescriptor, ActorProps, SpawnPoint
     colliders/         # Physics collider components
     state/             # State machine, mouse events, triggers for interactive objects
     frustumVisibility.ts # Shared set of frustum-hidden objects (portals restore them for off-screen renders)
   portals/
-    Building.tsx       # Spawnable building: exterior + always-mounted interior at an indoor Y slot, paired portals
+    Building.tsx       # Actor building (GLTF portal path): exterior + always-mounted interior at an indoor Y slot, paired portals
     Portal.tsx         # Portal surface (door mesh + crossing-time protection box) — registers a static PortalDescriptor
     PortalContext.tsx  # Portal registry, activeIndoorId, indoor bounds registry
     PortalTeleportSystem.tsx # ONE useFrame for all portals: camera plane-crossing detection + teleport
@@ -211,9 +300,11 @@ src/
 4. Geometry buffers written, normals computed, skirt vertices set
 5. Chunk made visible via atomic LOD swap system
 
-### Spawn Lifecycle
+### Actor Spawn Lifecycle
 
-Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density grid + probability roll + spatial-hash spacing, cached per 250u chunk; cache eviction also removes the chunk's points from the spatial hash so a revisited chunk regenerates the identical points instead of being blocked by its own stale copies). `ObjectPool.tsx` mounts/unmounts them with a size-aware multi-radius hysteresis:
+(The ACTOR class only — dressing has its own, simpler lifecycle: whole chunks mount/unmount around the camera, see `src/dressing/Dressing.tsx`.)
+
+Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density grid + probability roll + spatial-hash spacing, cached per 250u chunk; cache eviction also removes the chunk's points from the spatial hash so a revisited chunk regenerates the identical points instead of being blocked by its own stale copies). Delivered chunks are ALSO cached client-side (`generateSpawnPoints.ts`), so the pool's every-5-frames batch only round-trips the worker for chunks it hasn't seen — steady-state batches serialize nothing over postMessage; `cleanupSpawnCache` evicts both caches with the same radius rule. `ObjectPool.tsx` mounts/unmounts them with a size-aware multi-radius hysteresis:
 
 - `immediateRadius = spawnRadius * 0.5` (or `desc.immediateRadius`) — inner zone: initial spawns allowed, REspawns blocked
 - `spawnRadius = renderDistance + footprint/2` — points inside it mount (big objects spawn sooner); between immediate and spawn radius, respawns are allowed so a camped area keeps repopulating as NPCs wander off
@@ -258,7 +349,7 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
      <Biome name="name" id={N} joinable blendable>
        <Terrain noise={{ params: {...} }} />
        <Material getMaterial={getMaterial} />
-       {/* <Spawnables>…</Spawnables>, <GrassField … />, <Skybox … /> as needed */}
+       {/* <Actors>…</Actors>, <Dressing>…</Dressing>, <GrassField … />, <Skybox … /> as needed */}
      </Biome>
    );
    ```
@@ -267,7 +358,7 @@ Buildings pair an outdoor "enter" portal with an indoor "exit" portal; interiors
 
 The combined fragment shader branch, voronoi biome lookup, and worker noise config are all derived from the registrations — no core files to touch.
 
-Note on duplicated biomes: registrations (terrain rules, materials, spawnables) for the same biome `id` are merged into one biome data object at commit, so duplicates must be kept in sync manually (a divergence would silently resolve last-registration-wins). *Visual* children (e.g. `GrassField`) are NOT merged — if two regions with the same duplicated biome are mounted at once, each duplicate renders its own grass; be mindful of that cost when mounting multiple regions that duplicate a biome.
+Note on duplicated biomes: registrations (terrain rules, materials, actors) for the same biome `id` are merged into one biome data object at commit, so duplicates must be kept in sync manually (a divergence would silently resolve last-registration-wins). *Visual* children (e.g. `GrassField`) are NOT merged — if two regions with the same duplicated biome are mounted at once, each duplicate renders its own grass; be mindful of that cost when mounting multiple regions that duplicate a biome.
 
 ### New Region
 
@@ -282,11 +373,13 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
    ```
 2. Export it from `src/world/regions/index.ts` and mount it inside `GameWorld` (`src/world/GameWorld.tsx`). Region JSX order matters — voronoi assignment depends on it.
 
-### New Spawn/NPC
+### New Actor (per-object spawns: NPCs, buildings, interactables)
 
-**Static objects** (no custom behavior — just a model at a position):
-1. Create `src/spawnables/<name>/` with a `spawnable.tsx` exporting a `SpawnDescriptor` (set `model` GLTF path and `scale`) plus a `<XxxSpawnable>` component wrapping it: `export const XxxSpawnable = (overrides: Partial<SpawnDescriptor>) => <Spawnable {...XxxDescriptor} {...overrides} />` — spawn restrictions (`biomeIds`, `heightRange`, `slopeRange`, `roadDistanceRange` — distance to the road centerline, city roads/sidewalks — `density`, spacing) are descriptor props; `biomeIds` unset means "spawns in every biome"; `quantization` overrides the global vertex-quantization grid size for this object (unset = global). Spawnables live outside biome folders because one spawnable may be mounted in several biomes.
-2. Mount it inside a biome's `<Spawnables>` group (props on `<Spawnables>` are shared defaults for all children; a child's own props win)
+Pick the class first: unique geometry, interaction, or behavior → ACTOR (below); many + identical + stateless → DRESSING (next section).
+
+**Static actors** (no custom behavior — just a model at a position):
+1. Create `src/actors/<name>/` with an `actor.tsx` exporting an `ActorDescriptor` (set `model` GLTF path and `scale`) plus `export const XxxActor = createActor(XxxDescriptor)` — spawn restrictions (`biomeIds`, `heightRange`, `slopeRange`, `roadDistanceRange` — distance to the road centerline, city roads/sidewalks — `density`, spacing) are descriptor props; `biomeIds` unset means "spawns in every biome"; `quantization` overrides the global vertex-quantization grid size for this object (unset = global). Actors live outside biome folders because one actor may be mounted in several biomes. Variants extend a base by SPREADING its descriptor (see `building/skyscraper.tsx`).
+2. Mount it inside a biome's `<Actors>` group (props on `<Actors>` are shared defaults for all children; a child's own props win)
 3. Place GLTF model in `public/models/`
 
 **Grass / mass vegetation** (thousands of instances — too many for the spawn system):
@@ -295,18 +388,24 @@ Note on duplicated biomes: registrations (terrain rules, materials, spawnables) 
 3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
 
 **Procedural buildings** (seeded shape, real nested interiors, clickable doors — no GLTF, no portals):
-1. `src/spawnables/building/` — `<Building>` generates a deterministic building from a seed (default: spawn coordinates), interior-first: rooms-per-floor × floors set the interior area, which sets the exterior footprint and height (so the shell realistically wraps the inside). Exterior: 4–8-sided masses — boxy slabs or rotated faceted canisters — grayscale segments with occasional accent colors, lips/bulges, gentle lean, scattered oval/skewed-quad windows, rooftop caps + crooked pipes; colors baked as vertex colors so all buildings share one material. Night window lights: each building has `windowLightChance` (0–1 fraction of windows that light per night; default 0.6, 0 = never) and `windowLightIntensity` (emissive strength of lit glass, default 1.4) — a shader patch on the shared exterior material (per-vertex vec3 `aWindow` = stable per-window random + chance + intensity, global uniforms driven by `getWindowLightsProgress()` and `getNightIndex()`) hashes each window against the per-night seed, so a DIFFERENT subset pops on sporadically over LIGHTS_TRANSITION_DURATION_MS each nightfall (off at dawn the same way), washing the glass yellowish with an emissive glow. No extra draw calls or light objects.
+1. `src/actors/building/` — `<Building>` generates a deterministic building from a seed (default: spawn coordinates), interior-first: rooms-per-floor × floors set the interior area, which sets the exterior footprint and height (so the shell realistically wraps the inside). Exterior: 4–8-sided masses — boxy slabs or rotated faceted canisters — grayscale segments with occasional accent colors, lips/bulges, gentle lean, scattered oval/skewed-quad windows, rooftop caps + crooked pipes; colors baked as vertex colors so all buildings share one material. Night window lights: each building has `windowLightChance` (0–1 fraction of windows that light per night; default 0.6, 0 = never) and `windowLightIntensity` (emissive strength of lit glass, default 1.4) — a shader patch on the shared exterior material (per-vertex vec3 `aWindow` = stable per-window random + chance + intensity, global uniforms driven by `getWindowLightsProgress()` and `getNightIndex()`) hashes each window against the per-night seed, so a DIFFERENT subset pops on sporadically over LIGHTS_TRANSITION_DURATION_MS each nightfall (off at dawn the same way), washing the glass yellowish with an emissive glow. No extra draw calls or light objects.
 2. Exterior and interior are ONE building, both always rendered: the shell has REAL THICKNESS — the outer surface leans/tapers/bulges freely, while the INNER surface is a straight PRISM of the interior polygon through the occupied floors (the wall cavity between them varies in thickness). A constant inner surface means BSP split walls extend EXACTLY to it at every story: a two-room floor is one dividing wall running exterior-to-exterior, never an enclosed room-within-a-room (wall ends on the BSP domain boundary are stretched to the polygon via `ringSpanAt`, tucked into the cavity). Ramps: EACH story gap gets its own independently placed straight-run ramp (random spot + axis/direction per gap, so floor 1→2 differs from 2→3), sitting OPEN inside a normal room — stories generate in order, placing the gap's shaft first (clear of the arrival hole/landing from below; clear of exterior door zones on the ground floor), then BSP-ing the floor around it: split walls, pillars, doorways, light panels, and child slots all avoid the shaft footprint and the arrival rects, and a split wall never T-junctions into a perpendicular wall at its doorway. Door openings get jamb reveals closing the cavity, and doors auto-nudge along their edge away from wall ends that dead-end into the perimeter. The interior renders as a single merged vertex-colored UNLIT mesh (walls, polygon slabs with per-gap ramp holes, ramps, light panels) with a fixed wrap-lambert BAKED into the vertex colors at build time (light panels excluded, staying full-bright) so same-color surfaces still read as separate planes at zero runtime cost; interior colors derive from the exterior ground-segment color (floor darker, ceiling lighter) and are overridable via the `interiorColors` option. The plan generator clamps outer-shell rings through the occupied floors (apothem-corrected for polygons, including an inserted ring exactly at `interiorTop`) so the shell never cuts inward — shape runs free above the top floor. The shell carve, inner carve, and door leaf share the same ring edge + param.
-3. Door mechanic: each opening holds a real hinged door leaf (closed = extra cuboid collider). Clicking it (screen-center raycast ≤6u, cursor grows on hover) swings it open. Only dynamic content is gated: children (spawnables in rooms) mount within ~150u, all colliders within ~120u. This replaces the old portal pair entirely; `src/portals/` remains for the GLTF `portals/Building.tsx` path.
+3. Door mechanic: each opening holds a real hinged door leaf (closed = extra cuboid collider). Clicking it (screen-center raycast ≤6u, cursor grows on hover) swings it open. Only dynamic content is gated: children (actors in rooms) mount within ~150u, all colliders within ~120u. This replaces the old portal pair entirely; `src/portals/` remains for the GLTF `portals/Building.tsx` path.
 4. Building variants (apartment/office/theater/…) wrap `<Building>` with their own options — every randomization knob is a prop with a seeded default: `exteriorSize`, `heightRange`, `numberOfSides` (default [4,5,6,7,8]), `palette`/`accentColors`/`accentChance`, `windowShapes` (WINDOW_SHAPE enum; default [SQUARE], CIRCLE opt-in), `windowCount` (array of count choices), `windowSize`, `maxLean`, `stories`, `roomCount` (number or array of per-floor count choices — EACH floor rolls its own count and its own BSP layout, so no two floors are identical; footprint sized for the largest choice), `doorCount`, `doorSize`, `ceilingHeight`, `materials` — plus children, which render at seeded positions inside rooms across stories. First variant: `Skyscraper` (`skyscraper.tsx`) — 6 stories under a 70–115u shell.
 5. Geometry is cached per seed in `buildingAssets.ts`; interior wall boxes double as cuboid colliders; the exterior render triangles double as the trimesh collider (door openings included).
-6. Register via `<BuildingSpawnable biomeIds={[CITY_BIOME_ID]} />` (currently city-only).
+6. Register via `<BuildingActor biomeIds={[CITY_BIOME_ID]} />` (currently city-only).
 
-**Interactive objects** (physics, state machines, custom logic):
-1. Create `src/spawnables/<name>/` with the object component (+ `stateMachine.ts` if needed)
+**Interactive actors** (physics, state machines, custom logic):
+1. Create `src/actors/<name>/` with the object component (+ `stateMachine.ts` if needed)
 2. Use `GameObject` for GLTF loading + colliders, `useStateMachine` / `useMouseEvents` for behavior
-3. Add a `spawnable.tsx` with a `SpawnDescriptor` (its `component` = your custom component) and a `<XxxSpawnable>` wrapper; mount it in a biome's `<Spawnables>` group (see `src/spawnables/beeble/`)
+3. Add an `actor.tsx` with an `ActorDescriptor` (its `component` = your custom component) and `createActor`; mount it in a biome's `<Actors>` group (see `src/actors/beeble/`)
 4. Place GLTF model in `public/models/`
+
+### New Dressing feature (instanced stateless scenery)
+
+1. Create `src/dressing/<name>/<Name>.tsx`. Structure: props with defaults for every placement knob (plus `renderDistance`, resolved via `useDressingRenderDistance(own, default)` so a `<Dressing>` group can override it), `useDressingAssets` for geometries/materials, `useDressingChunks({ renderDistance, build })` for the chunk lifecycle, and `instancedFromPoints` to assemble each chunk. Per-chunk side-state (animation clocks, external registrations) goes through `useChunkRegistry` so it's cleaned up when chunks unmount — see `traffic-lights` (animation + glow sources) and `street-lamps` (lamp heads + colliders) for the two patterns.
+2. Placement comes from the dressing worker (`dressingWorker.ts`): reuse `getDensityPoints` for spawn-style density placement (density + footprint + road-band filters — how street lamps place), or add a bespoke enumerator to `vertexCompute.ts` + a message type to `cityDressing.worker.ts` for structured placement (lattices, intersections — how markers/signals/power lines place). Enumerators must be deterministic and duplicate-free under chunked queries (ownership by position); add a case to `src/workers/cityFeatures.test.ts`.
+3. Mount it inside the biome's `<Dressing>` group.
 
 ### Per-Region / Per-Biome Skybox
 
@@ -327,7 +426,8 @@ Mount `<Skybox topColor=… horizonColor=… bottomColor=… />` inside a `<Regi
 - Skeleton cloning on spawn indexes bones by name in one pass (`cloneModelWithAnimations`) — avoid per-bone scene traversals.
 - **TaskQueue is time-budgeted** (6ms slices, then yields a macrotask): awaiting a synchronous task only yields a MICROtask, so without the budget a burst of queued work (collider builds, building geometry) would still run inside one frame.
 - **Procedural building assets build through a TaskQueue** (`Building.tsx`): cache-hit seeds mount synchronously (despawn/respawn churn), NEW seeds render null for a frame or two while plan generation + triangulation run in budgeted slices — a spawn batch with several unseen buildings can't stack builds into one frame. Full off-thread (worker) geometry building was evaluated and deferred: the pipeline leans on THREE triangulators (ExtrudeGeometry with holes, mergeGeometries), so a worker port means serializing every buffer back — revisit only if the sliced builds still hitch.
-- **Street lights are ONE mesh + ONE material clone each** (vertex-colored parts, `aLampMask` attribute gates the emissive to the head) — one draw call per lamp; all clones share one compiled program via a fixed customProgramCacheKey.
+- **City street lamps are INSTANCED dressing** (`dressing/street-lamps`): one draw call + ONE shared material per chunk, no per-lamp components. The per-object street-lamp ACTOR (one mesh + one material clone per lamp, program shared via a fixed customProgramCacheKey) remains for lower-density use elsewhere.
+- **Dressing vs actors is a measured perf boundary**: rendering the dressing set (markers, lamps, signals, poles) as per-object spawn components cost ~10–20 fps; instanced chunks recover it. Don't add mass scenery as actors.
 
 ## UI / Overlay Styling
 
