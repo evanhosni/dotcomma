@@ -428,6 +428,12 @@ const CITY_CHAMFER_DOT_PENALTY = 60;
 const CITY_ARTERIAL_RECOVER_NORM = 12.2;
 const CITY_ARTERIAL_RECOVER_SLOPE = 3;
 
+// Freeway grade ramp end (real units from the freeway centerline): plateaus
+// reach their full height this far out. Must stay well inside the building
+// setback (~35u from the centerline via the field recovery) so block
+// interiors are flat where buildings stand.
+const CITY_FREEWAY_RAMP_END = 24;
+
 // Constraint candidates: distance + toward-road unit direction (world frame).
 // Scratch buffers — workers are single-threaded.
 const cityConsD = new Float64Array(24);
@@ -1006,13 +1012,20 @@ const getCityTerrain = (
   let elevation =
     hC * (1 - wx) * (1 - wy) + hX * wx * (1 - wy) + hY * (1 - wx) * wy + hD * wx * wy;
 
-  // Arterials sit at grade 0: block plateaus ramp up from the district
-  // boundary roads. Both sides of a boundary ramp to the same value, so
-  // elevation stays continuous across the district (and rotation) switch —
-  // the ramp is confined inside the arterial road surface. The belt freeway
-  // sits at grade 0 the same way.
-  elevation *= smoothstepVal(2, city.freewayWidth - 4, arterialReal);
-  elevation *= smoothstepVal(2, city.freewayWidth - 4, beltReal);
+  // Freeways (arterials + belt) sit at MID-PLATEAU GRADE (maxBlockElevation/2
+  // — the expected value of the seeded plateaus), and the transition spreads
+  // over CITY_FREEWAY_RAMP_END real units instead of hugging the centerline.
+  // Both sides of a boundary still ramp to the same constant, so elevation
+  // stays continuous across the district (and rotation) switch. (Grade 0 with
+  // a tight ramp was used before and REJECTED: every freeway read as a V
+  // TROUGH — high plateaus on both sides diving to zero along the median.
+  // Mid-plateau grade halves the worst offset and turns low-plateau sides
+  // into a gentle road crown.)
+  const freewayGrade = city.maxBlockElevation * 0.5;
+  const freewayRamp =
+    smoothstepVal(2, CITY_FREEWAY_RAMP_END, arterialReal) *
+    smoothstepVal(2, CITY_FREEWAY_RAMP_END, beltReal);
+  elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
 
   // Roundabout island: its own flat plateau, independent of the (possibly
   // differing) wrap-around block heights — blended in UNDER the inner ring
@@ -1185,12 +1198,15 @@ export function computeVertexData(x: number, z: number): VertexResult {
       distanceToRoadCenter = Math.min(city.dist, distanceToRiver);
       distanceToFreewayCenter = city.paintDist;
       freewayAlong = city.paintAlong;
-      // The biome height cancels the global base noise, then sits each block
-      // on its own flat plateau (roads ramp between neighboring plateaus and
-      // dip a curb's depth below the sidewalk). Blends smoothly back to the
-      // neighboring biome's terrain at the boundary.
-      biomeHeight =
-        (city.elevation - terrainNoise(cfg.baseNoiseParams, x, z)) * blend * riverFade;
+      // The city RIDES the regional base noise: plateaus/roads/curbs are all
+      // RELATIVE offsets on top of the standard base terrain, so cities sit
+      // at varied elevations and undulate gently with the region. (The base
+      // used to be CANCELLED here, pinning every city to ~height 0 — rejected:
+      // the whole map's cities sat at sea level, and the rim had to jump from
+      // regional height down to zero.) Base noise is LOW-frequency (scale
+      // 5000), so block-scale slopes stay small; blends smoothly into the
+      // neighboring biome at the boundary.
+      biomeHeight = city.elevation * blend * riverFade;
     }
   }
 
