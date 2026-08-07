@@ -34,10 +34,16 @@ export const getVertexData = async (x: number, y: number): Promise<VertexResult>
 
 /** PAD-FREE vertex data for FREQUENT main-thread callers (player ground
  *  checks): the padded path computes flatten-pad tiles synchronously — a
- *  ~30–70ms hitch per new city tile the player walks into. Pads sit ABOVE
- *  the raw terrain, so below-raw-surface checks (embed rescue, fall-through
- *  backstop) stay sound. One-off callers (respawn) should keep the padded
- *  getVertexData. */
+ *  ~30–70ms hitch per new city tile the player walks into.
+ *
+ *  WARNING: this is NOT a lower bound on the real surface. Pads EXCAVATE as
+ *  well as fill — they lerp terrain toward the actor's own ground height, so
+ *  uphill of a building on a slope the true ground sits BELOW this height
+ *  (measured up to 8.3u; 6% of pads exceed 2u). A below-surface test that
+ *  trusts this alone will fire on solid ground — it made the player's
+ *  fall-through backstop teleport them out of a building's excavation every
+ *  few frames. Use it as a cheap PRE-FILTER and confirm with getVertexData
+ *  before acting (see resolveEmbeddedSurface in player/Player.tsx). */
 export const getVertexDataRaw = async (x: number, y: number): Promise<VertexResult> => {
   await ensureInit();
   return computeVertexDataRaw(x, y);

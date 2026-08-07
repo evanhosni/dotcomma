@@ -134,6 +134,34 @@ const smooth01 = (t: number): number => {
   return x * x * (3 - 2 * x);
 };
 
+/**
+ * True collider-surface height at (x, z) IF the capsule bottom is genuinely
+ * below it by more than `tolerance` — otherwise null (nothing to rescue).
+ *
+ * The cheap RAW height is only a PRE-FILTER. Flatten pads EXCAVATE: they lerp
+ * terrain toward the actor's own ground height, so on the uphill side of a
+ * slope the real ground sits BELOW the raw surface — measured up to 8.3u,
+ * past EMBED_TOLERANCE on 6% of pads. Trusting raw there made the backstop
+ * "rescue" a player standing on perfectly solid ground inside a building's
+ * excavation, teleporting them into the air every 3 frames — the infinite
+ * bounce when sliding down a slope into a building. Raw runs first (it builds
+ * no pad tiles, so the common case stays cheap); only when it claims the
+ * player is embedded do we pay for the padded height, whose flatten tiles are
+ * CACHED — a tile build once per area, not per query.
+ */
+const resolveEmbeddedSurface = async (
+  x: number,
+  z: number,
+  bottom: number,
+  tolerance: number
+): Promise<number | null> => {
+  const raw = await getVertexDataRaw(x, z);
+  if (bottom >= raw.height - tolerance) return null; // clearly above ground
+  const padded = await getVertexData(x, z);
+  if (bottom >= padded.height - tolerance) return null; // pad excavation, not tunneling
+  return padded.height;
+};
+
 /** Leaky persistence timer: fills while the condition holds, decays faster
  *  when it doesn't, and saturates at 2× the engage delay so an engaged
  *  response has hysteresis on the way out. */
@@ -466,18 +494,14 @@ export const Player = () => {
           unsticking.current = true;
           const sx = fx;
           const sz = fz;
-          // Raw (pad-free) height: pads sit ABOVE raw terrain, so the
-          // below-surface test stays sound — and the padded path would
-          // compute flatten tiles synchronously on the main thread.
-          getVertexDataRaw(sx, sz).then((vd) => {
+          resolveEmbeddedSurface(sx, sz, fy - PLAYER_HEIGHT / 2, STUCK_EMBED_MIN).then((surface) => {
             unsticking.current = false;
             const body = rigidBodyRef.current;
             if (!body) return;
             const cur = body.translation();
             if (Math.abs(cur.x - sx) > 3 || Math.abs(cur.z - sz) > 3) return; // stale
-            const bottom = cur.y - PLAYER_HEIGHT / 2;
-            if (bottom < vd.height - STUCK_EMBED_MIN) {
-              body.setTranslation({ x: cur.x, y: vd.height + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
+            if (surface !== null && cur.y - PLAYER_HEIGHT / 2 < surface - STUCK_EMBED_MIN) {
+              body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
               verticalVelocity.current = 0;
               slideSpeed.current = 0;
               stuckFrames.current = 0;
@@ -510,20 +534,18 @@ export const Player = () => {
       if (groundCheckFrame.current % GROUND_CHECK_INTERVAL === 0) {
         const cx = finalPos.x;
         const cz = finalPos.z;
-        // Raw (pad-free) height — see the stuck-escape note above.
-        getVertexDataRaw(cx, cz).then((vd) => {
+        resolveEmbeddedSurface(cx, cz, finalPos.y - PLAYER_HEIGHT / 2, EMBED_TOLERANCE).then((surface) => {
+          if (surface === null) return;
           const body = rigidBodyRef.current;
           if (!body) return;
           const cur = body.translation();
           // Stale sample — the player moved columns (or teleported through a
           // portal) between the request and now.
           if (Math.abs(cur.x - cx) > 3 || Math.abs(cur.z - cz) > 3) return;
-          const bottom = cur.y - PLAYER_HEIGHT / 2;
-          if (bottom < vd.height - EMBED_TOLERANCE) {
-            body.setTranslation({ x: cur.x, y: vd.height + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
-            verticalVelocity.current = 0;
-            slideSpeed.current = 0;
-          }
+          if (cur.y - PLAYER_HEIGHT / 2 >= surface - EMBED_TOLERANCE) return; // recovered meanwhile
+          body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
+          verticalVelocity.current = 0;
+          slideSpeed.current = 0;
         });
       }
     }
