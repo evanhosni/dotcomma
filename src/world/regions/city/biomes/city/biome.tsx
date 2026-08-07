@@ -16,7 +16,7 @@ export const CITY_BIOME_ID = 1;
  *  (each a seeded multiple of 15°) separated by wide arterials, with
  *  polyomino blocks on flat plateaus, flatiron triangle super-cells, and
  *  roundabout super-cells (round block + ring road). Heights
- *  (base-noise-cancelling) and the road-distance field come from the city
+ *  (block plateaus riding the regional base noise) and the road-distance field come from the city
  *  branch of the shared vertex pipeline (workers/vertexCompute.ts, keyed by
  *  biome id 1 + WorldConfig.cityConfig) — no `noise` config here.
  *
