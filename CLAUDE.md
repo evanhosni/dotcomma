@@ -293,7 +293,34 @@ src/
                        #   Unlit shaders (terrain/grass) dim via NIGHT_BLEND_UNIFORM +
                        #   NIGHT_GROUND_DIM instead (building interiors stay bright)
   player/
-    Player.tsx         # First-person controller + physics
+    Player.tsx         # First-person controller + physics. SLOPES are three
+                       #   bands, not a hard stop: ≤25° full speed; 25–45° the
+                       #   UPHILL input component scales smoothly to 0 (contour/
+                       #   downhill unaffected; ~half speed around 35°); >45°
+                       #   unclimbable — the player
+                       #   slides down the fall line (gravity-tangent accel, capped,
+                       #   momentum decays on walkable ground, no jump mid-slide).
+                       #   Ground normal from a per-frame downward raycast (NOT gated
+                       #   on computedGrounded — that flag flickers false on steep
+                       #   surfaces); the Rapier controller's climb limit sits at the
+                       #   45° hard wall. FALL-THROUGH DEFENSES (kinematic capsule vs
+                       #   terrain trimesh tunneling — do not weaken): fall speed
+                       #   clamped while riding an unclimbable slope (terminal-velocity
+                       #   scrape at a glancing angle punches through triangles), the
+                       #   KCC solve is SUBSTEPPED to ≤ ~capsule-radius sweeps (with
+                       #   propagateModifiedBodyPositionsToColliders between substeps),
+                       #   CC_OFFSET is 0.08 (0.02 allowed numerical penetration; a
+                       #   sweep starting inside a triangle passes through),
+                       #   setNormalNudgeFactor(0.02) recovers shallow penetrations,
+                       #   and the AUTHORITATIVE BACKSTOP: every 3 frames the capsule
+                       #   is compared against the ANALYTIC terrain height
+                       #   (getVertexData — the same source the heightfield colliders
+                       #   are built from); > 2u below the surface (outdoors,
+                       #   non-noclip) snaps the player back onto it. The physics
+                       #   ground is per-chunk heightfields swapped during LOD
+                       #   changes, so sweep hardening alone can never close every
+                       #   timing hole — the backstop is what actually guarantees no
+                       #   fall-through
     useInput.tsx       # Keyboard input
   utils/
     utils.ts           # getAllBiomes, getDistance2D (plain exports)
