@@ -40,28 +40,47 @@ const CC_OFFSET = 0.08;
 const SNAP_TO_GROUND = 0.3;
 
 // ---- Slopes ----
-// Three bands instead of a hard stop at the old 35° limit:
-//   ≤ SOFT_START:            full speed.
-//   SOFT_START..SOFT_END:    the UPHILL component of input scales smoothly
-//                            from 1 → 0 (walking along the contour or downhill
-//                            stays full speed).
-//   > SOFT_END:              unclimbable — the player slides down the slope's
-//                            fall line, accelerating with gravity's tangential
-//                            component; momentum bleeds off quickly on
-//                            walkable ground. No jumping mid-slide.
-// The Rapier controller's own climb limit sits at SOFT_END (it provides the
-// hard wall + downhill deflection); everything softer is shaped here from a
-// ground-normal raycast. The band is deliberately WIDE (20°) so the slowdown
-// creeps in gradually — the smoothstep keeps the ends gentle, so around the
-// old 35° limit you still walk at roughly half speed.
+// Two INDEPENDENT responses, both driven by the ground-normal raycast:
+//   SLOWDOWN (SOFT_START..SOFT_END): the UPHILL component of input scales
+//     smoothly from 1 → 0 (walking along the contour or downhill stays full
+//     speed). The band is deliberately WIDE so it creeps in gradually.
+//   SLIDE (> SLIDE_ANGLE): unclimbable — the player slides down the slope's
+//     fall line, accelerating with gravity's tangential component; momentum
+//     bleeds off quickly on walkable ground. No jumping mid-slide. The Rapier
+//     controller's own climb limit sits here too (hard wall + deflection).
+//
+// SLIDE_ANGLE is set from a MEASURED slope distribution of the real terrain
+// (sampled at LOD1 collider resolution, 4.375u, across grassland — the
+// steepest biome). Natural terrain tops out at ~47°:
+//     median 25.6° | p90 35.3° | p99 42.6° | max 46.9°
+//     >35°: 10.7% of area | >40°: 3.6% | >45°: 0.17% | >50°: NONE
+// Capsule-solid steep spots (whole footprint steep, not a one-triangle
+// sliver) are what the player can actually stand on: 257 in a 600×600 patch
+// at 40°, but only 15 at 45° and 5 at 50°. So 55° was UNREACHABLE — nothing
+// in the world is that steep except flatten-pad skirts, which is why sliding
+// stopped happening entirely. 40° is the value where genuine steep faces
+// exist without being everywhere. Re-measure before changing this if the
+// terrain noise changes.
 const SLOPE_SOFT_START = 25 * (Math.PI / 180);
 const SLOPE_SOFT_END = 45 * (Math.PI / 180);
+const SLOPE_SLIDE_ANGLE = 40 * (Math.PI / 180);
+// Both responses require PERSISTENCE — this many seconds of steep ground
+// before they engage. Flatten-pad edges and heightfield slivers are tiny
+// steep faces the probe clips for a frame or two; reacting instantly to those
+// made walking anywhere feel like sliding. The timers LEAK rather than reset
+// (decay at DECAY× fill rate, saturating at 2× the delay) so genuinely steep
+// but bumpy ground still engages, a lone sliver never does, and an engaged
+// slide doesn't stutter off on one flat triangle.
+const SLOPE_ENGAGE_DELAY = 0.1;
+const SLIDE_ENGAGE_DELAY = 0.15;
+const SLOPE_TIMER_DECAY = 2;
 const SLIDE_MAX_SPEED = 30;
 const SLIDE_STOP_DECEL = 60; // how fast leftover slide momentum dies on walkable ground
-// While riding an unclimbable slope, gravity must not wind up to terminal
-// velocity — a huge downward component fed into a glancing steep contact is
-// exactly what used to punch through the trimesh. The slide vector provides
-// the downhill motion; this just keeps the capsule pressed to the surface.
+// Near ANY ground, gravity must not wind up to terminal velocity. Two
+// separate bugs share this cause: a huge downward component fed into a
+// glancing steep contact punches through the trimesh, and on gentle ground it
+// gets deflected sideways into permanent drift. The slide vector provides the
+// downhill motion; this just keeps the capsule pressed to the surface.
 const SLIDE_FALL_CLAMP = -20;
 
 // Devmode speeds
@@ -115,6 +134,12 @@ const smooth01 = (t: number): number => {
   return x * x * (3 - 2 * x);
 };
 
+/** Leaky persistence timer: fills while the condition holds, decays faster
+ *  when it doesn't, and saturates at 2× the engage delay so an engaged
+ *  response has hysteresis on the way out. */
+const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
+  Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
+
 export const Player = () => {
   const inputRef = useInput();
   const { camera } = useThree();
@@ -130,6 +155,9 @@ export const Player = () => {
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
   const groundRayRef = useRef<Rapier.Ray | null>(null);
   const groundCheckFrame = useRef(0);
+  // Seconds of CONTINUOUS steep ground under the probe (see the engage delays).
+  const softSlopeTime = useRef(0);
+  const steepSlopeTime = useRef(0);
   const stuckFrames = useRef(0);
   const unsticking = useRef(false);
 
@@ -137,11 +165,13 @@ export const Player = () => {
 
   useEffect(() => {
     const controller = world.createCharacterController(CC_OFFSET);
-    // The hard wall lives at SOFT_END — the 35°..45° band is climbable but
-    // speed-shaped in the frame loop, and beyond it the controller both
-    // blocks climbing and deflects gravity down the slope.
-    controller.setMaxSlopeClimbAngle(SLOPE_SOFT_END + 0.01);
-    controller.setMinSlopeSlideAngle(SLOPE_SOFT_END);
+    // The hard wall lives at SLIDE_ANGLE — everything below it is climbable
+    // but speed-shaped in the frame loop, and beyond it the controller both
+    // blocks climbing and deflects gravity down the slope. (The slowdown
+    // curve runs to SOFT_END, past the wall — so uphill speed is already down
+    // to ~16% when the slide takes over, with no dead zone between them.)
+    controller.setMaxSlopeClimbAngle(SLOPE_SLIDE_ANGLE + 0.01);
+    controller.setMinSlopeSlideAngle(SLOPE_SLIDE_ANGLE);
     // Push the capsule OUT along contact normals noticeably harder than the
     // default (1e-4): shallow penetrations on steep glancing contacts must
     // recover instead of accumulating until a sweep starts inside the trimesh.
@@ -223,6 +253,7 @@ export const Player = () => {
       // grounded flag flickers false on too-steep surfaces, which is exactly
       // where the slope logic matters most.
       let nearGround = false;
+      let groundSupported = false;
       let groundAngle = 0;
       let nX = 0;
       let nY = 1;
@@ -263,16 +294,44 @@ export const Player = () => {
             nZ = hnZ;
             groundAngle = Math.acos(Math.min(Math.max(nY, -1), 1));
           }
+          // Tighter test: the surface is within snapping reach, i.e. the
+          // controller is genuinely standing on it rather than merely near it.
+          groundSupported = hit.timeOfImpact <= PLAYER_HEIGHT / 2 / Math.max(hnY, 0.25) + SNAP_TO_GROUND + 0.1;
         }
       }
-      const onSlideSlope = nearGround && groundAngle > SLOPE_SOFT_END;
+
+      // Slope responses only engage after the ground has been steep for a
+      // sustained moment — a single frame clipping a pad edge or a heightfield
+      // sliver must not trigger them.
+      softSlopeTime.current = bumpSlopeTimer(
+        softSlopeTime.current,
+        nearGround && groundAngle > SLOPE_SOFT_START,
+        dt,
+        SLOPE_ENGAGE_DELAY
+      );
+      steepSlopeTime.current = bumpSlopeTimer(
+        steepSlopeTime.current,
+        nearGround && groundAngle > SLOPE_SLIDE_ANGLE,
+        dt,
+        SLIDE_ENGAGE_DELAY
+      );
+
+      const onSlideSlope = steepSlopeTime.current >= SLIDE_ENGAGE_DELAY;
+      // Gravity/jump support: computedGrounded() alone FLICKERS false on
+      // heightfield terrain, and every flickered frame integrated gravity
+      // without reset — winding toward terminal velocity, which the controller
+      // then deflected along even a 2–3° slope into permanent horizontal drift
+      // (the "always sliding no matter how flat" bug) while snap-to-ground kept
+      // the capsule glued down. The raycast is re-evaluated every frame, so it
+      // can't accumulate that way. Do NOT gate support on the flag alone.
+      const walkableSupport = groundSupported && groundAngle <= SLOPE_SLIDE_ANGLE;
 
       // ---- Input, shaped by slope ----
       if (_moveVec.lengthSq() > 0) {
         _moveVec.normalize();
         // In the soft band, only the UPHILL component of the input slows —
         // full speed along the contour and downhill.
-        if (nearGround && groundAngle > SLOPE_SOFT_START) {
+        if (nearGround && groundAngle > SLOPE_SOFT_START && softSlopeTime.current >= SLOPE_ENGAGE_DELAY) {
           const hLen = Math.hypot(nX, nZ);
           if (hLen > 1e-5) {
             _uphill.set(-nX / hLen, 0, -nZ / hLen);
@@ -302,21 +361,22 @@ export const Player = () => {
       }
 
       // Gravity integration (capped at terminal velocity)
-      if (grounded && verticalVelocity.current <= 0) {
+      if ((grounded || walkableSupport) && verticalVelocity.current <= 0) {
         verticalVelocity.current = 0;
       } else {
         verticalVelocity.current = Math.max(verticalVelocity.current + GRAVITY * dt, TERMINAL_VELOCITY);
       }
-      // Riding an unclimbable slope: cap the fall speed. Without this,
-      // gravity winds toward terminal velocity while the capsule scrapes the
-      // surface at a glancing angle — the huge downward sweep is what used to
-      // punch the player through the terrain trimesh.
-      if (onSlideSlope && verticalVelocity.current < SLIDE_FALL_CLAMP) {
+      // Near ANY ground, cap the fall speed. Without this, gravity winds
+      // toward terminal velocity while the capsule scrapes the surface at a
+      // glancing angle — the huge downward sweep both punches the player
+      // through the terrain trimesh and gets deflected into sideways drift.
+      if (nearGround && verticalVelocity.current < SLIDE_FALL_CLAMP) {
         verticalVelocity.current = SLIDE_FALL_CLAMP;
       }
 
-      // Jump — not while sliding on an unclimbable slope
-      if (jump && grounded && !onSlideSlope) {
+      // Jump — not while sliding on an unclimbable slope. Uses the ray-based
+      // support too, so a flickered grounded flag can't eat a jump input.
+      if (jump && (grounded || walkableSupport) && !onSlideSlope && verticalVelocity.current <= 0) {
         verticalVelocity.current = JUMP_IMPULSE;
       }
 

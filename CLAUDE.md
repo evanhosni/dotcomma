@@ -301,19 +301,40 @@ src/
     Player.tsx         # First-person controller + physics. SLOPES are three
                        #   bands, not a hard stop: ≤25° full speed; 25–45° the
                        #   UPHILL input component scales smoothly to 0 (contour/
-                       #   downhill unaffected; ~half speed around 35°); >45°
-                       #   unclimbable — the player
+                       #   downhill unaffected); >40° (SLOPE_SLIDE_ANGLE, also the
+                       #   Rapier climb wall) unclimbable. The slide angle is
+                       #   DECOUPLED from the slowdown band and set from a MEASURED
+                       #   slope distribution (LOD1 collider resolution, grassland):
+                       #   natural terrain tops out at ~47° — median 25.6°, p99
+                       #   42.6°, >45° is 0.17% of area and >50° NONE, and
+                       #   capsule-solid steep spots (not one-triangle slivers)
+                       #   number 257 per 600×600 patch at 40° vs 15 at 45°. 55°
+                       #   was tried and REJECTED as UNREACHABLE (sliding stopped
+                       #   happening at all); re-measure before retuning. Responses
+                       #   require PERSISTENCE (slowdown 0.1s, slide 0.15s) via
+                       #   LEAKY timers (decay 2×, saturate at 2× the delay):
+                       #   flatten-pad edges + heightfield slivers are tiny steep
+                       #   faces that otherwise flicker them on every step, while
+                       #   the leak keeps bumpy-but-steep ground engaged — the player
                        #   slides down the fall line (gravity-tangent accel, capped,
                        #   momentum decays on walkable ground, no jump mid-slide).
+                       #   GRAVITY/JUMP support = computedGrounded OR the ray within
+                       #   snap distance of walkable ground (walkableSupport): the
+                       #   flag alone flickers on heightfields, gravity then
+                       #   integrated WITHOUT reset toward terminal velocity, and the
+                       #   KCC deflected that huge downward sweep along even 2–3°
+                       #   slopes into permanent horizontal drift ("always sliding no
+                       #   matter how flat") while snap kept the capsule glued. The
+                       #   near-ground fall clamp also bounds it. Do not gate support
+                       #   on the flag alone.
                        #   Ground normal from a per-frame downward raycast (NOT gated
                        #   on computedGrounded — that flag flickers false on steep
                        #   surfaces) with SLOPE-ADAPTIVE reach (surface sits 1/cos(θ)
                        #   below the capsule center on inclines; a fixed feet-length
                        #   reach missed the ground beyond ~55°, so the slide never
-                       #   engaged and jumping stayed possible exactly there); the
-                       #   Rapier controller's climb limit sits at the 45° hard wall. FALL-THROUGH DEFENSES (kinematic capsule vs
+                       #   engaged and jumping stayed possible exactly there). FALL-THROUGH DEFENSES (kinematic capsule vs
                        #   terrain trimesh tunneling — do not weaken): fall speed
-                       #   clamped while riding an unclimbable slope (terminal-velocity
+                       #   clamped near ANY ground (terminal-velocity
                        #   scrape at a glancing angle punches through triangles), the
                        #   KCC solve is SUBSTEPPED to ≤ ~capsule-radius sweeps (with
                        #   propagateModifiedBodyPositionsToColliders between substeps),
