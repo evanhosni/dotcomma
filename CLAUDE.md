@@ -302,8 +302,11 @@ src/
                        #   momentum decays on walkable ground, no jump mid-slide).
                        #   Ground normal from a per-frame downward raycast (NOT gated
                        #   on computedGrounded — that flag flickers false on steep
-                       #   surfaces); the Rapier controller's climb limit sits at the
-                       #   45° hard wall. FALL-THROUGH DEFENSES (kinematic capsule vs
+                       #   surfaces) with SLOPE-ADAPTIVE reach (surface sits 1/cos(θ)
+                       #   below the capsule center on inclines; a fixed feet-length
+                       #   reach missed the ground beyond ~55°, so the slide never
+                       #   engaged and jumping stayed possible exactly there); the
+                       #   Rapier controller's climb limit sits at the 45° hard wall. FALL-THROUGH DEFENSES (kinematic capsule vs
                        #   terrain trimesh tunneling — do not weaken): fall speed
                        #   clamped while riding an unclimbable slope (terminal-velocity
                        #   scrape at a glancing angle punches through triangles), the
@@ -320,7 +323,13 @@ src/
                        #   ground is per-chunk heightfields swapped during LOD
                        #   changes, so sweep hardening alone can never close every
                        #   timing hole — the backstop is what actually guarantees no
-                       #   fall-through
+                       #   fall-through. STUCK ESCAPE (the shallow sibling of
+                       #   fall-through — capsule wedged slightly INSIDE the surface,
+                       #   under the backstop tolerance, every sweep returns ~zero):
+                       #   sustained input with ~no resulting movement for ~0.2s
+                       #   triggers an analytic-height check; even slightly below the
+                       #   surface → lift exactly onto it; not embedded (wall push) →
+                       #   back off and re-check later
     useInput.tsx       # Keyboard input
   utils/
     utils.ts           # getAllBiomes, getDistance2D (plain exports)
