@@ -19,7 +19,7 @@ const GRID_STEP = 2; // world units between terrain samples
 const MAX_BLADES_PER_CHUNK = 16384;
 const BLADE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
 
-// ── Inline params type (mirrors GrassChunkParams in objects/vegetation/grassWorker.ts) ──
+// ── Inline params type (mirrors GrassChunkParams in foliage/grass/grassWorker.ts) ──
 
 interface GrassChunkParams {
   seed: string;

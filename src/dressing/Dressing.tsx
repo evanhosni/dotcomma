@@ -11,8 +11,9 @@ import { TaskQueue } from "../utils/task-queue/TaskQueue";
  * components, no per-object state. Placement is enumerated OFF-THREAD in
  * workers/cityDressing.worker.ts (via dressingWorker.ts) and rendered as one
  * InstancedMesh (or a few) per chunk. Objects with their own identity,
- * state, or interaction belong to the other class — ACTORS (see
- * src/world/components/Actor.tsx).
+ * state, or interaction are ACTORS (src/world/components/Actor.tsx); mass
+ * GPU vegetation at thousands-per-chunk scale is FOLIAGE
+ * (src/foliage/Foliage.tsx) — it deliberately does not build on this base.
  *
  * A dressing feature component is expected to contain ONLY its unique
  * logic: which points to fetch, its geometry/materials, and (rarely) a
