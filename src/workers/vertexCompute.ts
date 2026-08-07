@@ -68,6 +68,24 @@ export interface WorldConfig {
     triangleChance: number; // probability a super-cell is split by a diagonal road
     roundaboutChance: number; // probability a super-cell is a circular block + ring road
   };
+  /** Actors with flattenGround: true — the terrain flattens a PAD under each
+   *  deterministic instance (see the flatten-pad engine below). */
+  flattenDescriptors?: FlattenDescriptor[];
+}
+
+/** Serialized placement rules of a flattenGround actor — enough to replicate
+ *  its spawn candidates deterministically inside the height function. */
+export interface FlattenDescriptor {
+  id: string;
+  density: number;
+  clustering: number;
+  footprint: number;
+  priority: number;
+  biomeIds?: number[];
+  heightRange?: [number, number];
+  roadDistanceRange?: [number, number];
+  radius: number; // flat pad radius around the instance
+  skirt: number; // blend ring width back to the raw terrain
 }
 
 export interface VertexResult {
@@ -396,14 +414,18 @@ const cityBlockElevation = (
 
 interface CityTerrain {
   dist: number; // distance to the nearest road centerline, in street units (0 = on it)
-  elevation: number; // plateau height incl. road ramps + curb dip
+  elevation: number; // height RELATIVE to the smooth base: plateau + road ramps +
+  //   curb dip (computeVertexData adds the base back). Flat footing for
+  //   buildings comes from the generic flatten-ground PADS, not from leveling
+  //   blocks (whole-block leveling was tried and REVERTED in favor of pads —
+  //   pads work in every biome).
   paintDist: number; // REAL distance to the nearest freeway centerline (paint channel)
   paintAlong: number; // dash-phase coordinate along that freeway
 }
 
-// Ramps between block plateaus start this far inside the road edge, so the
-// curb line and sidewalk always sit flat at their block's height.
-const CITY_RAMP_INSET = 2;
+// Ramps between block plateaus extend this far BEYOND the road half-width on
+// each side (across the sidewalk) — the wide span keeps street grades gentle.
+const CITY_RAMP_SPAN = 4;
 
 // Scale of the pairwise chamfer/melt constraint: road-edge along the cut
 // sits at dᵢ + dⱼ = roadWidth / scale (≈ 28.6u span at 0.35) — corners get
@@ -989,11 +1011,12 @@ const getCityTerrain = (
 
   // ── Plateau elevation ──
   // Bilinear plateau interpolation toward the neighbors the vertex leans
-  // into: flat through the block interior, ramping only within the inner
-  // (roadWidth − inset) span of a cell boundary, and only where labels differ
-  // (same label → same height → no seam). In-cell features and freeways
-  // don't move plateaus — they just carve road surface across flat tops.
-  const rampFrac = Math.max(city.roadWidth - CITY_RAMP_INSET, 1) / gs;
+  // into: ramping only where labels differ (same label → same height → no
+  // seam). Heights are RELATIVE to the regional base, which the whole city
+  // rides smoothly; flat building footing comes from the flatten-ground
+  // PADS, not from leveling blocks. The ramp span covers street AND
+  // sidewalk (roadWidth + CITY_RAMP_SPAN each side) for gentle grades.
+  const rampFrac = (city.roadWidth + CITY_RAMP_SPAN) / gs;
   const flatEdge = 0.5 - rampFrac;
   const fx = lx / gs - (ix + 0.5); // [-0.5, 0.5] across the cell
   const fy = ly / gs - (iy + 0.5);
@@ -1106,6 +1129,283 @@ const getCityTerrain = (
 };
 
 // ══════════════════════════════════════════════════════════════════════
+// Flatten-ground pads (actors with flattenGround: true)
+// ══════════════════════════════════════════════════════════════════════
+// Buildings — and future houses in ANY biome — need flat footing without
+// biome-specific terrain hacks: each flatten-enabled actor gets a terrain
+// PAD, flat at the actor's raw ground height inside `radius` and blending
+// back to the raw terrain over `skirt`.
+//
+// The chicken-and-egg (spawn points come from terrain height; terrain now
+// depends on spawn points) is resolved by making flatten-actor placement
+// FULLY DETERMINISTIC and having BOTH consumers use this one function:
+//   - candidates roll the exact same seeds/filters as spawn.worker's
+//     density algorithm (filters evaluate against the RAW, pad-free height —
+//     guarded against recursion);
+//   - spacing is a stateless greedy over a CANONICAL TILE window (all
+//     flatten descriptors together, ordered by priority → descriptor → cell,
+//     candidate rejected within its own footprint of any accepted point) —
+//     NOT the spawn worker's stateful spatial hash, which is chunk-visit-
+//     order dependent and unreproducible here;
+//   - spawn.worker sources these actors' points FROM getFlattenPoints, so
+//     every spawned instance sits exactly on a pad, and there are no vacant
+//     pads.
+
+const FLATTEN_TILE = 128; // world units per canonical placement tile
+// Spacing rounds: 1 round = Matérn II (~45% of greedy packing); 4 rounds
+// converge to greedy-level density while staying window-consistent.
+const FLATTEN_SPACING_ROUNDS = 4;
+
+interface FlattenCandidate {
+  x: number;
+  z: number;
+  y: number;
+  biomeId: number;
+  descIndex: number;
+  gx: number;
+  gz: number;
+}
+
+export interface FlattenPoint {
+  x: number;
+  z: number;
+  y: number; // raw ground height at the center = the pad height
+  biomeId: number;
+  descId: string;
+  radius: number;
+  skirt: number;
+}
+
+const flattenTileCache = new Map<string, FlattenPoint[]>();
+// Adjacent tiles' padded windows overlap by the spacing pad — the boundary
+// cells' candidates (each costing a RAW computeVertexData) would otherwise be
+// re-evaluated for every neighboring tile (~2.2× duplication at city
+// densities). null = rolled/filtered out.
+const flattenCandCache = new Map<string, FlattenCandidate | null>();
+let flattenReach = 0; // max(radius + skirt) — vertex lookup reach
+let flattenSpacingPad = 0; // max footprint — spacing window pad
+let flattenBiomes: Set<number> | null = null; // union of descs' biomeIds; null = unrestricted
+let computingFlatten = false; // recursion guard: candidate filters use RAW height
+
+/** Vertex data WITHOUT flatten pads — for sparse scans (tests, probes) that
+ *  would otherwise trigger a full pad-tile computation per lonely sample. */
+export function computeVertexDataRaw(x: number, z: number): VertexResult {
+  computingFlatten = true;
+  try {
+    return computeVertexData(x, z);
+  } finally {
+    computingFlatten = false;
+  }
+}
+
+/** All accepted flatten points whose CENTER lies in the given tile.
+ *  Canonical: candidates are gathered over the tile padded by the max
+ *  footprint and greedily spaced in a fixed order, so every caller (terrain
+ *  vertices, spawn worker, tests) sees the identical set. */
+const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
+  const key = `${tx},${tz}`;
+  const hit = flattenTileCache.get(key);
+  if (hit) return hit;
+  if (flattenTileCache.size > 2048) flattenTileCache.clear();
+
+  const minX = tx * FLATTEN_TILE;
+  const minZ = tz * FLATTEN_TILE;
+  const maxX = minX + FLATTEN_TILE;
+  const maxZ = minZ + FLATTEN_TILE;
+  const pMinX = minX - flattenSpacingPad;
+  const pMinZ = minZ - flattenSpacingPad;
+  const pMaxX = maxX + flattenSpacingPad;
+  const pMaxZ = maxZ + flattenSpacingPad;
+
+  const descs = cfg!.flattenDescriptors!;
+  const candidates: FlattenCandidate[] = [];
+  computingFlatten = true;
+  try {
+    for (let di = 0; di < descs.length; di++) {
+      const desc = descs[di];
+      // EXACTLY the spawn.worker density algorithm (same seeds), minus the
+      // stateful spacing hash.
+      const cellSize = Math.sqrt(1_000_000 / desc.density);
+      const gx0 = Math.floor(pMinX / cellSize);
+      const gx1 = Math.floor(pMaxX / cellSize);
+      const gz0 = Math.floor(pMinZ / cellSize);
+      const gz1 = Math.floor(pMaxZ / cellSize);
+      const probability = (desc.density * cellSize * cellSize) / 1_000_000;
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          const candKey = `${di}:${gx},${gz}`;
+          const cached = flattenCandCache.get(candKey);
+          if (cached !== undefined) {
+            if (cached !== null) candidates.push(cached);
+            continue;
+          }
+          if (flattenCandCache.size > 65536) flattenCandCache.clear();
+
+          const seed = `${desc.id}_${gx}_${gz}`;
+          const rand = seedRand(seed);
+          let cand: FlattenCandidate | null = null;
+          if (!(desc.clustering > 0 && seedRand(`cluster_${desc.id}_${gx}_${gz}`) < desc.clustering * 0.7)) {
+            const x = gx * cellSize + seedRand(seed + "_x") * cellSize;
+            const z = gz * cellSize + seedRand(seed + "_z") * cellSize;
+            if (rand <= probability) {
+              const vd = computeVertexData(x, z); // RAW (computingFlatten guard)
+              const passes =
+                (!desc.biomeIds || desc.biomeIds.length === 0 || desc.biomeIds.includes(vd.biomeId)) &&
+                (!desc.heightRange ||
+                  (vd.height >= desc.heightRange[0] && vd.height <= desc.heightRange[1])) &&
+                (!desc.roadDistanceRange ||
+                  (vd.distanceToRoadCenter >= desc.roadDistanceRange[0] &&
+                    vd.distanceToRoadCenter <= desc.roadDistanceRange[1]));
+              if (passes) {
+                cand = { x, z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
+              }
+            }
+          }
+          flattenCandCache.set(candKey, cand);
+          if (cand !== null) candidates.push(cand);
+        }
+      }
+    }
+  } finally {
+    computingFlatten = false;
+  }
+
+  // Deterministic total order, then ITERATED LOCAL spacing (Matérn-II
+  // rounds): within a round, a candidate is rejected when any earlier-ordered
+  // POOL member sits within its own footprint — a purely local rule, so
+  // every tile computes identical results (greedy against ACCEPTED points
+  // was tried and REJECTED: acceptance chains propagate beyond any fixed
+  // window and neighboring tiles disagreed). A single round saturates at
+  // ~45% of greedy packing though — candidates blocked by other REJECTED
+  // candidates stay empty — so rejected-but-viable candidates re-enter for
+  // FLATTEN_SPACING_ROUNDS rounds against the actual winners, converging to
+  // greedy-level density. Locality: round k decisions depend on ≤ k×footprint
+  // neighborhoods, covered by the spacing window pad (ROUNDS × footprint).
+  candidates.sort((a, b) => {
+    const pa = descs[a.descIndex].priority;
+    const pb = descs[b.descIndex].priority;
+    if (pa !== pb) return pa - pb;
+    if (a.descIndex !== b.descIndex) return a.descIndex - b.descIndex;
+    if (a.gz !== b.gz) return a.gz - b.gz;
+    return a.gx - b.gx;
+  });
+  const accepted: FlattenCandidate[] = [];
+  let pool = candidates;
+  for (let round = 0; round < FLATTEN_SPACING_ROUNDS && pool.length > 0; round++) {
+    // Drop pool members blocked by prior rounds' winners — permanently out.
+    if (round > 0) {
+      pool = pool.filter((c) => {
+        const fp = descs[c.descIndex].footprint;
+        const fpSq = fp * fp;
+        for (let i = 0; i < accepted.length; i++) {
+          const dx = c.x - accepted[i].x;
+          const dz = c.z - accepted[i].z;
+          if (dx * dx + dz * dz < fpSq) return false;
+        }
+        return true;
+      });
+    }
+    // Matérn II within the round's pool.
+    const winners: FlattenCandidate[] = [];
+    for (let ci = 0; ci < pool.length; ci++) {
+      const c = pool[ci];
+      const fp = descs[c.descIndex].footprint;
+      const fpSq = fp * fp;
+      let blocked = false;
+      for (let j = 0; j < ci; j++) {
+        const dx = c.x - pool[j].x;
+        const dz = c.z - pool[j].z;
+        if (dx * dx + dz * dz < fpSq) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) winners.push(c);
+    }
+    accepted.push(...winners);
+    const winSet = new Set(winners);
+    pool = pool.filter((c) => !winSet.has(c));
+  }
+
+  const points: FlattenPoint[] = [];
+  for (const c of accepted) {
+    if (c.x < minX || c.x >= maxX || c.z < minZ || c.z >= maxZ) continue; // tile ownership
+    const desc = descs[c.descIndex];
+    points.push({
+      x: c.x,
+      z: c.z,
+      y: c.y,
+      biomeId: c.biomeId,
+      descId: desc.id,
+      radius: desc.radius,
+      skirt: desc.skirt,
+    });
+  }
+  flattenTileCache.set(key, points);
+  return points;
+};
+
+/** Flatten points with centers inside the bounds (spawn.worker sources
+ *  flattenGround actors' spawn points from this). */
+export function getFlattenPoints(
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number
+): FlattenPoint[] {
+  if (!cfg || !cfg.flattenDescriptors || cfg.flattenDescriptors.length === 0) return [];
+  const out: FlattenPoint[] = [];
+  const tx0 = Math.floor(minX / FLATTEN_TILE);
+  const tx1 = Math.floor((maxX - 0.001) / FLATTEN_TILE);
+  const tz0 = Math.floor(minZ / FLATTEN_TILE);
+  const tz1 = Math.floor((maxZ - 0.001) / FLATTEN_TILE);
+  for (let tx = tx0; tx <= tx1; tx++) {
+    for (let tz = tz0; tz <= tz1; tz++) {
+      for (const p of flattenTilePoints(tx, tz)) {
+        if (p.x >= minX && p.x < maxX && p.z >= minZ && p.z < maxZ) out.push(p);
+      }
+    }
+  }
+  return out;
+}
+
+/** Blend the height toward any overlapping pads (flat inside radius,
+ *  smoothstep back to the raw terrain across the skirt). Influences apply in
+ *  ASCENDING mask order so the dominant pad lands last: at dense packing a
+ *  neighbor's skirt can reach into a pad's flat zone, and unordered
+ *  application let it tilt the footing buildings stand on. */
+const flattenInfluences: { y: number; mask: number }[] = [];
+const applyFlattenPads = (x: number, z: number, height: number): number => {
+  flattenInfluences.length = 0;
+  const tx0 = Math.floor((x - flattenReach) / FLATTEN_TILE);
+  const tx1 = Math.floor((x + flattenReach) / FLATTEN_TILE);
+  const tz0 = Math.floor((z - flattenReach) / FLATTEN_TILE);
+  const tz1 = Math.floor((z + flattenReach) / FLATTEN_TILE);
+  for (let tx = tx0; tx <= tx1; tx++) {
+    for (let tz = tz0; tz <= tz1; tz++) {
+      const points = flattenTilePoints(tx, tz);
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i];
+        const dx = x - p.x;
+        const dz = z - p.z;
+        const reach = p.radius + p.skirt;
+        const dSq = dx * dx + dz * dz;
+        if (dSq >= reach * reach) continue;
+        const mask = 1 - smoothstepVal(p.radius, reach, Math.sqrt(dSq));
+        flattenInfluences.push({ y: p.y, mask });
+      }
+    }
+  }
+  if (flattenInfluences.length > 1) {
+    flattenInfluences.sort((a, b) => a.mask - b.mask || a.y - b.y);
+  }
+  for (let i = 0; i < flattenInfluences.length; i++) {
+    height += (flattenInfluences[i].y - height) * flattenInfluences[i].mask;
+  }
+  return height;
+};
+
+// ══════════════════════════════════════════════════════════════════════
 // Main Pipeline
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1113,6 +1413,22 @@ let cfg: WorldConfig | null = null;
 
 export function initCompute(config: WorldConfig): void {
   cfg = config;
+  flattenTileCache.clear();
+  flattenCandCache.clear();
+  flattenReach = 0;
+  flattenSpacingPad = 0;
+  flattenBiomes = new Set<number>();
+  for (const d of config.flattenDescriptors ?? []) {
+    flattenReach = Math.max(flattenReach, d.radius + d.skirt);
+    // Round-k spacing decisions depend on ≤ k×footprint neighborhoods.
+    flattenSpacingPad = Math.max(flattenSpacingPad, d.footprint * FLATTEN_SPACING_ROUNDS);
+    if (d.biomeIds && d.biomeIds.length > 0) {
+      for (const b of d.biomeIds) flattenBiomes.add(b);
+    } else {
+      flattenBiomes = null; // an unrestricted descriptor — pads possible anywhere
+    }
+    if (flattenBiomes === null) break;
+  }
 }
 
 const regionGridFn = (point: Vec2, regions: SerializedRegion[]) => {
@@ -1174,7 +1490,9 @@ export function computeVertexData(x: number, z: number): VertexResult {
   const blend =
     Math.min(blendWidth, Math.max(distanceToBiomeBoundary - cfg.boundaryWidth, 0)) / blendWidth;
 
-  // Step 4: Biome height
+  // Step 4: Biome height (baseHeight computed once — the city branch levels
+  // its blocks against it, and step 5 adds it to every biome)
+  const baseHeight = terrainNoise(cfg.baseNoiseParams, x, z);
   let biomeHeight = 0;
   let distanceToRoadCenter = distanceToBiomeBoundary;
   let distanceToFreewayCenter = 99999;
@@ -1198,20 +1516,32 @@ export function computeVertexData(x: number, z: number): VertexResult {
       distanceToRoadCenter = Math.min(city.dist, distanceToRiver);
       distanceToFreewayCenter = city.paintDist;
       freewayAlong = city.paintAlong;
-      // The city RIDES the regional base noise: plateaus/roads/curbs are all
-      // RELATIVE offsets on top of the standard base terrain, so cities sit
-      // at varied elevations and undulate gently with the region. (The base
-      // used to be CANCELLED here, pinning every city to ~height 0 — rejected:
-      // the whole map's cities sat at sea level, and the rim had to jump from
-      // regional height down to zero.) Base noise is LOW-frequency (scale
-      // 5000), so block-scale slopes stay small; blends smoothly into the
-      // neighboring biome at the boundary.
+      // The city RIDES the regional base noise: cities sit at varied
+      // elevations following the region, with plateaus/roads/curbs as
+      // RELATIVE offsets on top (base added in step 5). Flat building
+      // footing comes from the flatten-ground PADS applied below — NOT from
+      // cancelling the base (every city at ~height 0 — rejected) or leveling
+      // whole blocks (city-only mechanism — rejected in favor of pads that
+      // work in every biome).
       biomeHeight = city.elevation * blend * riverFade;
     }
   }
 
   // Step 5: Base noise
-  const height = biomeHeight + terrainNoise(cfg.baseNoiseParams, x, z);
+  let height = biomeHeight + baseHeight;
+
+  // Step 6: flatten-ground pads (skipped while evaluating pad candidates —
+  // their filters and pad heights are defined against the RAW terrain — and
+  // skipped entirely in biomes no flatten descriptor targets, so pad tiles
+  // are only ever computed where pads can exist)
+  if (
+    !computingFlatten &&
+    cfg.flattenDescriptors &&
+    cfg.flattenDescriptors.length > 0 &&
+    (flattenBiomes === null || flattenBiomes.has(biome.id))
+  ) {
+    height = applyFlattenPads(x, z, height);
+  }
 
   return {
     height,
@@ -1620,7 +1950,10 @@ export function getCityVoronoiSites(
         wx = site.x - terrainNoise(cfg.roadNoiseParams, wz, 0);
         wz = site.y - terrainNoise(cfg.roadNoiseParams, wx, 0);
       }
-      out.push({ key: `${ix},${iy}`, x: wx, y: computeVertexData(wx, wz).height, z: wz });
+      // RAW height: the site feeds a beacon floating heightOffset above the
+      // ground — flatten-pad deltas are irrelevant, and the padded path
+      // would compute pad tiles for every site.
+      out.push({ key: `${ix},${iy}`, x: wx, y: computeVertexDataRaw(wx, wz).height, z: wz });
     }
   }
 

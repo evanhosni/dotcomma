@@ -1,7 +1,6 @@
 import {
-  CitySitePoint,
   computeVertexData,
-  getCityVoronoiSites,
+  computeVertexDataRaw,
   initCompute,
   VertexResult,
 } from "../workers/vertexCompute";
@@ -33,15 +32,14 @@ export const getVertexData = async (x: number, y: number): Promise<VertexResult>
   return computeVertexData(x, y);
 };
 
-/** Voronoi site point (one per city-biome cell) within the bounds — the
- *  seeded center of each city, in real world coordinates (used by the
- *  CityLights visual component). */
-export const getCityLightSites = async (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number
-): Promise<CitySitePoint[]> => {
+/** PAD-FREE vertex data for FREQUENT main-thread callers (player ground
+ *  checks): the padded path computes flatten-pad tiles synchronously — a
+ *  ~30–70ms hitch per new city tile the player walks into. Pads sit ABOVE
+ *  the raw terrain, so below-raw-surface checks (embed rescue, fall-through
+ *  backstop) stay sound. One-off callers (respawn) should keep the padded
+ *  getVertexData. */
+export const getVertexDataRaw = async (x: number, y: number): Promise<VertexResult> => {
   await ensureInit();
-  return getCityVoronoiSites(minX, minZ, maxX, maxZ);
+  return computeVertexDataRaw(x, y);
 };
+

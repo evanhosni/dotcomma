@@ -12,7 +12,7 @@
  *   OUT: { type: "CHUNK_BUILT", id, heights, biomeIds, distBiome, distRegion, distRoad }
  */
 
-import { WorldConfig, initCompute, computeVertexData } from "./vertexCompute";
+import { WorldConfig, initCompute, computeVertexData, computeVertexDataRaw } from "./vertexCompute";
 
 let initialized = false;
 
@@ -32,8 +32,11 @@ self.onmessage = (e: MessageEvent) => {
       return;
     }
 
-    const { id, vertexX, vertexY, offsetX, offsetZ } = e.data;
+    const { id, vertexX, vertexY, offsetX, offsetZ, skipPads } = e.data;
     const count: number = vertexX.length;
+    // Far visual-only LODs skip flatten pads (sub-vertex-spacing features;
+    // computing their tiles exploded far city chunk builds).
+    const compute = skipPads ? computeVertexDataRaw : computeVertexData;
 
     const heights = new Float32Array(count);
     const biomeIds = new Float32Array(count);
@@ -44,7 +47,7 @@ self.onmessage = (e: MessageEvent) => {
     const freewayAlong = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
-      const result = computeVertexData(vertexX[i] + offsetX, -vertexY[i] + offsetZ);
+      const result = compute(vertexX[i] + offsetX, -vertexY[i] + offsetZ);
       heights[i] = result.height;
       biomeIds[i] = result.biomeId;
       distBiome[i] = result.distanceToBiomeBoundaryCenter;

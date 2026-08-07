@@ -1,10 +1,9 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { CitySitePoint, getCityLightSites } from "../../dressing/dressingWorker";
 import { getNightBlend } from "../../sky/dayNight";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
-import { CitySitePoint } from "../../workers/vertexCompute";
-import { getCityLightSites } from "../../world/vertexData";
 
 // Fixed pool size — the scene's light count must stay constant from first
 // frame onward (see IndoorLightRig: a varying light count forces a full
@@ -14,8 +13,10 @@ const POOL_SIZE = 6;
 const PARK_Y = -1e6;
 const RESCAN_DISTANCE = 200; // camera travel between site scans
 
-// Site scans run computeVertexData per city site on the main thread —
-// budgeted through a queue like the road markers.
+// Site scans run in the dressing WORKER (they used to run computeVertexData
+// per site on the main thread — with flatten pads, each site could compute a
+// pad tile synchronously: a periodic lag spike every RESCAN_DISTANCE of
+// roaming). The queue just serializes scan requests.
 const scanQueue = new TaskQueue();
 
 export interface CityLightsProps {

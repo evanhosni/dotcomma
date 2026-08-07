@@ -7,9 +7,11 @@
 import { DEFAULT_WORLD_TERRAIN_PARAMS } from "../world/registry";
 import {
   computeVertexData,
+  computeVertexDataRaw,
   getCityFreewaySidePoints,
   getCityRoadMarkers,
   getCityTrafficLightPoints,
+  getFlattenPoints,
   initCompute,
   WorldConfig,
 } from "./vertexCompute";
@@ -41,28 +43,65 @@ const config: WorldConfig = {
   baseNoiseParams: P.baseNoise,
   biomeNoiseConfigs: {},
   cityConfig: P.cityConfig,
+  // Mirrors BuildingDescriptor's placement rules (flattenGround: true) plus
+  // the grass-biome country building.
+  flattenDescriptors: [
+    {
+      id: "building",
+      density: 3800,
+      clustering: 0,
+      footprint: 30,
+      priority: 55,
+      biomeIds: [1],
+      roadDistanceRange: [23, 99999],
+      radius: 13.5,
+      skirt: 10.5,
+    },
+    {
+      id: "grass-building",
+      density: 25,
+      clustering: 0,
+      footprint: 30,
+      priority: 55,
+      biomeIds: [3],
+      roadDistanceRange: [23, 99999],
+      radius: 13.5,
+      skirt: 10.5,
+    },
+  ],
 };
 
 const key = (p: { x: number; z: number }) => `${p.x.toFixed(3)}|${p.z.toFixed(3)}`;
 
-/** Center of a reasonably deep city area (found by coarse scan). */
+/** Center of a reasonably deep city area / grass area (found by coarse scan). */
 let cx = 0;
 let cz = 0;
+let gx = 0;
+let gz = 0;
 
 beforeAll(() => {
   initCompute(config);
   let best = -Infinity;
+  let bestGrass = -Infinity;
   for (let x = -6000; x <= 6000; x += 200) {
     for (let z = -6000; z <= 6000; z += 200) {
-      const vd = computeVertexData(x, z);
+      // Raw variant: a coarse world scan would otherwise compute a pad tile
+      // per lonely sample.
+      const vd = computeVertexDataRaw(x, z);
       if (vd.biomeId === 1 && vd.distanceToBiomeBoundaryCenter > best) {
         best = vd.distanceToBiomeBoundaryCenter;
         cx = x;
         cz = z;
       }
+      if (vd.biomeId === 3 && vd.distanceToBiomeBoundaryCenter > bestGrass) {
+        bestGrass = vd.distanceToBiomeBoundaryCenter;
+        gx = x;
+        gz = z;
+      }
     }
   }
   expect(best).toBeGreaterThan(100); // found a city interior to test in
+  expect(bestGrass).toBeGreaterThan(100); // and a grass interior
 });
 
 describe("getCityTrafficLightPoints", () => {
@@ -98,6 +137,69 @@ describe("getCityTrafficLightPoints", () => {
 
   it("respects the chance roll (0 → nothing)", () => {
     expect(getCityTrafficLightPoints(cx - R, cz - R, cx + R, cz + R, 0)).toHaveLength(0);
+  });
+});
+
+describe("flatten-ground pads", () => {
+  it("terrain is flat under every flatten-ground instance, at its exact spawn height", () => {
+    const points = getFlattenPoints(cx - 400, cz - 400, cx + 400, cz + 400);
+    expect(points.length).toBeGreaterThan(0);
+
+    for (const p of points.slice(0, 5)) {
+      const h0 = computeVertexData(p.x, p.z).height;
+      // The pad height IS the point's spawn height — actors sit exactly on it.
+      expect(h0).toBeCloseTo(p.y, 3);
+      // Flat across the pad radius.
+      const r = p.radius * 0.7;
+      for (const [dx, dz] of [
+        [r, 0],
+        [-r, 0],
+        [0, r],
+        [0, -r],
+        [r * 0.7, r * 0.7],
+      ]) {
+        expect(computeVertexData(p.x + dx, p.z + dz).height).toBeCloseTo(h0, 2);
+      }
+    }
+  });
+
+  it("pads work in ANY biome — grass-biome buildings level the rolling terrain", () => {
+    const points = getFlattenPoints(gx - 500, gz - 500, gx + 500, gz + 500).filter(
+      (p) => p.descId === "grass-building"
+    );
+    expect(points.length).toBeGreaterThan(0);
+    const p = points[0];
+    const h0 = computeVertexData(p.x, p.z).height;
+    expect(h0).toBeCloseTo(p.y, 3);
+    const r = p.radius * 0.7;
+    for (const [dx, dz] of [
+      [r, 0],
+      [-r, 0],
+      [0, r],
+      [0, -r],
+    ]) {
+      expect(computeVertexData(p.x + dx, p.z + dz).height).toBeCloseTo(h0, 2);
+    }
+  });
+
+  it("points are deterministic and duplicate-free across bounds splits", () => {
+    const R = 256;
+    const whole = getFlattenPoints(cx - R, cz - R, cx + R, cz + R);
+    const parts = [
+      ...getFlattenPoints(cx - R, cz - R, cx, cz),
+      ...getFlattenPoints(cx, cz - R, cx + R, cz),
+      ...getFlattenPoints(cx - R, cz, cx, cz + R),
+      ...getFlattenPoints(cx, cz, cx + R, cz + R),
+    ];
+    expect(parts.map(key).sort()).toEqual(whole.map(key).sort());
+    expect(new Set(parts.map(key)).size).toBe(parts.length);
+    // Spacing: no two points within the descriptor footprint.
+    for (let i = 0; i < whole.length; i++) {
+      for (let j = i + 1; j < whole.length; j++) {
+        const d = Math.hypot(whole[i].x - whole[j].x, whole[i].z - whole[j].z);
+        expect(d).toBeGreaterThanOrEqual(30);
+      }
+    }
   });
 });
 

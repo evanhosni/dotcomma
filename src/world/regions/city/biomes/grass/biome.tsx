@@ -1,6 +1,7 @@
+import { BuildingActor } from "../../../../../actors/building/actor";
 import { Foliage } from "../../../../../foliage/Foliage";
 import { GrassField } from "../../../../../foliage/grass/GrassField";
-import { Biome, Material, Terrain } from "../../../../components";
+import { Actors, Biome, Material, Terrain } from "../../../../components";
 import { getMaterial } from "./material";
 
 export const CITY_GRASS_BIOME_ID = 3;
@@ -25,6 +26,13 @@ export const CityGrassBiome = () => (
       }}
     />
     <Material getMaterial={getMaterial} />
+    <Actors>
+      {/* Sparse country buildings — flattenGround pads level the rolling
+          terrain under each one. Distinct id: "building" belongs to the city
+          registration and descriptors dedupe by id. (Kept in sync with the
+          grass region's duplicate of this biome.) */}
+      <BuildingActor id="grass-building" biomeIds={[CITY_GRASS_BIOME_ID]} density={25} />
+    </Actors>
     <Foliage renderDistance={1000}>
       <GrassField
         density={8000000}
