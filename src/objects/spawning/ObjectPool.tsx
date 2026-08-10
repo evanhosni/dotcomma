@@ -109,7 +109,7 @@ export const ObjectPool = () => {
   const dirtyRef = useRef(false);
 
   const { camera } = useThree();
-  const { terrain_loaded, progress, terrainHighLODPending, spawnPending } = useGameContext();
+  const { terrain_loaded, progress, terrainHighLODPending } = useGameContext();
 
   // Collect all spawn descriptors from the active world (registered by
   // <Actor> components; mounted by <World> after the first commit)
@@ -207,7 +207,6 @@ export const ObjectPool = () => {
     if (descriptors.length === 0) return;
 
     isGeneratingRef.current = true;
-    spawnPending.current = true;
     const wasDirty = dirtyRef.current;
     dirtyRef.current = false;
 
@@ -302,7 +301,6 @@ export const ObjectPool = () => {
       console.error("Error in spawn generation:", error);
     } finally {
       isGeneratingRef.current = false;
-      spawnPending.current = false;
     }
   }, [
     camera,
@@ -313,7 +311,6 @@ export const ObjectPool = () => {
     maxDespawnRadius,
     cleanupDespawnLedger,
     sweepOutOfRange,
-    spawnPending,
   ]);
 
   useFrame(() => {
@@ -325,9 +322,8 @@ export const ObjectPool = () => {
     // Gate 2: Minimum frames between spawn batches
     if (frameCountRef.current - lastBatchFrameRef.current < MIN_FRAMES_BETWEEN_BATCHES) return;
 
-    // Gate 3: Only defer to HIGH-RES terrain (LOD1/2), not all terrain.
-    // Low-LOD terrain (LOD3-5) defers to US via spawnPending.
-    // The deference is time-boxed: a player outrunning terrain keeps LOD1/2
+    // Gate 3: Defer to HIGH-RES terrain (LOD1/2) only — distant coarse terrain
+    // has no claim on us. Time-boxed: a player outrunning terrain keeps LOD1/2
     // permanently pending, and an indefinitely starved pool never evicts its
     // caches and then floods the frame it finally runs.
     if (terrainHighLODPending.current) {

@@ -106,11 +106,6 @@ const terrain: TerrainProps = {
 
 let queueDirty = false;
 
-// How many consecutive UpdateTerrain passes may yield LOD3-5 building to a
-// pending spawn batch before terrain proceeds anyway. See the use site.
-const MAX_FRAMES_DEFERRED_TO_SPAWNS = 30;
-let spawnDeferFrames = 0;
-
 // Geometry pool keyed by LOD level — recycles BufferGeometry to avoid GC churn
 const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
 
@@ -394,7 +389,7 @@ export const TerrainRenderer = () => {
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
   const [colliderVersion, setColliderVersion] = useState(0);
-  const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending, spawnPending } = useGameContext();
+  const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending } = useGameContext();
   const collidersChanged = React.useRef(false);
   const lastRemainingRef = React.useRef<number>(-1);
   const isUpdatingTerrain = React.useRef(false);
@@ -615,22 +610,6 @@ export const TerrainRenderer = () => {
       const nextChunk = terrain.queued_to_build[terrain.queued_to_build.length - 1];
       if (!nextChunk) break;
 
-      // If the next chunk is low-LOD (3-5) and objects are waiting to spawn,
-      // defer it — let ObjectPool have this frame instead. TIME-BOXED: during
-      // catch-up the pool runs budgeted batches back to back, so `spawnPending`
-      // is essentially always set and an unbounded deference would mean LOD3-5
-      // NEVER builds. Those are the very chunks stale visible chunks are
-      // waiting on to be swapped out, so starving them grows the destroy queue
-      // and the per-frame overlap work with it. The counter only resets when
-      // spawning actually goes idle, so this is a bounded courtesy rather than
-      // a lock.
-      if (nextChunk.lod.level >= 3 && spawnPending.current) {
-        if (spawnDeferFrames < MAX_FRAMES_DEFERRED_TO_SPAWNS) {
-          spawnDeferFrames++;
-          break;
-        }
-      }
-
       const chunk = terrain.queued_to_build.pop()!;
 
       const vertCount = (chunk.lod.segments + 1) ** 2;
@@ -652,9 +631,6 @@ export const TerrainRenderer = () => {
         terrain.active_chunk = null;
       }
     }
-
-    // Spawning idle → the courtesy budget is restored for the next burst.
-    if (!spawnPending.current) spawnDeferFrames = 0;
 
     // Signal whether high-res (LOD1/2) terrain is still pending
     const hasHighLOD =

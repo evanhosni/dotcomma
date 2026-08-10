@@ -11,6 +11,4 @@ export interface GameContextType {
   setTerrainLoaded: (terrain_loaded: boolean) => void;
   /** True when LOD1/LOD2 (close, high-detail) terrain chunks are pending build. */
   terrainHighLODPending: React.MutableRefObject<boolean>;
-  /** Set by ObjectPool — true when spawn generation is in progress or queued. */
-  spawnPending: React.MutableRefObject<boolean>;
 }

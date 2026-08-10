@@ -136,17 +136,16 @@ const chunkKeyOf = (p: SpawnPoint): string =>
  * A time budget rather than a chunk count, because per-chunk cost varies by
  * more than 10× with terrain — a dense city chunk runs the flatten engine over
  * thousands of pad candidates (~60ms), an empty grassland chunk is nearly
- * free. Any fixed count is therefore both too slow in cheap terrain (the
- * worker idles between batches) and too long in expensive terrain, where it
- * holds `spawnPending` — and thus blocks low-LOD terrain building — for far
- * longer than it needs to.
+ * free. Any fixed count is therefore both too long in the city and too short
+ * in open terrain, where the worker would idle against the batch cadence
+ * floor (MIN_FRAMES_BETWEEN_BATCHES, ~83ms at 60fps — which is why this sits
+ * just above it).
  *
  * This is also what makes catch-up a STREAM instead of a debt. Keys go out
  * sorted nearest-first; whatever the budget doesn't reach is left uncached and
  * re-requested next batch, re-sorted against the CURRENT camera position. So
  * ground the player has already left is never generated at all — it just stops
- * being asked for. Sized a little above the batch cadence floor
- * (MIN_FRAMES_BETWEEN_BATCHES ≈ 83ms) so the worker never sits idle.
+ * being asked for.
  */
 const SPAWN_BUDGET_MS = 100;
 
@@ -207,8 +206,6 @@ export const generateSpawnPoints = async (
  * generateSpawnPoints relies on to generate the nearest slice each batch).
  * Stays on main thread — pure math, no heavy computation.
  */
-const scratchNearby: { key: string; distSq: number }[] = [];
-
 export const getNearbyChunkKeys = (
   playerX: number,
   playerZ: number,
@@ -219,7 +216,7 @@ export const getNearbyChunkKeys = (
   const radius = Math.ceil(maxRenderDistance / SPAWN_CHUNK_SIZE) + 1;
   const maxDistSq = (maxRenderDistance + SPAWN_CHUNK_SIZE) ** 2;
 
-  scratchNearby.length = 0;
+  const nearby: { key: string; distSq: number }[] = [];
 
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dz = -radius; dz <= radius; dz++) {
@@ -231,18 +228,16 @@ export const getNearbyChunkKeys = (
         (playerX - chunkCenterX) ** 2 + (playerZ - chunkCenterZ) ** 2;
 
       if (distSq <= maxDistSq) {
-        scratchNearby.push({ key: `${cx}_${cz}`, distSq });
+        nearby.push({ key: `${cx}_${cz}`, distSq });
       }
     }
   }
 
   // Sort on the distance we already computed — the old comparator re-parsed
   // both keys out of their strings on every comparison (O(n log n) splits).
-  scratchNearby.sort((a, b) => a.distSq - b.distSq);
+  nearby.sort((a, b) => a.distSq - b.distSq);
 
-  const keys: string[] = new Array(scratchNearby.length);
-  for (let i = 0; i < scratchNearby.length; i++) keys[i] = scratchNearby[i].key;
-  return keys;
+  return nearby.map((n) => n.key);
 };
 
 /**
