@@ -15,7 +15,7 @@ void main() {
   float texScale = 1.0 / 26.25;
 
   // ── Terrain texture (slope-based blending + triplanar) ──
-  float largeNoise = fbm(vWorldPos.xz * 0.005, 3);
+  float largeNoise = worldFbm(vWorldPos.xz, 0.005, 3);
   float noiseOffset = (largeNoise - 0.5) * 0.1;
   float heightFactor = smoothstep(30.0, 150.0, vHeight) * 0.3;
   float effectiveSlope = vSlopeAngle + noiseOffset + heightFactor;

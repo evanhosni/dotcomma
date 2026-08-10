@@ -15,14 +15,21 @@ const SPAWN_CHUNK_SIZE = 250;
 
 let worker: Worker | null = null;
 let workerReady = false;
-const pendingRequests = new Map<number, (points: SpawnPoint[]) => void>();
+/** Points for the chunks the worker actually finished, plus their keys — a
+ *  time-budgeted request may complete only a prefix of what was asked for. */
+interface SpawnsResult {
+  points: SpawnPoint[];
+  done: string[];
+}
+
+const pendingRequests = new Map<number, (result: SpawnsResult) => void>();
 let nextRequestId = 0;
 
 const handleMessage = (e: MessageEvent) => {
   if (e.data.type === "SPAWNS_RESULT") {
     const resolve = pendingRequests.get(e.data.id);
     if (resolve) {
-      resolve(e.data.points);
+      resolve({ points: e.data.points, done: e.data.done });
       pendingRequests.delete(e.data.id);
     }
   }
@@ -100,53 +107,108 @@ export const serializeDescriptors = (
 // fixed for the session), so steady-state batches touch the worker only for
 // NEW chunks. Evicted in cleanupSpawnCache with the same radius rule as the
 // worker's cache, so revisited chunks regenerate in both places together.
-const clientChunkCache = new Map<string, SpawnPoint[]>();
+//
+// Entries carry their own world-space CENTER: eviction runs every batch over
+// the whole cache, and re-deriving coordinates by parsing the key string
+// ("cx_cz".split → Number) made the one operation that keeps the cache
+// bounded the most expensive thing about it. Distance is now pure arithmetic
+// on fields that are already there.
+interface CachedChunk {
+  centerX: number;
+  centerZ: number;
+  points: SpawnPoint[];
+}
+
+const clientChunkCache = new Map<string, CachedChunk>();
+
+const newCachedChunk = (cx: number, cz: number): CachedChunk => ({
+  centerX: (cx + 0.5) * SPAWN_CHUNK_SIZE,
+  centerZ: (cz + 0.5) * SPAWN_CHUNK_SIZE,
+  points: [],
+});
 
 const chunkKeyOf = (p: SpawnPoint): string =>
   `${Math.floor(p.x / SPAWN_CHUNK_SIZE)}_${Math.floor(p.z / SPAWN_CHUNK_SIZE)}`;
 
 /**
- * Generate spawn points for the given chunk keys.
+ * How long the worker may spend generating NEW chunks per round-trip.
+ *
+ * A time budget rather than a chunk count, because per-chunk cost varies by
+ * more than 10× with terrain — a dense city chunk runs the flatten engine over
+ * thousands of pad candidates (~60ms), an empty grassland chunk is nearly
+ * free. Any fixed count is therefore both too slow in cheap terrain (the
+ * worker idles between batches) and too long in expensive terrain, where it
+ * holds `spawnPending` — and thus blocks low-LOD terrain building — for far
+ * longer than it needs to.
+ *
+ * This is also what makes catch-up a STREAM instead of a debt. Keys go out
+ * sorted nearest-first; whatever the budget doesn't reach is left uncached and
+ * re-requested next batch, re-sorted against the CURRENT camera position. So
+ * ground the player has already left is never generated at all — it just stops
+ * being asked for. Sized a little above the batch cadence floor
+ * (MIN_FRAMES_BETWEEN_BATCHES ≈ 83ms) so the worker never sits idle.
+ */
+const SPAWN_BUDGET_MS = 100;
+
+/**
+ * Spawn points for the given chunk keys, as one bucket per resolved chunk
+ * (buckets are the cache's own arrays — do not mutate). Chunk keys must be
+ * sorted nearest-first: the worker spends SPAWN_BUDGET_MS on uncached chunks
+ * in that order, and the remainder is picked up by later calls.
+ *
  * All computation happens in the worker thread; delivered chunks are cached
  * client-side so only new chunks cost a round-trip.
  */
 export const generateSpawnPoints = async (
   chunkKeys: string[],
   descriptors: SerializedActorDescriptor[]
-): Promise<SpawnPoint[]> => {
+): Promise<SpawnPoint[][]> => {
   if (!worker || !workerReady) return [];
 
   const missing = chunkKeys.filter((k) => !clientChunkCache.has(k));
+
   if (missing.length > 0) {
     const id = nextRequestId++;
-    const points = await new Promise<SpawnPoint[]>((resolve) => {
+    const result = await new Promise<SpawnsResult>((resolve) => {
       pendingRequests.set(id, resolve);
       worker!.postMessage({
         type: "GENERATE_SPAWNS",
         id,
         chunkKeys: missing,
         descriptors,
+        budgetMs: SPAWN_BUDGET_MS,
       });
     });
-    for (const key of missing) clientChunkCache.set(key, []);
-    for (const p of points) {
-      const bucket = clientChunkCache.get(chunkKeyOf(p));
-      if (bucket) bucket.push(p);
+    // Only chunks the worker FINISHED get cached — the rest stay unknown and
+    // are re-requested (or dropped, if the player has moved on).
+    for (const key of result.done) {
+      const sep = key.indexOf("_");
+      clientChunkCache.set(
+        key,
+        newCachedChunk(Number(key.slice(0, sep)), Number(key.slice(sep + 1)))
+      );
+    }
+    for (const p of result.points) {
+      const entry = clientChunkCache.get(chunkKeyOf(p));
+      if (entry) entry.points.push(p);
     }
   }
 
-  const out: SpawnPoint[] = [];
+  const out: SpawnPoint[][] = [];
   for (const key of chunkKeys) {
-    const bucket = clientChunkCache.get(key);
-    if (bucket) out.push(...bucket);
+    const entry = clientChunkCache.get(key);
+    if (entry && entry.points.length > 0) out.push(entry.points);
   }
   return out;
 };
 
 /**
- * Get chunk keys near a player position, sorted by distance.
+ * Get chunk keys near a player position, sorted nearest-first (the order
+ * generateSpawnPoints relies on to generate the nearest slice each batch).
  * Stays on main thread — pure math, no heavy computation.
  */
+const scratchNearby: { key: string; distSq: number }[] = [];
+
 export const getNearbyChunkKeys = (
   playerX: number,
   playerZ: number,
@@ -157,7 +219,7 @@ export const getNearbyChunkKeys = (
   const radius = Math.ceil(maxRenderDistance / SPAWN_CHUNK_SIZE) + 1;
   const maxDistSq = (maxRenderDistance + SPAWN_CHUNK_SIZE) ** 2;
 
-  const keys: string[] = [];
+  scratchNearby.length = 0;
 
   for (let dx = -radius; dx <= radius; dx++) {
     for (let dz = -radius; dz <= radius; dz++) {
@@ -169,19 +231,17 @@ export const getNearbyChunkKeys = (
         (playerX - chunkCenterX) ** 2 + (playerZ - chunkCenterZ) ** 2;
 
       if (distSq <= maxDistSq) {
-        keys.push(`${cx}_${cz}`);
+        scratchNearby.push({ key: `${cx}_${cz}`, distSq });
       }
     }
   }
 
-  keys.sort((a, b) => {
-    const [ax, az] = a.split("_").map(Number);
-    const [bx, bz] = b.split("_").map(Number);
-    const distA = (ax - centerCX) ** 2 + (az - centerCZ) ** 2;
-    const distB = (bx - centerCX) ** 2 + (bz - centerCZ) ** 2;
-    return distA - distB;
-  });
+  // Sort on the distance we already computed — the old comparator re-parsed
+  // both keys out of their strings on every comparison (O(n log n) splits).
+  scratchNearby.sort((a, b) => a.distSq - b.distSq);
 
+  const keys: string[] = new Array(scratchNearby.length);
+  for (let i = 0; i < scratchNearby.length; i++) keys[i] = scratchNearby[i].key;
   return keys;
 };
 
@@ -199,12 +259,10 @@ export const cleanupSpawnCache = (
   worker.postMessage({ type: "CLEANUP", playerX, playerZ, cleanupRadius });
 
   const cleanupRadiusSq = cleanupRadius * cleanupRadius;
-  clientChunkCache.forEach((_, key) => {
-    const [cx, cz] = key.split("_").map(Number);
-    const chunkCenterX = (cx + 0.5) * SPAWN_CHUNK_SIZE;
-    const chunkCenterZ = (cz + 0.5) * SPAWN_CHUNK_SIZE;
-    const distSq = (playerX - chunkCenterX) ** 2 + (playerZ - chunkCenterZ) ** 2;
-    if (distSq > cleanupRadiusSq) clientChunkCache.delete(key);
+  clientChunkCache.forEach((entry, key) => {
+    const dx = playerX - entry.centerX;
+    const dz = playerZ - entry.centerZ;
+    if (dx * dx + dz * dz > cleanupRadiusSq) clientChunkCache.delete(key);
   });
 };
 

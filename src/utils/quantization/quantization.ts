@@ -16,17 +16,49 @@ export namespace _quantization {
     }
   `;
 
-  /** Replacement for #include <project_vertex> — quantizes in world space. */
+  /**
+   * Replacement for #include <project_vertex> — quantizes on a WORLD-ALIGNED
+   * lattice, but never forms an absolute world coordinate to do it.
+   *
+   * GLSL is float32: at 100k units from the world origin its resolution is
+   * ~0.008u, a THIRD of the 0.025u grid. Quantizing `modelMatrix * position`
+   * directly therefore made the lattice flicker under the camera (vertices
+   * flipping cells frame to frame = swimming geometry) instead of holding
+   * still, getting worse the further the player travelled — and past ~420k
+   * units `worldPos / 0.025` leaves float32's exact-integer range and the
+   * result collapses outright.
+   *
+   * Instead the offset from the object's OWN origin is quantized:
+   * mat3() drops the translation so that offset stays object-sized and exact,
+   * and modelViewMatrix[3] is the object origin in view space, already
+   * resolved on the CPU in float64. `qPhase` re-anchors the lattice to the
+   * world so the wobble doesn't slide along with the object; its own accuracy
+   * is limited by the float32 model matrix, but it is CONSTANT per object, so
+   * it shows up as a fixed sub-cell offset rather than as flicker.
+   */
   const PROJECT_VERTEX_REPLACEMENT = /* glsl */ `
     vec4 mvPosition = vec4( transformed, 1.0 );
 
     #ifdef USE_INSTANCING
-      mvPosition = instanceMatrix * mvPosition;
-    #endif
 
-    vec4 qWorldPos = modelMatrix * mvPosition;
-    qWorldPos.xyz = quantizeWorldPos(qWorldPos.xyz);
-    mvPosition = viewMatrix * qWorldPos;
+      // Instance transforms carry their own absolute world translation, which
+      // the object-origin rebase below cannot reach — instanced quantized
+      // materials keep the original absolute-space math.
+      mvPosition = instanceMatrix * mvPosition;
+      vec4 qWorldPos = modelMatrix * mvPosition;
+      qWorldPos.xyz = quantizeWorldPos( qWorldPos.xyz );
+      mvPosition = viewMatrix * qWorldPos;
+
+    #else
+
+      vec3 qLocal = mat3( modelMatrix ) * mvPosition.xyz;
+      if ( uGridSize > 0.0 ) {
+        vec3 qPhase = mod( modelMatrix[ 3 ].xyz, uGridSize );
+        qLocal = floor( ( qLocal + qPhase ) / uGridSize + 0.5 ) * uGridSize - qPhase;
+      }
+      mvPosition = vec4( modelViewMatrix[ 3 ].xyz + mat3( viewMatrix ) * qLocal, 1.0 );
+
+    #endif
 
     gl_Position = projectionMatrix * mvPosition;
   `;
