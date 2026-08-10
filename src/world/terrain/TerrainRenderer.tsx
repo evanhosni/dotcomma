@@ -17,6 +17,85 @@ const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
   return overlapX && overlapZ;
 };
 
+// ── Coarse spatial index over chunks ────────────────────────────────────────
+// The swap/prune passes all ask the same question every frame: "does any
+// chunk in set X overlap chunk C?". Answering it by scanning the whole set is
+// O(chunks × queue) — fine when both are small, but a player who outruns
+// terrain generation grows BOTH sides into the hundreds (every chunk left
+// behind waits in queued_to_destroy until its coarse replacement is built,
+// and coarse replacements are the lowest build priority), and the scan alone
+// then costs more than a frame. Bucketing by a fixed grid keeps every query
+// to the handful of chunks that share the queried chunk's tiles.
+//
+// Tile = the largest chunk size, so any chunk spans at most 2×2 tiles.
+const INDEX_TILE = LOD5_CHUNK_SIZE;
+
+class ChunkIndex {
+  /** tileX → tileZ → chunks. Nested maps keep keys numeric (no string
+   *  allocation per query, no packing collisions at extreme coordinates). */
+  private tiles = new Map<number, Map<number, Chunk[]>>();
+  private count = 0;
+
+  clear(): void {
+    if (this.count === 0) return;
+    this.tiles.clear();
+    this.count = 0;
+  }
+
+  get isEmpty(): boolean {
+    return this.count === 0;
+  }
+
+  add(chunk: Chunk): void {
+    const half = chunk.lod.chunkSize / 2;
+    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
+    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
+    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
+    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
+      let col = this.tiles.get(tx);
+      if (!col) {
+        col = new Map();
+        this.tiles.set(tx, col);
+      }
+      for (let tz = tz0; tz <= tz1; tz++) {
+        const bucket = col.get(tz);
+        if (bucket) bucket.push(chunk);
+        else col.set(tz, [chunk]);
+      }
+    }
+    this.count++;
+  }
+
+  /** True when any indexed chunk other than `exclude` overlaps `chunk`. */
+  overlapsAny(chunk: Chunk, exclude?: Chunk): boolean {
+    if (this.count === 0) return false;
+    const half = chunk.lod.chunkSize / 2;
+    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
+    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
+    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
+    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
+      const col = this.tiles.get(tx);
+      if (!col) continue;
+      for (let tz = tz0; tz <= tz1; tz++) {
+        const bucket = col.get(tz);
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const other = bucket[i];
+          if (other !== exclude && other !== chunk && chunksOverlap(chunk, other)) return true;
+        }
+      }
+    }
+    return false;
+  }
+}
+
+// Reused across frames (cleared + refilled) so the per-frame passes allocate
+// nothing.
+const pendingIndex = new ChunkIndex(); // chunks still waiting to be built
+const pendingSet = new Set<Chunk>(); // same set, for identity tests
+const blockerIndex = new ChunkIndex(); // stale chunks that must stay visible
+const coverIndex = new ChunkIndex(); // stale VISIBLE chunks acting as cover
+
 const terrain: TerrainProps = {
   group: new THREE.Group(),
   chunks: {},
@@ -355,78 +434,60 @@ export const TerrainRenderer = () => {
   /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
    *  are built, then hide+destroy the old chunk in the same frame. */
   const ProcessSwaps = (desiredChunks: { [key: string]: { position: number[]; lod: LODLevel } }) => {
-    // Collect chunks still pending build (queued or actively building)
-    const pending = new Set<Chunk>(terrain.queued_to_build);
-    if (terrain.active_chunk) pending.add(terrain.active_chunk);
+    // NOTE: this must run even with an empty destroy queue — pass 2 is what
+    // makes freshly built chunks visible at all (nothing to swap on startup).
+
+    // Collect chunks still pending build (queued or actively building) — they
+    // are the ONLY thing that can hold an old chunk back, and they are always
+    // invisible (a chunk is shown in pass 2, after it leaves the queue).
+    pendingIndex.clear();
+    pendingSet.clear();
+    for (const c of terrain.queued_to_build) {
+      if (c.plane.visible) continue;
+      pendingIndex.add(c);
+      pendingSet.add(c);
+    }
+    if (terrain.active_chunk && !terrain.active_chunk.plane.visible) {
+      pendingIndex.add(terrain.active_chunk);
+      pendingSet.add(terrain.active_chunk);
+    }
 
     // Pass 1: determine which old chunks have ALL their replacements built
-    const swappable: { [key: string]: boolean } = {};
-    const cancelled: { [key: string]: boolean } = {};
+    const swappable = new Set<string>();
+    const cancelled = new Set<string>();
 
     for (const oldKey of terrain.queued_to_destroy) {
-      if (!terrain.chunks[oldKey]) {
-        cancelled[oldKey] = true;
+      const entry = terrain.chunks[oldKey];
+      // Gone already, or desired again (player reversed) → cancel destruction
+      if (!entry || desiredChunks[oldKey]) {
+        cancelled.add(oldKey);
         continue;
       }
-
-      // If the old chunk is desired again (player reversed), cancel destruction
-      if (desiredChunks[oldKey]) {
-        cancelled[oldKey] = true;
-        continue;
-      }
-
-      const oldChunk = terrain.chunks[oldKey].chunk;
-      let allReady = true;
-
-      for (const otherKey in terrain.chunks) {
-        if (otherKey === oldKey) continue;
-        const other = terrain.chunks[otherKey].chunk;
-        if (!other.plane.visible && chunksOverlap(oldChunk, other)) {
-          if (pending.has(other)) {
-            allReady = false;
-            break;
-          }
-        }
-      }
-
-      if (allReady) {
-        swappable[oldKey] = true;
-      }
+      if (!pendingIndex.overlapsAny(entry.chunk)) swappable.add(oldKey);
     }
 
     // Pass 2: show built-but-invisible chunks only if every old chunk they
     // overlap is swappable (prevents showing over a still-visible old chunk
     // whose OTHER replacements aren't ready yet)
+    blockerIndex.clear();
+    for (const oldKey of terrain.queued_to_destroy) {
+      if (swappable.has(oldKey) || cancelled.has(oldKey)) continue;
+      const entry = terrain.chunks[oldKey];
+      if (entry) blockerIndex.add(entry.chunk);
+    }
+
     for (const key in terrain.chunks) {
       const chunk = terrain.chunks[key].chunk;
-      if (chunk.plane.visible || pending.has(chunk)) continue;
-
-      let canShow = true;
-      for (const oldKey of terrain.queued_to_destroy) {
-        if (
-          terrain.chunks[oldKey] &&
-          !swappable[oldKey] &&
-          !cancelled[oldKey] &&
-          chunksOverlap(chunk, terrain.chunks[oldKey].chunk)
-        ) {
-          canShow = false;
-          break;
-        }
-      }
-
-      if (canShow) {
-        chunk.plane.visible = true;
-      }
+      if (chunk.plane.visible || pendingSet.has(chunk)) continue;
+      if (!blockerIndex.overlapsAny(chunk)) chunk.plane.visible = true;
     }
 
-    // Pass 3: destroy swappable old chunks
-    for (const oldKey in swappable) {
+    // Pass 3: destroy swappable old chunks + clean processed/cancelled entries
+    for (const oldKey of swappable) {
       destroyChunk(oldKey);
+      terrain.queued_to_destroy.delete(oldKey);
     }
-
-    // Clean processed/cancelled entries from the destroy queue
-    for (const k in swappable) terrain.queued_to_destroy.delete(k);
-    for (const k in cancelled) terrain.queued_to_destroy.delete(k);
+    for (const k of cancelled) terrain.queued_to_destroy.delete(k);
   };
 
   const UpdateTerrain = async (material: THREE.Material) => {
@@ -449,6 +510,16 @@ export const TerrainRenderer = () => {
     }
 
     // ── 3. Prune stale chunks ────────────────────────────────────────────
+    // Visible chunks already queued for destruction act as COVER: an
+    // invisible chunk overlapping one of them can't be dropped yet. Indexed
+    // by position and kept up to date as the loop queues more, so the check
+    // stays O(1)-ish instead of scanning the whole destroy queue per chunk.
+    coverIndex.clear();
+    for (const oldKey of terrain.queued_to_destroy) {
+      const oldData = terrain.chunks[oldKey];
+      if (oldData && oldData.chunk.plane.visible) coverIndex.add(oldData.chunk);
+    }
+
     const toPrune: string[] = [];
     for (const chunkKey in terrain.chunks) {
       if (desiredChunks[chunkKey]) continue;
@@ -458,22 +529,12 @@ export const TerrainRenderer = () => {
         // Visible — queue for atomic swap via ProcessSwaps
         if (!terrain.queued_to_destroy.has(chunkKey)) {
           terrain.queued_to_destroy.add(chunkKey);
+          coverIndex.add(chunk);
         }
-      } else if (terrain.active_chunk !== chunk) {
-        // Invisible and not actively building — safe to remove UNLESS
-        // it overlaps a visible chunk queued for destruction (that chunk
-        // still needs this as cover until a new replacement is ready)
-        let neededAsCover = false;
-        for (const oldKey of terrain.queued_to_destroy) {
-          const oldData = terrain.chunks[oldKey];
-          if (oldData && oldData.chunk.plane.visible && chunksOverlap(chunk, oldData.chunk)) {
-            neededAsCover = true;
-            break;
-          }
-        }
-        if (!neededAsCover) {
-          toPrune.push(chunkKey);
-        }
+      } else if (terrain.active_chunk !== chunk && !coverIndex.overlapsAny(chunk)) {
+        // Invisible, not actively building, and nothing depends on it as
+        // cover — safe to remove
+        toPrune.push(chunkKey);
       }
     }
     for (const key of toPrune) {
@@ -781,6 +842,9 @@ export const TerrainRenderer = () => {
       ncols: segments,
       position: offset.toArray(),
       chunkSize: cs,
+      // Built ONCE, here — see the note on TerrainColliderProps.args
+      args: [segments, segments, heights as unknown as number[], { x: cs, y: 1, z: cs }],
+      bodyPosition: [offset.x, 0, offset.y],
     };
   };
 
@@ -788,7 +852,7 @@ export const TerrainRenderer = () => {
     <>
       {Object.values(terrain.chunks).map(({ chunk }) => {
         if (chunk.collider) {
-          return <TerrainCollider key={chunk.collider.chunkKey} {...chunk.collider} />;
+          return <TerrainCollider key={chunk.collider.chunkKey} desc={chunk.collider} />;
         }
         return null;
       })}
@@ -796,12 +860,13 @@ export const TerrainRenderer = () => {
   );
 };
 
-export const TerrainCollider: React.FC<TerrainColliderProps> = ({ heights, nrows, ncols, position, chunkSize }) => {
+/** Memoized on the (stable) collider descriptor: every collider change bumps
+ *  colliderVersion and re-renders this list, and an unmemoized re-render tears
+ *  down and rebuilds the Rapier heightfield for EVERY chunk. */
+export const TerrainCollider: React.FC<{ desc: TerrainColliderProps }> = React.memo(({ desc }) => {
   return (
-    <RigidBody type="fixed" position={[position[0], 0, position[1]]} colliders={false}>
-      <HeightfieldCollider
-        args={[nrows, ncols, heights as unknown as number[], { x: chunkSize, y: 1, z: chunkSize }]}
-      />
+    <RigidBody type="fixed" position={desc.bodyPosition} colliders={false}>
+      <HeightfieldCollider args={desc.args} />
     </RigidBody>
   );
-};
+});

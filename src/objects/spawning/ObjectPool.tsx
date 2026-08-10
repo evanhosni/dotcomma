@@ -12,12 +12,31 @@ import {
   serializeDescriptors,
   updateSpawnFootprint,
 } from "./generateSpawnPoints";
-import { ActorDescriptor, ActorProps } from "./types";
+import { ActorDescriptor, ActorProps, SpawnPoint } from "./types";
 
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps — responsive to player movement
 const RESPAWN_COOLDOWN_MS = 1000; // min age of a despawn ledger entry before it can be cleared
 const DESPAWN_HYSTERESIS = 1.2; // despawn radius = spawn radius * this
 const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius * this
+
+/**
+ * Max objects mounted per batch. Mounting is a React commit plus, for
+ * procedural actors, geometry generation — landing a whole backlog in one
+ * commit is a multi-hundred-millisecond freeze. Candidates are mounted
+ * NEAREST-FIRST and the remainder is simply re-evaluated next batch against
+ * the new camera position, so anything the player has already left behind is
+ * never mounted at all rather than mounted-then-swept.
+ */
+const MAX_MOUNTS_PER_BATCH = 8;
+
+/**
+ * Hard ceiling on how long spawning defers to high-res terrain. Deferring is
+ * right in the normal case, but a player who outruns terrain generation keeps
+ * LOD1/2 permanently pending — spawning then never runs, which also means its
+ * cache eviction never runs, and everything arrives at once when terrain
+ * finally settles. Past this many frames we take a batch anyway.
+ */
+const MAX_FRAMES_DEFERRED_TO_TERRAIN = 90;
 
 /**
  * Three-radius spawn lifecycle (all radii are size-aware — footprint/2 is the
@@ -53,12 +72,19 @@ interface MountedObject {
   descriptorId: string;
 }
 
+/** A self-destroyed object, blocked from respawning until the player leaves.
+ *  Coordinates are stored rather than re-parsed out of the id string — the
+ *  ledger is swept on every batch and its whole job is a distance test. */
+interface DespawnRecord {
+  despawnedAt: number;
+  x: number;
+  z: number;
+  descriptorId: string;
+}
+
 /** objId format: `${x}_${z}_${descriptorId}` (descriptor ids may contain underscores). */
-const parseObjId = (objId: string): { x: number; z: number; descriptorId: string } | null => {
-  const parts = objId.split("_");
-  if (parts.length < 3) return null;
-  return { x: Number(parts[0]), z: Number(parts[1]), descriptorId: parts.slice(2).join("_") };
-};
+const objIdOf = (point: SpawnPoint): string =>
+  `${point.x}_${point.z}_${point.descriptorId}`;
 
 export const ObjectPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
@@ -66,10 +92,11 @@ export const ObjectPool = () => {
   const objectsMapRef = useRef(new Map<string, MountedObject>());
   // Despawn ledger: objects that self-destroyed (onDestroy). Blocks respawn
   // until the spawn point leaves the spawn radius.
-  const despawnLedgerRef = useRef(new Map<string, number>());
+  const despawnLedgerRef = useRef(new Map<string, DespawnRecord>());
   const isGeneratingRef = useRef(false);
   const frameCountRef = useRef(0);
   const lastBatchFrameRef = useRef(0);
+  const deferredSinceFrameRef = useRef(0);
   const workerReadyRef = useRef(false);
   const dirtyRef = useRef(false);
 
@@ -128,22 +155,17 @@ export const ObjectPool = () => {
   // still inside the immediate radius stay blocked until the player moves away.
   const cleanupDespawnLedger = useCallback(() => {
     const now = Date.now();
-    despawnLedgerRef.current.forEach((despawnedAt, objId) => {
-      if (now - despawnedAt < RESPAWN_COOLDOWN_MS) return;
+    despawnLedgerRef.current.forEach((rec, objId) => {
+      if (now - rec.despawnedAt < RESPAWN_COOLDOWN_MS) return;
 
-      const parsed = parseObjId(objId);
-      if (!parsed) {
-        despawnLedgerRef.current.delete(objId);
-        return;
-      }
-      const desc = descriptorMap.get(parsed.descriptorId);
+      const desc = descriptorMap.get(rec.descriptorId);
       if (!desc) {
         despawnLedgerRef.current.delete(objId);
         return;
       }
 
-      const dx = camera.position.x - parsed.x;
-      const dz = camera.position.z - parsed.z;
+      const dx = camera.position.x - rec.x;
+      const dz = camera.position.z - rec.z;
       const immediateRadius = getImmediateRadius(desc);
       if (dx * dx + dz * dz > immediateRadius * immediateRadius) {
         despawnLedgerRef.current.delete(objId);
@@ -187,33 +209,52 @@ export const ObjectPool = () => {
 
       const chunkKeys = getNearbyChunkKeys(camera.position.x, camera.position.z, maxSpawnRadius);
 
-      // Send all chunk keys to the worker in one message
-      const points = await generateSpawnPoints(chunkKeys, serializedDescriptors);
+      // Nearest-first; only a bounded slice of NEW chunks is generated per
+      // call, so a player who outran spawning streams back in instead of
+      // paying off one giant backlog.
+      const buckets = await generateSpawnPoints(chunkKeys, serializedDescriptors);
 
       let hasChanges = sweepOutOfRange();
 
-      for (const point of points) {
-        const desc = descriptorMap.get(point.descriptorId);
-        if (!desc) continue;
+      // Collect mountable candidates first, then mount the nearest
+      // MAX_MOUNTS_PER_BATCH. The rest are simply re-tested next batch — by
+      // then the player may have moved past them, in which case they are
+      // never mounted at all.
+      const candidates: { point: SpawnPoint; objId: string; desc: ActorDescriptor; distSq: number }[] = [];
 
-        // Spawn gate: point must be within the spawn radius (size-aware).
-        // No inner exclusion — initial spawns are allowed at any distance so
-        // spawning can catch up with fast player movement.
-        const dx = point.x - camera.position.x;
-        const dz = point.z - camera.position.z;
-        const distSq = dx * dx + dz * dz;
-        const spawnRadius = getSpawnRadius(desc);
-        if (distSq > spawnRadius * spawnRadius) continue;
+      for (const bucket of buckets) {
+        for (const point of bucket) {
+          const desc = descriptorMap.get(point.descriptorId);
+          if (!desc) continue;
 
-        const objId = `${point.x}_${point.z}_${point.descriptorId}`;
+          // Spawn gate: point must be within the spawn radius (size-aware).
+          // No inner exclusion — initial spawns are allowed at any distance so
+          // spawning can catch up with fast player movement.
+          const dx = point.x - camera.position.x;
+          const dz = point.z - camera.position.z;
+          const distSq = dx * dx + dz * dz;
+          const spawnRadius = getSpawnRadius(desc);
+          if (distSq > spawnRadius * spawnRadius) continue;
 
-        // Respawn-blocked: it self-destroyed and the player hasn't left yet
-        if (despawnLedgerRef.current.has(objId)) continue;
+          const objId = objIdOf(point);
 
-        // Never duplicate a mounted object
-        if (objectsMapRef.current.has(objId)) continue;
+          // Never duplicate a mounted object; respawn-blocked entries stay out
+          // until the player leaves their immediate radius
+          if (objectsMapRef.current.has(objId)) continue;
+          if (despawnLedgerRef.current.has(objId)) continue;
 
+          candidates.push({ point, objId, desc, distSq });
+        }
+      }
+
+      if (candidates.length > MAX_MOUNTS_PER_BATCH) {
+        candidates.sort((a, b) => a.distSq - b.distSq);
+        candidates.length = MAX_MOUNTS_PER_BATCH;
+      }
+
+      for (const { point, objId, desc } of candidates) {
         const Component = desc.component;
+        const spawnRadius = getSpawnRadius(desc);
         const despawnRadius = getDespawnRadius(desc);
         const props: ActorProps = {
           id: objId,
@@ -226,7 +267,12 @@ export const ObjectPool = () => {
           cursorOverride: desc.cursorOverride,
           quantization: desc.quantization,
           onDestroy: (id: string) => {
-            despawnLedgerRef.current.set(id, Date.now());
+            despawnLedgerRef.current.set(id, {
+              despawnedAt: Date.now(),
+              x: point.x,
+              z: point.z,
+              descriptorId: point.descriptorId,
+            });
             objectsMapRef.current.delete(id);
             dirtyRef.current = true;
           },
@@ -273,7 +319,14 @@ export const ObjectPool = () => {
 
     // Gate 3: Only defer to HIGH-RES terrain (LOD1/2), not all terrain.
     // Low-LOD terrain (LOD3-5) defers to US via spawnPending.
-    if (terrainHighLODPending.current) return;
+    // The deference is time-boxed: a player outrunning terrain keeps LOD1/2
+    // permanently pending, and an indefinitely starved pool never evicts its
+    // caches and then floods the frame it finally runs.
+    if (terrainHighLODPending.current) {
+      if (deferredSinceFrameRef.current === 0) deferredSinceFrameRef.current = frameCountRef.current;
+      if (frameCountRef.current - deferredSinceFrameRef.current < MAX_FRAMES_DEFERRED_TO_TERRAIN) return;
+    }
+    deferredSinceFrameRef.current = 0;
 
     // Gate 4: Worker must be initialized
     if (!workerReadyRef.current) return;
