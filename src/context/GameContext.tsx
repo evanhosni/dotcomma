@@ -18,7 +18,6 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
   const [progress, setProgress] = useState(0);
   const [terrain_loaded, setTerrainLoaded] = useState(false);
   const terrainHighLODPending = useRef(false);
-  const spawnPending = useRef(false);
 
   // Value object to be provided to consumers
   const value: GameContextType = {
@@ -30,7 +29,6 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
     terrain_loaded,
     setTerrainLoaded,
     terrainHighLODPending,
-    spawnPending,
   };
 
   return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
