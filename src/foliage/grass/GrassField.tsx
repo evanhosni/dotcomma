@@ -41,6 +41,21 @@ void main() {
   vUv = uv;
   vTint = bladeData.z;
 
+  // The offset attribute is an ABSOLUTE world position, and float32 resolves
+  // only ~0.008u at 100k units from the origin — a third of the 0.025u
+  // quantization grid. Quantizing (or projecting) in absolute space therefore
+  // made every blade flicker between lattice cells as the camera moved, worse
+  // the further out the player went. Blade POSITIONS are built relative to
+  // the chunk origin instead: the mesh sits at its chunk origin, an exact
+  // multiple of GRASS_CHUNK_SIZE (itself a whole multiple of every
+  // quantization grid, so the relative lattice IS the world lattice), and the
+  // subtraction below is exact because a blade is never more than one chunk
+  // from that origin. Camera-relative and wind terms keep using the absolute
+  // offset: they are differences or low-frequency phases, insensitive to that
+  // resolution, and the wind has to stay continuous across chunk borders.
+  vec3 chunkOrigin = modelMatrix[3].xyz;
+  vec3 offsetRel = offset - chunkOrigin;
+
   float phase = bladeData.x;
   float scale = bladeData.y;
 
@@ -60,7 +75,7 @@ void main() {
   look = normalize(look + vec3(0.0001, 0.0, 0.0));
   vec3 right = vec3(look.z, 0.0, -look.x);
 
-  vec3 pos = offset + right * (position.x * width);
+  vec3 pos = offsetRel + right * (position.x * width);
   pos.y += position.y * height;
 
   // wind: bend grows quadratically toward the tip, gusts travel across the field
@@ -73,7 +88,9 @@ void main() {
 
   pos = quantizeWorldPos(pos);
 
-  gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
+  // modelViewMatrix[3] is the chunk origin in view space, resolved on the CPU
+  // in float64 — the projection never touches a big absolute coordinate.
+  gl_Position = projectionMatrix * vec4(modelViewMatrix[3].xyz + mat3(viewMatrix) * pos, 1.0);
 }
 `;
 
@@ -299,16 +316,20 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       geo.setAttribute("bladeData", new THREE.InstancedBufferAttribute(result.bladeData, 3));
       geo.instanceCount = result.count;
 
-      // manual bounding sphere so per-chunk frustum culling works
+      // manual bounding sphere so per-chunk frustum culling works — in the
+      // mesh's own (chunk-origin) frame, since the mesh is no longer at 0
       const half = GRASS_CHUNK_SIZE / 2;
       const centerY = (result.minY + result.maxY + bladeHeight) / 2;
       const radiusY = (result.maxY - result.minY) / 2 + bladeHeight + Math.abs(sway) + 1;
       geo.boundingSphere = new THREE.Sphere(
-        new THREE.Vector3(cx * GRASS_CHUNK_SIZE + half, centerY, cz * GRASS_CHUNK_SIZE + half),
+        new THREE.Vector3(half, centerY, half),
         Math.sqrt(half * half * 2 + radiusY * radiusY),
       );
 
       const mesh = new THREE.Mesh(geo, material);
+      // The shader reads the chunk origin off modelMatrix[3] to rebase blade
+      // positions — see GRASS_VERTEX_SHADER.
+      mesh.position.set(cx * GRASS_CHUNK_SIZE, 0, cz * GRASS_CHUNK_SIZE);
       chunksRef.current.set(key, mesh);
       groupRef.current?.add(mesh);
     });

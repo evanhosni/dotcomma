@@ -125,9 +125,19 @@ class SpatialHash {
 
 let initialized = false;
 let spatialHash: SpatialHash | null = null;
-const chunkCache = new Map<string, SpawnPoint[]>();
-const hashPopulatedChunks = new Set<string>();
 
+/** Cached chunk. Carries its own world-space CENTER and its spatial-hash
+ *  membership: CLEANUP walks the whole cache on every spawn batch, and
+ *  re-deriving coordinates by parsing the key string made eviction — the one
+ *  thing keeping this cache bounded — the most expensive thing about it. */
+interface CachedChunk {
+  centerX: number;
+  centerZ: number;
+  points: SpawnPoint[];
+  inHash: boolean;
+}
+
+const chunkCache = new Map<string, CachedChunk>();
 
 // ── Spawn Generation ──
 
@@ -135,17 +145,19 @@ const generateForChunk = (
   chunkKey: string,
   descriptors: SerializedDescriptor[]
 ): SpawnPoint[] => {
-  if (chunkCache.has(chunkKey)) {
-    const cached = chunkCache.get(chunkKey)!;
+  const hit = chunkCache.get(chunkKey);
+  if (hit) {
     // Re-insert into spatial hash only if not already populated
-    if (!hashPopulatedChunks.has(chunkKey)) {
-      for (const p of cached) spatialHash!.insert(p);
-      hashPopulatedChunks.add(chunkKey);
+    if (!hit.inHash) {
+      for (const p of hit.points) spatialHash!.insert(p);
+      hit.inHash = true;
     }
-    return cached;
+    return hit.points;
   }
 
-  const [cx, cz] = chunkKey.split("_").map(Number);
+  const sep = chunkKey.indexOf("_");
+  const cx = Number(chunkKey.slice(0, sep));
+  const cz = Number(chunkKey.slice(sep + 1));
   const chunkMinX = cx * SPAWN_CHUNK_SIZE;
   const chunkMinZ = cz * SPAWN_CHUNK_SIZE;
 
@@ -273,8 +285,12 @@ const generateForChunk = (
     }
   }
 
-  chunkCache.set(chunkKey, chunkPoints);
-  hashPopulatedChunks.add(chunkKey);
+  chunkCache.set(chunkKey, {
+    centerX: chunkMinX + SPAWN_CHUNK_SIZE / 2,
+    centerZ: chunkMinZ + SPAWN_CHUNK_SIZE / 2,
+    points: chunkPoints,
+    inHash: true,
+  });
   return chunkPoints;
 };
 
@@ -313,32 +329,30 @@ self.onmessage = (e: MessageEvent) => {
     const { playerX, playerZ, cleanupRadius } = e.data;
     const cleanupRadiusSq = cleanupRadius * cleanupRadius;
 
-    for (const key of Array.from(chunkCache.keys())) {
-      const [cx, cz] = key.split("_").map(Number);
-      const chunkCenterX = (cx + 0.5) * SPAWN_CHUNK_SIZE;
-      const chunkCenterZ = (cz + 0.5) * SPAWN_CHUNK_SIZE;
-      const distSq =
-        (playerX - chunkCenterX) ** 2 + (playerZ - chunkCenterZ) ** 2;
+    // Coordinates live on the entry — no key parsing, just a distance test.
+    chunkCache.forEach((entry, key) => {
+      const dx = playerX - entry.centerX;
+      const dz = playerZ - entry.centerZ;
+      if (dx * dx + dz * dz <= cleanupRadiusSq) return;
 
-      if (distSq > cleanupRadiusSq) {
-        // Evict the chunk's points from the spatial hash too. Stale copies
-        // would otherwise block their own deterministic regeneration when the
-        // player returns (every candidate lands exactly on its old copy and
-        // fails the spacing check), permanently despawning the chunk's objects.
-        const points = chunkCache.get(key)!;
-        if (hashPopulatedChunks.has(key)) {
-          for (const p of points) spatialHash!.remove(p);
-          hashPopulatedChunks.delete(key);
-        }
-        chunkCache.delete(key);
+      // Evict the chunk's points from the spatial hash too. Stale copies
+      // would otherwise block their own deterministic regeneration when the
+      // player returns (every candidate lands exactly on its old copy and
+      // fails the spacing check), permanently despawning the chunk's objects.
+      if (entry.inHash) {
+        for (const p of entry.points) spatialHash!.remove(p);
+        entry.inHash = false;
       }
-    }
+      chunkCache.delete(key);
+    });
     return;
   }
 
   if (type === "UPDATE_FOOTPRINT") {
     spatialHash = new SpatialHash(e.data.maxFootprint);
-    hashPopulatedChunks.clear();
+    chunkCache.forEach((entry) => {
+      entry.inHash = false;
+    });
     return;
   }
 };
