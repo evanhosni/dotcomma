@@ -7,7 +7,8 @@ import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { traceEvent, traceSpan } from "../../utils/spikeTrace";
-import { getDistance2D, uploadOnFirstDraw } from "../../utils/utils";
+import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { getDistance2D } from "../../utils/utils";
 import {
   beginProceduralBuildingBuild,
   peekProceduralBuildingAssets,

@@ -49,3 +49,12 @@ export const getVertexDataRaw = async (x: number, y: number): Promise<VertexResu
   return computeVertexDataRaw(x, y);
 };
 
+/** PADDED vertex data computed OFF-THREAD (in the dressing worker — it idles
+ *  most of the time and runs the same pipeline). This is the safe way for a
+ *  frequent caller to confirm a raw pre-filter hit: a flatten-tile miss
+ *  inside the padded path costs 30–70ms, which the worker absorbs instead of
+ *  the frame. Returns null until the worker is initialized — fall back to
+ *  getVertexData (main thread, may hitch) for one-off callers that need an
+ *  answer regardless. */
+export { getVertexSample } from "../dressing/dressingWorker";
+
