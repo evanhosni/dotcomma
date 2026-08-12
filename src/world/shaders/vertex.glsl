@@ -16,6 +16,7 @@ varying float vSlopeAngle;
 varying float vHeight;
 varying vec3 vWorldNormal;
 varying vec3 vWorldPos;
+varying vec3 vWorldPosAbs;
 
 uniform float uGridSize;
 
@@ -68,6 +69,15 @@ void main() {
 
   vWorldUv = worldPos.xz / 26.25;
   vWorldPos = worldPos;
+
+  // TRUE (unwrapped) world position — ONLY for consumers that compare against
+  // absolute positions computed on the CPU: the lamp-glow grid and the scene
+  // point-light loop (comparing those against the WRAPPED vWorldPos aliased
+  // the lighting onto the wrong chunks — lit/unlit tiles per wrap cell).
+  // Float32 absolute error (~0.06u at 1M units) is far below any lighting
+  // falloff scale. NEVER use this for tiling, quantization, or fwidth()
+  // guards — that's what the wrapped vWorldPos above is for.
+  vWorldPosAbs = chunkOrigin + localWorld;
 
   vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
   vWorldNormal = worldNormal;

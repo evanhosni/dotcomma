@@ -21,7 +21,17 @@ import { SkyboxSystem } from "./Skybox";
  * once with the committed config — registrations added after the first commit
  * update the registry but do not re-init already-running workers.
  */
-export const World = ({ children }: React.PropsWithChildren) => {
+interface WorldProps extends React.PropsWithChildren {
+  /** Mount the streaming chunk terrain system (default). Worlds whose ground
+   *  is a single static mesh (HomeWorld's flat plane) pass false and mount
+   *  their own ground — they must then set terrain_loaded/progress themselves
+   *  (the Player is gated on it) and provide their own ground collider. The
+   *  world config still commits, so the analytic height pipeline
+   *  (getVertexData — Player backstop/respawn) keeps working. */
+  terrain?: boolean;
+}
+
+export const World = ({ terrain = true, children }: WorldProps) => {
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
 
@@ -45,7 +55,7 @@ export const World = ({ children }: React.PropsWithChildren) => {
         {children}
         {ready && (
           <>
-            <TerrainRenderer />
+            {terrain && <TerrainRenderer />}
             <ObjectPool />
             <SkyboxSystem />
           </>

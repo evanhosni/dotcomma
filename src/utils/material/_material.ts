@@ -153,8 +153,10 @@ export namespace _material {
       gl_FragColor.rgb *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
 
       // Street-lamp glow: real gradient pools of light on the road (added
-      // AFTER the night dim so lamps genuinely brighten the ground).
-      ${lampGlowAccumGLSL("vWorldPos")}
+      // AFTER the night dim so lamps genuinely brighten the ground). Uses the
+      // ABSOLUTE world position — lamp positions in the grid are absolute,
+      // and the wrapped vWorldPos aliased the glow onto the wrong chunks.
+      ${lampGlowAccumGLSL("vWorldPosAbs")}
       gl_FragColor.rgb += lampGlowSum * 0.25;
 
       ${
@@ -163,9 +165,11 @@ export namespace _material {
       // terrain — lambert with three's physical distance attenuation.
       // pointLights[i].position is VIEW-space, color is premultiplied by
       // intensity; parked pool lights have intensity 0 and contribute nothing.
+      // vWorldPosAbs, not vWorldPos: the view matrix expects an ABSOLUTE
+      // world position, and the wrapped one lit the wrong chunks.
       #if NUM_POINT_LIGHTS > 0
       {
-        vec3 plViewPos = (viewMatrix * vec4(vWorldPos, 1.0)).xyz;
+        vec3 plViewPos = (viewMatrix * vec4(vWorldPosAbs, 1.0)).xyz;
         vec3 plViewNormal = normalize((viewMatrix * vec4(vWorldNormal, 0.0)).xyz);
         vec3 pointLightSum = vec3(0.0);
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {

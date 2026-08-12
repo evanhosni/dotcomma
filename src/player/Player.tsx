@@ -2,7 +2,7 @@ import type Rapier from "@dimforge/rapier3d-compat";
 import { PointerLockControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
@@ -10,6 +10,8 @@ import { usePortalContext } from "../portals/PortalContext";
 import { getVertexData, getVertexDataRaw } from "../world/vertexData";
 import { useInput } from "./useInput";
 
+/** Default spawn: BODY-CENTER position high above the origin — the player
+ *  free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
 const FALL_RESET_Y = -500;
 
@@ -168,7 +170,14 @@ const resolveEmbeddedSurface = async (
 const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
   Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
 
-export const Player = () => {
+export interface PlayerProps {
+  /** Where the player's FEET start (ground-level position). When set, the
+   *  capsule spawns standing there (center = y + half height) instead of
+   *  free-falling from the default sky spawn. Home page: [0, 0, 0]. */
+  spawnPosition?: [number, number, number];
+}
+
+export const Player = ({ spawnPosition }: PlayerProps) => {
   const inputRef = useInput();
   const { camera } = useThree();
   const { terrain_loaded, playerPosition } = useGameContext();
@@ -190,6 +199,17 @@ export const Player = () => {
   const unsticking = useRef(false);
 
   const { world, rapier } = useRapier();
+
+  // BODY-CENTER spawn: the prop is a feet/ground position (+ a hair of
+  // clearance so the capsule never starts penetrating; snap-to-ground settles
+  // it on the first step), the default is the sky drop.
+  const spawn = useMemo<[number, number, number]>(
+    () =>
+      spawnPosition
+        ? [spawnPosition[0], spawnPosition[1] + PLAYER_HEIGHT / 2 + 0.05, spawnPosition[2]]
+        : SPAWN_POSITION,
+    [spawnPosition?.[0], spawnPosition?.[1], spawnPosition?.[2]]
+  );
 
   useEffect(() => {
     const controller = world.createCharacterController(CC_OFFSET);
@@ -248,9 +268,9 @@ export const Player = () => {
     // Hold player in place until terrain colliders are loaded (outdoor world only)
     const needsTerrain = !activeIndoorId;
     if (needsTerrain && !terrain_loaded && !noclip) {
-      rb.setTranslation({ x: SPAWN_POSITION[0], y: SPAWN_POSITION[1], z: SPAWN_POSITION[2] }, true);
+      rb.setTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] }, true);
       verticalVelocity.current = 0;
-      _camTarget.set(SPAWN_POSITION[0], SPAWN_POSITION[1] + PLAYER_HEIGHT * 0.5, SPAWN_POSITION[2]);
+      _camTarget.set(spawn[0], spawn[1] + PLAYER_HEIGHT * 0.5, spawn[2]);
       camera.position.copy(_camTarget);
       cameraReady.current = false;
       return;
@@ -580,7 +600,7 @@ export const Player = () => {
   return (
     <>
       <PointerLockControls />
-      <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={SPAWN_POSITION} colliders={false} ccd>
+      <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={spawn} colliders={false} ccd>
         <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
       </RigidBody>
     </>

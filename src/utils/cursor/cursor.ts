@@ -17,13 +17,28 @@ function getOrCreateCursor(): HTMLDivElement {
     backgroundColor: "#0f0",
     pointerEvents: "none",
     zIndex: "1000",
+    // Hidden until the canvas is focused (pointer lock) — see initCursor.
+    display: "none",
   });
   document.body.appendChild(el);
   return el;
 }
 
+let visibilityBound = false;
+
 export const initCursor = (): void => {
-  getOrCreateCursor();
+  const el = getOrCreateCursor();
+
+  // The crosshair only means anything while mouse-look is engaged — hide it
+  // whenever the canvas doesn't hold pointer lock (menus, before clicking in).
+  if (!visibilityBound) {
+    visibilityBound = true;
+    const sync = () => {
+      el.style.display = document.pointerLockElement ? "block" : "none";
+    };
+    sync();
+    document.addEventListener("pointerlockchange", sync);
+  }
 };
 
 export const showCursor = (): void => {

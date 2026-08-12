@@ -658,6 +658,7 @@ export const TerrainRenderer = () => {
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
+
     const chunk: Chunk = {
       offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
