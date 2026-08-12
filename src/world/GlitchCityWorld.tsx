@@ -5,7 +5,7 @@ import { PostProcessing } from "../vfx/PostProcessing";
 import { Material, Skybox, Terrain, World } from "./components";
 
 /**
- * The game world — single source of truth for active content.
+ * glitch-city — the main game world (route: /glitch-city).
  *
  * Everything is declared as components: <World> hosts the global rulesets
  * (terrain rules, materials, skybox, post-processing) and mounts the global
@@ -15,7 +15,7 @@ import { Material, Skybox, Terrain, World } from "./components";
  *
  * To add a region: create a component in src/regions/ and mount it here.
  */
-export const GameWorld = React.memo(() => (
+export const GlitchCityWorld = React.memo(() => (
   <World>
     {/* Global terrain rules — omitted props use DEFAULT_WORLD_TERRAIN_PARAMS */}
     <Terrain seed="123" />

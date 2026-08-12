@@ -40,6 +40,7 @@ export const getMaterial = async () => {
       "varying float vHeight;",
       "varying vec3 vWorldNormal;",
       "varying vec3 vWorldPos;",
+      "varying vec3 vWorldPosAbs;",
     ],
   });
 

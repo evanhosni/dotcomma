@@ -8,7 +8,6 @@ import { Player } from "../player/Player";
 import { PortalContextProvider } from "../portals/PortalContext";
 import { DayNightProvider } from "../sky/DayNightContext";
 import { initCursor } from "../utils/cursor/cursor";
-import { GameWorld } from "./GameWorld";
 
 /** Portal useFrame hooks use non-zero priorities (-1, 1), which disables R3F's
  *  auto-rendering. This component replaces it with an explicit render at the end. */
@@ -20,7 +19,15 @@ const SceneRender = () => {
   return null;
 };
 
-const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
+interface CustomCanvasProps extends React.PropsWithChildren {
+  /** Scene/canvas background color (home page overrides to black). */
+  background?: string;
+  /** Where the player's FEET spawn (ground-level position). Unset = the
+   *  default sky drop onto the terrain. Home page: [0, 0, 0]. */
+  playerSpawn?: [number, number, number];
+}
+
+const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
   const { physicsDebug } = useDevMode();
 
   useEffect(() => {
@@ -29,28 +36,31 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
 
   return (
     <>
-      <color attach="background" args={["#555555"]} />
+      <color attach="background" args={[background]} />
       <SceneRender />
       <Overlay />
       <Physics gravity={[0, -100, 0]} debug={physicsDebug}>
         {children}
-        <GameWorld />
-        <Player />
+        <Player spawnPosition={playerSpawn} />
       </Physics>
     </>
   );
 };
 
 /** PreCustomCanvas needs PortalContext, so wrap it */
-const PreCustomCanvasWithPortal = ({ children }: React.PropsWithChildren) => (
+const PreCustomCanvasWithPortal = ({ background, playerSpawn, children }: CustomCanvasProps) => (
   <PortalContextProvider>
-    <PreCustomCanvas>{children}</PreCustomCanvas>
+    <PreCustomCanvas background={background} playerSpawn={playerSpawn}>
+      {children}
+    </PreCustomCanvas>
   </PortalContextProvider>
 );
 
-export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
+/** The game canvas. The active world (<GlitchCityWorld/>, <HomeWorld/>) is
+ *  passed as children by the route in index.tsx. */
+export const CustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
   const defaultCanvasProps = {
-    style: { background: "#555" },
+    style: { background },
   };
 
   const mergedCanvasProps = { ...defaultCanvasProps };
@@ -59,7 +69,9 @@ export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
     <Canvas {...mergedCanvasProps}>
       <GameContextProvider>
         <DayNightProvider>
-          <PreCustomCanvasWithPortal>{children}</PreCustomCanvasWithPortal>
+          <PreCustomCanvasWithPortal background={background} playerSpawn={playerSpawn}>
+            {children}
+          </PreCustomCanvasWithPortal>
         </DayNightProvider>
       </GameContextProvider>
     </Canvas>
