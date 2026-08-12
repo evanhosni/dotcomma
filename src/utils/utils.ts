@@ -23,3 +23,23 @@ export const getDistance2DSq = (pos1: THREE.Vector3, pos2: THREE.Vector3): numbe
   const dz = pos1.z - pos2.z;
   return dx * dx + dz * dz;
 };
+
+/** Force ONE real draw of a mesh regardless of the camera frustum, then
+ *  restore normal culling. three uploads geometry buffers/textures and links
+ *  the shader program on a mesh's FIRST DRAW — content mounted off-screen
+ *  otherwise defers its entire GPU upload to the frame the player first turns
+ *  toward it, and a fast 180° cashes in EVERY deferred upload at once (the
+ *  turn-around lag spike). Mount time is already staggered (spawn batches,
+ *  budgeted chunk builds), so paying the upload there flattens the storm.
+ *  The one off-frustum draw costs its vertex work only (no fragments), and a
+ *  mesh whose `visible` is false stays deferred until it's shown — the flag
+ *  simply persists until the first actual draw. */
+export const uploadOnFirstDraw = (mesh: import("three").Object3D): void => {
+  mesh.frustumCulled = false;
+  const prev = mesh.onAfterRender;
+  mesh.onAfterRender = function (this: any, ...args: any[]) {
+    mesh.frustumCulled = true;
+    mesh.onAfterRender = prev;
+    (prev as any)?.apply(this, args);
+  } as typeof mesh.onAfterRender;
+};

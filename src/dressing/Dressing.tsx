@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import React, { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
+import { uploadOnFirstDraw } from "../utils/utils";
 
 /**
  * DRESSING — the instanced spawn class.
@@ -143,6 +144,9 @@ export const instancedFromPoints = <P,>(
       new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2),
       Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
     );
+    // Pay the instance-buffer upload at (budget-staggered) chunk build time,
+    // not when the player first turns toward the chunk.
+    uploadOnFirstDraw(mesh);
   }
   return mesh;
 };

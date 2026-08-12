@@ -6,7 +6,7 @@ import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
 import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
-import { getDistance2D } from "../../utils/utils";
+import { getDistance2D, uploadOnFirstDraw } from "../../utils/utils";
 import {
   beginProceduralBuildingBuild,
   peekProceduralBuildingAssets,
@@ -296,6 +296,16 @@ export const Building = ({
     retainProceduralBuildingAssets(resolvedSeed, optionsKey, assets);
     return () => releaseProceduralBuildingAssets(resolvedSeed, optionsKey);
   }, [assets, resolvedSeed, optionsKey]);
+
+  // Buildings mostly mount OFF-SCREEN (spawn radius is a circle, the player
+  // faces one way) — pay each mesh's one-time GPU upload now, staggered by
+  // the spawn batch, instead of all at once when the player turns around.
+  useEffect(() => {
+    if (!assets) return;
+    groupRef.current?.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) uploadOnFirstDraw(o);
+    });
+  }, [assets]);
 
   // ---- Door state ---- (indexes default closed until toggled)
   // The React state drives the collider mount; the SWING LOOP reads the ref.

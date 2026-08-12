@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
 import { _quantization } from "../../utils/quantization/quantization";
+import { uploadOnFirstDraw } from "../../utils/utils";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import { useFoliageRenderDistance } from "../Foliage";
@@ -122,7 +123,21 @@ interface GrassChunk {
   cx: number;
   cz: number;
   mesh: THREE.Mesh | null; // null = built but empty
+  count: number; // full blade count — instanceCount is truncated by distance
 }
+
+// ── Distance-tiered blade counts ──
+// The worker delivers each chunk's instances sorted longest-lived-first (by
+// the shader's per-blade fade key), so truncating instanceCount by distance
+// is exact: the dropped tail is precisely the blades the fade has already
+// shrunk to nothing — they cost full vertex work otherwise (measured: grass
+// was 14.6M of 14.8M rendered triangles). The TAPER below that additionally
+// thins mid-distance density toward a floor — a real (mild) visual reduction,
+// tune the constants to taste.
+const GRASS_LOD_TAPER_START = 250; // full density inside this distance
+const GRASS_LOD_TAPER_END = 600; // density floor reached here
+const GRASS_LOD_TAPER_MIN = 0.6; // fraction of full density at the floor
+const GRASS_CHUNK_HALF_DIAG = (GRASS_CHUNK_SIZE * Math.SQRT2) / 2;
 
 /** Dispose a chunk's geometry WITHOUT killing the shared blade quad: the
  *  base position/uv/index buffers are shared by EVERY chunk of every
@@ -333,7 +348,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       pendingRef.current.delete(key);
 
       if (result.count === 0) {
-        chunksRef.current.set(key, { cx, cz, mesh: null });
+        chunksRef.current.set(key, { cx, cz, mesh: null, count: 0 });
         return;
       }
 
@@ -360,7 +375,10 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       // The shader reads the chunk origin off modelMatrix[3] to rebase blade
       // positions — see GRASS_VERTEX_SHADER.
       mesh.position.set(cx * GRASS_CHUNK_SIZE, 0, cz * GRASS_CHUNK_SIZE);
-      chunksRef.current.set(key, { cx, cz, mesh });
+      // Pay the ~200KB instance-attribute upload NOW (chunk arrivals are
+      // already budget-staggered) instead of when the player turns toward it.
+      uploadOnFirstDraw(mesh);
+      chunksRef.current.set(key, { cx, cz, mesh, count: result.count });
       groupRef.current?.add(mesh);
     });
   };
@@ -399,12 +417,30 @@ export const GrassField: React.FC<GrassFieldProps> = ({
     chunksRef.current.forEach((chunk, key) => {
       const dx = (chunk.cx + 0.5) * GRASS_CHUNK_SIZE - px;
       const dz = (chunk.cz + 0.5) * GRASS_CHUNK_SIZE - pz;
-      if (dx * dx + dz * dz > keepDistSq) {
+      const distSq = dx * dx + dz * dz;
+      if (distSq > keepDistSq) {
         if (chunk.mesh) {
           groupRef.current?.remove(chunk.mesh);
           disposeChunkGeometry(chunk.mesh.geometry);
         }
         chunksRef.current.delete(key);
+      } else if (chunk.mesh) {
+        // Truncate to the blades still visible at this distance (instances
+        // arrive fade-sorted — see GRASS_LOD constants above). dNear uses the
+        // chunk's nearest possible blade so nothing visible is ever cut;
+        // +0.03 pads the uniform-hash count estimate.
+        const dNear = Math.max(0, Math.sqrt(distSq) - GRASS_CHUNK_HALF_DIAG);
+        const t = (dNear / renderDistance - 0.55) / 0.45;
+        const fadeFrac = 1 - Math.min(Math.max(t, 0), 1) + 0.03;
+        const taperT = Math.min(
+          Math.max((dNear - GRASS_LOD_TAPER_START) / (GRASS_LOD_TAPER_END - GRASS_LOD_TAPER_START), 0),
+          1
+        );
+        const taperFrac = 1 - taperT * (1 - GRASS_LOD_TAPER_MIN);
+        const frac = Math.min(1, fadeFrac, taperFrac);
+        (chunk.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = Math.ceil(
+          chunk.count * frac
+        );
       }
     });
 
