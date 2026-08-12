@@ -3,6 +3,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
+import { traceEvent } from "../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../utils/utils";
 import { getActiveWorldConfig } from "../registry";
 import { getMaterial } from "../material";
@@ -676,6 +677,7 @@ export const TerrainRenderer = () => {
     // Single batched collider re-render per frame
     if (collidersChanged.current) {
       collidersChanged.current = false;
+      traceEvent("terrain:collider-commit"); // Rapier heightfield builds land in the following React commit
       setColliderVersion((v) => v + 1);
     }
 
@@ -742,6 +744,7 @@ export const TerrainRenderer = () => {
       chunk.lod.hasCollider
     );
     const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
+    const traceT0 = performance.now();
 
     // Reuse attribute arrays from pooled geometry when available, else allocate
     const totalVerts = pos.count;
@@ -845,6 +848,8 @@ export const TerrainRenderer = () => {
       GenerateColliders(chunk, offset, workerResult.colliderHeights);
       collidersChanged.current = true;
     }
+
+    traceEvent(`terrain:finish L${chunk.lod.level}`, performance.now() - traceT0);
 
     yield;
   };

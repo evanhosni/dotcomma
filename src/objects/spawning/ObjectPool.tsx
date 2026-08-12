@@ -2,6 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../context/GameContext";
+import { traceEvent } from "../../utils/spikeTrace";
 import { getActiveRegions, getActiveWorldConfig } from "../../world/registry";
 import { collectDescriptors } from "./collectDescriptors";
 import {
@@ -378,6 +379,8 @@ export const ObjectPool = () => {
       }
 
       if (hasChanges || wasDirty) {
+        // The mount/unmount React commit lands right after this event
+        traceEvent("spawn:commit", candidates.length);
         setStableComponents(Array.from(objectsMapRef.current.values(), (o) => o.node));
       }
     } catch (error) {
