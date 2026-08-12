@@ -14,7 +14,7 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { WorldConfig, initCompute, computeVertexData, getFlattenPoints, seedRand } from "./vertexCompute";
+import { FlattenPoint, WorldConfig, initCompute, computeVertexData, getFlattenPoints, seedRand } from "./vertexCompute";
 
 const SPAWN_CHUNK_SIZE = 250;
 
@@ -48,25 +48,31 @@ interface SerializedDescriptor {
 class SpatialHash {
   private cellSize: number;
   private invCellSize: number;
-  private cells = new Map<string, SpawnPoint[]>();
+  // Nested numeric maps (cx → cz → bucket), the codebase-preferred pattern
+  // (see ChunkIndex in TerrainRenderer.tsx). The old `${cx}_${cz}` string key
+  // was built per candidate × 9 neighbor cells (~2,100 strings per
+  // descriptor-chunk); numeric lookups allocate nothing. Query/insert
+  // semantics and ordering are unchanged: buckets keep insertion order and
+  // isTooClose scans the same dx-then-dz cell order as before.
+  private cells = new Map<number, Map<number, SpawnPoint[]>>();
 
   constructor(maxFootprint: number) {
     this.cellSize = Math.max(maxFootprint * 2.5, 1);
     this.invCellSize = 1 / this.cellSize;
   }
 
-  private key(cx: number, cz: number): string {
-    return `${cx}_${cz}`;
-  }
-
   insert(point: SpawnPoint): void {
     const cx = Math.floor(point.x * this.invCellSize);
     const cz = Math.floor(point.z * this.invCellSize);
-    const k = this.key(cx, cz);
-    let bucket = this.cells.get(k);
+    let row = this.cells.get(cx);
+    if (!row) {
+      row = new Map();
+      this.cells.set(cx, row);
+    }
+    let bucket = row.get(cz);
     if (!bucket) {
       bucket = [];
-      this.cells.set(k, bucket);
+      row.set(cz, bucket);
     }
     bucket.push(point);
   }
@@ -75,12 +81,16 @@ class SpatialHash {
   remove(point: SpawnPoint): void {
     const cx = Math.floor(point.x * this.invCellSize);
     const cz = Math.floor(point.z * this.invCellSize);
-    const k = this.key(cx, cz);
-    const bucket = this.cells.get(k);
+    const row = this.cells.get(cx);
+    if (!row) return;
+    const bucket = row.get(cz);
     if (!bucket) return;
     const i = bucket.indexOf(point);
     if (i !== -1) bucket.splice(i, 1);
-    if (bucket.length === 0) this.cells.delete(k);
+    if (bucket.length === 0) {
+      row.delete(cz);
+      if (row.size === 0) this.cells.delete(cx);
+    }
   }
 
   isTooClose(
@@ -99,8 +109,10 @@ class SpatialHash {
     const cz = Math.floor(z * this.invCellSize);
 
     for (let dx = -cellSpan; dx <= cellSpan; dx++) {
+      const row = this.cells.get(cx + dx);
+      if (!row) continue;
       for (let dz = -cellSpan; dz <= cellSpan; dz++) {
-        const bucket = this.cells.get(this.key(cx + dx, cz + dz));
+        const bucket = row.get(cz + dz);
         if (!bucket) continue;
         for (let i = 0; i < bucket.length; i++) {
           const p = bucket[i];
@@ -143,7 +155,7 @@ const chunkCache = new Map<string, CachedChunk>();
 
 const generateForChunk = (
   chunkKey: string,
-  descriptors: SerializedDescriptor[]
+  sorted: SerializedDescriptor[] // pre-sorted by priority (once per message)
 ): SpawnPoint[] => {
   const hit = chunkCache.get(chunkKey);
   if (hit) {
@@ -161,12 +173,16 @@ const generateForChunk = (
   const chunkMinX = cx * SPAWN_CHUNK_SIZE;
   const chunkMinZ = cz * SPAWN_CHUNK_SIZE;
 
-  // Sort by priority: lowest first (rarest objects placed first)
-  const sorted = [...descriptors].sort(
-    (a, b) => (a.priority ?? 50) - (b.priority ?? 50)
-  );
-
   const chunkPoints: SpawnPoint[] = [];
+
+  // getFlattenPoints re-scans the chunk's tile window and returns ALL flatten
+  // descriptors' points every call, so it's fetched ONCE per chunk (lazily, on
+  // the first flattenGround descriptor) and bucketed by descId. Each bucket is
+  // the exact subsequence the old per-descriptor `p.descId !== desc.id` filter
+  // saw, in the same enumeration order, and buckets are still consumed in the
+  // priority loop's order — so chunkPoints order and spatial-hash insertion
+  // order are byte-identical to calling the engine per descriptor.
+  let flattenByDesc: Map<string, FlattenPoint[]> | null = null;
 
   for (const desc of sorted) {
     // flattenGround actors: placement comes from the DETERMINISTIC flatten
@@ -176,22 +192,35 @@ const generateForChunk = (
     // space against them; their own spacing was already resolved by the
     // engine's stateless greedy.
     if (desc.flattenGround) {
-      for (const p of getFlattenPoints(
-        chunkMinX,
-        chunkMinZ,
-        chunkMinX + SPAWN_CHUNK_SIZE,
-        chunkMinZ + SPAWN_CHUNK_SIZE
-      )) {
-        if (p.descId !== desc.id) continue;
-        const point: SpawnPoint = {
-          x: p.x,
-          z: p.z,
-          height: p.y,
-          biomeId: p.biomeId,
-          descriptorId: desc.id,
-        };
-        spatialHash!.insert(point);
-        chunkPoints.push(point);
+      if (flattenByDesc === null) {
+        flattenByDesc = new Map();
+        for (const p of getFlattenPoints(
+          chunkMinX,
+          chunkMinZ,
+          chunkMinX + SPAWN_CHUNK_SIZE,
+          chunkMinZ + SPAWN_CHUNK_SIZE
+        )) {
+          let arr = flattenByDesc.get(p.descId);
+          if (!arr) {
+            arr = [];
+            flattenByDesc.set(p.descId, arr);
+          }
+          arr.push(p);
+        }
+      }
+      const descPoints = flattenByDesc.get(desc.id);
+      if (descPoints) {
+        for (const p of descPoints) {
+          const point: SpawnPoint = {
+            x: p.x,
+            z: p.z,
+            height: p.y,
+            biomeId: p.biomeId,
+            descriptorId: desc.id,
+          };
+          spatialHash!.insert(point);
+          chunkPoints.push(point);
+        }
       }
       continue;
     }
@@ -324,11 +353,18 @@ self.onmessage = (e: MessageEvent) => {
     const { id, chunkKeys, descriptors, budgetMs } = e.data;
     const deadline = performance.now() + budgetMs;
 
+    // Sort by priority once per message: lowest first (rarest objects placed
+    // first). The descriptor set is fixed within a message, so sorting inside
+    // generateForChunk just repeated the identical (stable) sort per chunk.
+    const sorted = ([...descriptors] as SerializedDescriptor[]).sort(
+      (a, b) => (a.priority ?? 50) - (b.priority ?? 50)
+    );
+
     const allPoints: SpawnPoint[] = [];
     const done: string[] = [];
 
     for (const key of chunkKeys) {
-      const points = generateForChunk(key, descriptors);
+      const points = generateForChunk(key, sorted);
       for (let i = 0; i < points.length; i++) allPoints.push(points[i]);
       done.push(key);
       // Checked AFTER the first chunk, so a single chunk costlier than the

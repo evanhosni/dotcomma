@@ -133,27 +133,50 @@ const noiseInstance = new Noise(seedRand("bierce"));
 const simplex2 = (x: number, y: number) => noiseInstance.simplex2(x, y);
 const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
 
+// Per-params constants (gain + normalization depend only on the params
+// object, which is stable per world config) — recomputing 2**-persistence and
+// the amplitude sum per call added a pow per noise call, 3-4 calls per vertex.
+const noiseParamsCache = new WeakMap<TerrainNoiseParams, { G: number; norm: number }>();
+const getNoiseConsts = (params: TerrainNoiseParams) => {
+  let c = noiseParamsCache.get(params);
+  if (!c) {
+    const G = 2.0 ** -params.persistence;
+    let amplitude = 1.0;
+    let norm = 0;
+    for (let o = 0; o < params.octaves; o++) {
+      norm += amplitude;
+      amplitude *= G;
+    }
+    c = { G, norm };
+    noiseParamsCache.set(params, c);
+  }
+  return c;
+};
+
 const terrainNoise = (params: TerrainNoiseParams, x: number, y: number): number => {
   const xs = x / params.scale;
   const ys = y / params.scale;
-  const G = 2.0 ** -params.persistence;
+  const { G, norm } = getNoiseConsts(params);
+  const isSimplex = params.type === "simplex";
   let amplitude = 1.0;
   let frequency = 1.0;
-  let normalization = 0;
   let total = 0;
   for (let o = 0; o < params.octaves; o++) {
     const noiseValue =
-      params.type === "simplex"
-        ? simplex2(xs * frequency, ys * frequency) * 0.5 + 0.5
-        : perlin2(xs * frequency, ys * frequency) * 0.5 + 0.5;
+      (isSimplex ? simplex2(xs * frequency, ys * frequency) : perlin2(xs * frequency, ys * frequency)) *
+        0.5 +
+      0.5;
     total += noiseValue * amplitude;
-    normalization += amplitude;
     amplitude *= G;
     frequency *= params.lacunarity;
   }
-  total /= normalization;
+  total /= norm;
   total -= 0.5;
-  return Math.pow(total, params.exponentiation) * params.height;
+  // pow() preserved exactly for arbitrary exponents; the common integer cases
+  // skip it (identical results — pow with integer exponents is exact here)
+  const e = params.exponentiation;
+  const shaped = e === 2 ? total * total : e === 1 ? total : Math.pow(total, e);
+  return shaped * params.height;
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -283,6 +306,19 @@ const getDelaunayData = (grid: VGrid[]) => {
   return cached;
 };
 
+// Wall lists are a pure function of the two grid arrays (the vertex only
+// feeds eviction bookkeeping), so memoize on grid identity like the Delaunay
+// cache. Without this, every vertex re-walked all ~96 halfedges and allocated
+// a label string per halfedge + a Wall object per boundary — ~900k string
+// allocations per LOD1 chunk, the dominant chunk-build cost. The regionGrid
+// identity is checked too: a biome grid cell always maps to one region grid
+// (gridSize divides regionGridSize), but the guard keeps the cache correct
+// even if that invariant ever changes.
+const wallsCache = new WeakMap<
+  VGrid[],
+  { regionGrid: VGrid[]; biomeWalls: Wall[]; riverWalls: Wall[] }
+>();
+
 const getWalls = (
   seed: string,
   currentVertex: Vec2,
@@ -290,6 +326,9 @@ const getWalls = (
   regionGrid: VGrid[],
   gridSize: number
 ): { biomeWalls: Wall[]; riverWalls: Wall[] } => {
+  const memo = wallsCache.get(grid);
+  if (memo && memo.regionGrid === regionGrid) return memo;
+
   const x = Math.floor(currentVertex.x / gridSize);
   const y = Math.floor(currentVertex.y / gridSize);
 
@@ -350,7 +389,9 @@ const getWalls = (
     }
   }
 
-  return { biomeWalls, riverWalls };
+  const result = { regionGrid, biomeWalls, riverWalls };
+  wallsCache.set(grid, result);
+  return result;
 };
 
 /** Side-channel of the last distanceToWall call: a pseudo-arc coordinate
@@ -396,18 +437,24 @@ const smoothstepVal = (edge0: number, edge1: number, x: number): number => {
  *  adjacent cells of the same block — which have no road between them — are
  *  guaranteed the same height. Memoized: it runs 4× per city vertex and
  *  seedRand spins up a fresh seedrandom instance per call. */
-const cityElevationCache = new Map<string, number>();
+const cityElevationCache = new Map<number, number>();
+let cityElevationCacheSeed = "";
 const cityBlockElevation = (
   citySeed: string,
   blockIndex: number | undefined,
   maxElevation: number
 ): number => {
   if (blockIndex === undefined || blockIndex < 0) return 0;
-  const key = `${citySeed}-elevation-${blockIndex}`;
-  let h = cityElevationCache.get(key);
+  // Numeric memo key — the seeded string is only built on a genuine miss
+  // (this runs 4-5× per city vertex; the old string key allocated per HIT)
+  if (cityElevationCacheSeed !== citySeed) {
+    cityElevationCache.clear();
+    cityElevationCacheSeed = citySeed;
+  }
+  let h = cityElevationCache.get(blockIndex);
   if (h === undefined) {
-    h = seedRand(key) * maxElevation;
-    cityElevationCache.set(key, h);
+    h = seedRand(`${citySeed}-elevation-${blockIndex}`) * maxElevation;
+    cityElevationCache.set(blockIndex, h);
   }
   return h;
 };
@@ -532,16 +579,33 @@ const baseCityLabel = (ix: number, iy: number, walls: Wall[], d: CityDistrict): 
 
 /** Per-cell block cell (label + shape), cached so terrain, spawns, and the
  *  road-marker enumeration always agree. Coordinates are DISTRICT-LOCAL;
- *  each district has its own seeded layout (seeds salted by district key). */
-const cityCellCaches: { [seed: string]: Map<string, CityCell> } = {};
+ *  each district has its own seeded layout (seeds salted by district key).
+ *  Nested numeric maps under the district key: the old flat string key
+ *  (`${d.key}:${ix},${iy}`) allocated ~10 strings per city vertex on HITS. */
+interface CityCellStore {
+  count: number;
+  districts: Map<string, Map<number, Map<number, CityCell>>>;
+}
+const cityCellCaches: { [seed: string]: CityCellStore } = {};
+
+const cityCellLookup = (store: CityCellStore, dKey: string, ix: number, iy: number): CityCell | undefined =>
+  store.districts.get(dKey)?.get(ix)?.get(iy);
+
 const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): CityCell => {
   const city = cfg!.cityConfig;
-  let cache = cityCellCaches[city.seed];
-  if (!cache) cache = cityCellCaches[city.seed] = new Map();
-  const key = `${d.key}:${ix},${iy}`;
-  let cell = cache.get(key);
+  let store = cityCellCaches[city.seed];
+  if (!store) store = cityCellCaches[city.seed] = { count: 0, districts: new Map() };
+  let cell = cityCellLookup(store, d.key, ix, iy);
   if (cell === undefined) {
-    if (cache.size > 20000) cache.clear(); // tiny entries; cheap deterministic regen
+    if (store.count > 20000) {
+      // Drop the oldest half of the DISTRICTS (insertion order ≈ distance)
+      let drop = Math.max(1, store.districts.size >> 1);
+      for (const [dk, dm] of store.districts) {
+        if (drop-- <= 0) break;
+        dm.forEach((col) => (store.count -= col.size));
+        store.districts.delete(dk);
+      }
+    }
     const gs = city.gridSize;
     const px = (ix + 0.5) * gs;
     const py = (iy + 0.5) * gs;
@@ -598,7 +662,18 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
         };
       }
     }
-    cache.set(key, cell);
+    let dmap = store.districts.get(d.key);
+    if (!dmap) {
+      dmap = new Map();
+      store.districts.set(d.key, dmap);
+    }
+    let col = dmap.get(ix);
+    if (!col) {
+      col = new Map();
+      dmap.set(ix, col);
+    }
+    col.set(iy, cell);
+    store.count++;
   }
   return cell;
 };
@@ -618,7 +693,7 @@ const cityScalarCache = new Map<string, number>();
 const cityScalar = (key: string, compute: () => number): number => {
   let v = cityScalarCache.get(key);
   if (v === undefined) {
-    if (cityScalarCache.size > 8192) cityScalarCache.clear();
+    if (cityScalarCache.size > 8192) dropOldestHalf(cityScalarCache);
     v = compute();
     cityScalarCache.set(key, v);
   }
@@ -627,24 +702,43 @@ const cityScalar = (key: string, compute: () => number): number => {
 
 const cityDistrictPitch = (): number => cfg!.cityConfig.districtSize * cfg!.cityConfig.gridSize;
 
+// Row/segment boundaries are the hottest scalar lookups (the findCityRow /
+// findCitySeg while-loops probe them ≥4× per vertex) — dedicated numeric-key
+// maps so cache HITS allocate nothing (the seeded key strings are only built
+// on a miss). Bounded by the district cache's own eviction radius in practice;
+// entries are 8-byte numbers, so no explicit cap is needed.
+const cityRowBoundaryCache = new Map<number, number>();
 /** Z of the boundary line between district rows k−1 and k. */
-const cityRowBoundary = (k: number): number =>
-  cityScalar(`drow:${k}`, () => {
+const cityRowBoundary = (k: number): number => {
+  let v = cityRowBoundaryCache.get(k);
+  if (v === undefined) {
     const pitch = cityDistrictPitch();
-    return (k + (seedRand(`${cfg!.cityConfig.seed}-drow-${k}`) - 0.5) * CITY_DISTRICT_JITTER) * pitch;
-  });
+    v = (k + (seedRand(`${cfg!.cityConfig.seed}-drow-${k}`) - 0.5) * CITY_DISTRICT_JITTER) * pitch;
+    cityRowBoundaryCache.set(k, v);
+  }
+  return v;
+};
 
+const citySegBoundaryCache = new Map<number, Map<number, number>>();
 /** X of the boundary line between segments m−1 and m of row r (staggered
  *  per row via a seeded phase). */
-const citySegBoundary = (r: number, m: number): number =>
-  cityScalar(`dseg:${r}:${m}`, () => {
+const citySegBoundary = (r: number, m: number): number => {
+  let row = citySegBoundaryCache.get(r);
+  if (!row) {
+    row = new Map();
+    citySegBoundaryCache.set(r, row);
+  }
+  let v = row.get(m);
+  if (v === undefined) {
     const pitch = cityDistrictPitch();
     const phase = seedRand(`${cfg!.cityConfig.seed}-dphase-${r}`);
-    return (
+    v =
       (m + phase + (seedRand(`${cfg!.cityConfig.seed}-dseg-${r}-${m}`) - 0.5) * CITY_DISTRICT_JITTER) *
-      pitch
-    );
-  });
+      pitch;
+    row.set(m, v);
+  }
+  return v;
+};
 
 // Arterial wiggle: the district boundary roads bend with two seeded sine
 // octaves — windy freeways instead of straight lines. District ASSIGNMENT
@@ -720,7 +814,7 @@ const cityDistrictByIndex = (r: number, m: number): CityDistrict => {
   const key = `${r},${m}`;
   let d = cityDistrictCache.get(key);
   if (d === undefined) {
-    if (cityDistrictCache.size > 1024) cityDistrictCache.clear();
+    if (cityDistrictCache.size > 1024) dropOldestHalf(cityDistrictCache);
     const minZ = cityRowBoundary(r);
     const maxZ = cityRowBoundary(r + 1);
     const minX = citySegBoundary(r, m);
@@ -1176,6 +1270,19 @@ export interface FlattenPoint {
   skirt: number;
 }
 
+/** Overflow eviction for the hot Maps: drop the OLDEST half (Maps iterate in
+ *  insertion order, so recency ≈ proximity to the player). A full clear() was
+ *  a cliff — for flattenTileCache each entry is hundreds of raw
+ *  computeVertexData calls (30–70ms), and clearing rebuilt the entire live
+ *  working set from zero on the very next vertex. */
+const dropOldestHalf = <K, V>(map: Map<K, V>): void => {
+  let remaining = map.size >> 1;
+  for (const key of map.keys()) {
+    if (remaining-- <= 0) break;
+    map.delete(key);
+  }
+};
+
 const flattenTileCache = new Map<string, FlattenPoint[]>();
 // Adjacent tiles' padded windows overlap by the spacing pad — the boundary
 // cells' candidates (each costing a RAW computeVertexData) would otherwise be
@@ -1206,7 +1313,7 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
   const key = `${tx},${tz}`;
   const hit = flattenTileCache.get(key);
   if (hit) return hit;
-  if (flattenTileCache.size > 2048) flattenTileCache.clear();
+  if (flattenTileCache.size > 2048) dropOldestHalf(flattenTileCache);
 
   const minX = tx * FLATTEN_TILE;
   const minZ = tz * FLATTEN_TILE;
@@ -1239,7 +1346,7 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
             if (cached !== null) candidates.push(cached);
             continue;
           }
-          if (flattenCandCache.size > 65536) flattenCandCache.clear();
+          if (flattenCandCache.size > 65536) dropOldestHalf(flattenCandCache);
 
           const seed = `${desc.id}_${gx}_${gz}`;
           const rand = seedRand(seed);
@@ -1374,9 +1481,13 @@ export function getFlattenPoints(
  *  ASCENDING mask order so the dominant pad lands last: at dense packing a
  *  neighbor's skirt can reach into a pad's flat zone, and unordered
  *  application let it tilt the footing buildings stand on. */
-const flattenInfluences: { y: number; mask: number }[] = [];
+// Parallel reused buffers, insertion-sorted on write (ascending mask, then y —
+// almost always ≤3 entries). An object per influence per vertex was steady GC
+// churn across every collider chunk build.
+const flattenInfY: number[] = [];
+const flattenInfMask: number[] = [];
 const applyFlattenPads = (x: number, z: number, height: number): number => {
-  flattenInfluences.length = 0;
+  let infCount = 0;
   const tx0 = Math.floor((x - flattenReach) / FLATTEN_TILE);
   const tx1 = Math.floor((x + flattenReach) / FLATTEN_TILE);
   const tz0 = Math.floor((z - flattenReach) / FLATTEN_TILE);
@@ -1392,15 +1503,23 @@ const applyFlattenPads = (x: number, z: number, height: number): number => {
         const dSq = dx * dx + dz * dz;
         if (dSq >= reach * reach) continue;
         const mask = 1 - smoothstepVal(p.radius, reach, Math.sqrt(dSq));
-        flattenInfluences.push({ y: p.y, mask });
+        // Insertion sort keeps (mask, y) ascending as we go
+        let j = infCount++;
+        while (
+          j > 0 &&
+          (flattenInfMask[j - 1] > mask || (flattenInfMask[j - 1] === mask && flattenInfY[j - 1] > p.y))
+        ) {
+          flattenInfMask[j] = flattenInfMask[j - 1];
+          flattenInfY[j] = flattenInfY[j - 1];
+          j--;
+        }
+        flattenInfMask[j] = mask;
+        flattenInfY[j] = p.y;
       }
     }
   }
-  if (flattenInfluences.length > 1) {
-    flattenInfluences.sort((a, b) => a.mask - b.mask || a.y - b.y);
-  }
-  for (let i = 0; i < flattenInfluences.length; i++) {
-    height += (flattenInfluences[i].y - height) * flattenInfluences[i].mask;
+  for (let i = 0; i < infCount; i++) {
+    height += (flattenInfY[i] - height) * flattenInfMask[i];
   }
   return height;
 };
@@ -1563,7 +1682,16 @@ export function computeVertexData(x: number, z: number): VertexResult {
 /** District-local cell lookup with the local biome walls (rim detection),
  *  mirroring computeVertexData's road-noise warp for the context. */
 const cityCellAtLocal = (ix: number, iy: number, d: CityDistrict): CityCell => {
-  const gs = cfg!.cityConfig.gridSize;
+  // Cache-first: getCityCell only needs the walls/noise context on a genuine
+  // miss, but building that context costs 2 road-noise FBMs + the voronoi
+  // lookup — paying it on every call made cache HITS the dominant cost of
+  // the dressing enumerations (markers probe this 3× per candidate).
+  const city = cfg!.cityConfig;
+  const store = cityCellCaches[city.seed];
+  const cached = store && cityCellLookup(store, d.key, ix, iy);
+  if (cached) return cached;
+
+  const gs = city.gridSize;
   const w = cityLocalToWorld((ix + 0.5) * gs, (iy + 0.5) * gs, d);
   const warped: Vec2 = {
     x: w.x + terrainNoise(cfg!.roadNoiseParams, w.y, 0),

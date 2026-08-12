@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { useGameContext } from "../context/GameContext";
 import { CROSSING_DEPTH_THRESHOLD, CROSSING_HALF_HEIGHT_TOLERANCE } from "./constants";
 import { getPortalPairMatrix, getPortalPairYaw } from "./portalMath";
-import { usePortalContext } from "./PortalContext";
+import { PortalDescriptor, usePortalContext } from "./PortalContext";
 
 /**
  * Central plane-crossing detector + teleporter (one useFrame for ALL portals).
@@ -26,8 +26,13 @@ const _bodyPos = new THREE.Vector3();
 const _yawQuat = new THREE.Quaternion();
 const _up = new THREE.Vector3(0, 1, 0);
 
-// Per-indoor nearest active enter portal (reused each frame)
-const _nearestEnter = new Map<string, { id: string; dist: number }>();
+// Per-indoor nearest active enter portal. Entry OBJECTS are reused across
+// frames (reset, not reallocated) — a fresh {id, dist} literal per nearby
+// enter portal per frame was steady garbage.
+const _nearestEnter = new Map<string, { id: string | null; distSq: number }>();
+// Exit portals collected during the main pass so the contextEnterId write
+// below doesn't re-walk the whole portal map a second time.
+const _exitPortals: PortalDescriptor[] = [];
 
 export const PortalTeleportSystem = () => {
   const { portals, playerRigidBodyRef, enterIndoor, exitIndoor, previewIndoorIdRef } = usePortalContext();
@@ -42,23 +47,36 @@ export const PortalTeleportSystem = () => {
     const prev = prevSide.current;
 
     let previewId: string | null = null;
-    let previewDist = Infinity;
-    _nearestEnter.clear();
+    let previewDistSq = Infinity;
+    for (const entry of _nearestEnter.values()) {
+      entry.id = null;
+      entry.distSq = Infinity;
+    }
+    _exitPortals.length = 0;
 
     for (const portal of portals.current.values()) {
-      const dist = camera.position.distanceTo(portal.position);
-      if (dist > portal.activationDistance) {
+      // Collected before any continue/break so the contextEnterId pass sees
+      // (almost) every exit portal — see the note on `break` below.
+      if (portal.direction === "exit") _exitPortals.push(portal);
+      // Squared distances everywhere — comparisons only, no sqrt per portal.
+      const distSq = camera.position.distanceToSquared(portal.position);
+      if (distSq > portal.activationDistance * portal.activationDistance) {
         prev.delete(portal.id);
         continue;
       }
       if (portal.direction === "enter") {
-        if (dist < previewDist) {
-          previewDist = dist;
+        if (distSq < previewDistSq) {
+          previewDistSq = distSq;
           previewId = portal.targetIndoorId;
         }
-        const nearest = _nearestEnter.get(portal.targetIndoorId);
-        if (!nearest || dist < nearest.dist) {
-          _nearestEnter.set(portal.targetIndoorId, { id: portal.id, dist });
+        let nearest = _nearestEnter.get(portal.targetIndoorId);
+        if (!nearest) {
+          nearest = { id: null, distSq: Infinity };
+          _nearestEnter.set(portal.targetIndoorId, nearest);
+        }
+        if (distSq < nearest.distSq) {
+          nearest.id = portal.id;
+          nearest.distSq = distSq;
         }
       }
 
@@ -120,10 +138,11 @@ export const PortalTeleportSystem = () => {
 
     // Tell each exit portal which enter portal (if any) is its current viewing
     // context, so it can render the exterior inside that portal's preview.
-    for (const portal of portals.current.values()) {
-      if (portal.direction === "exit") {
-        portal.contextEnterId = _nearestEnter.get(portal.targetIndoorId)?.id ?? null;
-      }
+    // (On the rare teleport frame the `break` above leaves exits not yet
+    // iterated out of _exitPortals — they keep last frame's context for one
+    // frame, which matches _nearestEnter itself being partial on that frame.)
+    for (const portal of _exitPortals) {
+      portal.contextEnterId = _nearestEnter.get(portal.targetIndoorId)?.id ?? null;
     }
 
     previewIndoorIdRef.current = previewId;

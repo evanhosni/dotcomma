@@ -12,6 +12,7 @@ import {
   LAMP_COLOR_RED,
   LAMP_COLOR_YELLOW,
   LampHead,
+  markLampGridDirty,
 } from "../../sky/lampGlow";
 import {
   instancedFromPoints,
@@ -53,6 +54,11 @@ interface SignalChunk {
   lamps: THREE.InstancedMesh;
   lights: LightAnim[];
   headKeys: string[];
+  /** Seconds accumulated since the last per-light pass. */
+  sincePass: number;
+  /** min(lights.remaining) at the last pass — until sincePass reaches it, no
+   *  light in the chunk can be due, so the whole chunk is skipped. */
+  nextSwitchIn: number;
 }
 
 export interface TrafficLightsProps {
@@ -77,6 +83,7 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
   const { camera } = useThree();
   const registry = useChunkRegistry<SignalChunk>((chunk) => {
     for (const key of chunk.headKeys) activeLampHeads.delete(key);
+    markLampGridDirty(); // heads left the set — next grid rewrite must run
     clearLampGridIfEmpty();
   });
 
@@ -148,11 +155,19 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
         return { state, remaining: (p.phase * 7.13) % holdFor(), head };
       });
       if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
+      markLampGridDirty(); // new heads registered above
 
       const group = new THREE.Group();
       group.add(bodies);
       group.add(lamps);
-      registry.add({ group, lamps, lights, headKeys });
+      registry.add({
+        group,
+        lamps,
+        lights,
+        headKeys,
+        sincePass: 0,
+        nextSwitchIn: lights.reduce((min, l) => Math.min(min, l.remaining), Infinity),
+      });
       return group;
     },
   });
@@ -162,21 +177,59 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
     driveLampLighting(camera, state.clock.elapsedTime);
 
     registry.forEachAlive((chunk) => {
-      let changed = false;
+      // Chunk-level skip: no light can be due before min(remaining) elapses,
+      // so accumulate time and only walk the lights when it has. remaining
+      // stays a per-light countdown; it's just decremented in batches.
+      chunk.sincePass += delta;
+      if (chunk.sincePass < chunk.nextSwitchIn) return;
+      const elapsed = chunk.sincePass;
+      chunk.sincePass = 0;
+
+      let minRemaining = Infinity;
+      // Changed lamp-INSTANCE range (3 lamps per light) for the partial upload.
+      let minInst = Infinity;
+      let maxInst = -1;
       for (let i = 0; i < chunk.lights.length; i++) {
         const light = chunk.lights[i];
-        light.remaining -= delta;
-        if (light.remaining > 0) continue;
-        light.state = nextState(light.state);
-        light.remaining = holdFor();
-        light.head.color = STATE_TO_GLOW[light.state]; // grid picks it up next rewrite
-        const lit = STATE_TO_LAMP[light.state];
-        for (let l = 0; l < 3; l++) {
-          chunk.lamps.setColorAt(i * 3 + l, l === lit ? LIT[l] : DIM[l]);
+        light.remaining -= elapsed;
+        if (light.remaining <= 0) {
+          light.state = nextState(light.state);
+          light.remaining = holdFor();
+          light.head.color = STATE_TO_GLOW[light.state];
+          markLampGridDirty(); // pavement glow follows without waiting on another dirty source
+          const lit = STATE_TO_LAMP[light.state];
+          for (let l = 0; l < 3; l++) {
+            chunk.lamps.setColorAt(i * 3 + l, l === lit ? LIT[l] : DIM[l]);
+          }
+          if (i * 3 < minInst) minInst = i * 3;
+          maxInst = i * 3 + 2;
         }
-        changed = true;
+        if (light.remaining < minRemaining) minRemaining = light.remaining;
       }
-      if (changed && chunk.lamps.instanceColor) chunk.lamps.instanceColor.needsUpdate = true;
+      chunk.nextSwitchIn = minRemaining;
+
+      if (maxInst >= 0 && chunk.lamps.instanceColor) {
+        // Partial GPU upload — three r157 has the single updateRange
+        // {offset, count} on BufferAttribute (addUpdateRange arrived in
+        // r159), measured in ARRAY ELEMENTS (floats, 3 per instance); the
+        // renderer resets count to -1 after the ranged bufferSubData. When
+        // several lights flipped this frame the range widens to span them
+        // all (the untouched colors in between re-upload unchanged, still
+        // far cheaper than the whole buffer).
+        const attr = chunk.lamps.instanceColor;
+        let start = minInst * 3;
+        let end = (maxInst + 1) * 3;
+        // count !== -1 ⇒ an earlier range is still unconsumed (the mesh is
+        // frustum-culled, so the renderer never got to it) — expand over it,
+        // or those colors would silently never reach the GPU.
+        if (attr.updateRange.count !== -1) {
+          start = Math.min(start, attr.updateRange.offset);
+          end = Math.max(end, attr.updateRange.offset + attr.updateRange.count);
+        }
+        attr.updateRange.offset = start;
+        attr.updateRange.count = end - start;
+        attr.needsUpdate = true;
+      }
     });
   });
 

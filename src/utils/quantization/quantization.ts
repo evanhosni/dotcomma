@@ -96,7 +96,12 @@ export namespace _quantization {
     const originalCacheKey = material.customProgramCacheKey?.bind(material);
     material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + "_quantized";
 
-    material.onBeforeCompile = (shader) => {
+    // Chain after any pre-existing onBeforeCompile (same pattern as
+    // lampGlow's patch) — assigning directly silently discarded another
+    // patch's shader edits when quantization was applied second.
+    const prevOnBeforeCompile = material.onBeforeCompile;
+    material.onBeforeCompile = (shader, renderer) => {
+      prevOnBeforeCompile?.call(material, shader, renderer);
       shader.uniforms.uGridSize = uniform;
 
       // Inject quantize function before main()

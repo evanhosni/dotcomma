@@ -97,9 +97,13 @@ export interface InstancePlacement {
 
 /**
  * Standard chunk assembly: one InstancedMesh from a point list. `place` maps
- * each point to a position + yaw (local +X faces along yaw). Culling is
- * disabled — instanced bounds don't auto-fit scattered instances, and chunks
- * are small enough to always draw.
+ * each point to a position + yaw (local +X faces along yaw). Frustum culling
+ * stays ON: instanced bounds don't auto-fit scattered instances (three would
+ * have to walk every matrix), but the placements are known right here, so an
+ * explicit world-space bounding sphere is computed from their min/max —
+ * padded by the geometry's own bounds so tall poles / long arms survive any
+ * per-instance yaw. (The mesh sits at the world origin — instance positions
+ * are absolute — so the sphere needs no further transform.)
  */
 export const instancedFromPoints = <P,>(
   geometry: THREE.BufferGeometry,
@@ -113,15 +117,33 @@ export const instancedFromPoints = <P,>(
   const up = new THREE.Vector3(0, 1, 0);
   const pos = new THREE.Vector3();
   const one = new THREE.Vector3(1, 1, 1);
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < points.length; i++) {
     const p = place(points[i], i);
     q.setFromAxisAngle(up, p.yaw ?? 0);
     pos.set(p.x, p.y, p.z);
     m.compose(pos, q, one);
     mesh.setMatrixAt(i, m);
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
   }
   mesh.instanceMatrix.needsUpdate = true;
-  mesh.frustumCulled = false;
+  if (points.length > 0) {
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const gbs = geometry.boundingSphere!;
+    // A yaw rotation about the instance origin can swing the geometry's
+    // sphere center anywhere on a circle of radius |center| — pad by both.
+    const pad = gbs.center.length() + gbs.radius;
+    mesh.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2),
+      Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
+    );
+  }
   return mesh;
 };
 
@@ -152,7 +174,11 @@ export interface ChunkRegistryEntry {
  * Side-state tied to chunk lifetime (animation clocks, lamp-head
  * registrations, collider point lists). `forEachAlive` iterates live entries
  * and lazily prunes unmounted ones, invoking `onRemove` — call it from the
- * feature's own useFrame; no extra frame loop is added.
+ * feature's own useFrame; no extra frame loop is added. On component unmount
+ * `onRemove` runs for every remaining entry: the lazy prune only fires from
+ * the feature's frame loop, so without this, external registrations (lamp
+ * heads in the lampGlow grid) would leak as phantom lights across world
+ * switches / HMR.
  */
 export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
   const onRemoveRef = useRef(onRemove);
@@ -181,6 +207,13 @@ export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry
       },
     };
   }
+  useEffect(() => {
+    const registry = registryRef.current!;
+    return () => {
+      registry.entries.forEach((entry) => onRemoveRef.current?.(entry));
+      registry.entries.clear();
+    };
+  }, []);
   return registryRef.current;
 };
 
@@ -196,6 +229,10 @@ export interface DressingChunkBounds {
 interface DressingChunk {
   object: THREE.Object3D | null;
   disposed: boolean;
+  // World-space chunk center, stored so the prune pass never parses it back
+  // out of the map key.
+  centerX: number;
+  centerZ: number;
 }
 
 /** Release per-chunk GPU buffers (instance attributes). Shared geometries /
@@ -256,46 +293,49 @@ export const useDressingChunks = ({
     const ccx = Math.floor(camX / DRESSING_CHUNK_SIZE);
     const ccz = Math.floor(camZ / DRESSING_CHUNK_SIZE);
 
-    // Build chunks entering range
+    // Build chunks entering range — collected first, then enqueued
+    // nearest-first (the shared queue serializes ALL dressing features, so
+    // raw scan order made a fresh ring build its far corner before the
+    // ground under the camera).
+    const candidates: { cx: number; cz: number; centerX: number; centerZ: number; distSq: number }[] = [];
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dz = -radius; dz <= radius; dz++) {
         const cx = ccx + dx;
         const cz = ccz + dz;
         const centerX = (cx + 0.5) * DRESSING_CHUNK_SIZE;
         const centerZ = (cz + 0.5) * DRESSING_CHUNK_SIZE;
-        if (Math.hypot(camX - centerX, camZ - centerZ) > renderDistance) continue;
-
-        const key = `${cx}_${cz}`;
-        if (chunks.has(key)) continue;
-
-        const entry: DressingChunk = { object: null, disposed: false };
-        chunks.set(key, entry);
-
-        dressingQueue.addTask(async () => {
-          if (entry.disposed) return;
-          const object = await buildRef.current({
-            minX: cx * DRESSING_CHUNK_SIZE,
-            minZ: cz * DRESSING_CHUNK_SIZE,
-            maxX: (cx + 1) * DRESSING_CHUNK_SIZE,
-            maxZ: (cz + 1) * DRESSING_CHUNK_SIZE,
-          });
-          if (!object) return;
-          if (entry.disposed || !groupRef.current) {
-            disposeChunkObject(object);
-            return;
-          }
-          groupRef.current.add(object);
-          entry.object = object;
-        });
+        const distSq = (camX - centerX) ** 2 + (camZ - centerZ) ** 2;
+        if (distSq > renderDistance * renderDistance) continue;
+        if (chunks.has(`${cx}_${cz}`)) continue;
+        candidates.push({ cx, cz, centerX, centerZ, distSq });
       }
+    }
+    candidates.sort((a, b) => a.distSq - b.distSq);
+    for (const { cx, cz, centerX, centerZ } of candidates) {
+      const entry: DressingChunk = { object: null, disposed: false, centerX, centerZ };
+      chunks.set(`${cx}_${cz}`, entry);
+
+      dressingQueue.addTask(async () => {
+        if (entry.disposed) return;
+        const object = await buildRef.current({
+          minX: cx * DRESSING_CHUNK_SIZE,
+          minZ: cz * DRESSING_CHUNK_SIZE,
+          maxX: (cx + 1) * DRESSING_CHUNK_SIZE,
+          maxZ: (cz + 1) * DRESSING_CHUNK_SIZE,
+        });
+        if (!object) return;
+        if (entry.disposed || !groupRef.current) {
+          disposeChunkObject(object);
+          return;
+        }
+        groupRef.current.add(object);
+        entry.object = object;
+      });
     }
 
     // Drop chunks leaving range (hysteresis so borders don't thrash)
     chunks.forEach((entry, key) => {
-      const [cx, cz] = key.split("_").map(Number);
-      const centerX = (cx + 0.5) * DRESSING_CHUNK_SIZE;
-      const centerZ = (cz + 0.5) * DRESSING_CHUNK_SIZE;
-      if (Math.hypot(camX - centerX, camZ - centerZ) > renderDistance * 1.3) {
+      if (Math.hypot(camX - entry.centerX, camZ - entry.centerZ) > renderDistance * 1.3) {
         entry.disposed = true;
         if (entry.object) {
           group.remove(entry.object);

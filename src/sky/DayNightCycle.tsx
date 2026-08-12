@@ -126,7 +126,7 @@ export const DayNightCycle = ({
   nightDurationMs = NIGHT_DURATION_MS,
   transitionMs = DAY_NIGHT_CYCLE_TRANSITION_MS,
 }: DayNightCycleProps) => {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
 
   const groupRef = useRef<THREE.Group>(null);
   const sunRef = useRef<THREE.Mesh>(null);
@@ -190,11 +190,17 @@ export const DayNightCycle = ({
   // lands at the exact frame the first dusk begins — a synchronous program
   // compile+link (expensive under Windows/ANGLE) that read as a "large frame
   // drop right at nightfall". gl.compile traverses regardless of `visible`,
-  // and all three materials are unlit, so compiling against the celestial
-  // group alone builds the same programs the scene render will use.
+  // BUT it also collects the scene LIGHTS only from the object it is passed,
+  // and light COUNTS are part of three's program cache key: compiling just
+  // the celestial group found zero lights, so its programs (numPointLights=0)
+  // never matched the real render (the parked CityLights / IndoorLightRig
+  // pools) and dusk still paid the compile. Precompile must see the SCENE's
+  // lights — deferred one frame so the light-owning components (mounted in
+  // the same commit tree) are all in the scene first.
   useEffect(() => {
-    if (groupRef.current) gl.compile(groupRef.current, camera);
-  }, [gl, camera]);
+    const raf = requestAnimationFrame(() => gl.compile(scene, camera));
+    return () => cancelAnimationFrame(raf);
+  }, [gl, scene, camera]);
 
   const startRef = useRef(performance.now());
   const jitterTimer = useRef(0);

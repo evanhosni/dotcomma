@@ -7,7 +7,7 @@ import {
   TrimeshCollider as RapierTrimesh,
   RigidBody,
 } from "@react-three/rapier";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 
 // NOTE: The RigidBody `position` prop is in LOCAL space (affected by parent
@@ -29,6 +29,9 @@ const KinematicUpdater = ({
   const lastX = useRef(NaN);
   const lastY = useRef(NaN);
   const lastZ = useRef(NaN);
+  // Per-instance scratch — setNextKinematicTranslation copies the values, so
+  // reusing one object avoids an {x,y,z} allocation per moving collider per frame
+  const scratch = useRef({ x: 0, y: 0, z: 0 }).current;
 
   useFrame(() => {
     if (!positionRef.current || !rigidBodyRef.current) return;
@@ -39,7 +42,10 @@ const KinematicUpdater = ({
     lastX.current = x;
     lastY.current = y;
     lastZ.current = z;
-    rigidBodyRef.current.setNextKinematicTranslation({ x, y, z });
+    scratch.x = x;
+    scratch.y = y;
+    scratch.z = z;
+    rigidBodyRef.current.setNextKinematicTranslation(scratch);
   });
 
   return null;
@@ -145,6 +151,15 @@ export const TrimeshCollider = ({
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
+  // Stable typed arrays: react-three-rapier spreads `args` into the deps that
+  // own the Rapier shape, so a FRESH Float32Array/Uint32Array per render
+  // removed and recreated the trimesh collider (full QBVH rebuild) on every
+  // parent re-render.
+  const args = useMemo<[Float32Array, Uint32Array]>(
+    () => [new Float32Array(vertices || []), new Uint32Array(indices || [])],
+    [vertices, indices],
+  );
+
   return (
     <RigidBody
       ref={rigidBodyRef}
@@ -153,7 +168,7 @@ export const TrimeshCollider = ({
       rotation={rotation}
       colliders={false}
     >
-      <RapierTrimesh args={[new Float32Array(vertices || []), new Uint32Array(indices || [])]} />
+      <RapierTrimesh args={args} />
       {!isStatic && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
     </RigidBody>
   );

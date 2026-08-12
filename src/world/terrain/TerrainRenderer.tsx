@@ -106,6 +106,27 @@ const terrain: TerrainProps = {
 
 let queueDirty = false;
 
+// ── Steady-state gate ────────────────────────────────────────────────────────
+// The desired chunk set depends only on camera position, so it is recomputed
+// only after the camera moves DESIRED_MOVE_EPS units (negligible against the
+// 420u base chunk), and the whole update pass is skipped once the queues are
+// drained and the last built chunk has been made visible. Without this, the
+// full quadtree descent (~270 leaves, ~800 allocations) ran every frame even
+// standing still.
+const DESIRED_MOVE_EPS_SQ = 8 * 8;
+let cachedDesired: { [key: string]: { position: number[]; lod: LODLevel } } | null = null;
+let desiredAtX = Infinity;
+let desiredAtZ = Infinity;
+let terrainDirty = true;
+// Camera position at the last build-queue sort (re-sorted when it drifts)
+let lastSortX = Infinity;
+let lastSortZ = Infinity;
+
+// Reused per-pass collections (cleared, never reallocated)
+const swappableKeys = new Set<string>();
+const cancelledKeys = new Set<string>();
+const pruneKeys: string[] = [];
+
 // Geometry pool keyed by LOD level — recycles BufferGeometry to avoid GC churn
 const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
 
@@ -162,11 +183,12 @@ const handleTerrainWorkerMessage = (e: MessageEvent) => {
 };
 
 const buildChunkInWorker = (
-  vertexX: Float32Array,
-  vertexY: Float32Array,
+  segments: number,
+  chunkSize: number,
   offsetX: number,
   offsetZ: number,
   skipPads: boolean,
+  needCollider: boolean,
 ): Promise<{
   heights: Float32Array;
   biomeIds: Float32Array;
@@ -175,13 +197,25 @@ const buildChunkInWorker = (
   distRoad: Float32Array;
   distFreeway: Float32Array;
   freewayAlong: Float32Array;
+  normals: Float32Array;
+  colliderHeights: Float32Array | null;
 }> => {
   return new Promise((resolve) => {
     pendingChunkResolve = resolve;
-    terrainWorker!.postMessage(
-      { type: "BUILD_CHUNK", id: 0, vertexX, vertexY, offsetX, offsetZ, skipPads },
-      [vertexX.buffer, vertexY.buffer]
-    );
+    // The local vertex grid is a pure function of (chunkSize, segments) — the
+    // worker regenerates it from these params instead of the main thread
+    // building + transferring two arrays per chunk. Normals and the Rapier
+    // column-major collider heights come back precomputed too.
+    terrainWorker!.postMessage({
+      type: "BUILD_CHUNK",
+      id: 0,
+      segments,
+      chunkSize,
+      offsetX,
+      offsetZ,
+      skipPads,
+      needCollider,
+    });
   });
 };
 
@@ -447,14 +481,14 @@ export const TerrainRenderer = () => {
       pendingIndex.add(c);
       pendingSet.add(c);
     }
-    if (terrain.active_chunk && !terrain.active_chunk.plane.visible) {
-      pendingIndex.add(terrain.active_chunk);
-      pendingSet.add(terrain.active_chunk);
-    }
+    // (no active-build case: ProcessSwaps runs before the build loop, when
+    // terrain.active_chunk is always null)
 
     // Pass 1: determine which old chunks have ALL their replacements built
-    const swappable = new Set<string>();
-    const cancelled = new Set<string>();
+    const swappable = swappableKeys;
+    const cancelled = cancelledKeys;
+    swappable.clear();
+    cancelled.clear();
 
     for (const oldKey of terrain.queued_to_destroy) {
       const entry = terrain.chunks[oldKey];
@@ -494,22 +528,26 @@ export const TerrainRenderer = () => {
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
 
-    // ── 1. Recompute desired chunks every frame ──────────────────────────
-    const desiredChunks = computeDesiredChunks(playerX, playerZ);
-
-    // ── 2. Cancel active build if no longer desired ──────────────────────
-    if (terrain.active_chunk) {
-      const ac = terrain.active_chunk;
-      const gridX = Math.round(ac.offset.x / ac.lod.chunkSize);
-      const gridZ = Math.round(ac.offset.y / ac.lod.chunkSize);
-      const acKey = `${ac.lod.level}/${gridX}/${gridZ}`;
-      if (!desiredChunks[acKey]) {
-        destroyChunk(acKey);
-        terrain.active_chunk = null;
-      }
+    // ── 1. Recompute desired chunks only after real movement ─────────────
+    const mdx = playerX - desiredAtX;
+    const mdz = playerZ - desiredAtZ;
+    const moved = cachedDesired === null || mdx * mdx + mdz * mdz > DESIRED_MOVE_EPS_SQ;
+    // Steady state (queues drained, everything visible, camera parked):
+    // nothing below can change anything — skip the whole pass.
+    if (!moved && !terrainDirty) return;
+    if (moved) {
+      cachedDesired = computeDesiredChunks(playerX, playerZ);
+      desiredAtX = playerX;
+      desiredAtZ = playerZ;
     }
+    const desiredChunks = cachedDesired!;
 
-    // ── 3. Prune stale chunks ────────────────────────────────────────────
+    // (terrain.active_chunk is only ever non-null DURING step 5's build loop
+    // below — every pass starts with no build in flight, so there is no
+    // "cancel the active build" step; an undesired chunk that finished
+    // building is simply pruned on the next pass.)
+
+    // ── 2. Prune stale chunks ────────────────────────────────────────────
     // Visible chunks already queued for destruction act as COVER: an
     // invisible chunk overlapping one of them can't be dropped yet. Indexed
     // by position and kept up to date as the loop queues more, so the check
@@ -520,7 +558,7 @@ export const TerrainRenderer = () => {
       if (oldData && oldData.chunk.plane.visible) coverIndex.add(oldData.chunk);
     }
 
-    const toPrune: string[] = [];
+    pruneKeys.length = 0;
     for (const chunkKey in terrain.chunks) {
       if (desiredChunks[chunkKey]) continue;
       const chunk = terrain.chunks[chunkKey].chunk;
@@ -534,14 +572,14 @@ export const TerrainRenderer = () => {
       } else if (terrain.active_chunk !== chunk && !coverIndex.overlapsAny(chunk)) {
         // Invisible, not actively building, and nothing depends on it as
         // cover — safe to remove
-        toPrune.push(chunkKey);
+        pruneKeys.push(chunkKey);
       }
     }
-    for (const key of toPrune) {
+    for (const key of pruneKeys) {
       destroyChunk(key);
     }
 
-    // ── 4. Add new desired chunks ────────────────────────────────────────
+    // ── 3. Add new desired chunks ────────────────────────────────────────
     for (const chunkKey in desiredChunks) {
       if (chunkKey in terrain.chunks) continue;
 
@@ -549,87 +587,73 @@ export const TerrainRenderer = () => {
       const [cx, cz] = position;
       const offset = new THREE.Vector2(cx, cz);
 
-      const chunk = QueueChunk(offset, lod, material);
+      const chunk = QueueChunk(chunkKey, offset, lod, material);
       terrain.chunks[chunkKey] = {
         position: [cx, cz],
         chunk: chunk,
       };
     }
 
-    // ── 5. Atomic visibility swaps ───────────────────────────────────────
+    // ── 4. Atomic visibility swaps ───────────────────────────────────────
     ProcessSwaps(desiredChunks);
 
-    // ── 6. Build chunks (vertex budget) ─────────────────────────────────
-    // Priority order: LOD1/2 (high-res) → yield to objects → LOD3-5 (low-res)
-    const MAX_VERTS_PER_FRAME = 2500;
-    let budget = MAX_VERTS_PER_FRAME;
+    // ── 5. Build chunks (time budget) ────────────────────────────────────
+    // Wall-clock budgeted, mirroring the spawn worker: per-chunk cost varies
+    // wildly with LOD and terrain (a LOD5 chunk is a 4-vertex roundtrip, a
+    // LOD1 city chunk runs the flatten engine), so a vertex/count budget
+    // either stalls the frame or drains hundreds of chunks in one pass with a
+    // frozen, stale queue order. At least one chunk always builds per pass;
+    // between passes the desired set, prune, and swaps all get to run again.
+    const BUILD_BUDGET_MS = 5;
+    const buildDeadline = performance.now() + BUILD_BUDGET_MS;
 
-    // Continue any active build first
-    if (terrain.active_chunk) {
-      const currentChunk = terrain.active_chunk;
-      try {
-        const iteratorResult = await terrain.active_chunk.rebuildIterator!.next();
-        if (iteratorResult.done) {
-          if (terrain.active_chunk === currentChunk) {
-            terrain.active_chunk = null;
-          }
-        } else {
-          budget = 0; // active build still in progress, don't start new ones
-        }
-      } catch (error) {
-        console.error("Error updating terrain:", error);
-        if (terrain.active_chunk === currentChunk) {
-          terrain.active_chunk = null;
-        }
+    let builtThisPass = false;
+
+    // Drop chunks that have been pruned (in place — no per-frame array), sort
+    // by priority only when the queue changed or the camera moved meaningfully
+    // since the last sort (catch-up must keep streaming nearest-first)
+    {
+      const queue = terrain.queued_to_build;
+      let w = 0;
+      for (let i = 0; i < queue.length; i++) {
+        if (queue[i].key in terrain.chunks) queue[w++] = queue[i];
+      }
+      if (w !== queue.length) {
+        queue.length = w;
+        queueDirty = true;
       }
     }
 
-    // Filter out chunks that have been pruned, sort by priority (only when queue changed)
-    const beforeLen = terrain.queued_to_build.length;
-    terrain.queued_to_build = terrain.queued_to_build.filter((chunk) => {
-      const gridX = Math.round(chunk.offset.x / chunk.lod.chunkSize);
-      const gridZ = Math.round(chunk.offset.y / chunk.lod.chunkSize);
-      const key = `${chunk.lod.level}/${gridX}/${gridZ}`;
-      return key in terrain.chunks;
-    });
-    if (terrain.queued_to_build.length !== beforeLen) queueDirty = true;
-
-    if (queueDirty) {
-      queueDirty = false;
-      terrain.queued_to_build.sort((a, b) => {
-        if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-        const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-        const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
-        return distB - distA;
-      });
+    if (terrain.queued_to_build.length > 0) {
+      const sdx = playerX - lastSortX;
+      const sdz = playerZ - lastSortZ;
+      if (queueDirty || sdx * sdx + sdz * sdz > 64 * 64) {
+        queueDirty = false;
+        lastSortX = playerX;
+        lastSortZ = playerZ;
+        terrain.queued_to_build.sort((a, b) => {
+          if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
+          const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
+          const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+          return distB - distA;
+        });
+      }
     }
 
-    // Start new chunks within vertex budget
-    while (budget > 0 && !terrain.active_chunk && terrain.queued_to_build.length > 0) {
-      // Peek at the next chunk (last element after sort = highest priority)
-      const nextChunk = terrain.queued_to_build[terrain.queued_to_build.length - 1];
-      if (!nextChunk) break;
-
+    // Build until the deadline (last element after sort = highest priority)
+    while (terrain.queued_to_build.length > 0) {
       const chunk = terrain.queued_to_build.pop()!;
-
-      const vertCount = (chunk.lod.segments + 1) ** 2;
-      budget -= vertCount;
-
       terrain.active_chunk = chunk;
       chunk.rebuildIterator = BuildChunk(chunk, material);
-
       try {
-        const iteratorResult = await chunk.rebuildIterator.next();
-        if (iteratorResult.done) {
-          terrain.active_chunk = null;
-        } else {
-          // Generator yielded — chunk build complete
-          terrain.active_chunk = null;
-        }
+        // BuildChunk yields once, after the chunk is fully built
+        await chunk.rebuildIterator.next();
+        builtThisPass = true;
       } catch (error) {
         console.error("Error updating terrain:", error);
-        terrain.active_chunk = null;
       }
+      terrain.active_chunk = null;
+      if (performance.now() > buildDeadline) break;
     }
 
     // Signal whether high-res (LOD1/2) terrain is still pending
@@ -638,8 +662,11 @@ export const TerrainRenderer = () => {
       (terrain.active_chunk !== null && terrain.active_chunk.lod.level <= 2);
     terrainHighLODPending.current = hasHighLOD;
 
+    // The remaining count only matters for the loading progress bar — after
+    // terrain_loaded, re-rendering the component (and reconciling the whole
+    // collider list) every time the queue length changes is pure waste.
     const newRemaining = terrain.queued_to_build.length;
-    if (newRemaining !== lastRemainingRef.current) {
+    if (newRemaining !== lastRemainingRef.current && !terrain_loaded) {
       lastRemainingRef.current = newRemaining;
       if (remainingChunks === null) setTotalChunks(newRemaining);
       setRemainingChunks(newRemaining);
@@ -650,9 +677,17 @@ export const TerrainRenderer = () => {
       collidersChanged.current = false;
       setColliderVersion((v) => v + 1);
     }
+
+    // Stay "dirty" while anything is still in flight, and for one extra pass
+    // after the last build so ProcessSwaps gets to make it visible.
+    terrainDirty =
+      builtThisPass ||
+      terrain.queued_to_build.length > 0 ||
+      terrain.active_chunk !== null ||
+      terrain.queued_to_destroy.size > 0;
   };
 
-  const QueueChunk = (offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
+  const QueueChunk = (chunkKey: string, offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
     const plane = new THREE.Mesh(acquireGeometry(lod), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
@@ -660,6 +695,7 @@ export const TerrainRenderer = () => {
     plane.rotation.x = -Math.PI / 2;
 
     const chunk: Chunk = {
+      key: chunkKey,
       offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
       rebuildIterator: null,
@@ -686,25 +722,20 @@ export const TerrainRenderer = () => {
     const perimCount = perimeterIndices.length;
     const posArray = pos.array as Float32Array;
 
-    // Read vertex positions directly from buffer (avoid Vector3 allocation per vertex)
-    const vertX = new Float32Array(mainVertCount);
-    const vertY = new Float32Array(mainVertCount);
-    for (let i = 0; i < mainVertCount; i++) {
-      vertX[i] = posArray[i * 3];
-      vertY[i] = posArray[i * 3 + 1];
-    }
-
-    // Send all vertex positions to the terrain worker in a single message
+    // One descriptor message per chunk — the worker generates the local grid,
+    // heights, attributes, NORMALS, and (for collider LODs) the column-major
+    // Rapier heights, so the main thread only writes buffers.
     // Flatten pads (13–24u features) only matter where they can be SEEN and
     // WALKED ON — collider-bearing LODs. Far visual-only chunks skip them: a
-    // LOD5 chunk spans ~256 pad tiles, and computing them exploded far city
-    // chunk builds ~9× (which stalled terrain, which stalled spawning).
+    // LOD5 chunk spans ~256 pad tiles, and computing their tiles exploded far
+    // city chunk builds ~9× (which stalled terrain, which stalled spawning).
     const workerResult = await buildChunkInWorker(
-      vertX,
-      vertY,
+      segments,
+      chunk.lod.chunkSize,
       offset.x,
       offset.y,
-      !chunk.lod.hasCollider
+      !chunk.lod.hasCollider,
+      chunk.lod.hasCollider
     );
     const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
 
@@ -778,13 +809,16 @@ export const TerrainRenderer = () => {
     (geom.getAttribute("distanceToFreewayCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("freewayAlong") as THREE.BufferAttribute).needsUpdate = true;
 
-    // Apply material and update geometry immediately
+    // Apply material and update geometry immediately. Normals come
+    // precomputed from the worker (main grid only — computeVertexNormals on
+    // the main thread iterated the full index buffer including 768 skirt
+    // triangles whose results were immediately overwritten below).
     chunk.plane.material = material;
     chunk.plane.geometry.attributes.position.needsUpdate = true;
-    chunk.plane.geometry.computeVertexNormals();
+    const normalArray = chunk.plane.geometry.attributes.normal.array as Float32Array;
+    normalArray.set(workerResult.normals, 0);
 
     // Copy terrain edge normals to skirt vertices so they don't trigger triplanar
-    const normalArray = chunk.plane.geometry.attributes.normal.array as Float32Array;
     for (let i = 0; i < perimCount; i++) {
       const srcIdx = perimeterIndices[i];
       const nx = normalArray[srcIdx * 3];
@@ -803,37 +837,23 @@ export const TerrainRenderer = () => {
 
     chunk.plane.position.set(offset.x, 0, offset.y);
 
-    if (chunk.lod.hasCollider) {
-      GenerateColliders(chunk, offset);
+    if (chunk.lod.hasCollider && workerResult.colliderHeights) {
+      GenerateColliders(chunk, offset, workerResult.colliderHeights);
       collidersChanged.current = true;
     }
 
     yield;
   };
 
-  const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2) => {
+  /** heights arrive COLUMN-MAJOR from the worker (col = X axis = ix, row =
+   *  Z axis = iz — the order Rapier's heightfield wants), so no transpose or
+   *  allocation happens here. */
+  const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2, heights: Float32Array) => {
     const segments = chunk.lod.segments;
     const cs = chunk.lod.chunkSize;
-    const posArray = chunk.plane.geometry.attributes.position.array as Float32Array;
-    const n = segments + 1;
 
-    // Rapier heightfield uses COLUMN-MAJOR order: heights[col * (nrows+1) + row].
-    // The mesh geometry (rotated -PI/2 around X) maps:
-    //   grid (ix, iz) → worldX = localX, worldZ = -localY
-    //   ix=0 → worldX = -half, ix=segments → worldX = +half
-    //   iz=0 → worldZ = -half, iz=segments → worldZ = +half
-    // Rapier: col index → X axis, row index → Z axis.
-    const heights = new Float32Array(n * n);
-    for (let iz = 0; iz < n; iz++) {
-      for (let ix = 0; ix < n; ix++) {
-        const height = posArray[(iz * n + ix) * 3 + 2];
-        heights[ix * n + iz] = height; // column-major: col=ix, row=iz
-      }
-    }
-
-    const chunkKey = `${chunk.lod.level}/${offset.x / cs}/${offset.y / cs}`;
     chunk.collider = {
-      chunkKey,
+      chunkKey: chunk.key,
       heights,
       nrows: segments,
       ncols: segments,
@@ -845,16 +865,19 @@ export const TerrainRenderer = () => {
     };
   };
 
-  return (
-    <>
-      {Object.values(terrain.chunks).map(({ chunk }) => {
-        if (chunk.collider) {
-          return <TerrainCollider key={chunk.collider.chunkKey} desc={chunk.collider} />;
-        }
-        return null;
-      })}
-    </>
-  );
+  // Rebuilt only when a collider actually changed (colliderVersion) — other
+  // state renders (progress, material) must not re-reconcile ~64 collider
+  // elements against a 300+-entry chunk map.
+  const colliderElements = React.useMemo(() => {
+    const els: React.ReactElement[] = [];
+    for (const key in terrain.chunks) {
+      const collider = terrain.chunks[key].chunk.collider;
+      if (collider) els.push(<TerrainCollider key={collider.chunkKey} desc={collider} />);
+    }
+    return els;
+  }, [colliderVersion]);
+
+  return <>{colliderElements}</>;
 };
 
 /** Memoized on the (stable) collider descriptor: every collider change bumps

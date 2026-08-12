@@ -10,6 +10,7 @@ import {
   getNearbyChunkKeys,
   initSpawnWorker,
   serializeDescriptors,
+  SPAWN_CHUNK_SIZE,
   updateSpawnFootprint,
 } from "./generateSpawnPoints";
 import { ActorDescriptor, ActorProps, SpawnPoint } from "./types";
@@ -73,11 +74,17 @@ const getDespawnRadius = (desc: ActorDescriptor): number =>
 const getImmediateRadius = (desc: ActorDescriptor): number =>
   desc.immediateRadius ?? getSpawnRadius(desc) * IMMEDIATE_RADIUS_FACTOR;
 
+/** Half-diagonal of a spawn chunk — a chunk whose CENTER is this much past
+ *  the largest spawn radius cannot contain a single mountable point, so the
+ *  candidate scan skips the whole bucket without touching its points. */
+const CHUNK_HALF_DIAGONAL = (SPAWN_CHUNK_SIZE * Math.SQRT2) / 2;
+
 interface MountedObject {
   node: React.ReactNode;
-  x: number;
-  z: number;
-  descriptorId: string;
+  /** The client cache's own point object — the identity key that must be
+   *  removed from mountedPointsRef when this entry unmounts. Coordinates and
+   *  descriptor are read through it (same values the entry used to mount). */
+  point: SpawnPoint;
 }
 
 /** A self-destroyed object, blocked from respawning until the player leaves.
@@ -88,9 +95,17 @@ interface DespawnRecord {
   x: number;
   z: number;
   descriptorId: string;
+  /** Current identity key in ledgerPointsRef — kept in sync so clearing the
+   *  ledger entry can clear the identity entry without a scan. Re-pointed if
+   *  the cache evicts and later re-delivers the chunk (new point objects). */
+  point: SpawnPoint;
 }
 
-/** objId format: `${x}_${z}_${descriptorId}` (descriptor ids may contain underscores). */
+/** objId format: `${x}_${z}_${descriptorId}` (descriptor ids may contain underscores).
+ *  Deliberately NOT called in the per-point candidate scan — float→string
+ *  building for ~3,000 points per batch was the scan's dominant cost; the
+ *  scan uses point-identity collections instead, and the string id is built
+ *  once per actual mount (React key / props.id / objectsMap key). */
 const objIdOf = (point: SpawnPoint): string =>
   `${point.x}_${point.z}_${point.descriptorId}`;
 
@@ -98,6 +113,16 @@ export const ObjectPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
 
   const objectsMapRef = useRef(new Map<string, MountedObject>());
+  // Identity fast paths for the candidate scan. The client spawn cache hands
+  // back ITS OWN stable point objects (see generateSpawnPoints), so "is this
+  // point mounted / respawn-blocked?" is a reference lookup — no per-point
+  // string building. Both are kept exactly in sync with their string-keyed
+  // sources of truth (objectsMap / despawnLedger): entries are removed
+  // whenever an object unmounts or a ledger entry clears, and the mount loop
+  // repairs them if the cache evicted + re-delivered a chunk (new point
+  // objects), so stale point references can never accumulate or mask state.
+  const mountedPointsRef = useRef(new Set<SpawnPoint>());
+  const ledgerPointsRef = useRef(new Map<SpawnPoint, DespawnRecord>());
   // Despawn ledger: objects that self-destroyed (onDestroy). Blocks respawn
   // until the spawn point leaves the spawn radius.
   const despawnLedgerRef = useRef(new Map<string, DespawnRecord>());
@@ -127,6 +152,14 @@ export const ObjectPool = () => {
 
   // Max spawn radius across all descriptors — drives chunk fetching
   const maxSpawnRadius = useMemo(() => Math.max(...descriptors.map((d) => getSpawnRadius(d)), 500), [descriptors]);
+
+  // Same max WITHOUT the 500u chunk-fetch floor — the candidate scan's
+  // per-bucket early-out wants the tightest bound on "could any descriptor
+  // mount a point in this chunk"
+  const maxDescSpawnRadius = useMemo(
+    () => descriptors.reduce((m, d) => Math.max(m, getSpawnRadius(d)), 0),
+    [descriptors]
+  );
 
   // Max despawn radius — worker cache must never evict chunks that still have mounted objects
   const maxDespawnRadius = useMemo(() => Math.max(...descriptors.map((d) => getDespawnRadius(d)), 600), [descriptors]);
@@ -169,6 +202,7 @@ export const ObjectPool = () => {
       const desc = descriptorMap.get(rec.descriptorId);
       if (!desc) {
         despawnLedgerRef.current.delete(objId);
+        ledgerPointsRef.current.delete(rec.point);
         return;
       }
 
@@ -177,6 +211,7 @@ export const ObjectPool = () => {
       const immediateRadius = getImmediateRadius(desc);
       if (dx * dx + dz * dz > immediateRadius * immediateRadius) {
         despawnLedgerRef.current.delete(objId);
+        ledgerPointsRef.current.delete(rec.point);
       }
     });
   }, [camera, descriptorMap]);
@@ -188,13 +223,14 @@ export const ObjectPool = () => {
   const sweepOutOfRange = useCallback((): boolean => {
     let removed = false;
     objectsMapRef.current.forEach((obj, objId) => {
-      const desc = descriptorMap.get(obj.descriptorId);
+      const desc = descriptorMap.get(obj.point.descriptorId);
       if (!desc) return;
-      const dx = obj.x - camera.position.x;
-      const dz = obj.z - camera.position.z;
+      const dx = obj.point.x - camera.position.x;
+      const dz = obj.point.z - camera.position.z;
       const despawnRadius = getDespawnRadius(desc);
       if (dx * dx + dz * dz > despawnRadius * despawnRadius) {
         objectsMapRef.current.delete(objId);
+        mountedPointsRef.current.delete(obj.point);
         removed = true;
       }
     });
@@ -227,10 +263,32 @@ export const ObjectPool = () => {
       // MAX_MOUNTS_PER_BATCH. The rest are simply re-tested next batch — by
       // then the player may have moved past them, in which case they are
       // never mounted at all.
-      const candidates: { point: SpawnPoint; objId: string; desc: ActorDescriptor; distSq: number }[] = [];
+      //
+      // This scan is the pool's hot path (~3,000 points every batch, nearly
+      // all resolving "already mounted"), so it is pure arithmetic +
+      // identity lookups — the string objId is only built for the bounded set
+      // of points that actually mount below.
+      const candidates: { point: SpawnPoint; desc: ActorDescriptor; distSq: number }[] = [];
+
+      // Per-bucket early-out: a chunk whose center is beyond every spawn
+      // radius plus the chunk half-diagonal cannot contain a mountable point.
+      // (maxDescSpawnRadius, not maxSpawnRadius — the chunk-fetch floor of
+      // 500u would defeat the gate whenever all descriptors are smaller.)
+      const bucketGate = maxDescSpawnRadius + CHUNK_HALF_DIAGONAL;
+      const bucketGateSq = bucketGate * bucketGate;
 
       for (const bucket of buckets) {
-        for (const point of bucket) {
+        const bdx = bucket.centerX - camera.position.x;
+        const bdz = bucket.centerZ - camera.position.z;
+        if (bdx * bdx + bdz * bdz > bucketGateSq) continue;
+
+        for (const point of bucket.points) {
+          // Never duplicate a mounted object; respawn-blocked entries stay out
+          // until the player leaves their immediate radius. Identity checks
+          // first — they reject almost every point, before any other work.
+          if (mountedPointsRef.current.has(point)) continue;
+          if (ledgerPointsRef.current.has(point)) continue;
+
           const desc = descriptorMap.get(point.descriptorId);
           if (!desc) continue;
 
@@ -243,14 +301,7 @@ export const ObjectPool = () => {
           const spawnRadius = getSpawnRadius(desc);
           if (distSq > spawnRadius * spawnRadius) continue;
 
-          const objId = objIdOf(point);
-
-          // Never duplicate a mounted object; respawn-blocked entries stay out
-          // until the player leaves their immediate radius
-          if (objectsMapRef.current.has(objId)) continue;
-          if (despawnLedgerRef.current.has(objId)) continue;
-
-          candidates.push({ point, objId, desc, distSq });
+          candidates.push({ point, desc, distSq });
         }
       }
 
@@ -259,7 +310,31 @@ export const ObjectPool = () => {
         candidates.length = MAX_MOUNTS_PER_BATCH;
       }
 
-      for (const { point, objId, desc } of candidates) {
+      for (const { point, desc } of candidates) {
+        const objId = objIdOf(point);
+
+        // String-keyed backstops for the one hole in identity checks: a chunk
+        // evicted from the client cache and re-delivered later hands back NEW
+        // point objects, which the identity collections can't recognize. The
+        // string maps stay authoritative here, and the identity entry is
+        // re-pointed at the fresh object so the next batch's hot loop filters
+        // it again. (A blocked candidate can waste one of this batch's mount
+        // slots in that rare race — the repair makes it a one-batch cost.)
+        const ledgerRec = despawnLedgerRef.current.get(objId);
+        if (ledgerRec) {
+          ledgerPointsRef.current.delete(ledgerRec.point);
+          ledgerRec.point = point;
+          ledgerPointsRef.current.set(point, ledgerRec);
+          continue;
+        }
+        const mounted = objectsMapRef.current.get(objId);
+        if (mounted) {
+          mountedPointsRef.current.delete(mounted.point);
+          mounted.point = point;
+          mountedPointsRef.current.add(point);
+          continue;
+        }
+
         const Component = desc.component;
         const spawnRadius = getSpawnRadius(desc);
         const despawnRadius = getDespawnRadius(desc);
@@ -274,23 +349,31 @@ export const ObjectPool = () => {
           cursorOverride: desc.cursorOverride,
           quantization: desc.quantization,
           onDestroy: (id: string) => {
-            despawnLedgerRef.current.set(id, {
+            // The mounted entry's stored point is authoritative — if a stale
+            // onDestroy ever fired after a sweep + remount, deleting the
+            // closure's `point` could orphan the NEW point in the mounted set.
+            const entry = objectsMapRef.current.get(id);
+            const livePoint = entry ? entry.point : point;
+            const rec: DespawnRecord = {
               despawnedAt: Date.now(),
               x: point.x,
               z: point.z,
               descriptorId: point.descriptorId,
-            });
+              point: livePoint,
+            };
+            despawnLedgerRef.current.set(id, rec);
+            ledgerPointsRef.current.set(livePoint, rec);
             objectsMapRef.current.delete(id);
+            mountedPointsRef.current.delete(livePoint);
             dirtyRef.current = true;
           },
         };
 
         objectsMapRef.current.set(objId, {
           node: <Component key={objId} {...props} />,
-          x: point.x,
-          z: point.z,
-          descriptorId: point.descriptorId,
+          point,
         });
+        mountedPointsRef.current.add(point);
         hasChanges = true;
       }
 
@@ -308,6 +391,7 @@ export const ObjectPool = () => {
     serializedDescriptors,
     descriptorMap,
     maxSpawnRadius,
+    maxDescSpawnRadius,
     maxDespawnRadius,
     cleanupDespawnLedger,
     sweepOutOfRange,

@@ -13,6 +13,7 @@ import {
   CitySitePoint,
   CityTrafficLightPoint,
   RoadMarkerPoint,
+  VertexResult,
 } from "../workers/vertexCompute";
 import { getActiveWorldConfig, whenWorldReady } from "../world/registry";
 
@@ -125,6 +126,15 @@ export const getDensityPoints = (
   params: DensityPointParams
 ): Promise<DensityPoint[]> =>
   request({ type: "DENSITY_POINTS", minX, minZ, maxX, maxZ, params });
+
+/** One PADDED vertex sample, computed in the worker. The Player's backstop
+ *  confirm uses this: a flatten-tile miss inside the padded path costs
+ *  30-70ms, and paying that on the main thread was a roaming lag spike.
+ *  Returns null until the worker is initialized (callers fall back). */
+export const getVertexSample = async (x: number, z: number): Promise<VertexResult | null> => {
+  const points = await request({ type: "VERTEX_SAMPLE", x, z });
+  return (points[0] as VertexResult) ?? null;
+};
 
 /** Voronoi site point of every city-biome cell in the bounds (CityLights
  *  beacons). Ran on the main thread before and each site could compute a

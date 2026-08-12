@@ -16,7 +16,7 @@ import {
   patchLampMask,
 } from "../../actors/street-lamp/StreetLamp";
 import { getWindowLightsProgress } from "../../sky/dayNight";
-import { LAMP_COLOR_WARM } from "../../sky/lampGlow";
+import { LAMP_COLOR_WARM, markLampGridDirty } from "../../sky/lampGlow";
 import {
   instancedFromPoints,
   useChunkRegistry,
@@ -71,10 +71,22 @@ export const StreetLamps = ({
   const [colliders, setColliders] = useState<{ key: string; x: number; y: number; z: number }[]>(
     []
   );
-  const colliderKeysRef = useRef("");
+  // Last full collider scan: camera position + alive-chunk-set signature
+  // (skip gate) and the in-range lamp set's numeric signature (state-update
+  // change detection) — all cheap number compares, no string joins.
+  const lastScanRef = useRef({
+    x: Infinity,
+    z: Infinity,
+    chunkCount: -1,
+    pointCount: -1,
+    colliderCount: -1,
+    colliderHash: 0,
+  });
+  const aliveScratchRef = useRef<LampChunk[]>([]);
 
   const registry = useChunkRegistry<LampChunk>((chunk) => {
     for (const key of chunk.headKeys) activeLampHeads.delete(key);
+    markLampGridDirty(); // heads left the set — next grid rewrite must run
     clearLampGridIfEmpty();
   });
 
@@ -118,6 +130,7 @@ export const StreetLamps = ({
       const group = new THREE.Group();
       group.add(mesh);
       registry.add({ group, headKeys, points });
+      markLampGridDirty(); // new heads registered above
       return group;
     },
   });
@@ -127,21 +140,55 @@ export const StreetLamps = ({
     driveLampLighting(camera, state.clock.elapsedTime);
     assets.material.emissiveIntensity = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
 
-    // Colliders for the few lamps near the player (registry iteration also
-    // prunes unmounted chunks, unregistering their lamp heads).
+    // Colliders for the few lamps near the player.
     if (frameCount.current++ % COLLIDER_SCAN_INTERVAL_FRAMES !== 0) return;
-    const near: { key: string; x: number; y: number; z: number }[] = [];
-    const maxDistSq = LAMP_COLLIDER_DISTANCE * LAMP_COLLIDER_DISTANCE;
+
+    // The registry sweep must run EVERY interval even when the scan below is
+    // skipped — forEachAlive is what prunes unmounted chunks and unregisters
+    // their lamp heads. Collect alive chunks + a cheap chunk-set signature
+    // (count + total points) while at it.
+    const alive = aliveScratchRef.current;
+    alive.length = 0;
+    let pointCount = 0;
     registry.forEachAlive((chunk) => {
+      alive.push(chunk);
+      pointCount += chunk.points.length;
+    });
+
+    // Skip the per-lamp distance scan when the camera has moved < 2u since
+    // the last scan and the alive chunk set is unchanged — nothing can have
+    // entered or left collider range.
+    const last = lastScanRef.current;
+    const movedSq =
+      (camera.position.x - last.x) ** 2 + (camera.position.z - last.z) ** 2;
+    if (movedSq < 4 && alive.length === last.chunkCount && pointCount === last.pointCount) {
+      alive.length = 0;
+      return;
+    }
+    last.x = camera.position.x;
+    last.z = camera.position.z;
+    last.chunkCount = alive.length;
+    last.pointCount = pointCount;
+
+    const near: { key: string; x: number; y: number; z: number }[] = [];
+    let hash = 0;
+    const maxDistSq = LAMP_COLLIDER_DISTANCE * LAMP_COLLIDER_DISTANCE;
+    for (const chunk of alive) {
       for (const p of chunk.points) {
         const dx = p.x - camera.position.x;
         const dz = p.z - camera.position.z;
-        if (dx * dx + dz * dz < maxDistSq) near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z });
+        if (dx * dx + dz * dz < maxDistSq) {
+          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z });
+          hash += p.x * 31 + p.z * 17 + p.y;
+        }
       }
-    });
-    const keys = near.map((n) => n.key).join("|");
-    if (keys !== colliderKeysRef.current) {
-      colliderKeysRef.current = keys;
+    }
+    alive.length = 0;
+    // Numeric change detection (coords are deterministic, so equal
+    // sum + count means the same lamp set) instead of a joined key string.
+    if (near.length !== last.colliderCount || hash !== last.colliderHash) {
+      last.colliderCount = near.length;
+      last.colliderHash = hash;
       setColliders(near);
     }
   });

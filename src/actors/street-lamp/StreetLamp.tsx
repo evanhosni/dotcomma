@@ -5,12 +5,23 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import { ActorProps } from "../../objects/spawning/types";
 import { getWindowLightsProgress } from "../../sky/dayNight";
-import { LAMP_COLOR_WARM, LampHead, setLampGlowIntensity, updateLampGrid } from "../../sky/lampGlow";
+import {
+  LAMP_COLOR_WARM,
+  LampHead,
+  markLampGridDirty,
+  setLampGlowIntensity,
+  updateLampGrid,
+} from "../../sky/lampGlow";
 import { getDistance2D } from "../../utils/utils";
 
 const DESPAWN_BUFFER = 1.2;
 const FADE_BAND = 40; // world units before renderDistance over which lamps fade
 const MOUNT_FADE_DURATION = 0.8; // s — spawn chunks can mount lamps mid-band, so every mount eases in from 0
+// The distance sqrt + fade/collider/despawn checks run every Nth frame
+// (phase-offset per instance so a chunk of lamps doesn't check in lockstep).
+// The fade is a 40u smoothstep, so an ~8-frame-stale opacity is imperceptible
+// at any movement speed.
+const DISTANCE_CHECK_INTERVAL = 8;
 export const LAMP_COLLIDER_DISTANCE = 60;
 export const LAMP_POLE_HEIGHT = 10.8;
 export const LAMP_ARM_X = 1.25; // lamp head offset along the arm
@@ -145,7 +156,12 @@ export const StreetLamp = ({ id, coordinates, renderDistance, despawnDistance, o
   const collidersActiveRef = useRef(false);
   const [collidersActive, setCollidersActive] = useState(false);
   const appliedOpacityRef = useRef(-1);
+  const appliedEmissiveRef = useRef(-1);
   const mountFadeRef = useRef(0); // 0 → 1 over MOUNT_FADE_DURATION after mount
+  // Deterministic per-instance phase for the throttled distance check
+  const frameRef = useRef(
+    Math.abs(Math.floor(coordinates[0] * 7.13 + coordinates[2] * 3.71)) % DISTANCE_CHECK_INTERVAL,
+  );
 
   // Per-instance material clone so this lamp can fade at the render edge
   // independently (clone() drops onBeforeCompile, so re-patch — the shared
@@ -153,6 +169,11 @@ export const StreetLamp = ({ id, coordinates, renderDistance, despawnDistance, o
   const material = useMemo(() => {
     const m = LAMP_POST_MATERIAL.clone();
     patchLampMask(m);
+    // Start invisible: the throttled distance check below may not run until
+    // a few frames after mount, and the mount fade starts at 0 anyway —
+    // without this the lamp would flash at full opacity until the first check.
+    m.opacity = 0;
+    m.transparent = true;
     return m;
   }, []);
   useEffect(() => () => material.dispose(), [material]);
@@ -172,18 +193,34 @@ export const StreetLamp = ({ id, coordinates, renderDistance, despawnDistance, o
       color: LAMP_COLOR_WARM,
     };
     activeLampHeads.set(id, head);
+    markLampGridDirty(); // grid rewrites are dirty-gated — every head mutation must flag it
     return () => {
       activeLampHeads.delete(id);
+      markLampGridDirty();
       clearLampGridIfEmpty();
     };
   }, [id, coordinates, yaw]);
 
   useFrame((state, delta) => {
     // Shared lighting driver — first lamp per frame does the global work
+    // (self-dedupes on the frame time, so calling every frame is free)
     driveLampLighting(camera, state.clock.elapsedTime);
 
-    // Everything runs every frame — the edge fade is a direct function of
-    // distance, so it's smooth at any movement speed.
+    // The night ramp must stay smooth, so the emissive is checked every
+    // frame — but only WRITTEN when the ramp actually moved (steady day /
+    // steady night skip the material write entirely).
+    const emissive = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
+    if (emissive !== appliedEmissiveRef.current) {
+      appliedEmissiveRef.current = emissive;
+      material.emissiveIntensity = emissive;
+    }
+
+    // Mount fade accumulates every frame (cheap); the sqrt distance +
+    // fade/collider/despawn checks only run every DISTANCE_CHECK_INTERVAL
+    // frames, phase-offset per instance.
+    mountFadeRef.current = Math.min(1, mountFadeRef.current + delta / MOUNT_FADE_DURATION);
+    if (frameRef.current++ % DISTANCE_CHECK_INTERVAL !== 0) return;
+
     const distance = getDistance2D(camera.position, positionVec);
 
     if (distance > (despawnDistance ?? renderDistance * DESPAWN_BUFFER)) {
@@ -199,11 +236,9 @@ export const StreetLamp = ({ id, coordinates, renderDistance, despawnDistance, o
     // Distance fade: 1 inside (renderDistance - FADE_BAND), 0 at renderDistance.
     // Multiplied by a short mount fade — spawn CHUNKS can mount a lamp deep
     // inside the band, and without this it would pop in at full opacity.
-    mountFadeRef.current = Math.min(1, mountFadeRef.current + delta / MOUNT_FADE_DURATION);
     const t = Math.min(Math.max((distance - (renderDistance - FADE_BAND)) / FADE_BAND, 0), 1);
     const opacity = (1 - t * t * (3 - 2 * t)) * mountFadeRef.current; // smoothstep × ease-in
 
-    material.emissiveIntensity = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
     if (opacity !== appliedOpacityRef.current) {
       appliedOpacityRef.current = opacity;
       material.opacity = opacity;

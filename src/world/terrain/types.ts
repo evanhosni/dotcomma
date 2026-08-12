@@ -7,6 +7,9 @@ export interface TerrainProps {
 }
 
 export interface Chunk {
+  /** Canonical `${lod.level}/${gx}/${gz}` key — cached at queue time so the
+   *  per-frame passes never rebuild strings from float math. */
+  key: string;
   offset: THREE.Vector2;
   plane: THREE.Mesh;
   rebuildIterator: AsyncIterator<any> | null;

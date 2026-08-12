@@ -173,6 +173,11 @@ export namespace _material {
         vec3 plViewNormal = normalize((viewMatrix * vec4(vWorldNormal, 0.0)).xyz);
         vec3 pointLightSum = vec3(0.0);
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+          // Parked pool lights (intensity 0 → premultiplied color 0) skip the
+          // whole falloff math — a uniform-coherent branch, so the usual
+          // 5-7 dead lights cost ~nothing per fragment.
+          vec3 lCol = pointLights[i].color;
+          if (dot(lCol, lCol) < 1e-6) continue;
           vec3 lVec = pointLights[i].position - plViewPos;
           float lDist = max(length(lVec), 0.001);
           float atten = 1.0 / max(pow(lDist, pointLights[i].decay), 0.01);
@@ -181,7 +186,7 @@ export namespace _material {
             atten *= edge * edge;
           }
           float ndotl = clamp(dot(plViewNormal, lVec / lDist), 0.0, 1.0);
-          pointLightSum += pointLights[i].color * (ndotl * atten);
+          pointLightSum += lCol * (ndotl * atten);
         }
         gl_FragColor.rgb += gl_FragColor.rgb * pointLightSum;
       }
