@@ -1,6 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { isMainRenderFrame } from "../vfx/frameCap";
 import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, MOON_DIRECTION, NIGHT_DURATION_MS, setNightBlend, SUN_DIRECTION, tickWindowLights } from "./dayNight";
 
 /**
@@ -189,21 +190,36 @@ export const DayNightCycle = ({
   // Materials compile lazily on their first visible render, which otherwise
   // lands at the exact frame the first dusk begins — a synchronous program
   // compile+link (expensive under Windows/ANGLE) that read as a "large frame
-  // drop right at nightfall". gl.compile traverses regardless of `visible`,
-  // BUT it also collects the scene LIGHTS only from the object it is passed,
-  // and light COUNTS are part of three's program cache key: compiling just
-  // the celestial group found zero lights, so its programs (numPointLights=0)
-  // never matched the real render (the parked CityLights / IndoorLightRig
-  // pools) and dusk still paid the compile. Precompile must see the SCENE's
-  // lights — deferred one frame so the light-owning components (mounted in
-  // the same commit tree) are all in the scene first.
+  // drop right at nightfall". TWO traps, both hit historically:
+  // (1) gl.compile collects the scene LIGHTS only from the object it is
+  //     passed, and light COUNTS are part of three's program cache key —
+  //     compiling just the celestial group found zero lights, so its programs
+  //     never matched the real render. Precompile must see the SCENE.
+  // (2) gl.compile uses traverseVisible (verified in three r157), and the
+  //     moon/stars are `visible = false` all day — every scene-wide compile
+  //     pass silently SKIPPED exactly the materials this exists for. They
+  //     must be flipped visible for the duration of the compile call.
+  // Deferred one frame so the light-owning components (mounted in the same
+  // commit tree) are all in the scene first; the frame loop restores the
+  // real visibility on its next tick regardless.
   useEffect(() => {
-    const raf = requestAnimationFrame(() => gl.compile(scene, camera));
+    const raf = requestAnimationFrame(() => {
+      const celestial = [sunRef.current, moonRef.current, starsRef.current];
+      const prev = celestial.map((o) => o?.visible ?? false);
+      celestial.forEach((o) => o && (o.visible = true));
+      gl.compile(scene, camera);
+      celestial.forEach((o, i) => o && (o.visible = prev[i]));
+    });
     return () => cancelAnimationFrame(raf);
   }, [gl, scene, camera]);
 
   const startRef = useRef(performance.now());
   const jitterTimer = useRef(0);
+  // First frames force the night-only objects through a REAL draw: gl.compile
+  // links their programs (effect above) but does NOT upload geometry buffers
+  // or touch lazy driver state — only an actual draw does. It's imperceptible:
+  // at day the moon renders at scale 0.001 and the stars at opacity 0.
+  const warmFramesRef = useRef(2);
 
   useFrame((_, delta) => {
     const group = groupRef.current;
@@ -241,6 +257,17 @@ export const DayNightCycle = ({
     if (starsRef.current) {
       starMaterial.opacity = blend * 0.9;
       starsRef.current.visible = blend > 0.01;
+    }
+
+    // Warm-up draw (see warmFramesRef): keep everything visible for the first
+    // couple PRESENTED frames so buffers upload during load, not at first
+    // dusk. Counted against isMainRenderFrame — with an FPS cap active, a
+    // skipped tick draws nothing and must not consume a warm frame.
+    if (warmFramesRef.current > 0) {
+      if (isMainRenderFrame()) warmFramesRef.current--;
+      if (sunMesh) sunMesh.visible = true;
+      if (moonMesh) moonMesh.visible = true;
+      if (starsRef.current) starsRef.current.visible = true;
     }
 
     // ---- Independent vertex jitter on a fixed tick ----

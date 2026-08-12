@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../sky/lampGlow";
 import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
-import { getDistance2DSq } from "../utils/utils";
+import { getDistance2DSq, uploadOnFirstDraw } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { AnimationControl } from "./state/types";
@@ -190,6 +190,7 @@ export const GameObject = ({
   const animFrameParityRef = useRef(false);
   const shouldRenderCollidersRef = useRef(false);
   const lastVisibleRef = useRef<boolean | null>(null);
+  const warmupFramesRef = useRef(0);
   const destroyedRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
@@ -246,10 +247,18 @@ export const GameObject = ({
           mesh.frustumCulled = true;
           mesh.castShadow = false;
           mesh.receiveShadow = false;
+          // Warm the GPU at mount: force one real draw so this model type's
+          // shader programs link and its textures/buffers upload NOW (mount is
+          // staggered by spawn batches) instead of inside gl.render the frame
+          // the player first LOOKS at one — measured as the remaining 50-90ms
+          // render-internal spikes. warmupFramesRef below keeps the group
+          // visible long enough for that draw to actually happen.
+          uploadOnFirstDraw(mesh);
         }
       }
     });
     materialsRef.current = Array.from(materialSet);
+    warmupFramesRef.current = 3;
 
     // Set up the mixer only — actions are created lazily (getOrCreateAction)
     if (clonedModel.animations && clonedModel.animations.length > 0) {
@@ -424,8 +433,17 @@ export const GameObject = ({
     // 2. It's very close to the camera
     const originalRadius = boundsRef.current.radius;
     boundsRef.current.radius = paddedRadius; // Temporarily increase radius for check
-    const isVisible = frustum.intersectsSphere(boundsRef.current) || isCloseToCamera;
+    let isVisible = frustum.intersectsSphere(boundsRef.current) || isCloseToCamera;
     boundsRef.current.radius = originalRadius; // Restore original radius
+
+    // Warm-up: stay visible for the first few frames after mount so the
+    // meshes' forced first draw (uploadOnFirstDraw in the mount effect) can
+    // actually happen — an object mounted behind the player would otherwise
+    // be hidden here before its programs/textures ever reach the GPU.
+    if (warmupFramesRef.current > 0) {
+      warmupFramesRef.current--;
+      isVisible = true;
+    }
 
     // Set visibility directly on the group ref — no React re-render. Only
     // touch the shared Set (and the group) on actual TRANSITIONS: steady-state

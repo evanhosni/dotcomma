@@ -6,6 +6,7 @@ import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
 import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
+import { traceEvent, traceSpan } from "../../utils/spikeTrace";
 import { getDistance2D, uploadOnFirstDraw } from "../../utils/utils";
 import {
   beginProceduralBuildingBuild,
@@ -272,13 +273,13 @@ export const Building = ({
     // could split (an occasional roaming lag spike). Cancelled builds just
     // stop; partial geometry was never rendered, so there's nothing to free.
     const build = beginProceduralBuildingBuild(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions);
-    for (const step of build.steps) {
+    build.steps.forEach((step, phase) => {
       buildQueue.addTask(async () => {
-        if (!cancelled) step();
+        if (!cancelled) traceSpan(`building:phase${phase}`, step);
       });
-    }
+    });
     buildQueue.addTask(async () => {
-      if (!cancelled) setAssets(build.finish());
+      if (!cancelled) setAssets(traceSpan("building:finish", build.finish));
     });
     return () => {
       cancelled = true;
@@ -381,6 +382,7 @@ export const Building = ({
         if (!shouldCollide || time - lastColliderActivationTime > COLLIDER_ACTIVATION_WINDOW_S) {
           if (shouldCollide) lastColliderActivationTime = time;
           collidersActiveRef.current = shouldCollide;
+          if (shouldCollide) traceEvent("building:colliders-on"); // Rapier trimesh builds land in the following commit
           setCollidersActive(shouldCollide);
         }
       }

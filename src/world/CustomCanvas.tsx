@@ -2,12 +2,13 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
 import { useEffect } from "react";
 import { useDevMode } from "../context/DevContext";
-import { GameContextProvider, useGameContext } from "../context/GameContext";
+import { GameContextProvider } from "../context/GameContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
 import { PortalContextProvider } from "../portals/PortalContext";
 import { DayNightProvider } from "../sky/DayNightContext";
 import { initCursor } from "../utils/cursor/cursor";
+import { traceSpan } from "../utils/spikeTrace";
 import { consumeMainRenderFrame, isMainRenderFrame } from "../vfx/frameCap";
 
 /** Portal useFrame hooks use non-zero priorities (-1, 1), which disables R3F's
@@ -29,31 +30,20 @@ const SceneRender = () => {
     consumeMainRenderFrame();
   }, -10);
   useFrame(() => {
-    if (isMainRenderFrame()) gl.render(scene, camera);
+    // traceSpan: a lag spike INSIDE this span is GPU/driver work (first-draw
+    // buffer uploads, shader links); outside it is main-thread JS.
+    if (isMainRenderFrame()) traceSpan("render", () => gl.render(scene, camera));
   }, 2);
   return null;
 };
 
-/** Post-load shader precompile. DayNightCycle's gl.compile runs at world
- *  mount, BEFORE any streamed content exists — grass chunks, spawned actors,
- *  and dressing mount later, and a material type the player hasn't faced yet
- *  otherwise lazy-compiles+links its program on the exact frame it first
- *  enters the view (expensive under Windows/ANGLE — the same stall class as
- *  the old nightfall hitch, felt as a dip while "just looking around").
- *  Re-compiling shortly after load converts those scattered mid-gameplay
- *  stalls into one controlled hitch while the world is still settling; the
- *  second pass catches late-streaming content. Programs already compiled are
- *  cache hits, so repeat passes only pay for genuinely new programs. */
-const PrecompileStreamedContent = () => {
-  const { gl, scene, camera } = useThree();
-  const { terrain_loaded } = useGameContext();
-  useEffect(() => {
-    if (!terrain_loaded) return;
-    const timers = [3000, 12000].map((ms) => window.setTimeout(() => gl.compile(scene, camera), ms));
-    return () => timers.forEach((t) => clearTimeout(t));
-  }, [terrain_loaded, gl, scene, camera]);
-  return null;
-};
+// NOTE: a post-load scene-wide gl.compile pass ("PrecompileStreamedContent")
+// used to live here, firing at +3s/+12s after terrain_loaded. It was REMOVED:
+// per-mount warm draws (uploadOnFirstDraw + GameObject/DayNightCycle warm
+// frames) now compile every program and upload every buffer at mount time,
+// staggered — while the scene-wide pass was itself a large SYNCHRONOUS hitch
+// tens of seconds into play (it read as "the first night cycle lag spike").
+// Do not reintroduce a whole-scene compile after content has streamed in.
 
 interface CustomCanvasProps extends React.PropsWithChildren {
   /** Scene/canvas background color (home page overrides to black). */
@@ -74,7 +64,6 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
     <>
       <color attach="background" args={[background]} />
       <SceneRender />
-      <PrecompileStreamedContent />
       <Overlay />
       <Physics gravity={[0, -100, 0]} debug={physicsDebug}>
         {children}
