@@ -20,6 +20,11 @@ import { consumeMainRenderFrame, isMainRenderFrame } from "../vfx/frameCap";
  *  portal RT passes (0.9 / 1) so they can skip frames nobody will see. */
 const SceneRender = () => {
   const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    // Console/debug access to the live renderer (perf diagnosis: draw-call
+    // counts, frustum-flag audits, scripted camera moves). Not used by game code.
+    (window as any).__game = { gl, scene, camera };
+  }, [gl, scene, camera]);
   useFrame(() => {
     consumeMainRenderFrame();
   }, -10);

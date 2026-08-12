@@ -3,6 +3,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
+import { uploadOnFirstDraw } from "../../utils/utils";
 import { getActiveWorldConfig } from "../registry";
 import { getMaterial } from "../material";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
@@ -693,6 +694,9 @@ export const TerrainRenderer = () => {
     plane.castShadow = false;
     plane.receiveShadow = true;
     plane.rotation.x = -Math.PI / 2;
+    // Chunks built behind the player otherwise defer their whole buffer
+    // upload to the frame the player first turns toward them.
+    uploadOnFirstDraw(plane);
 
     const chunk: Chunk = {
       key: chunkKey,

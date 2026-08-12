@@ -170,12 +170,39 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
     if (y > maxY) maxY = y;
   }
 
+  // ── Sort blades by DESCENDING fade key ──
+  // The shader gives every blade its own fade-out distance from
+  // fract(phase * 1.618 + tint * 12.9898) (see GRASS_VERTEX_SHADER): past it
+  // the blade is invisible but still costs full vertex work. With instances
+  // ordered longest-lived first, the main thread can truncate a far chunk's
+  // instanceCount to just the blades whose fade hasn't zeroed them — instance
+  // order has no other meaning, so this is visually free.
+  const order: number[] = new Array(placed);
+  const fadeKey = new Float32Array(placed);
+  for (let i = 0; i < placed; i++) {
+    order[i] = i;
+    const v = bladeData[i * 3] * 1.618 + bladeData[i * 3 + 2] * 12.9898;
+    fadeKey[i] = v - Math.floor(v);
+  }
+  order.sort((a, b) => fadeKey[b] - fadeKey[a]);
+  const outOffsets = new Float32Array(placed * 3);
+  const outBladeData = new Float32Array(placed * 3);
+  for (let k = 0; k < placed; k++) {
+    const i = order[k];
+    outOffsets[k * 3] = offsets[i * 3];
+    outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
+    outOffsets[k * 3 + 2] = offsets[i * 3 + 2];
+    outBladeData[k * 3] = bladeData[i * 3];
+    outBladeData[k * 3 + 1] = bladeData[i * 3 + 1];
+    outBladeData[k * 3 + 2] = bladeData[i * 3 + 2];
+  }
+
   return {
     count: placed,
     minY: placed > 0 ? minY : 0,
     maxY: placed > 0 ? maxY : 0,
-    offsets: offsets.slice(0, placed * 3),
-    bladeData: bladeData.slice(0, placed * 3),
+    offsets: outOffsets,
+    bladeData: outBladeData,
   };
 };
 

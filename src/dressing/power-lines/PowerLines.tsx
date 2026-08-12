@@ -1,6 +1,7 @@
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
+import { uploadOnFirstDraw } from "../../utils/utils";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import {
   instancedFromPoints,
@@ -85,6 +86,8 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
       min.clone().add(max).multiplyScalar(0.5),
       min.distanceTo(max) / 2 + 0.1
     );
+    // Upload at chunk build time, not when the player first turns this way
+    uploadOnFirstDraw(wires);
   }
 };
 
