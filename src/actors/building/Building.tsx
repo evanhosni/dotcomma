@@ -8,7 +8,7 @@ import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { getDistance2D } from "../../utils/utils";
 import {
-  getProceduralBuildingAssets,
+  beginProceduralBuildingBuild,
   peekProceduralBuildingAssets,
   ProceduralBuildingAssets,
   releaseProceduralBuildingAssets,
@@ -266,10 +266,19 @@ export const Building = ({
   useEffect(() => {
     if (assets) return;
     let cancelled = false;
+    // Each build PHASE queues as its own task (plan → exterior → interior →
+    // assembly), so the queue's time budget can yield between phases — as one
+    // monolithic task a heavy skyscraper was a single long frame no budget
+    // could split (an occasional roaming lag spike). Cancelled builds just
+    // stop; partial geometry was never rendered, so there's nothing to free.
+    const build = beginProceduralBuildingBuild(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions);
+    for (const step of build.steps) {
+      buildQueue.addTask(async () => {
+        if (!cancelled) step();
+      });
+    }
     buildQueue.addTask(async () => {
-      if (cancelled) return;
-      const built = getProceduralBuildingAssets(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions);
-      if (!cancelled) setAssets(built);
+      if (!cancelled) setAssets(build.finish());
     });
     return () => {
       cancelled = true;

@@ -1,8 +1,8 @@
 import React from "react";
-import { CityRegion, DesertRegion } from "./regions";
 import { DayNightCycle } from "../sky/DayNightCycle";
 import { PostProcessing } from "../vfx/PostProcessing";
 import { Material, Skybox, Terrain, World } from "./components";
+import { CityRegion, DesertRegion } from "./regions";
 
 /**
  * glitch-city — the main game world (route: /glitch-city).
@@ -28,6 +28,10 @@ export const GlitchCityWorld = React.memo(() => (
     {/* Jittery low-poly sun/moon + stars; follows the player so the sky never
         leaves render distance */}
     <DayNightCycle />
+    {/* fpsCap trades peak framerate for CONSISTENCY: the rAF loop (physics,
+        AI, spawning — all dt-based) still runs at display rate; only the
+        presented frame + portal RTs are paced. Steady 60 with headroom reads
+        smoother than a fluctuating 100. */}
     <PostProcessing quantization={0.025} />
 
     <CityRegion />

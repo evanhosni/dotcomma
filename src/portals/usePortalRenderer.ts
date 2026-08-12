@@ -2,6 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideFrustumObjects, restoreFrustumVisibility } from "../objects/frustumVisibility";
+import { isMainRenderFrame } from "../vfx/frameCap";
 import {
   FULL_RATE_DIST,
   MAX_RES_SCALE,
@@ -206,6 +207,10 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
   // fresh before the enter portal renders. Both run after the teleport system
   // (-2) and before the explicit scene render (2).
   useFrame((state) => {
+    // FPS cap: this pass exists solely to feed the main render — a tick that
+    // won't present a frame doesn't need fresh portal textures (or the
+    // surface-swap/texture-matrix bookkeeping that only the render consumes).
+    if (!isMainRenderFrame()) return;
     const door = doorMeshRef.current;
     const box = boxMeshRef.current;
     const self = getPortal(id);
