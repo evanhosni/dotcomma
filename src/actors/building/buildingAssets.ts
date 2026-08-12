@@ -640,9 +640,52 @@ export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions)
   if (existing) return existing.assets;
 
   const plan = generateBuildingPlan(seed, opts);
+  return assembleBuildingAssets(key, plan, buildExteriorGeometry(plan), buildInteriorGeometries(plan));
+};
 
-  const { geometry: exteriorGeometry, bodyFloats } = buildExteriorGeometry(plan);
-  const interiorBuild = buildInteriorGeometries(plan);
+/** The same build split at its natural phase boundaries (plan → exterior →
+ *  interior → assembly), each phase meant to run as its OWN task on the build
+ *  queue. The monolithic getProceduralBuildingAssets call was a single
+ *  unsplittable task — the queue's time budget only yields BETWEEN tasks, so
+ *  a heavy skyscraper still landed as one long frame while roaming. finish()
+ *  dedupes against the cache, so a same-seed build that lost a race simply
+ *  adopts the winner (partial geometries were never rendered — no GL state
+ *  to free). */
+export const beginProceduralBuildingBuild = (
+  seed: string,
+  opts: BuildingOptions,
+): { steps: Array<() => void>; finish: () => ProceduralBuildingAssets } => {
+  let plan: ReturnType<typeof generateBuildingPlan>;
+  let ext: ReturnType<typeof buildExteriorGeometry>;
+  let interior: ReturnType<typeof buildInteriorGeometries>;
+  return {
+    steps: [
+      () => {
+        plan = generateBuildingPlan(seed, opts);
+      },
+      () => {
+        ext = buildExteriorGeometry(plan);
+      },
+      () => {
+        interior = buildInteriorGeometries(plan);
+      },
+    ],
+    finish: () => {
+      const key = `${seed}|${JSON.stringify(opts)}`;
+      const existing = cache.get(key);
+      if (existing) return existing.assets;
+      return assembleBuildingAssets(key, plan, ext, interior);
+    },
+  };
+};
+
+const assembleBuildingAssets = (
+  key: string,
+  plan: ReturnType<typeof generateBuildingPlan>,
+  extBuild: ReturnType<typeof buildExteriorGeometry>,
+  interiorBuild: ReturnType<typeof buildInteriorGeometries>,
+): ProceduralBuildingAssets => {
+  const { geometry: exteriorGeometry, bodyFloats } = extBuild;
 
   // Shell collider = outer body triangles (windows excluded) + the inner
   // shell surface, so the player collides with the wall face they can see
