@@ -113,6 +113,29 @@ void main() {
 }
 `;
 
+// Chunk coords pack into one exact float64 key (|cx|,|cz| < 2²⁵ ⇒ ±10⁹ world
+// units at 32u cells, far past world scale) so the 3-frame scans never build
+// a "${cx}_${cz}" string per cell in radius nor parse one back on eviction.
+const packChunkKey = (cx: number, cz: number): number => cx * 0x4000000 + cz; // 2^26
+
+interface GrassChunk {
+  cx: number;
+  cz: number;
+  mesh: THREE.Mesh | null; // null = built but empty
+}
+
+/** Dispose a chunk's geometry WITHOUT killing the shared blade quad: the
+ *  base position/uv/index buffers are shared by EVERY chunk of every
+ *  GrassField, and geometry.dispose() deallocates each attached attribute's
+ *  GL buffer — detach them first so only this chunk's instance attributes
+ *  are freed. */
+const disposeChunkGeometry = (geo: THREE.BufferGeometry): void => {
+  geo.deleteAttribute("position");
+  geo.deleteAttribute("uv");
+  geo.setIndex(null);
+  geo.dispose();
+};
+
 // ── Shared resources (module-level, never disposed) ──
 
 let defaultBladeTexture: THREE.CanvasTexture | null = null;
@@ -178,12 +201,17 @@ export const GrassField: React.FC<GrassFieldProps> = ({
 }) => {
   const renderDistance = useFoliageRenderDistance(renderDistanceProp, 120);
   const groupRef = useRef<THREE.Group>(null);
-  const chunksRef = useRef(new Map<string, THREE.Mesh | null>()); // null = built but empty
-  const pendingRef = useRef(new Set<string>());
+  const chunksRef = useRef(new Map<number, GrassChunk>());
+  const pendingRef = useRef(new Set<number>());
   const generationRef = useRef(0); // bumped on param change so stale worker results are discarded
   const frameCountRef = useRef(0);
   const workerReadyRef = useRef(false);
   const mountedRef = useRef(true);
+  // Scan gate: once a pass finds nothing to request and nothing is in
+  // flight, the eviction+candidate sweep can't produce new work until the
+  // camera enters another grass cell — skip it (the uTime write stays live).
+  const settledRef = useRef(false);
+  const lastCellRef = useRef({ cx: Number.NaN, cz: Number.NaN });
 
   const { camera } = useThree();
   const { terrain_loaded, progress } = useGameContext();
@@ -267,14 +295,16 @@ export const GrassField: React.FC<GrassFieldProps> = ({
 
   const clearChunks = useCallback(() => {
     generationRef.current++;
-    chunksRef.current.forEach((mesh) => {
+    chunksRef.current.forEach(({ mesh }) => {
       if (mesh) {
         groupRef.current?.remove(mesh);
-        mesh.geometry.dispose();
+        disposeChunkGeometry(mesh.geometry);
       }
     });
     chunksRef.current.clear();
     pendingRef.current.clear();
+    settledRef.current = false;
+    lastCellRef.current.cx = Number.NaN; // force the next pass through the gate
   }, []);
 
   // Rebuild all chunks when placement params or the material change; tear down on unmount
@@ -294,7 +324,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
     };
   }, [texture, png]);
 
-  const requestChunk = (key: string, cx: number, cz: number) => {
+  const requestChunk = (key: number, cx: number, cz: number) => {
     pendingRef.current.add(key);
     const generation = generationRef.current;
 
@@ -303,7 +333,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       pendingRef.current.delete(key);
 
       if (result.count === 0) {
-        chunksRef.current.set(key, null);
+        chunksRef.current.set(key, { cx, cz, mesh: null });
         return;
       }
 
@@ -330,7 +360,7 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       // The shader reads the chunk origin off modelMatrix[3] to rebase blade
       // positions — see GRASS_VERTEX_SHADER.
       mesh.position.set(cx * GRASS_CHUNK_SIZE, 0, cz * GRASS_CHUNK_SIZE);
-      chunksRef.current.set(key, mesh);
+      chunksRef.current.set(key, { cx, cz, mesh });
       groupRef.current?.add(mesh);
     });
   };
@@ -345,42 +375,68 @@ export const GrassField: React.FC<GrassFieldProps> = ({
 
     const px = camera.position.x;
     const pz = camera.position.z;
+    const centerCX = Math.floor(px / GRASS_CHUNK_SIZE);
+    const centerCZ = Math.floor(pz / GRASS_CHUNK_SIZE);
 
-    // Evict chunks well outside the render distance
-    const keepDistSq = (renderDistance + GRASS_CHUNK_SIZE * 2) ** 2;
-    chunksRef.current.forEach((mesh, key) => {
-      const [cx, cz] = key.split("_").map(Number);
-      const dx = (cx + 0.5) * GRASS_CHUNK_SIZE - px;
-      const dz = (cz + 0.5) * GRASS_CHUNK_SIZE - pz;
+    // Early-out: settled (last pass found nothing to request), nothing in
+    // flight, and the camera is still in the same grass cell — the sweep
+    // below can't produce new work. (Eviction is deferred at most one cell of
+    // travel by this; the ×1.25 hysteresis dwarfs a 32u cell.)
+    if (
+      settledRef.current &&
+      pendingRef.current.size === 0 &&
+      centerCX === lastCellRef.current.cx &&
+      centerCZ === lastCellRef.current.cz
+    ) {
+      return;
+    }
+    lastCellRef.current.cx = centerCX;
+    lastCellRef.current.cz = centerCZ;
+
+    // Evict chunks well outside the render distance (hysteresis wide enough
+    // that boundary chunks don't thrash between evict and re-request)
+    const keepDistSq = (renderDistance * 1.25) ** 2;
+    chunksRef.current.forEach((chunk, key) => {
+      const dx = (chunk.cx + 0.5) * GRASS_CHUNK_SIZE - px;
+      const dz = (chunk.cz + 0.5) * GRASS_CHUNK_SIZE - pz;
       if (dx * dx + dz * dz > keepDistSq) {
-        if (mesh) {
-          groupRef.current?.remove(mesh);
-          mesh.geometry.dispose();
+        if (chunk.mesh) {
+          groupRef.current?.remove(chunk.mesh);
+          disposeChunkGeometry(chunk.mesh.geometry);
         }
         chunksRef.current.delete(key);
       }
     });
 
     // Request missing chunks, nearest first
-    if (pendingRef.current.size >= MAX_PENDING_CHUNKS) return;
+    if (pendingRef.current.size >= MAX_PENDING_CHUNKS) {
+      settledRef.current = false;
+      return;
+    }
 
-    const centerCX = Math.floor(px / GRASS_CHUNK_SIZE);
-    const centerCZ = Math.floor(pz / GRASS_CHUNK_SIZE);
     const radius = Math.ceil(renderDistance / GRASS_CHUNK_SIZE);
-    const maxDistSq = (renderDistance + GRASS_CHUNK_SIZE) ** 2;
-    const candidates: { key: string; cx: number; cz: number; distSq: number }[] = [];
+    // The per-blade fade (see GRASS_VERTEX_SHADER) zeroes width AND height at
+    // fadeEnd = renderDistance × (0.55 + 0.45 × bladeRand), bladeRand < 1 —
+    // so NO blade survives past renderDistance. A chunk whose nearest AABB
+    // point is at or beyond that can only hold fully-faded (zero-size)
+    // blades: never request it. Keep in sync with the shader's fade
+    // constants.
+    const fadeZeroDistSq = renderDistance * renderDistance;
+    const candidates: { key: number; cx: number; cz: number; distSq: number }[] = [];
 
     for (let dcx = -radius; dcx <= radius; dcx++) {
       for (let dcz = -radius; dcz <= radius; dcz++) {
         const cx = centerCX + dcx;
         const cz = centerCZ + dcz;
-        const key = `${cx}_${cz}`;
+        const key = packChunkKey(cx, cz);
         if (chunksRef.current.has(key) || pendingRef.current.has(key)) continue;
 
-        const dx = (cx + 0.5) * GRASS_CHUNK_SIZE - px;
-        const dz = (cz + 0.5) * GRASS_CHUNK_SIZE - pz;
-        const distSq = dx * dx + dz * dz;
-        if (distSq <= maxDistSq) candidates.push({ key, cx, cz, distSq });
+        // Nearest point of the chunk's AABB to the camera (XZ), exact — a
+        // center-distance test would over-request diagonal chunks.
+        const nx = Math.max(cx * GRASS_CHUNK_SIZE - px, 0, px - (cx + 1) * GRASS_CHUNK_SIZE);
+        const nz = Math.max(cz * GRASS_CHUNK_SIZE - pz, 0, pz - (cz + 1) * GRASS_CHUNK_SIZE);
+        const distSq = nx * nx + nz * nz;
+        if (distSq < fadeZeroDistSq) candidates.push({ key, cx, cz, distSq });
       }
     }
 
@@ -389,6 +445,10 @@ export const GrassField: React.FC<GrassFieldProps> = ({
       if (pendingRef.current.size >= MAX_PENDING_CHUNKS) break;
       requestChunk(c.key, c.cx, c.cz);
     }
+    // Settled only when the sweep found nothing at all and nothing is in
+    // flight — a throttled batch (candidates beyond MAX_PENDING) keeps the
+    // scan running until every candidate has been built.
+    settledRef.current = candidates.length === 0 && pendingRef.current.size === 0;
   });
 
   return <group ref={groupRef} />;

@@ -19,6 +19,7 @@
  *   IN:  { type: "FREEWAY_SIDES",  id, minX, minZ, maxX, maxZ, spacing, lateral, junctionClear, withNext }
  *   IN:  { type: "DENSITY_POINTS", id, minX, minZ, maxX, maxZ, params: DensityPointParams }
  *   IN:  { type: "CITY_SITES",     id, minX, minZ, maxX, maxZ } (no biome probe — big windows)
+ *   IN:  { type: "VERTEX_SAMPLE",  id, x, z } (single padded height sample — Player backstop)
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "DRESSING_RESULT", id, points }
  */
@@ -132,6 +133,15 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   const { id, minX, minZ, maxX, maxZ } = e.data;
+
+  // Single PADDED vertex sample (Player backstop confirm) — a flatten-tile
+  // miss inside computeVertexData costs 30-70ms, which is exactly why the
+  // Player routes it here instead of paying it on the main thread.
+  if (type === "VERTEX_SAMPLE") {
+    const points = initialized ? [computeVertexData(e.data.x, e.data.z)] : [];
+    (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
+    return;
+  }
 
   // City-site scans use HUGE windows (scan radius ~1800) — the chunk-center
   // biome probe doesn't apply, and the site enumeration self-filters cheaply.

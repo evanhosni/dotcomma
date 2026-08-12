@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../sky/lampGlow";
 import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
-import { getDistance2D } from "../utils/utils";
+import { getDistance2DSq } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { AnimationControl } from "./state/types";
@@ -26,6 +26,23 @@ const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
 let frustumUpdatedAt = -1;
+
+// Debug "E = toggle animations" (only for instances NOT driven by a state
+// machine): ONE shared window listener + flag instead of a keydown listener
+// per instance — hundreds of mounted spawns each registering their own
+// listener made every keypress O(spawns) even when nothing used the feature.
+let manualAnimationsPlaying = false;
+const manualAnimationSubscribers = new Set<() => void>();
+let manualAnimationListenerAttached = false;
+const ensureManualAnimationListener = (): void => {
+  if (manualAnimationListenerAttached) return;
+  manualAnimationListenerAttached = true;
+  window.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key.toLowerCase() !== "e") return;
+    manualAnimationsPlaying = !manualAnimationsPlaying;
+    manualAnimationSubscribers.forEach((apply) => apply());
+  });
+};
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
@@ -56,6 +73,20 @@ function cloneModelWithAnimations(gltf: any): {
   // re-traversal was O(bones × scene nodes) and caused spawn-batch hitches)
   const clonedBones = new Map<string, THREE.Bone>();
   const clonedSkinned: THREE.SkinnedMesh[] = [];
+
+  // Material clones are deduped by SOURCE material: a model like beeble.glb
+  // has 10 meshes sharing a handful of materials, and cloning per MESH meant
+  // that many extra materials to patch, fade-drive, and dispose per instance.
+  const materialCloneMap = new Map<THREE.Material, THREE.Material>();
+  const cloneMaterialShared = (mat: THREE.Material): THREE.Material => {
+    let cloned = materialCloneMap.get(mat);
+    if (!cloned) {
+      cloned = mat.clone();
+      materialCloneMap.set(mat, cloned);
+    }
+    return cloned;
+  };
+
   clone.scene.traverse((node: any) => {
     if (node.isBone) {
       clonedBones.set(node.name, node as THREE.Bone);
@@ -63,28 +94,36 @@ function cloneModelWithAnimations(gltf: any): {
     if (node.isSkinnedMesh) {
       clonedSkinned.push(node as THREE.SkinnedMesh);
     } else if (node.isMesh && node.material) {
-      // For regular meshes, just clone the material
-      node.material = node.material.clone();
+      // For regular meshes, just clone the material (shared by source)
+      node.material = cloneMaterialShared(node.material);
     }
   });
+
+  // Skeletons are deduped by SOURCE skeleton, mirroring SkeletonUtils.clone:
+  // beeble.glb has 10 skinned meshes all bound to ONE 24-joint skeleton, and
+  // a per-mesh skeleton.clone() created 10 skeletons → 10× Skeleton.update()
+  // + 10 bone-texture uploads per instance per frame. One clone per source
+  // skeleton (bones rebound to the cloned bone instances by name), bound to
+  // each mesh with its own bindMatrix.
+  const skeletonMap = new Map<THREE.Skeleton, THREE.Skeleton>();
 
   for (const node of clonedSkinned) {
     const originalMesh = skinnedMeshes[node.name];
     if (!originalMesh || !originalMesh.skeleton) continue;
 
-    node.skeleton = originalMesh.skeleton.clone();
-
-    // Rebind skeleton bones to the cloned scene's bones by name
-    node.skeleton.bones = node.skeleton.bones.map((bone: THREE.Bone) => clonedBones.get(bone.name) ?? bone);
-
-    // Clone and assign material
-    if (originalMesh.material) {
-      node.material = (originalMesh.material as THREE.Material).clone();
+    const srcSkeleton = originalMesh.skeleton;
+    let skeleton = skeletonMap.get(srcSkeleton);
+    if (!skeleton) {
+      const bones = srcSkeleton.bones.map((bone: THREE.Bone) => clonedBones.get(bone.name) ?? bone);
+      const boneInverses = srcSkeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
+      skeleton = new THREE.Skeleton(bones, boneInverses);
+      skeletonMap.set(srcSkeleton, skeleton);
     }
+    node.bind(skeleton, node.bindMatrix);
 
-    // Ensure bind matrices are updated
-    if (node.skeleton.boneInverses) {
-      node.skeleton.boneInverses = node.skeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
+    // Clone and assign material (shared by source)
+    if (originalMesh.material) {
+      node.material = cloneMaterialShared(originalMesh.material as THREE.Material);
     }
   }
 
@@ -140,7 +179,7 @@ export const GameObject = ({
   const mountedRef = useRef<boolean>(true);
   const clonedModel = useMemo(() => cloneModelWithAnimations(gltf), [gltf]);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
-  const actionsRef = useRef<THREE.AnimationAction[]>([]);
+  const actionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
   const scene = clonedModel.scene;
 
   const groupRef = useRef<THREE.Group>(null);
@@ -150,17 +189,39 @@ export const GameObject = ({
   const animDeltaRef = useRef(0);
   const animFrameParityRef = useRef(false);
   const shouldRenderCollidersRef = useRef(false);
+  const lastVisibleRef = useRef<boolean | null>(null);
+  const destroyedRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
   const [shouldRenderColliders, setShouldRenderColliders] = useState<boolean>(false);
+
+  // Actions are created LAZILY by clip name: beeble.glb carries 14 clips
+  // (298 tracks) of which the state machine ever plays 4 — eagerly binding
+  // every clip put all the unused tracks through the mixer's property-binding
+  // graph for every instance. Nothing binds a clip until something plays it.
+  const getOrCreateAction = (clipName: string): THREE.AnimationAction | null => {
+    const mixer = mixerRef.current;
+    if (!mixer) return null;
+    let action = actionsRef.current.get(clipName);
+    if (!action) {
+      const clip = clonedModel.animations.find((c: THREE.AnimationClip) => c.name === clipName);
+      if (!clip) return null;
+      action = mixer.clipAction(clip);
+      actionsRef.current.set(clipName, action);
+    }
+    return action;
+  };
 
   useEffect(() => {
     if (!scene) return;
 
     sceneRef.current = scene;
 
-    // Collect all materials for fade control and optimize
-    const allMaterials: THREE.Material[] = [];
+    // Collect all materials for fade control and optimize. Meshes share
+    // material clones (deduped by source in cloneModelWithAnimations), so
+    // dedupe here too: each unique clone gets patched exactly once and the
+    // fade loop writes each material once, not once per mesh using it.
+    const materialSet = new Set<THREE.Material>();
     scene.traverse((child: THREE.Object3D) => {
       if ((child as THREE.Mesh).isMesh || (child as THREE.SkinnedMesh).isSkinnedMesh) {
         const mesh = child as THREE.Mesh;
@@ -168,6 +229,8 @@ export const GameObject = ({
           const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
           materials.forEach((mat) => {
+            if (materialSet.has(mat)) return;
+            materialSet.add(mat);
             mat.transparent = true;
             mat.opacity = 0;
             (mat as any).fog = false;
@@ -178,7 +241,6 @@ export const GameObject = ({
             // Street-lamp glow — NPCs/objects near a lamp brighten like the
             // terrain and buildings do (grid lookup, no real lights)
             patchStandardMaterialLampGlow(mat);
-            allMaterials.push(mat);
           });
 
           mesh.frustumCulled = true;
@@ -187,21 +249,11 @@ export const GameObject = ({
         }
       }
     });
-    materialsRef.current = allMaterials;
+    materialsRef.current = Array.from(materialSet);
 
-    // Set up animations efficiently
+    // Set up the mixer only — actions are created lazily (getOrCreateAction)
     if (clonedModel.animations && clonedModel.animations.length > 0) {
-      const mixer = new THREE.AnimationMixer(scene);
-      mixerRef.current = mixer;
-
-      // Create actions once
-      actionsRef.current = clonedModel.animations.map((clip) => {
-        const action = mixer.clipAction(clip);
-        action.paused = true;
-        action.time = 0;
-        action.play();
-        return action;
-      });
+      mixerRef.current = new THREE.AnimationMixer(scene);
     }
 
     // Calculate bounding sphere efficiently
@@ -229,60 +281,95 @@ export const GameObject = ({
         mixerRef.current.stopAllAction();
       }
 
+      // Dispose per-instance GPU resources: the material clones and each
+      // shared cloned skeleton's bone texture. Geometry is SHARED with the
+      // source GLTF scene — never dispose it here.
+      for (const mat of materialsRef.current) {
+        mat.dispose();
+      }
+      const skeletons = new Set<THREE.Skeleton>();
+      scene.traverse((node: any) => {
+        if (node.isSkinnedMesh && node.skeleton) skeletons.add(node.skeleton);
+      });
+      skeletons.forEach((skeleton) => skeleton.dispose());
+
       // Clear references to help garbage collection
-      actionsRef.current = [];
+      actionsRef.current.clear();
+      materialsRef.current = [];
       mixerRef.current = null;
       sceneRef.current = null;
     };
   }, [scene, clonedModel.animations, quantization]); // scale omitted: stable per instance, only used for bounding sphere
 
-  // Add event listener for E key (only when not driven by state machine)
+  // E-key animation toggle (only when not driven by a state machine) —
+  // subscribes to the ONE shared module-level keydown listener.
   useEffect(() => {
     if (animationControl) return;
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === "e") {
-        setIsPlaying((prevState) => {
-          const newState = !prevState;
-
-          // Toggle all animations
-          if (actionsRef.current.length > 0) {
-            actionsRef.current.forEach((action) => {
-              action.paused = !newState;
-
-              // If resuming animations, ensure they're properly reset if they were stopped
-              if (newState && !action.isRunning()) {
-                action.play();
-              }
-            });
+    const apply = () => {
+      setIsPlaying(manualAnimationsPlaying);
+      if (manualAnimationsPlaying) {
+        // Materialize + play every clip (original behavior: all clips
+        // run together while the debug toggle is on)
+        for (const clip of clonedModel.animations ?? []) {
+          const action = getOrCreateAction(clip.name);
+          if (action) {
+            action.paused = false;
+            // If resuming animations, ensure they're properly reset if they were stopped
+            if (!action.isRunning()) {
+              action.play();
+            }
           }
-
-          return newState;
+        }
+      } else {
+        actionsRef.current.forEach((action) => {
+          action.paused = true;
         });
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
+    ensureManualAnimationListener();
+    manualAnimationSubscribers.add(apply);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      manualAnimationSubscribers.delete(apply);
     };
-  }, [animationControl]);
+  }, [animationControl, clonedModel]);
+
+  // The pool unmounts a destroyed object on its next batch — up to several
+  // frames after onDestroy. Whether this instance has colliders at all is
+  // known from the (cached) collider result; collider-less models (beeble)
+  // skip the collider-gate state machinery entirely.
+  const hasColliders =
+    colliders !== null &&
+    colliders.capsuleColliders.length +
+      colliders.sphereColliders.length +
+      colliders.boxColliders.length +
+      colliders.trimeshColliders.length >
+      0;
 
   // Handle animations and frustum culling
   useFrame((state, delta) => {
+    // onDestroy fires ONCE — re-firing every frame until the pool's next
+    // batch actually unmounts us rewrote the despawn-ledger timestamp each
+    // frame, delaying the eventual respawn cooldown.
+    if (destroyedRef.current) return;
+
     const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
-    const distance = getDistance2D(camera.position, objectPosition);
+    // Distances are only ever COMPARED here — stay in squared space (no sqrt)
+    const distanceSq = getDistance2DSq(camera.position, objectPosition);
 
     // Fade in/out
     const fade = fadeRef.current;
-    if (distance > renderDistance && !fade.fadingOut) {
+    if (distanceSq > renderDistance * renderDistance && !fade.fadingOut) {
       fade.fadingOut = true;
-    } else if (distance <= renderDistance && fade.fadingOut) {
+    } else if (distanceSq <= renderDistance * renderDistance && fade.fadingOut) {
       fade.fadingOut = false;
     }
 
     // Hard kill safety net
-    if (distance > (despawnDistance ?? renderDistance * DELETE_OBJECT_BUFFER)) {
+    const killDistance = despawnDistance ?? renderDistance * DELETE_OBJECT_BUFFER;
+    if (distanceSq > killDistance * killDistance) {
+      destroyedRef.current = true;
       onDestroy(id);
       return;
     }
@@ -290,6 +377,7 @@ export const GameObject = ({
     if (fade.fadingOut) {
       fade.opacity = Math.max(0, fade.opacity - delta / FADE_DURATION);
       if (fade.opacity <= 0) {
+        destroyedRef.current = true;
         onDestroy(id);
         return;
       }
@@ -323,12 +411,13 @@ export const GameObject = ({
     // For very large objects, we can add an additional check
     // based on distance to camera rather than just frustum
     const objectRadiusWithScale = boundsRef.current.radius;
-    const distanceToCamera = camera.position.distanceTo(objectPosition);
+    const distanceToCameraSq = camera.position.distanceToSquared(objectPosition);
 
     // Scale the "close to camera" threshold by the object's render distance
     const proximityFactor = renderDistance / DEFAULT_RENDER_DISTANCE;
+    const closeThreshold = objectRadiusWithScale * 3 * proximityFactor;
 
-    const isCloseToCamera = distanceToCamera < objectRadiusWithScale * 3 * proximityFactor;
+    const isCloseToCamera = distanceToCameraSq < closeThreshold * closeThreshold;
 
     // An object is visible if:
     // 1. It intersects with the padded frustum (using temporary larger radius), OR
@@ -338,8 +427,11 @@ export const GameObject = ({
     const isVisible = frustum.intersectsSphere(boundsRef.current) || isCloseToCamera;
     boundsRef.current.radius = originalRadius; // Restore original radius
 
-    // Set visibility directly on the group ref — no React re-render
-    if (groupRef.current) {
+    // Set visibility directly on the group ref — no React re-render. Only
+    // touch the shared Set (and the group) on actual TRANSITIONS: steady-state
+    // add/delete of every object every frame was measurable Set churn.
+    if (groupRef.current && lastVisibleRef.current !== isVisible) {
+      lastVisibleRef.current = isVisible;
       groupRef.current.visible = isVisible;
       if (isVisible) {
         frustumHiddenObjects.delete(groupRef.current);
@@ -348,13 +440,18 @@ export const GameObject = ({
       }
     }
 
-    // Also scale collider render distance based on object size
-    const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2);
+    // Colliders gate on DISTANCE only — physics must not depend on where the
+    // camera points (gating on the frustum result unmounted and rebuilt the
+    // Rapier colliders every time the player turned around).
+    if (hasColliders) {
+      // Also scale collider render distance based on object size
+      const colliderRenderDistance = Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2);
 
-    const shouldShowColliders = distance < colliderRenderDistance && isVisible;
-    if (shouldRenderCollidersRef.current !== shouldShowColliders) {
-      shouldRenderCollidersRef.current = shouldShowColliders;
-      setShouldRenderColliders(shouldShowColliders);
+      const shouldShowColliders = distanceSq < colliderRenderDistance * colliderRenderDistance;
+      if (shouldRenderCollidersRef.current !== shouldShowColliders) {
+        shouldRenderCollidersRef.current = shouldShowColliders;
+        setShouldRenderColliders(shouldShowColliders);
+      }
     }
 
     // State-machine-driven animation commands (cheap — always processed so
@@ -362,14 +459,14 @@ export const GameObject = ({
     if (animationControl && mixerRef.current && animationControl.dirty) {
       animationControl.dirty = false;
       const cmd = animationControl.pendingCommand;
-      if (cmd && clonedModel.animations.length > 0) {
-        const clipIndex = clonedModel.animations.findIndex((clip: THREE.AnimationClip) => clip.name === cmd.clipName);
-        if (clipIndex >= 0) {
-          const targetAction = actionsRef.current[clipIndex];
-          // Stop all actions first to clear the mixer
-          for (const action of actionsRef.current) {
+      if (cmd) {
+        const targetAction = getOrCreateAction(cmd.clipName);
+        if (targetAction) {
+          // Stop the materialized actions to clear the mixer (clips nothing
+          // ever played were never bound — there's nothing else to stop)
+          actionsRef.current.forEach((action) => {
             action.stop();
-          }
+          });
           // Play only the target
           targetAction.reset();
           targetAction.setLoop(cmd.loop ?? THREE.LoopRepeat, Infinity);
@@ -389,7 +486,8 @@ export const GameObject = ({
     if (mixer && (animationControl || isPlaying)) {
       animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
       animFrameParityRef.current = !animFrameParityRef.current;
-      const skipFarFrame = distance > renderDistance * ANIM_HALF_RATE_FRACTION && animFrameParityRef.current;
+      const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
+      const skipFarFrame = distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current;
       if (isVisible && !skipFarFrame) {
         mixer.update(animDeltaRef.current);
         animDeltaRef.current = 0;

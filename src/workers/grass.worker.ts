@@ -47,10 +47,33 @@ const mulberry32 = (a: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
+const EMPTY_RESULT = () => ({
+  count: 0,
+  minY: 0,
+  maxY: 0,
+  offsets: new Float32Array(0),
+  bladeData: new Float32Array(0),
+});
+
 const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams) => {
   const size = params.chunkSize;
   const minX = chunkX * size;
   const minZ = chunkZ * size;
+
+  // ── Emptiness pre-probe (mirrors cityDressing.worker's probeEmpty) ──
+  // One computeVertexData at the chunk center: when the center is outside
+  // every requested biome AND farther from the biome boundary than the
+  // chunk's half-diagonal (size × 0.75 > size × √2/2), no point in the chunk
+  // can be in a requested biome — every blade would fail the biome filter, so
+  // skip the (n×n)-sample terrain grid + blade loop entirely. Output for
+  // non-empty chunks is untouched (the probe only ever returns the same
+  // empty result the full loop would have produced).
+  if (params.biomeIds && params.biomeIds.length > 0) {
+    const vd = computeVertexData(minX + size / 2, minZ + size / 2);
+    if (!params.biomeIds.includes(vd.biomeId) && vd.distanceToBiomeBoundaryCenter > size * 0.75) {
+      return EMPTY_RESULT();
+    }
+  }
 
   // ── Coarse terrain grid: height, biome, slope (degrees) per node ──
   const n = Math.floor(size / GRID_STEP) + 1;

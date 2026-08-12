@@ -60,6 +60,30 @@ const _boundSphere = new THREE.Sphere();
 const _drawSize = new THREE.Vector2();
 const _savedClearColor = new THREE.Color();
 
+// The main camera's matrixWorld needs exactly one refresh per frame no matter
+// how many portal hooks run (all run at priority 0.9/1, after the Player and
+// teleport system have finished moving the camera). Stamped with r3f's clock
+// time, which is advanced once per frame.
+let _cameraUpdateTime = -1;
+
+/** Beyond the fade range the portal stays visible as a solid black door
+ *  (opacity 0 multiplies the texture to black) instead of a see-through hole
+ *  into the building shell. Module-scope (takes its state as args) — as a
+ *  closure it was reallocated inside every portal's every frame. */
+const showBlack = (
+  uniforms: { portalOpacity: { value: number } },
+  protecting: { current: boolean },
+  door: THREE.Mesh,
+  box: THREE.Mesh,
+  self: PortalDescriptor,
+): void => {
+  uniforms.portalOpacity.value = 0;
+  protecting.current = false;
+  door.visible = true;
+  box.visible = false;
+  self.activeMesh = door;
+};
+
 const isSphereVisible = (
   projection: THREE.Matrix4,
   viewInverse: THREE.Matrix4,
@@ -181,23 +205,12 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
   // (interior) may contain exit portal surfaces, so their textures must be
   // fresh before the enter portal renders. Both run after the teleport system
   // (-2) and before the explicit scene render (2).
-  useFrame(() => {
+  useFrame((state) => {
     const door = doorMeshRef.current;
     const box = boxMeshRef.current;
     const self = getPortal(id);
     if (!door || !box || !self) return;
     const mainCam = camera as THREE.PerspectiveCamera;
-
-    // Beyond the fade range the portal stays visible as a solid black door
-    // (opacity 0 multiplies the texture to black) instead of a see-through
-    // hole into the building shell.
-    const showBlack = () => {
-      uniforms.portalOpacity.value = 0;
-      protecting.current = false;
-      door.visible = true;
-      box.visible = false;
-      self.activeMesh = door;
-    };
 
     // ---- Choose the observer ----
     // Normally the main camera. For an exit portal whose building the player
@@ -206,7 +219,12 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
     // interior preview this surface will appear in. At the teleport instant
     // the context camera IS the post-teleport main camera, so the handoff
     // between modes is pixel-continuous.
-    camera.updateMatrixWorld();
+    // First portal hook this frame refreshes the camera matrix; the rest skip
+    // (module-level time stamp — nothing moves the camera between hooks).
+    if (state.clock.elapsedTime !== _cameraUpdateTime) {
+      _cameraUpdateTime = state.clock.elapsedTime;
+      camera.updateMatrixWorld();
+    }
     _localView.copy(camera.position).applyMatrix4(self.invMatrix);
     let viewDist = _localView.length();
     let usingContext = false;
@@ -217,7 +235,7 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
       const ctxEnter = getPortal(self.contextEnterId);
       const ctxEnterPaired = ctxEnter && getPortal(ctxEnter.pairedId);
       if (!ctxEnter || !ctxEnterPaired) {
-        showBlack();
+        showBlack(uniforms, protecting, door, box, self);
         return;
       }
       // The context enter portal is off-screen → its preview isn't being
@@ -233,7 +251,7 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
       viewDist = _localView.length();
       usingContext = true;
     } else {
-      showBlack();
+      showBlack(uniforms, protecting, door, box, self);
       return;
     }
     // Portal-local observer position: x/y span the door, z is the signed
@@ -246,7 +264,7 @@ export const usePortalRenderer = ({ id, pairedId, size, activationDistance, dire
     const opacity = Math.max(0, Math.min(1, (activationDistance - viewDist) / PORTAL_FADE_RANGE));
     uniforms.portalOpacity.value = hasRendered.current ? opacity : 0;
     if (opacity < 0.01) {
-      showBlack();
+      showBlack(uniforms, protecting, door, box, self);
       return;
     }
 

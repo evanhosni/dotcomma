@@ -27,6 +27,19 @@ const MAX_PHYSICS_CATCHUP = 0.15;
 
 const HAS_CLICK_TRIGGER = BEEBLE_SM.triggers.some((t) => t.id === "mouse-left-click");
 
+// Scratch objects for the per-frame physics step — computeColliderMovement
+// and setNextKinematicTranslation both consume their argument synchronously,
+// and useFrame callbacks run sequentially, so module-level reuse is safe
+// (allocating fresh {x,y,z} literals per active beeble per frame was GC churn).
+const _desiredMovement = { x: 0, y: 0, z: 0 };
+const _nextTranslation = { x: 0, y: 0, z: 0 };
+
+/** Deterministic per-instance frame phase from the spawn position, so a
+ *  batch of beebles mounted together doesn't do its every-Nth-frame work
+ *  (physics throttle, mouse raycast) all on the same frame. */
+const framePhaseFromCoords = (x: number, z: number, interval: number): number =>
+  Math.abs(Math.floor(x * 7.13 + z * 3.71)) % interval;
+
 export const Beeble = (props: ActorProps) => {
   const groupRef = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
@@ -34,15 +47,22 @@ export const Beeble = (props: ActorProps) => {
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
   const verticalVelocity = useRef(0);
   const pendingDtRef = useRef(0);
-  const physicsFrameRef = useRef(0);
+  const framePhase = useRef(
+    framePhaseFromCoords(props.coordinates[0], props.coordinates[2], PHYSICS_THROTTLE_FRAMES),
+  ).current;
+  const physicsFrameRef = useRef(framePhase);
   const groundedRef = useRef(false);
   const hasComputedRef = useRef(false);
 
   const { world } = useRapier();
 
   const sm = useStateMachine(BEEBLE_SM, positionRef, groupRef);
-  const mouseEvents = useMouseEvents(sm, groupRef, {
+  // Mouse interaction is fully handled inside useMouseEvents (window
+  // listeners + a manual screen-center raycast) — nothing is attached to the
+  // R3F group, see the note at the end of useMouseEvents.
+  useMouseEvents(sm, groupRef, {
     shouldGrowCursor: props.cursorOverride ?? HAS_CLICK_TRIGGER,
+    framePhase,
   });
 
   useEffect(() => {
@@ -108,23 +128,20 @@ export const Beeble = (props: ActorProps) => {
       verticalVelocity.current += GRAVITY * dt;
     }
 
-    const desiredMovement = {
-      x: velX * dt,
-      y: verticalVelocity.current * dt,
-      z: velZ * dt,
-    };
+    _desiredMovement.x = velX * dt;
+    _desiredMovement.y = verticalVelocity.current * dt;
+    _desiredMovement.z = velZ * dt;
 
     const collider = rb.collider(0);
     if (collider) {
-      controller.computeColliderMovement(collider, desiredMovement);
+      controller.computeColliderMovement(collider, _desiredMovement);
       const corrected = controller.computedMovement();
       hasComputedRef.current = true;
 
-      rb.setNextKinematicTranslation({
-        x: pos.x + corrected.x,
-        y: pos.y + corrected.y,
-        z: pos.z + corrected.z,
-      });
+      _nextTranslation.x = pos.x + corrected.x;
+      _nextTranslation.y = pos.y + corrected.y;
+      _nextTranslation.z = pos.z + corrected.z;
+      rb.setNextKinematicTranslation(_nextTranslation);
     }
 
     const finalPos = rb.translation();
@@ -149,17 +166,10 @@ export const Beeble = (props: ActorProps) => {
       >
         <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, BEEBLE_RADIUS]} />
       </RigidBody>
-      <group
-        ref={groupRef as any}
-        onPointerOver={mouseEvents.onPointerOver}
-        onPointerOut={mouseEvents.onPointerOut}
-        onClick={mouseEvents.onClick}
-        onContextMenu={mouseEvents.onContextMenu}
-        onPointerDown={mouseEvents.onPointerDown}
-        onPointerUp={mouseEvents.onPointerUp}
-        onDoubleClick={mouseEvents.onDoubleClick}
-        onWheel={mouseEvents.onWheel}
-      >
+      {/* NO pointer handler props here — even no-op handlers register the
+          group in R3F's interaction list, costing a recursive raycast (full
+          CPU-skinned triangle tests) per beeble on every pointermove. */}
+      <group ref={groupRef as any}>
         <GameObject
           model="/models/beeble.glb"
           positionRef={positionRef}

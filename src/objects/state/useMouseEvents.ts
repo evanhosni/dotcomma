@@ -1,19 +1,8 @@
-import { ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideCursor, showCursor } from "../../utils/cursor/cursor";
 import { StateMachineHandle } from "./types";
-
-export interface MouseEventHandlers {
-  onPointerOver: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerOut: (e: ThreeEvent<PointerEvent>) => void;
-  onClick: (e: ThreeEvent<MouseEvent>) => void;
-  onContextMenu: (e: ThreeEvent<MouseEvent>) => void;
-  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
-  onPointerUp: (e: ThreeEvent<PointerEvent>) => void;
-  onDoubleClick: (e: ThreeEvent<MouseEvent>) => void;
-  onWheel: (e: ThreeEvent<WheelEvent>) => void;
-}
 
 export interface MouseEventDistances {
   onMouseHoverEnter?: number;
@@ -34,9 +23,24 @@ export interface MouseEventDistances {
 export interface UseMouseEventsOptions {
   distances?: MouseEventDistances;
   shouldGrowCursor?: boolean;
+  /** Seed for the every-3-frames raycast throttle — pass a per-instance
+   *  value (hash of spawn coords) so batch-mounted actors don't all raycast
+   *  on the same frame. */
+  framePhase?: number;
 }
 
 const DEFAULT_DISTANCE = 5;
+
+// Angular pre-test: the manual raycast below does per-triangle CPU-skinned
+// tests, and the bounding-sphere reject is inflated ×3 for animation so it
+// rarely rejects — a miss used to scan every triangle of every mesh. The
+// screen-center ray only ever hits an actor roughly IN FRONT of the camera,
+// so reject outright unless the actor center is within ~18° of the view ray.
+// Skipped when the actor is very close (it then spans a wide angle and the
+// normalized direction is unstable).
+const VIEW_CONE_COS = Math.cos((18 * Math.PI) / 180);
+const VIEW_CONE_MIN_DIST_SQ = 16; // within 4u, run the full test regardless
+const _toActor = new THREE.Vector3();
 
 // Own raycaster — same approach as R3F: setFromCamera(center, camera) + intersectObject
 const _raycaster = new THREE.Raycaster();
@@ -55,8 +59,7 @@ export function useMouseEvents(
   sm: StateMachineHandle,
   groupRef: React.MutableRefObject<THREE.Group | null>,
   options: UseMouseEventsOptions = {},
-): MouseEventHandlers {
-  const { scene } = useThree();
+): void {
   const bb = sm.blackboard;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
@@ -80,7 +83,7 @@ export function useMouseEvents(
     [options.distances],
   );
 
-  const frameCountRef = useRef(0);
+  const frameCountRef = useRef(options.framePhase ?? 0);
   const lastHoverRef = useRef(false);
   const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
 
@@ -118,58 +121,70 @@ export function useMouseEvents(
       } else {
         _raycaster.setFromCamera(_center, camera);
 
-        // Cache SkinnedMesh references on first use, sorted largest-first
-        // so the body mesh (most likely to hit) is tested before tiny face
-        // meshes, maximising early-exit probability.
-        if (cachedMeshesRef.current.length === 0) {
-          groupRef.current.traverse((child) => {
-            if ((child as THREE.SkinnedMesh).isSkinnedMesh)
-              cachedMeshesRef.current.push(child as THREE.SkinnedMesh);
-          });
-          cachedMeshesRef.current.sort(
-            (a, b) => (b.geometry.index?.count ?? 0) - (a.geometry.index?.count ?? 0),
-          );
-        }
+        // Angular pre-test (see VIEW_CONE_COS above): the screen-center ray
+        // can only hit an actor near the view direction — skip all
+        // per-triangle work when it's off to the side or behind.
+        _toActor.subVectors(groupRef.current.position, _raycaster.ray.origin);
+        const outsideViewCone =
+          dist3DSq > VIEW_CONE_MIN_DIST_SQ &&
+          _toActor.normalize().dot(_raycaster.ray.direction) < VIEW_CONE_COS;
 
-        // Custom SkinnedMesh ray-triangle test. Three.js's built-in
-        // intersectObject silently drops valid hits for SkinnedMesh instances
-        // that mount after the initial batch (cause unknown — the geometry,
-        // bones, and matrices are all correct). This manual test uses the
-        // same data (getVertexPosition with bone transforms, local-space ray)
-        // and reliably produces hits that intersectObject misses.
-        let hitDist = Infinity;
-        const meshes = cachedMeshesRef.current;
+        if (outsideViewCone) {
+          hitDistRef.current = Infinity;
+        } else {
+          // Cache SkinnedMesh references on first use, sorted largest-first
+          // so the body mesh (most likely to hit) is tested before tiny face
+          // meshes, maximising early-exit probability.
+          if (cachedMeshesRef.current.length === 0) {
+            groupRef.current.traverse((child) => {
+              if ((child as THREE.SkinnedMesh).isSkinnedMesh)
+                cachedMeshesRef.current.push(child as THREE.SkinnedMesh);
+            });
+            cachedMeshesRef.current.sort(
+              (a, b) => (b.geometry.index?.count ?? 0) - (a.geometry.index?.count ?? 0),
+            );
+          }
 
-        for (let m = 0; m < meshes.length && hitDist > maxEventDist; m++) {
-          const sm = meshes[m];
-          const geo = sm.geometry;
-          if (!geo.index) continue;
+          // Custom SkinnedMesh ray-triangle test. Three.js's built-in
+          // intersectObject silently drops valid hits for SkinnedMesh instances
+          // that mount after the initial batch (cause unknown — the geometry,
+          // bones, and matrices are all correct). This manual test uses the
+          // same data (getVertexPosition with bone transforms, local-space ray)
+          // and reliably produces hits that intersectObject misses.
+          let hitDist = Infinity;
+          const meshes = cachedMeshesRef.current;
 
-          // Quick bounding-sphere rejection in world space
-          if (!geo.boundingSphere) geo.computeBoundingSphere();
-          _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
-          _worldSphere.radius *= 3; // inflate for animation
-          if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
+          for (let m = 0; m < meshes.length && hitDist > maxEventDist; m++) {
+            const sm = meshes[m];
+            const geo = sm.geometry;
+            if (!geo.index) continue;
 
-          // Build local-space ray
-          _invMatrix.copy(sm.matrixWorld).invert();
-          _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
+            // Quick bounding-sphere rejection in world space
+            if (!geo.boundingSphere) geo.computeBoundingSphere();
+            _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
+            _worldSphere.radius *= 3; // inflate for animation
+            if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
 
-          const idx = geo.index;
-          for (let i = 0, l = idx.count; i < l; i += 3) {
-            sm.getVertexPosition(idx.getX(i), _tA);
-            sm.getVertexPosition(idx.getX(i + 1), _tB);
-            sm.getVertexPosition(idx.getX(i + 2), _tC);
-            if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
-              _hitPt.applyMatrix4(sm.matrixWorld);
-              hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
-              break; // first hit is enough
+            // Build local-space ray
+            _invMatrix.copy(sm.matrixWorld).invert();
+            _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
+
+            const idx = geo.index;
+            for (let i = 0, l = idx.count; i < l; i += 3) {
+              sm.getVertexPosition(idx.getX(i), _tA);
+              sm.getVertexPosition(idx.getX(i + 1), _tB);
+              sm.getVertexPosition(idx.getX(i + 2), _tC);
+              if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
+                _hitPt.applyMatrix4(sm.matrixWorld);
+                hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
+                break; // first hit is enough
+              }
             }
           }
-        }
-        hitDistRef.current = hitDist;
-        if (hitDist <= d.hoverEnter) {
-          isHovering = true;
+          hitDistRef.current = hitDist;
+          if (hitDist <= d.hoverEnter) {
+            isHovering = true;
+          }
         }
       }
     }
@@ -184,7 +199,9 @@ export function useMouseEvents(
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
       bb.__mouse_hover_leave = true;
-      delete bb.__mouse_hover_active;
+      // Write false instead of delete — deleting keys forces the blackboard
+      // into dictionary mode; truthiness semantics are identical
+      bb.__mouse_hover_active = false;
       if (growCursor) hideCursor();
     }
   });
@@ -273,18 +290,9 @@ export function useMouseEvents(
     };
   }, [bb, d]);
 
-  // Return no-op handlers — events are now handled via DOM listeners above
-  return useMemo(
-    () => ({
-      onPointerOver: (_e: ThreeEvent<PointerEvent>) => {},
-      onPointerOut: (_e: ThreeEvent<PointerEvent>) => {},
-      onClick: (_e: ThreeEvent<MouseEvent>) => {},
-      onContextMenu: (_e: ThreeEvent<MouseEvent>) => {},
-      onPointerDown: (_e: ThreeEvent<PointerEvent>) => {},
-      onPointerUp: (_e: ThreeEvent<PointerEvent>) => {},
-      onDoubleClick: (_e: ThreeEvent<MouseEvent>) => {},
-      onWheel: (_e: ThreeEvent<WheelEvent>) => {},
-    }),
-    [],
-  );
+  // No return value: all events are handled via the DOM listeners + manual
+  // raycast above. Deliberately NOTHING is attached to the R3F group —
+  // returning even no-op pointer handlers registered every actor in R3F's
+  // interaction list, triggering a recursive raycast (full CPU-skinned
+  // triangle tests) per actor on every pointermove.
 }

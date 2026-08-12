@@ -37,10 +37,29 @@ export class TaskQueue {
         sliceStart = performance.now();
       }
       const { task } = this.queue.shift()!;
+      // The budget must measure SYNCHRONOUS main-thread time only. A task
+      // that awaits a worker round-trip suspends across a macrotask boundary
+      // — the browser already got its render turn there — but the wall-clock
+      // check above counted that idle wait, exhausted the budget every time,
+      // and inserted a (latency-adding) setTimeout yield between every such
+      // task. A self-rearming zero-timeout races the task: it can only fire
+      // while the task is suspended past a macrotask boundary, and each fire
+      // restarts the slice clock at that boundary (so only the task's
+      // synchronous tail after the last suspension keeps accumulating).
+      // Purely synchronous tasks resolve through microtasks alone — the
+      // timer never fires and their full cost still counts toward the slice.
+      let boundaryTimer: ReturnType<typeof setTimeout>;
+      const onMacrotaskBoundary = () => {
+        sliceStart = performance.now();
+        boundaryTimer = setTimeout(onMacrotaskBoundary, 0);
+      };
+      boundaryTimer = setTimeout(onMacrotaskBoundary, 0);
       try {
         await task();
       } catch (error) {
         console.error("Error processing task:", error);
+      } finally {
+        clearTimeout(boundaryTimer);
       }
     }
 

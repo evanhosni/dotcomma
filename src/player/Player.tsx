@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { usePortalContext } from "../portals/PortalContext";
+import { getVertexSample } from "../dressing/dressingWorker";
 import { getVertexData, getVertexDataRaw } from "../world/vertexData";
 import { useInput } from "./useInput";
 
@@ -130,6 +131,13 @@ const _uphill = new THREE.Vector3();
 // Persists across frames: the last slide direction keeps pushing while the
 // leftover momentum decays after reaching walkable ground.
 const _slideDir = new THREE.Vector3();
+// Reused Rapier-facing scratch (Rapier copies the values into wasm on call,
+// so the same objects are safe to mutate every frame — the substep loop
+// otherwise allocated up to 17 literals per frame)
+const _desiredMove = { x: 0, y: 0, z: 0 };
+const _stepMove = { x: 0, y: 0, z: 0 };
+const _transScratch = { x: 0, y: 0, z: 0 };
+const _notSensor = (c: Rapier.Collider) => !c.isSensor();
 
 const smooth01 = (t: number): number => {
   const x = Math.min(Math.max(t, 0), 1);
@@ -159,7 +167,11 @@ const resolveEmbeddedSurface = async (
 ): Promise<number | null> => {
   const raw = await getVertexDataRaw(x, z);
   if (bottom >= raw.height - tolerance) return null; // clearly above ground
-  const padded = await getVertexData(x, z);
+  // Padded confirm runs in the DRESSING WORKER: a flatten-tile miss inside
+  // the padded path is a 30-70ms computation, and paying it here was a
+  // main-thread lag spike every time this branch fired near a building on a
+  // slope. Falls back to the main-thread path only until the worker is up.
+  const padded = (await getVertexSample(x, z)) ?? (await getVertexData(x, z));
   if (bottom >= padded.height - tolerance) return null; // pad excavation, not tunneling
   return padded.height;
 };
@@ -322,7 +334,7 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
           undefined,
           collider,
           rb,
-          (c) => !c.isSensor()
+          _notSensor
         );
         if (hit) {
           // Trimesh normals can face either way — orient upward.
@@ -429,11 +441,10 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
       }
 
       // Compute desired movement, clamped so the swept capsule query stays reliable
-      const desiredMovement = {
-        x: (_moveVec.x + _slideDir.x * slideSpeed.current) * dt,
-        y: verticalVelocity.current * dt + _slideDir.y * slideSpeed.current * dt,
-        z: (_moveVec.z + _slideDir.z * slideSpeed.current) * dt,
-      };
+      const desiredMovement = _desiredMove;
+      desiredMovement.x = (_moveVec.x + _slideDir.x * slideSpeed.current) * dt;
+      desiredMovement.y = verticalVelocity.current * dt + _slideDir.y * slideSpeed.current * dt;
+      desiredMovement.z = (_moveVec.z + _slideDir.z * slideSpeed.current) * dt;
       const movementDistSq =
         desiredMovement.x * desiredMovement.x +
         desiredMovement.y * desiredMovement.y +
@@ -460,16 +471,15 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
             desiredMovement.z * desiredMovement.z
         );
         const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dist / MAX_SUBSTEP_DISTANCE)));
-        const stepMove = {
-          x: desiredMovement.x / steps,
-          y: desiredMovement.y / steps,
-          z: desiredMovement.z / steps,
-        };
+        const stepMove = _stepMove;
+        stepMove.x = desiredMovement.x / steps;
+        stepMove.y = desiredMovement.y / steps;
+        stepMove.z = desiredMovement.z / steps;
         let fx = pos.x;
         let fy = pos.y;
         let fz = pos.z;
         for (let i = 0; i < steps; i++) {
-          controller.computeColliderMovement(collider, stepMove, undefined, undefined, (c) => !c.isSensor());
+          controller.computeColliderMovement(collider, stepMove, undefined, undefined, _notSensor);
           const corrected = controller.computedMovement();
           fx += corrected.x;
           fy += corrected.y;
@@ -477,15 +487,24 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
           if (steps > 1 && i < steps - 1) {
             // Colliders only follow their body at the physics step — propagate
             // explicitly so the next substep's sweep starts from this spot.
-            rb.setTranslation({ x: fx, y: fy, z: fz }, false);
+            _transScratch.x = fx;
+            _transScratch.y = fy;
+            _transScratch.z = fz;
+            rb.setTranslation(_transScratch, false);
             world.propagateModifiedBodyPositionsToColliders();
           }
         }
         if (steps > 1) {
-          rb.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, false);
+          _transScratch.x = pos.x;
+          _transScratch.y = pos.y;
+          _transScratch.z = pos.z;
+          rb.setTranslation(_transScratch, false);
           world.propagateModifiedBodyPositionsToColliders();
         }
-        rb.setNextKinematicTranslation({ x: fx, y: fy, z: fz });
+        _transScratch.x = fx;
+        _transScratch.y = fy;
+        _transScratch.z = fz;
+        rb.setNextKinematicTranslation(_transScratch);
 
         // ---- Stuck detection (wedged-in-the-ground escape) ----
         // A capsule SLIGHTLY embedded in the terrain (below the backstop's

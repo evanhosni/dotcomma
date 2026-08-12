@@ -1,6 +1,6 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
-import { Children, useEffect, useRef, useState } from "react";
+import { Children, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { getNightIndex, getWindowLightsProgress } from "../../sky/dayNight";
 import { patchStandardMaterialLampGlow } from "../../sky/lampGlow";
@@ -11,6 +11,8 @@ import {
   getProceduralBuildingAssets,
   peekProceduralBuildingAssets,
   ProceduralBuildingAssets,
+  releaseProceduralBuildingAssets,
+  retainProceduralBuildingAssets,
 } from "./buildingAssets";
 import { BuildingOptions, BuildingProps } from "./types";
 
@@ -125,6 +127,37 @@ patchStandardMaterialLampGlow(DOOR_MATERIAL);
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
+const _sphere = new THREE.Sphere();
+// Reused door-hover hit target — intersectObject otherwise allocates a fresh
+// result array per door per check, across every nearby building.
+const _hits: THREE.Intersection[] = [];
+
+// At most one building may ACTIVATE its colliders per window: activation
+// mounts two Rapier trimeshes (a QBVH build over the exterior triangles,
+// several ms each), and buildings sitting at similar distances can cross the
+// 120u gate on the same frame — stacking those builds was a visible lag
+// spike. A blocked building simply retries at its next distance check
+// (~0.25s later, still ~100u out). Deactivation is cheap, never throttled.
+const COLLIDER_ACTIVATION_WINDOW_S = 0.05;
+let lastColliderActivationTime = -Infinity;
+
+// Shared-uniform time guard (same pattern as StreetLamp's driveLampLighting):
+// the FIRST building to run each frame writes the global window-light
+// uniforms, the other few hundred skip.
+let sharedUniformsTime = -1;
+
+/** Small deterministic string hash — seeds each building's frame counter so
+ *  the %3/%15 work of a batch-mounted city block doesn't all land on the
+ *  same frames. */
+const hashSeedString = (s: string): number => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h >>> 0; // non-negative so % stays in phase
+};
+
+// Hysteresis band for the distance gates (collider / children / interior) so
+// none of them flicker while the player hovers at a boundary.
+const GATE_HYSTERESIS = 12;
 
 // Building geometry builds run through this queue (time-budgeted slices) so
 // a spawn batch with several unseen seeds never triangulates in one frame.
@@ -178,7 +211,33 @@ export const Building = ({
 
   // Keyed on the stringified options so inline array props don't rebuild
   // assets on every parent render (same pattern as the world registrations).
-  const opts: BuildingOptions = {
+  // Memoized on the option props themselves: they come from descriptor
+  // spreads, so their identities are stable across this component's own
+  // re-renders (door clicks, gate flips) — without the memo every render
+  // paid a JSON.stringify.
+  const optionsKey = useMemo(() => {
+    const opts: BuildingOptions = {
+      exteriorSize,
+      numberOfSides,
+      palette,
+      accentColors,
+      accentChance,
+      windowShapes,
+      windowCount,
+      windowSize,
+      maxLean,
+      heightRange,
+      stories,
+      roomCount,
+      doorCount,
+      doorSize,
+      ceilingHeight,
+      windowLightChance,
+      windowLightIntensity,
+      interiorColors,
+    };
+    return JSON.stringify(opts);
+  }, [
     exteriorSize,
     numberOfSides,
     palette,
@@ -197,8 +256,7 @@ export const Building = ({
     windowLightChance,
     windowLightIntensity,
     interiorColors,
-  };
-  const optionsKey = JSON.stringify(opts);
+  ]);
   // Cache-hit seeds (despawn/respawn churn) mount instantly; NEW seeds build
   // through the shared task queue so a spawn batch with several unseen
   // buildings can't stack plan generation + triangulation into one frame.
@@ -218,11 +276,32 @@ export const Building = ({
     };
   }, [resolvedSeed, optionsKey]); // assets deliberately omitted: guard exits once built
 
+  // Pin the cache entry for as long as this building renders it — eviction
+  // only touches refcount-0 entries, so a mounted mesh's geometry can never
+  // be disposed out from under it (the old FIFO evicted still-rendering
+  // entries whenever >64 buildings were up). Passing `assets` lets the cache
+  // re-register the entry if a concurrent unmount's release trimmed it in
+  // the render→effect window.
+  useEffect(() => {
+    if (!assets) return;
+    retainProceduralBuildingAssets(resolvedSeed, optionsKey, assets);
+    return () => releaseProceduralBuildingAssets(resolvedSeed, optionsKey);
+  }, [assets, resolvedSeed, optionsKey]);
+
   // ---- Door state ---- (indexes default closed until toggled)
+  // The React state drives the collider mount; the SWING LOOP reads the ref.
+  // It must: the click wakes the sleeping swing loop and toggles state in the
+  // same handler, but the next useFrame can run BEFORE React re-renders — a
+  // loop reading the stale closure sees every door already settled and goes
+  // straight back to sleep, eating the click (the "click 3 times" bug).
   const [doorsOpen, setDoorsOpen] = useState<boolean[]>([]);
+  const doorsOpenRef = useRef<boolean[]>([]);
   const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const hingeRefs = useRef<(THREE.Group | null)[]>([]);
   const hoverDoorRef = useRef(-1);
+  // False once every hinge has settled on its target — the swing loop (and
+  // its Euler→quaternion trig) is skipped entirely until the next click.
+  const doorsMovingRef = useRef(false);
 
   // ---- Distance loop: self-despawn, collider gate, children gate. 2D
   // distance so upper floors don't count as "far". ----
@@ -232,17 +311,44 @@ export const Building = ({
   const [childrenActive, setChildrenActive] = useState(false);
   const childrenActiveRef = useRef(false);
   const lastDistanceRef = useRef(Infinity);
-  const frameCounter = useRef(0);
+  // Seeded with a per-instance hash so a spawn batch's %3/%15 work is spread
+  // across frames instead of every building checking on the same frame.
+  const frameCounter = useRef(hashSeedString(resolvedSeed));
 
-  useFrame((_, delta) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const interiorMeshRef = useRef<THREE.Mesh>(null);
+  const matricesFrozenRef = useRef(false);
+
+  useFrame((state, delta) => {
     const frame = frameCounter.current++;
 
-    // Shared-material uniforms — every building writes the same values, so
-    // whichever runs first each frame wins and the rest are no-ops.
-    WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
-    NIGHT_SEED_UNIFORM.value = getNightIndex();
+    // Shared-material uniforms — module-level time guard (driveLampLighting
+    // pattern): the first building each frame writes, the rest skip.
+    const time = state.clock.elapsedTime;
+    if (time !== sharedUniformsTime) {
+      sharedUniformsTime = time;
+      WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
+      NIGHT_SEED_UNIFORM.value = getNightIndex();
+    }
 
-    if (frame % DISTANCE_CHECK_INTERVAL === 0) {
+    // Buildings never move: once the subtree has valid world matrices,
+    // freeze the root (matrixWorldAutoUpdate=false stops the renderer's
+    // per-frame updateMatrixWorld from descending into it — hundreds of
+    // buildings × dozens of nodes). The distance check below re-enables it
+    // while the player is near, which covers every dynamic case (hinges,
+    // mounted children, rapier collider mounts, hover raycasts) — doors and
+    // children only ever act inside that range.
+    const group = groupRef.current;
+    if (group && !matricesFrozenRef.current) {
+      matricesFrozenRef.current = true;
+      group.updateWorldMatrix(true, true); // parents + whole subtree, once
+      group.matrixAutoUpdate = false;
+      group.matrixWorldAutoUpdate = false;
+    }
+
+    // First frame always checks (the counter's seeded phase would otherwise
+    // leave a fresh mount ungated for up to 14 frames).
+    if (lastDistanceRef.current === Infinity || frame % DISTANCE_CHECK_INTERVAL === 0) {
       const distance = getDistance2D(camera.position, positionVec);
       lastDistanceRef.current = distance;
       if (distance > (despawnDistance ?? renderDistance * DESPAWN_BUFFER)) {
@@ -250,12 +356,23 @@ export const Building = ({
         onDestroy(id);
         return;
       }
-      const shouldCollide = distance < COLLIDER_DISTANCE;
+      const shouldCollide =
+        distance < COLLIDER_DISTANCE + (collidersActiveRef.current ? GATE_HYSTERESIS : 0);
       if (shouldCollide !== collidersActiveRef.current) {
-        collidersActiveRef.current = shouldCollide;
-        setCollidersActive(shouldCollide);
+        if (!shouldCollide || time - lastColliderActivationTime > COLLIDER_ACTIVATION_WINDOW_S) {
+          if (shouldCollide) lastColliderActivationTime = time;
+          collidersActiveRef.current = shouldCollide;
+          setCollidersActive(shouldCollide);
+        }
       }
-      const near = distance < CHILDREN_ACTIVE_DISTANCE + (childrenActiveRef.current ? 12 : 0);
+      const near = distance < CHILDREN_ACTIVE_DISTANCE + (childrenActiveRef.current ? GATE_HYSTERESIS : 0);
+      // The interior mesh is fully occluded by the shell from outside —
+      // cull its draw call beyond children range (ref write, no re-render;
+      // same threshold + hysteresis as childrenActive so it can't flicker).
+      if (interiorMeshRef.current) interiorMeshRef.current.visible = near;
+      // Near = dynamic content possible → let world matrices update again;
+      // far = re-freeze (the subtree's matrices are current at that moment).
+      if (group && matricesFrozenRef.current) group.matrixWorldAutoUpdate = near;
       if (near !== childrenActiveRef.current) {
         childrenActiveRef.current = near;
         setChildrenActive(near);
@@ -271,7 +388,14 @@ export const Building = ({
         for (let i = 0; i < doorMeshRefs.current.length; i++) {
           const mesh = doorMeshRefs.current[i];
           if (!mesh) continue;
-          if (_raycaster.intersectObject(mesh, false).length > 0) {
+          // Bounding-sphere pre-test + reused hit array: intersectObject
+          // otherwise allocates a result array per door per check.
+          const geo = mesh.geometry;
+          if (geo.boundingSphere === null) geo.computeBoundingSphere();
+          _sphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
+          if (!_raycaster.ray.intersectsSphere(_sphere)) continue;
+          _hits.length = 0;
+          if (_raycaster.intersectObject(mesh, false, _hits).length > 0) {
             hover = i;
             break;
           }
@@ -285,12 +409,24 @@ export const Building = ({
       }
     }
 
-    // ---- Door swing animation ----
-    for (let i = 0; i < hingeRefs.current.length; i++) {
-      const hinge = hingeRefs.current[i];
-      if (!hinge) continue;
-      const target = doorsOpen[i] ? DOOR_OPEN_ANGLE : 0;
-      hinge.rotation.y += (target - hinge.rotation.y) * Math.min(1, delta * DOOR_SWING_RATE);
+    // ---- Door swing animation (skipped once all doors have settled — the
+    // asymptotic lerp otherwise keeps writing rotation.y, and its Euler→
+    // quaternion trig, on every door of every building forever) ----
+    if (doorsMovingRef.current) {
+      let stillMoving = false;
+      for (let i = 0; i < hingeRefs.current.length; i++) {
+        const hinge = hingeRefs.current[i];
+        if (!hinge) continue;
+        const target = doorsOpenRef.current[i] ? DOOR_OPEN_ANGLE : 0;
+        const diff = target - hinge.rotation.y;
+        if (Math.abs(diff) < 1e-3) {
+          if (diff !== 0) hinge.rotation.y = target; // snap; settled doors write nothing
+        } else {
+          hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
+          stillMoving = true;
+        }
+      }
+      doorsMovingRef.current = stillMoving;
     }
   });
 
@@ -300,6 +436,10 @@ export const Building = ({
       if (e.button !== 0) return;
       const idx = hoverDoorRef.current;
       if (idx < 0) return;
+      // Ref first (synchronous — the swing loop may run before the state
+      // lands), then wake the loop, then the state for the collider gate.
+      doorsOpenRef.current[idx] = !doorsOpenRef.current[idx];
+      doorsMovingRef.current = true;
       setDoorsOpen((open) => {
         const next = [...open];
         next[idx] = !next[idx];
@@ -324,11 +464,19 @@ export const Building = ({
   const slots = assets.plan.interior.childSlots;
 
   return (
-    <group position={coordinates}>
-      {/* The building: hollow shell + the interior physically inside it,
-          both always rendered */}
+    <group ref={groupRef} position={coordinates}>
+      {/* The building: hollow shell + the interior physically inside it.
+          The interior mesh only DRAWS within children range (visible is
+          driven by the distance loop above — from outside it's fully
+          occluded by the shell; starts hidden, the first-frame distance
+          check sets it before the first paint) */}
       <mesh geometry={assets.exteriorGeometry} material={materials?.exterior ?? DEFAULT_EXTERIOR} />
-      <mesh geometry={assets.interiorGeometry} material={materials?.interior ?? DEFAULT_INTERIOR} />
+      <mesh
+        ref={interiorMeshRef}
+        visible={false}
+        geometry={assets.interiorGeometry}
+        material={materials?.interior ?? DEFAULT_INTERIOR}
+      />
 
       {/* Doors — real leaves hinged at one edge */}
       {assets.doors.map((d, i) => (

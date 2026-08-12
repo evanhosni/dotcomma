@@ -57,14 +57,53 @@ export const LAMP_GRID_UNIFORMS = {
   uLampGlowIntensity: { value: 0 }, // global dusk/dawn ramp
 };
 
+// Rewrite gate: the periodic driver calls updateLampGrid unconditionally, but
+// a fill(0) over 16k floats + a full 64KB texImage2D upload is pure waste
+// when nothing changed. Registration/unregistration and traffic-signal color
+// flips mark the grid dirty; a camera-driven origin-cell change forces a
+// rewrite too (the texels are origin-relative).
+let gridDirty = true;
+let lastOriginX = Number.NaN;
+let lastOriginZ = Number.NaN;
+let lastHeadCount = -1;
+
+/** Call whenever the glow-source set changes (a head registered/removed) or
+ *  an existing head's `color` is mutated — the next periodic updateLampGrid
+ *  call then actually rewrites instead of early-outing. */
+export const markLampGridDirty = (): void => {
+  gridDirty = true;
+};
+
+// Reused buffer for the incoming heads — callers pass Map.values(), a
+// single-pass iterator, so it must be materialized before the clean check
+// can count it without consuming what the rewrite loop needs.
+const headScratch: LampHead[] = [];
+
 /** Rewrite the grid from the mounted lamp heads, centered on the camera.
- *  Cheap (16k floats) — called every few frames by the street-lamp driver. */
+ *  Called every few frames by the street-lamp driver; skipped entirely while
+ *  clean and the origin cell is unchanged. */
 export const updateLampGrid = (heads: Iterable<LampHead>, cameraX: number, cameraZ: number): void => {
-  gridData.fill(0);
   const originX = Math.floor(cameraX / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
   const originZ = Math.floor(cameraZ / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
+  headScratch.length = 0;
+  for (const head of heads) headScratch.push(head);
+  // The head-count comparison is a backstop for registration paths that
+  // mutate activeLampHeads directly without marking dirty (the per-object
+  // street-lamp ACTOR) — a plain iteration, far cheaper than the fill +
+  // upload it guards.
+  if (
+    !gridDirty &&
+    originX === lastOriginX &&
+    originZ === lastOriginZ &&
+    headScratch.length === lastHeadCount
+  ) {
+    headScratch.length = 0;
+    return;
+  }
+
+  gridData.fill(0);
   LAMP_GRID_UNIFORMS.uLampGridOrigin.value.set(originX, originZ);
-  for (const head of heads) {
+  for (const head of headScratch) {
     const p = head.position;
     const cx = Math.floor(p.x / LAMP_CELL_SIZE) - originX;
     const cz = Math.floor(p.z / LAMP_CELL_SIZE) - originZ;
@@ -77,6 +116,11 @@ export const updateLampGrid = (heads: Iterable<LampHead>, cameraX: number, camer
     gridData[idx + 3] = head.color + 1;
   }
   gridTexture.needsUpdate = true;
+  gridDirty = false;
+  lastOriginX = originX;
+  lastOriginZ = originZ;
+  lastHeadCount = headScratch.length;
+  headScratch.length = 0;
 };
 
 export const setLampGlowIntensity = (value: number): void => {
@@ -124,7 +168,10 @@ export const patchStandardMaterialLampGlow = (material: THREE.Material, strength
   if ((material as any).__lampGlowPatched) return;
   const prev = material.onBeforeCompile;
   const prevKey = material.customProgramCacheKey?.bind(material);
-  material.customProgramCacheKey = () => (prevKey?.() ?? "") + "_lampGlow";
+  // strength is baked into the GLSL below, so two patches with different
+  // strengths are different programs — the key must reflect that or the
+  // second material silently reuses the first one's compiled shader.
+  material.customProgramCacheKey = () => (prevKey?.() ?? "") + "_lampGlow" + strength.toFixed(2);
   material.onBeforeCompile = (shader, renderer) => {
     prev?.call(material, shader, renderer);
     shader.uniforms.uLampGrid = LAMP_GRID_UNIFORMS.uLampGrid;

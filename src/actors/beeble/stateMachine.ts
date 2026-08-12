@@ -251,6 +251,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         resetHeadBone(ctx);
         const bb = ctx.blackboard;
         bb.__inflate_t = 0;
+        bb.__inflate_done = false;
         bb.__inflate_meshes = [];
 
         if (!ctx.groupRef.current) return;
@@ -299,13 +300,24 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__inflate_t = Math.min((bb.__inflate_t ?? 0) + ctx.delta * 0.5, 1);
         const t = bb.__inflate_t;
 
-        const meshes = bb.__inflate_meshes ?? [];
-        for (const { posAttr, original, spherePositions } of meshes) {
-          const arr = posAttr.array as Float32Array;
-          for (let i = 0; i < arr.length; i++) {
-            arr[i] = original[i] + (spherePositions[i] - original[i]) * t;
+        // The morph saturates at t=1 — do ONE final write there and stop.
+        // Without the done flag this kept rewriting the whole vertex buffer
+        // (+ re-uploading it via needsUpdate) every frame, forever, for every
+        // ascended beeble.
+        if (!bb.__inflate_done) {
+          const meshes = bb.__inflate_meshes ?? [];
+          for (let m = 0; m < meshes.length; m++) {
+            const mesh = meshes[m];
+            const posAttr = mesh.posAttr;
+            const original = mesh.original;
+            const spherePositions = mesh.spherePositions;
+            const arr = posAttr.array as Float32Array;
+            for (let i = 0; i < arr.length; i++) {
+              arr[i] = original[i] + (spherePositions[i] - original[i]) * t;
+            }
+            posAttr.needsUpdate = true;
           }
-          posAttr.needsUpdate = true;
+          if (t >= 1) bb.__inflate_done = true;
         }
 
         // Balloon scale-up

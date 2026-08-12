@@ -425,11 +425,25 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     }
     return shape;
   };
-  /** Slab occupying y ∈ [yTop − thickness, yTop]. */
-  const slabGeo = (yTop: number, thickness: number, holes: { x0: number; z0: number; x1: number; z1: number }[]): THREE.BufferGeometry =>
-    new THREE.ExtrudeGeometry(slabShape(holes), { depth: thickness, bevelEnabled: false })
-      .rotateX(Math.PI / 2) // shape (x,y) → world (x,z); extrusion ends up downward
-      .translate(0, yTop, 0);
+  /** Slab occupying y ∈ [yTop − thickness, yTop]. The same (thickness, holes)
+   *  profile is requested up to 3× per building (floor layer + ceiling layer
+   *  per inter-story slab; top ceiling visual + its collider + the ground
+   *  collider), so each profile is extruded/triangulated ONCE and cloned for
+   *  the other uses — yTop is the only per-call difference and the translate
+   *  is applied identically, so the output geometry is unchanged. */
+  const slabGeoCache = new Map<string, THREE.BufferGeometry>();
+  const slabGeo = (yTop: number, thickness: number, holes: { x0: number; z0: number; x1: number; z1: number }[]): THREE.BufferGeometry => {
+    const key = `${thickness}|${holes.map((h) => `${h.x0},${h.z0},${h.x1},${h.z1}`).join(";")}`;
+    let base = slabGeoCache.get(key);
+    if (!base) {
+      base = new THREE.ExtrudeGeometry(slabShape(holes), { depth: thickness, bevelEnabled: false })
+        .rotateX(Math.PI / 2); // shape (x,y) → world (x,z); extrusion ends up downward
+      slabGeoCache.set(key, base);
+    }
+    // Plain BufferGeometry copy (not .clone() — ExtrudeGeometry's clone runs
+    // its default-shape constructor first, a wasted triangulation per call).
+    return new THREE.BufferGeometry().copy(base).translate(0, yTop, 0);
+  };
 
   // Bottom floor slab — top surface lifted above grade so terrain never
   // z-fights through, reaching below grade so no gap shows at the door sill.
@@ -528,6 +542,7 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     for (let i = 0; i < interiorSlabIndices.length; i++) interiorSlabIndices[i] = i;
   }
   slabMerged.dispose();
+  slabGeoCache.forEach((g) => g.dispose());
 
   return {
     interiorGeometry,
@@ -539,14 +554,32 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
   };
 };
 
-const cache = new Map<string, ProceduralBuildingAssets>();
-const MAX_CACHE = 64;
+// REFERENCE-COUNTED cache. Cache keys are per-instance seeds and the city
+// mounts 300-600 buildings at once, so any capped eviction that ignores
+// mounts disposes geometry that is still on a live mesh (the old 64-entry
+// FIFO did exactly that, and with a ~0 hit rate re-triangulated constantly).
+// Every mounted <Building> retains its entry; eviction only ever touches
+// refcount-0 entries (least-recently-released first), capped at MAX_IDLE so
+// despawn/respawn churn still gets its O(1) remount.
+interface BuildingCacheEntry {
+  assets: ProceduralBuildingAssets;
+  refCount: number;
+  /** Monotonic tick of the last drop to refcount 0 — eviction order. */
+  releasedAt: number;
+}
+
+const cache = new Map<string, BuildingCacheEntry>();
+// Cap on IDLE (refcount 0) entries only — retained entries never count
+// against it, so the cache legitimately exceeds this while a dense city
+// neighborhood is mounted.
+const MAX_IDLE_CACHE = 128;
+let releaseTick = 0;
 
 /** Cache-only lookup (no build). Lets <Building> mount instantly for seeds
  *  it has already built (despawn/respawn churn) while NEW seeds build
  *  through the task queue without blocking the spawn frame. */
 export const peekProceduralBuildingAssets = (seed: string, optionsKey: string): ProceduralBuildingAssets | null =>
-  cache.get(`${seed}|${optionsKey}`) ?? null;
+  cache.get(`${seed}|${optionsKey}`)?.assets ?? null;
 
 const disposeAssets = (a: ProceduralBuildingAssets): void => {
   a.exteriorGeometry.dispose();
@@ -554,10 +587,57 @@ const disposeAssets = (a: ProceduralBuildingAssets): void => {
   a.doorGeometry.dispose();
 };
 
+/** Evict least-recently-released refcount-0 entries down to the idle cap.
+ *  Linear scans are fine: the cache tops out around (mounted + MAX_IDLE)
+ *  entries and this only runs on insert / on a release to zero. */
+const trimIdleEntries = (): void => {
+  let idle = 0;
+  for (const e of cache.values()) if (e.refCount === 0) idle++;
+  while (idle > MAX_IDLE_CACHE) {
+    let oldestKey: string | null = null;
+    let oldestTick = Infinity;
+    for (const [k, e] of cache) {
+      if (e.refCount === 0 && e.releasedAt < oldestTick) {
+        oldestTick = e.releasedAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey === null) break;
+    disposeAssets(cache.get(oldestKey)!.assets);
+    cache.delete(oldestKey);
+    idle--;
+  }
+};
+
+/** Pin a cache entry while a <Building> renders it (mount effect). Passing
+ *  the assets closes the render→effect race: a concurrent unmount's release
+ *  can trim the just-peeked idle entry before this retain runs, in which
+ *  case the same object is re-registered — a disposed BufferGeometry simply
+ *  re-uploads on its next draw, so re-pinning it is safe. */
+export const retainProceduralBuildingAssets = (seed: string, optionsKey: string, assets: ProceduralBuildingAssets): void => {
+  const key = `${seed}|${optionsKey}`;
+  const entry = cache.get(key);
+  if (entry) {
+    entry.refCount++;
+  } else {
+    cache.set(key, { assets, refCount: 1, releasedAt: releaseTick++ });
+  }
+};
+
+export const releaseProceduralBuildingAssets = (seed: string, optionsKey: string): void => {
+  const entry = cache.get(`${seed}|${optionsKey}`);
+  if (!entry || entry.refCount === 0) return;
+  entry.refCount--;
+  if (entry.refCount === 0) {
+    entry.releasedAt = releaseTick++;
+    trimIdleEntries();
+  }
+};
+
 export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions): ProceduralBuildingAssets => {
   const key = `${seed}|${JSON.stringify(opts)}`;
   const existing = cache.get(key);
-  if (existing) return existing;
+  if (existing) return existing.assets;
 
   const plan = generateBuildingPlan(seed, opts);
 
@@ -604,13 +684,10 @@ export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions)
     })),
   };
 
-  // Well above the max simultaneously-mounted building count, so an evicted
-  // entry is never one that's still on screen.
-  if (cache.size >= MAX_CACHE) {
-    const oldest = cache.keys().next().value as string;
-    disposeAssets(cache.get(oldest)!);
-    cache.delete(oldest);
-  }
-  cache.set(key, assets);
+  // Inserted at refcount 0 — the mounting <Building>'s retain effect pins it
+  // moments later; a build whose component unmounted before delivery stays
+  // idle and ages out normally.
+  cache.set(key, { assets, refCount: 0, releasedAt: releaseTick++ });
+  trimIdleEntries();
   return assets;
 };

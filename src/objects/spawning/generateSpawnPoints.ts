@@ -113,15 +113,19 @@ export const serializeDescriptors = (
 // ("cx_cz".split → Number) made the one operation that keeps the cache
 // bounded the most expensive thing about it. Distance is now pure arithmetic
 // on fields that are already there.
-interface CachedChunk {
+// The cache entries themselves are what generateSpawnPoints returns — the
+// center coordinates double as the pool's per-bucket early-out (skip a whole
+// chunk when even its nearest corner is beyond every spawn radius) without a
+// second wrapper allocation. Treat as read-only outside this module.
+export interface SpawnChunkBucket {
   centerX: number;
   centerZ: number;
   points: SpawnPoint[];
 }
 
-const clientChunkCache = new Map<string, CachedChunk>();
+const clientChunkCache = new Map<string, SpawnChunkBucket>();
 
-const newCachedChunk = (cx: number, cz: number): CachedChunk => ({
+const newCachedChunk = (cx: number, cz: number): SpawnChunkBucket => ({
   centerX: (cx + 0.5) * SPAWN_CHUNK_SIZE,
   centerZ: (cz + 0.5) * SPAWN_CHUNK_SIZE,
   points: [],
@@ -150,10 +154,13 @@ const chunkKeyOf = (p: SpawnPoint): string =>
 const SPAWN_BUDGET_MS = 100;
 
 /**
- * Spawn points for the given chunk keys, as one bucket per resolved chunk
- * (buckets are the cache's own arrays — do not mutate). Chunk keys must be
- * sorted nearest-first: the worker spends SPAWN_BUDGET_MS on uncached chunks
- * in that order, and the remainder is picked up by later calls.
+ * Spawn points for the given chunk keys, as one bucket per resolved chunk,
+ * each carrying its chunk CENTER (buckets are the cache's own entries/arrays
+ * — do not mutate; point objects are identity-stable across calls while the
+ * chunk stays cached, which is what lets the pool's mounted/ledger checks be
+ * identity lookups instead of string builds). Chunk keys must be sorted
+ * nearest-first: the worker spends SPAWN_BUDGET_MS on uncached chunks in that
+ * order, and the remainder is picked up by later calls.
  *
  * All computation happens in the worker thread; delivered chunks are cached
  * client-side so only new chunks cost a round-trip.
@@ -161,7 +168,7 @@ const SPAWN_BUDGET_MS = 100;
 export const generateSpawnPoints = async (
   chunkKeys: string[],
   descriptors: SerializedActorDescriptor[]
-): Promise<SpawnPoint[][]> => {
+): Promise<SpawnChunkBucket[]> => {
   if (!worker || !workerReady) return [];
 
   const missing = chunkKeys.filter((k) => !clientChunkCache.has(k));
@@ -193,18 +200,32 @@ export const generateSpawnPoints = async (
     }
   }
 
-  const out: SpawnPoint[][] = [];
+  const out: SpawnChunkBucket[] = [];
   for (const key of chunkKeys) {
     const entry = clientChunkCache.get(key);
-    if (entry && entry.points.length > 0) out.push(entry.points);
+    if (entry && entry.points.length > 0) out.push(entry);
   }
   return out;
 };
 
+// getNearbyChunkKeys memo: the set-and-order of nearby chunk keys only
+// changes when the player crosses into a different 250u chunk (the distances
+// are measured center-chunk-relative), yet the pool calls this every batch
+// (~every 5 frames) — ~49 wrapper objects + key strings + a sort each time,
+// almost always identical to the last call. One entry is enough: there is one
+// caller with one (constant-per-session) radius. Callers treat the result as
+// read-only (they filter/iterate, never mutate), so the same array is safe to
+// hand back.
+let nearbyKeysCX = NaN;
+let nearbyKeysCZ = NaN;
+let nearbyKeysDist = NaN;
+let nearbyKeysCache: string[] = [];
+
 /**
  * Get chunk keys near a player position, sorted nearest-first (the order
  * generateSpawnPoints relies on to generate the nearest slice each batch).
- * Stays on main thread — pure math, no heavy computation.
+ * Stays on main thread — pure math, no heavy computation. Returns a cached
+ * (shared, read-only) array while the player stays in the same chunk.
  */
 export const getNearbyChunkKeys = (
   playerX: number,
@@ -213,6 +234,14 @@ export const getNearbyChunkKeys = (
 ): string[] => {
   const centerCX = Math.floor(playerX / SPAWN_CHUNK_SIZE);
   const centerCZ = Math.floor(playerZ / SPAWN_CHUNK_SIZE);
+  if (
+    centerCX === nearbyKeysCX &&
+    centerCZ === nearbyKeysCZ &&
+    maxRenderDistance === nearbyKeysDist
+  ) {
+    return nearbyKeysCache;
+  }
+
   const radius = Math.ceil(maxRenderDistance / SPAWN_CHUNK_SIZE) + 1;
   const maxDistSq = (maxRenderDistance + SPAWN_CHUNK_SIZE) ** 2;
 
@@ -237,7 +266,16 @@ export const getNearbyChunkKeys = (
   // both keys out of their strings on every comparison (O(n log n) splits).
   nearby.sort((a, b) => a.distSq - b.distSq);
 
-  return nearby.map((n) => n.key);
+  // Distances (and thus the order) are measured from the exact position at
+  // fill time, so within a chunk the memoized order is a snapshot — that only
+  // quantizes the worker's nearest-first SCHEDULING to chunk granularity
+  // (which chunks the time budget reaches first), never which points a chunk
+  // contains once generated.
+  nearbyKeysCX = centerCX;
+  nearbyKeysCZ = centerCZ;
+  nearbyKeysDist = maxRenderDistance;
+  nearbyKeysCache = nearby.map((n) => n.key);
+  return nearbyKeysCache;
 };
 
 /**

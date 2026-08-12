@@ -35,7 +35,9 @@ export interface PowerLinesProps {
 /** Fill a wire InstancedMesh with the 3 wires × 3 sagging segments from each
  *  pole to its successor. Both ends' crossarm offsets use the POLE's frame —
  *  the next pole's tangent differs by at most a few degrees of wiggle,
- *  invisible at pole height. */
+ *  invisible at pole height. Also sets an explicit world-space bounding
+ *  sphere from the span endpoints so frustum culling stays ON (the
+ *  auto-computed instanced bounds only cover the unit wire geometry). */
 const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]): void => {
   const xAxis = new THREE.Vector3(1, 0, 0);
   const a = new THREE.Vector3();
@@ -44,6 +46,8 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
   const seg = new THREE.Vector3();
   const q = new THREE.Quaternion();
   const scale = new THREE.Vector3();
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
   let w = 0;
   for (const p of spans) {
     const n = p.next!;
@@ -61,6 +65,10 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
         pos.y -= sag * 4 * t0 * (1 - t0);
         seg.lerpVectors(a, b, t1);
         seg.y -= sag * 4 * t1 * (1 - t1);
+        // The rendered wire is the straight piece between the sampled points,
+        // so the sampled points themselves ARE the geometry's extremes.
+        min.min(pos).min(seg);
+        max.max(pos).max(seg);
         seg.sub(pos);
         const len = seg.length();
         q.setFromUnitVectors(xAxis, seg.normalize());
@@ -70,7 +78,14 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
     }
   }
   wires.instanceMatrix.needsUpdate = true;
-  wires.frustumCulled = false;
+  if (w > 0) {
+    // +0.1 pad for the 0.06u wire cross-section (mesh sits at the world
+    // origin — instance positions are absolute, no further transform needed).
+    wires.boundingSphere = new THREE.Sphere(
+      min.clone().add(max).multiplyScalar(0.5),
+      min.distanceTo(max) / 2 + 0.1
+    );
+  }
 };
 
 /**

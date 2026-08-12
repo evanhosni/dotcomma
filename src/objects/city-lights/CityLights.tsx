@@ -12,6 +12,10 @@ import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 const POOL_SIZE = 6;
 const PARK_Y = -1e6;
 const RESCAN_DISTANCE = 200; // camera travel between site scans
+const RESELECT_DISTANCE = 20; // camera travel between nearest-site re-picks
+// Additive sprites below this opacity contribute nothing visible but still
+// cost a near-fullscreen alpha pass each — turn them off entirely.
+const AURA_MIN_VISIBLE_OPACITY = 0.005;
 
 // Site scans run in the dressing WORKER (they used to run computeVertexData
 // per site on the main thread — with flatten pads, each site could compute a
@@ -75,6 +79,13 @@ export const CityLights = ({
   const sites = useRef(new Map<string, CitySitePoint>()).current;
   const scanning = useRef(false);
   const lastScan = useRef<{ x: number; z: number } | null>(null);
+  // Nearest-POOL_SIZE selection, recomputed only when the camera has moved
+  // RESELECT_DISTANCE or the site set changed (bumped by the scan task) — a
+  // per-frame [...sites].sort() allocated and sorted the whole map every frame.
+  const assignedRef = useRef<(CitySitePoint | null)[]>(Array.from({ length: POOL_SIZE }, () => null));
+  const assignedDistSq = useRef(new Float64Array(POOL_SIZE)).current;
+  const sitesVersion = useRef(0);
+  const lastSelect = useRef({ x: Infinity, z: Infinity, version: -1 });
 
   // Soft radial-gradient glow, generated once — additive, so it brightens
   // whatever sky/skyline is behind it. Deliberately NO hot core: a broad dim
@@ -116,6 +127,10 @@ export const CityLights = ({
 	outgoingLight = diffuseColor.rgb;`,
       );
     };
+    // onBeforeCompile alone leaves the default cache key — an unpatched
+    // SpriteMaterial elsewhere would silently share (and clobber) this
+    // program. The patch is constant, so a constant key suffices.
+    mat.customProgramCacheKey = () => "city-lights-aura";
     return mat;
   }, [auraTexture, color]);
 
@@ -126,6 +141,12 @@ export const CityLights = ({
     },
     [auraMaterial, auraTexture],
   );
+
+  // Light transforms are only written on reselection now — force one when the
+  // props baked into them change.
+  useEffect(() => {
+    lastSelect.current.version = -1;
+  }, [intensity, heightOffset]);
 
   useFrame(({ camera }) => {
     const camX = camera.position.x;
@@ -146,41 +167,70 @@ export const CityLights = ({
             if (Math.hypot(p.x - sx, p.z - sz) > scanRadius * 1.5) sites.delete(key);
           });
           lastScan.current = { x: sx, z: sz };
+          sitesVersion.current++; // set changed — force a nearest-site re-pick
         } finally {
           scanning.current = false;
         }
       });
     }
 
-    // Assign the pool to the nearest sites; park the rest. The site count in
-    // range is small (cells are gridSize-sized), so the per-frame sort is cheap.
-    const sorted = [...sites.values()].sort(
-      (a, b) =>
-        (a.x - camX) * (a.x - camX) +
-        (a.z - camZ) * (a.z - camZ) -
-        ((b.x - camX) * (b.x - camX) + (b.z - camZ) * (b.z - camZ)),
-    );
-    // Aura strength: always faintly present, blooming toward full at night so
-    // it reads as city glow after dark (shared material — one write).
-    auraMaterial.opacity = aura ? auraOpacity * (0.2 + 0.8 * getNightBlend()) : 0;
+    // Assign the pool to the nearest sites; park the rest. Single-pass
+    // top-POOL_SIZE insertion into reused arrays, recomputed only when the
+    // camera has moved RESELECT_DISTANCE or the site set changed — sites are
+    // static in between, so the light/sprite transforms can't change either.
+    const sel = lastSelect.current;
+    const assigned = assignedRef.current;
+    if (
+      (camX - sel.x) ** 2 + (camZ - sel.z) ** 2 > RESELECT_DISTANCE * RESELECT_DISTANCE ||
+      sel.version !== sitesVersion.current
+    ) {
+      sel.x = camX;
+      sel.z = camZ;
+      sel.version = sitesVersion.current;
 
-    for (let i = 0; i < POOL_SIZE; i++) {
-      const light = lightRefs.current[i];
-      if (!light) continue;
-      const site = sorted[i];
-      const sprite = spriteRefs.current[i];
-      if (site) {
-        light.position.set(site.x, site.y + heightOffset, site.z);
-        light.intensity = intensity;
-        if (sprite) {
-          sprite.position.copy(light.position);
-          sprite.visible = aura;
+      for (let i = 0; i < POOL_SIZE; i++) assigned[i] = null;
+      let count = 0;
+      sites.forEach((p) => {
+        const d = (p.x - camX) * (p.x - camX) + (p.z - camZ) * (p.z - camZ);
+        if (count < POOL_SIZE) count++;
+        else if (d >= assignedDistSq[POOL_SIZE - 1]) return;
+        let i = count - 1;
+        while (i > 0 && assignedDistSq[i - 1] > d) {
+          assignedDistSq[i] = assignedDistSq[i - 1];
+          assigned[i] = assigned[i - 1];
+          i--;
         }
-      } else {
-        light.position.set(0, PARK_Y, 0);
-        light.intensity = 0;
-        if (sprite) sprite.visible = false;
+        assignedDistSq[i] = d;
+        assigned[i] = p;
+      });
+
+      for (let i = 0; i < POOL_SIZE; i++) {
+        const light = lightRefs.current[i];
+        if (!light) continue;
+        const site = assigned[i];
+        const sprite = spriteRefs.current[i];
+        if (site) {
+          light.position.set(site.x, site.y + heightOffset, site.z);
+          light.intensity = intensity;
+          if (sprite) sprite.position.copy(light.position);
+        } else {
+          light.position.set(0, PARK_Y, 0);
+          light.intensity = 0;
+        }
       }
+    }
+
+    // Aura strength: always faintly present, blooming toward full at night so
+    // it reads as city glow after dark (shared material — one write). Below
+    // the visibility floor the additive passes buy nothing — hide the sprites
+    // (visibility is per-frame: it follows the day/night blend, not the
+    // reselection above).
+    const effectiveAuraOpacity = aura ? auraOpacity * (0.2 + 0.8 * getNightBlend()) : 0;
+    auraMaterial.opacity = effectiveAuraOpacity;
+    const showAura = aura && effectiveAuraOpacity >= AURA_MIN_VISIBLE_OPACITY;
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const sprite = spriteRefs.current[i];
+      if (sprite) sprite.visible = showAura && assigned[i] !== null;
     }
   });
 

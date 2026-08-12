@@ -1,5 +1,5 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useContext, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { getNightBlend, NIGHT_SKY_COLORS } from "../../sky/dayNight";
 import { voronoi } from "../../utils/voronoi/voronoi";
@@ -148,19 +148,39 @@ export const SkyboxSystem = () => {
     }
   }, [material, worldSky]);
 
-  const resolveTarget = (): SkyboxSettings => {
+  // Resolved target sky, cached as PARSED colors. Resolution (find/some
+  // scans over the registrations + regions) and Color.set(cssString) parsing
+  // only happen on the DISCRETE events that can change the answer — a biome
+  // poll result or a registration change — never in the frame loop.
+  const resolvedColors = useRef({
+    top: new THREE.Color(SKYBOX_DEFAULTS.topColor),
+    horizon: new THREE.Color(SKYBOX_DEFAULTS.horizonColor),
+    bottom: new THREE.Color(SKYBOX_DEFAULTS.bottomColor),
+  });
+
+  const resolveTarget = useCallback((): void => {
+    let target: SkyboxSettings = worldSky;
     const biomeId = currentBiomeIdRef.current;
     if (biomeId !== null && hasScoped) {
       const biomeSky = skyboxes.find((s) => s.scope === "biome" && s.scopeId === biomeId);
-      if (biomeSky) return biomeSky;
-      const region = getActiveRegions().find((r) => r.biomes.some((b) => b.id === biomeId));
-      if (region) {
-        const regionSky = skyboxes.find((s) => s.scope === "region" && s.scopeId === region.id);
-        if (regionSky) return regionSky;
+      if (biomeSky) {
+        target = biomeSky;
+      } else {
+        const region = getActiveRegions().find((r) => r.biomes.some((b) => b.id === biomeId));
+        const regionSky =
+          region && skyboxes.find((s) => s.scope === "region" && s.scopeId === region.id);
+        if (regionSky) target = regionSky;
       }
     }
-    return worldSky;
-  };
+    const c = resolvedColors.current;
+    c.top.set(target.topColor);
+    c.horizon.set(target.horizonColor);
+    c.bottom.set(target.bottomColor);
+  }, [skyboxes, hasScoped, worldSky]);
+
+  // Registration-set changes (skyboxes/worldSky memos) re-resolve here; the
+  // biome poll below re-resolves on a changed biome id.
+  useLayoutEffect(() => resolveTarget(), [resolveTarget]);
 
   const targetColors = useRef({
     top: new THREE.Color(),
@@ -190,7 +210,11 @@ export const SkyboxSystem = () => {
               regions,
             })
             .then((result: any) => {
-              currentBiomeIdRef.current = result.biome?.id ?? null;
+              const id = result.biome?.id ?? null;
+              if (id !== currentBiomeIdRef.current) {
+                currentBiomeIdRef.current = id;
+                resolveTarget();
+              }
             })
             .finally(() => {
               pollInFlightRef.current = false;
@@ -199,11 +223,13 @@ export const SkyboxSystem = () => {
       }
     }
 
-    const target = resolveTarget();
+    // Frame loop is just the three lerps: cached resolved colors → night
+    // blend → uniform smoothing.
+    const resolved = resolvedColors.current;
     const t = targetColors.current;
-    t.top.set(target.topColor);
-    t.horizon.set(target.horizonColor);
-    t.bottom.set(target.bottomColor);
+    t.top.copy(resolved.top);
+    t.horizon.copy(resolved.horizon);
+    t.bottom.copy(resolved.bottom);
 
     // Day/night cycle: whatever sky is active (world/region/biome scoped),
     // mix it toward the night palette by the current blend.
