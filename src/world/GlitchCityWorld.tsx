@@ -28,10 +28,10 @@ export const GlitchCityWorld = React.memo(() => (
     {/* Jittery low-poly sun/moon + stars; follows the player so the sky never
         leaves render distance */}
     <DayNightCycle />
-    {/* fpsCap trades peak framerate for CONSISTENCY: the rAF loop (physics,
-        AI, spawning — all dt-based) still runs at display rate; only the
-        presented frame + portal RTs are paced. Steady 60 with headroom reads
-        smoother than a fluctuating 100. */}
+    {/* PostProcessing also takes fpsCap={n} (currently unset): it caps only
+        the PRESENTED frame — the rAF loop (physics, AI, spawning, all
+        dt-based) keeps running at display rate. A steady capped 60 with
+        headroom reads smoother than a fluctuating 100. */}
     <PostProcessing quantization={0.025} />
 
     <CityRegion />

@@ -2,7 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import React, { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
-import { uploadOnFirstDraw } from "../utils/utils";
+import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
 
 /**
  * DRESSING — the instanced spawn class.
@@ -139,16 +139,32 @@ export const instancedFromPoints = <P,>(
     const gbs = geometry.boundingSphere!;
     // A yaw rotation about the instance origin can swing the geometry's
     // sphere center anywhere on a circle of radius |center| — pad by both.
-    const pad = gbs.center.length() + gbs.radius;
-    mesh.boundingSphere = new THREE.Sphere(
-      new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2),
-      Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
-    );
-    // Pay the instance-buffer upload at (budget-staggered) chunk build time,
-    // not when the player first turns toward the chunk.
-    uploadOnFirstDraw(mesh);
+    finalizeInstancedChunk(mesh, minX, minY, minZ, maxX, maxY, maxZ, gbs.center.length() + gbs.radius);
   }
   return mesh;
+};
+
+/** Shared tail of every instanced-chunk build: set an explicit world-space
+ *  bounding sphere from the instance extents (+pad) so frustum culling works
+ *  (instance positions are absolute and the mesh sits at the world origin, so
+ *  the sphere needs no further transform), then queue the one-time GPU warm
+ *  draw — the buffer upload is paid at (budget-staggered) chunk build time,
+ *  not when the player first turns toward the chunk. */
+export const finalizeInstancedChunk = (
+  mesh: THREE.InstancedMesh,
+  minX: number,
+  minY: number,
+  minZ: number,
+  maxX: number,
+  maxY: number,
+  maxZ: number,
+  pad: number
+): void => {
+  mesh.boundingSphere = new THREE.Sphere(
+    new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2),
+    Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
+  );
+  uploadOnFirstDraw(mesh);
 };
 
 /** Low-level per-instance write for non-standard transforms (scaled wire

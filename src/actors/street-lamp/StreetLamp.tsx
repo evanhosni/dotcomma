@@ -12,7 +12,7 @@ import {
   setLampGlowIntensity,
   updateLampGrid,
 } from "../../sky/lampGlow";
-import { getDistance2D } from "../../utils/utils";
+import { framePhaseFromCoords, getDistance2D } from "../../utils/utils";
 
 const DESPAWN_BUFFER = 1.2;
 const FADE_BAND = 40; // world units before renderDistance over which lamps fade
@@ -159,9 +159,7 @@ export const StreetLamp = ({ id, coordinates, renderDistance, despawnDistance, o
   const appliedEmissiveRef = useRef(-1);
   const mountFadeRef = useRef(0); // 0 → 1 over MOUNT_FADE_DURATION after mount
   // Deterministic per-instance phase for the throttled distance check
-  const frameRef = useRef(
-    Math.abs(Math.floor(coordinates[0] * 7.13 + coordinates[2] * 3.71)) % DISTANCE_CHECK_INTERVAL,
-  );
+  const frameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], DISTANCE_CHECK_INTERVAL));
 
   // Per-instance material clone so this lamp can fade at the render edge
   // independently (clone() drops onBeforeCompile, so re-patch — the shared

@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
 import { _quantization } from "../../utils/quantization/quantization";
-import { uploadOnFirstDraw } from "../../utils/utils";
+import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import { useFoliageRenderDistance } from "../Foliage";

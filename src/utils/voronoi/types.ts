@@ -2,7 +2,6 @@ import { Biome, Region } from "../../world/types";
 
 export enum VORONOI_FUNCTION {
   CREATE = "create",
-  CREATE_BULK = "create-bulk",
   GET_CURRENT_REGION = "get-current-region",
   GET_CURRENT_REGION_SITE = "get-current-region-site",
   GET_CURRENT_BIOME = "get-current-biome",
@@ -40,7 +39,6 @@ interface VoronoiCreateParamsBase {
   seed: string;
   currentVertex: THREE.Vector2;
   gridSize: number;
-  isTerrain?: boolean;
 }
 
 interface VoronoiCreateParamsWithBiomes extends VoronoiCreateParamsBase {

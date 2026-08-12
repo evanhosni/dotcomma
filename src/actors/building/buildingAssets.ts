@@ -634,23 +634,13 @@ export const releaseProceduralBuildingAssets = (seed: string, optionsKey: string
   }
 };
 
-export const getProceduralBuildingAssets = (seed: string, opts: BuildingOptions): ProceduralBuildingAssets => {
-  const key = `${seed}|${JSON.stringify(opts)}`;
-  const existing = cache.get(key);
-  if (existing) return existing.assets;
-
-  const plan = generateBuildingPlan(seed, opts);
-  return assembleBuildingAssets(key, plan, buildExteriorGeometry(plan), buildInteriorGeometries(plan));
-};
-
-/** The same build split at its natural phase boundaries (plan → exterior →
+/** The build, split at its natural phase boundaries (plan → exterior →
  *  interior → assembly), each phase meant to run as its OWN task on the build
- *  queue. The monolithic getProceduralBuildingAssets call was a single
- *  unsplittable task — the queue's time budget only yields BETWEEN tasks, so
- *  a heavy skyscraper still landed as one long frame while roaming. finish()
- *  dedupes against the cache, so a same-seed build that lost a race simply
- *  adopts the winner (partial geometries were never rendered — no GL state
- *  to free). */
+ *  queue. A monolithic build-it-all call was a single unsplittable task — the
+ *  queue's time budget only yields BETWEEN tasks, so a heavy skyscraper
+ *  landed as one long frame while roaming. finish() dedupes against the
+ *  cache, so a same-seed build that lost a race simply adopts the winner
+ *  (partial geometries were never rendered — no GL state to free). */
 export const beginProceduralBuildingBuild = (
   seed: string,
   opts: BuildingOptions,

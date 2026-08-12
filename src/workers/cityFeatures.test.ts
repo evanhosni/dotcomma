@@ -2,7 +2,7 @@
  * Smoke tests for the city feature enumerators (traffic lights / freeway-side
  * points): determinism, duplicate-freedom across chunk splits, and placement
  * validity against the shared vertex pipeline. Runs the REAL compute module
- * with a config mirroring the live GameWorld registrations.
+ * with a config mirroring the live GlitchCityWorld registrations.
  */
 import { DEFAULT_WORLD_TERRAIN_PARAMS } from "../world/registry";
 import {

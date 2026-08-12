@@ -6,6 +6,7 @@ import { GameObject } from "../../objects/GameObject";
 import { ActorProps } from "../../objects/spawning/types";
 import { useMouseEvents } from "../../objects/state/useMouseEvents";
 import { useStateMachine } from "../../objects/state/useStateMachine";
+import { framePhaseFromCoords } from "../../utils/utils";
 import { BEEBLE_SM } from "./stateMachine";
 import type { RapierRigidBody } from "@react-three/rapier";
 import type Rapier from "@dimforge/rapier3d-compat";
@@ -33,12 +34,6 @@ const HAS_CLICK_TRIGGER = BEEBLE_SM.triggers.some((t) => t.id === "mouse-left-cl
 // (allocating fresh {x,y,z} literals per active beeble per frame was GC churn).
 const _desiredMovement = { x: 0, y: 0, z: 0 };
 const _nextTranslation = { x: 0, y: 0, z: 0 };
-
-/** Deterministic per-instance frame phase from the spawn position, so a
- *  batch of beebles mounted together doesn't do its every-Nth-frame work
- *  (physics throttle, mouse raycast) all on the same frame. */
-const framePhaseFromCoords = (x: number, z: number, interval: number): number =>
-  Math.abs(Math.floor(x * 7.13 + z * 3.71)) % interval;
 
 export const Beeble = (props: ActorProps) => {
   const groupRef = useRef<THREE.Group>(null);

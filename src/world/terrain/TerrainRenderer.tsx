@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
-import { uploadOnFirstDraw } from "../../utils/utils";
+import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { getActiveWorldConfig } from "../registry";
 import { getMaterial } from "../material";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";

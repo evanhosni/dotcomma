@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
-export const TEX_W = 1024;
-export const TEX_H = 256;
+const TEX_W = 1024;
+const TEX_H = 256;
 
 const BASE_FONT_PX = 112;
 const FIT_PADDING = 48; // px of canvas left free on each side

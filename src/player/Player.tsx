@@ -7,8 +7,7 @@ import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { usePortalContext } from "../portals/PortalContext";
-import { getVertexSample } from "../dressing/dressingWorker";
-import { getVertexData, getVertexDataRaw } from "../world/vertexData";
+import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/vertexData";
 import { useInput } from "./useInput";
 
 /** Default spawn: BODY-CENTER position high above the origin — the player

@@ -1,9 +1,9 @@
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import { uploadOnFirstDraw } from "../../utils/utils";
 import { getActiveWorldConfig, whenWorldReady } from "../../world/registry";
 import {
+  finalizeInstancedChunk,
   instancedFromPoints,
   setInstanceTransform,
   useDressingAssets,
@@ -80,14 +80,8 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
   }
   wires.instanceMatrix.needsUpdate = true;
   if (w > 0) {
-    // +0.1 pad for the 0.06u wire cross-section (mesh sits at the world
-    // origin — instance positions are absolute, no further transform needed).
-    wires.boundingSphere = new THREE.Sphere(
-      min.clone().add(max).multiplyScalar(0.5),
-      min.distanceTo(max) / 2 + 0.1
-    );
-    // Upload at chunk build time, not when the player first turns this way
-    uploadOnFirstDraw(wires);
+    // +0.1 pad for the 0.06u wire cross-section
+    finalizeInstancedChunk(wires, min.x, min.y, min.z, max.x, max.y, max.z, 0.1);
   }
 };
 

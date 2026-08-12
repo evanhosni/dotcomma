@@ -391,11 +391,6 @@ async function handleTask(task: MessageData) {
     self.postMessage(voronoiData);
   }
 
-  if (type === VORONOI_FUNCTION.CREATE_BULK) {
-    const results = (params as VoronoiCreateParams[]).map((param) => create(param));
-    self.postMessage({ type: VORONOI_FUNCTION.CREATE_BULK, results });
-  }
-
   if (type === VORONOI_FUNCTION.GET_DISTANCE_TO_WALL) {
     const distance = getDistanceToWall(params as VoronoiGetDistanceToWallParams);
     self.postMessage(distance);
