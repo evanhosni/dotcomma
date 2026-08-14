@@ -1,14 +1,12 @@
 import { useGLTF } from "@react-three/drei";
-import { useFrame, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { RootState, useThree } from "@react-three/fiber";
+import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { patchStandardMaterialLampGlow } from "../lighting/lampGlow";
-import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
-import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
 import { getDistance2DSq } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import { acquireModelClone, PooledModelClone, reclaimModelClone, releaseModelClone } from "./modelClonePool";
 import { AnimationControl } from "./state/types";
 import { GameObjectAttributes } from "./types";
 
@@ -26,7 +24,30 @@ const MAX_ANIM_CATCHUP = 0.5;
 const taskQueue = new TaskQueue();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
-let frustumUpdatedAt = -1;
+// Scratch for instances whose positionRef is not yet populated — set/used
+// synchronously within one updater call, never allocated per frame.
+const _fallbackPosition = new THREE.Vector3();
+
+// ── Shared frame driver ─────────────────────────────────────────────────────
+// ONE frame subscriber for ALL mounted GameObjects (driven by ObjectPool's
+// useFrame) instead of a useFrame per instance: with hundreds of actors
+// mounted, per-instance hooks meant that many R3F subscriber invocations and
+// subscription churn per spawn batch. Instances register a "latest closure"
+// ref; the driver refreshes the shared frustum once, then runs each updater.
+
+type GameObjectFrameUpdater = (state: RootState, delta: number) => void;
+const frameUpdaters = new Set<React.MutableRefObject<GameObjectFrameUpdater>>();
+
+/** Runs every mounted GameObject's per-frame work (fade, hard-kill, frustum
+ *  visibility, collider gating, animation LOD). Called once per frame from
+ *  ObjectPool's frame loop — which <Domain> always mounts, so any GameObject
+ *  inside a domain tree is driven. */
+export const driveGameObjectFrames = (state: RootState, delta: number): void => {
+  if (frameUpdaters.size === 0) return;
+  projScreenMatrix.multiplyMatrices(state.camera.projectionMatrix, state.camera.matrixWorldInverse);
+  frustum.setFromProjectionMatrix(projScreenMatrix);
+  frameUpdaters.forEach((updater) => updater.current(state, delta));
+};
 
 // Debug "E = toggle animations" (only for instances NOT driven by a state
 // machine): ONE shared window listener + flag instead of a keydown listener
@@ -46,90 +67,6 @@ const ensureManualAnimationListener = (): void => {
 };
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
-
-// Helper function to properly clone a model with animations
-function cloneModelWithAnimations(gltf: any): {
-  scene: THREE.Group;
-  animations: THREE.AnimationClip[];
-  nodes: Record<string, any>;
-  materials: Record<string, any>;
-} {
-  const clone = {
-    scene: gltf.scene.clone(true),
-    animations: gltf.animations,
-    nodes: { ...gltf.nodes },
-    materials: { ...gltf.materials },
-  };
-
-  // Clone the skeletons/bones properly
-  const skinnedMeshes: Record<string, THREE.SkinnedMesh> = {};
-
-  gltf.scene.traverse((node: any) => {
-    if (node.isSkinnedMesh) {
-      skinnedMeshes[node.name] = node as THREE.SkinnedMesh;
-    }
-  });
-
-  // Single pass over the clone: index bones by name (the old per-bone
-  // re-traversal was O(bones × scene nodes) and caused spawn-batch hitches)
-  const clonedBones = new Map<string, THREE.Bone>();
-  const clonedSkinned: THREE.SkinnedMesh[] = [];
-
-  // Material clones are deduped by SOURCE material: a model like beeble.glb
-  // has 10 meshes sharing a handful of materials, and cloning per MESH meant
-  // that many extra materials to patch, fade-drive, and dispose per instance.
-  const materialCloneMap = new Map<THREE.Material, THREE.Material>();
-  const cloneMaterialShared = (mat: THREE.Material): THREE.Material => {
-    let cloned = materialCloneMap.get(mat);
-    if (!cloned) {
-      cloned = mat.clone();
-      materialCloneMap.set(mat, cloned);
-    }
-    return cloned;
-  };
-
-  clone.scene.traverse((node: any) => {
-    if (node.isBone) {
-      clonedBones.set(node.name, node as THREE.Bone);
-    }
-    if (node.isSkinnedMesh) {
-      clonedSkinned.push(node as THREE.SkinnedMesh);
-    } else if (node.isMesh && node.material) {
-      // For regular meshes, just clone the material (shared by source)
-      node.material = cloneMaterialShared(node.material);
-    }
-  });
-
-  // Skeletons are deduped by SOURCE skeleton, mirroring SkeletonUtils.clone:
-  // beeble.glb has 10 skinned meshes all bound to ONE 24-joint skeleton, and
-  // a per-mesh skeleton.clone() created 10 skeletons → 10× Skeleton.update()
-  // + 10 bone-texture uploads per instance per frame. One clone per source
-  // skeleton (bones rebound to the cloned bone instances by name), bound to
-  // each mesh with its own bindMatrix.
-  const skeletonMap = new Map<THREE.Skeleton, THREE.Skeleton>();
-
-  for (const node of clonedSkinned) {
-    const originalMesh = skinnedMeshes[node.name];
-    if (!originalMesh || !originalMesh.skeleton) continue;
-
-    const srcSkeleton = originalMesh.skeleton;
-    let skeleton = skeletonMap.get(srcSkeleton);
-    if (!skeleton) {
-      const bones = srcSkeleton.bones.map((bone: THREE.Bone) => clonedBones.get(bone.name) ?? bone);
-      const boneInverses = srcSkeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
-      skeleton = new THREE.Skeleton(bones, boneInverses);
-      skeletonMap.set(srcSkeleton, skeleton);
-    }
-    node.bind(skeleton, node.bindMatrix);
-
-    // Clone and assign material (shared by source)
-    if (originalMesh.material) {
-      node.material = cloneMaterialShared(originalMesh.material as THREE.Material);
-    }
-  }
-
-  return clone;
-}
 
 /** The shared per-object base: every GLTF-model game object (and the actor
  *  components wrapping one) renders through <GameObject>, which owns the
@@ -179,17 +116,21 @@ export const GameObject = ({
 }: GameObjectProps) => {
   const { camera } = useThree();
   const gltf = useGLTF(model);
-  const sceneRef = useRef<THREE.Group | null>(null);
-  const boundsRef = useRef<THREE.Sphere>(new THREE.Sphere());
-  const mountedRef = useRef<boolean>(true);
-  const clonedModel = useMemo(() => cloneModelWithAnimations(gltf), [gltf]);
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
-  const actionsRef = useRef<Map<string, THREE.AnimationAction>>(new Map());
-  const scene = clonedModel.scene;
 
+  // Prepared clone from the pool — despawn/respawn churn reuses parked
+  // clones (materials already patched, mixer bound, bounds measured) instead
+  // of re-running the whole clone pipeline per mount. Acquired lazily during
+  // render (useGLTF has resolved by here); released in the ownership effect.
+  const cloneRef = useRef<PooledModelClone | null>(null);
+  if (cloneRef.current === null) {
+    cloneRef.current = acquireModelClone(model, gltf, quantization);
+  }
+  const pooled = cloneRef.current;
+  const scene = pooled.scene;
+
+  const boundsRef = useRef<THREE.Sphere>(new THREE.Sphere());
   const groupRef = useRef<THREE.Group>(null);
   const fadeRef = useRef({ opacity: 0, fadingOut: false });
-  const materialsRef = useRef<THREE.Material[]>([]);
   const appliedOpacityRef = useRef(-1);
   const animDeltaRef = useRef(0);
   const animFrameParityRef = useRef(false);
@@ -205,111 +146,48 @@ export const GameObject = ({
   // (298 tracks) of which the state machine ever plays 4 — eagerly binding
   // every clip put all the unused tracks through the mixer's property-binding
   // graph for every instance. Nothing binds a clip until something plays it.
+  // The actions map lives on the pooled record, so a reused clone keeps its
+  // already-bound actions.
   const getOrCreateAction = (clipName: string): THREE.AnimationAction | null => {
-    const mixer = mixerRef.current;
+    const mixer = pooled.mixer;
     if (!mixer) return null;
-    let action = actionsRef.current.get(clipName);
+    let action = pooled.actions.get(clipName);
     if (!action) {
-      const clip = clonedModel.animations.find((c: THREE.AnimationClip) => c.name === clipName);
+      const clip = pooled.animations.find((c: THREE.AnimationClip) => c.name === clipName);
       if (!clip) return null;
       action = mixer.clipAction(clip);
-      actionsRef.current.set(clipName, action);
+      pooled.actions.set(clipName, action);
     }
     return action;
   };
 
+  // Ownership + per-life reset. Creation-time work (material patching, GPU
+  // warm draw, bounds measure) happened in the pool; here we only reset the
+  // shared state this life mutates. reclaim/release are StrictMode-safe: the
+  // dev remount's cleanup schedules a DEFERRED release that the immediate
+  // re-setup cancels, so the clone never changes owner mid-remount.
   useEffect(() => {
-    if (!scene) return;
+    reclaimModelClone(pooled);
 
-    sceneRef.current = scene;
+    // Fade starts invisible each life (also covers the StrictMode reclaim
+    // path, where no acquire ran to reset the pooled materials).
+    for (const mat of pooled.materials) {
+      mat.opacity = 0;
+      mat.transparent = true;
+    }
+    fadeRef.current.opacity = 0;
+    fadeRef.current.fadingOut = false;
+    appliedOpacityRef.current = -1;
 
-    // Collect all materials for fade control and optimize. Meshes share
-    // material clones (deduped by source in cloneModelWithAnimations), so
-    // dedupe here too: each unique clone gets patched exactly once and the
-    // fade loop writes each material once, not once per mesh using it.
-    const materialSet = new Set<THREE.Material>();
-    scene.traverse((child: THREE.Object3D) => {
-      if ((child as THREE.Mesh).isMesh || (child as THREE.SkinnedMesh).isSkinnedMesh) {
-        const mesh = child as THREE.Mesh;
-        if (mesh.material) {
-          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-
-          materials.forEach((mat) => {
-            if (materialSet.has(mat)) return;
-            materialSet.add(mat);
-            mat.transparent = true;
-            mat.opacity = 0;
-            (mat as any).fog = false;
-
-            if (!child.userData?.skipQuantization) {
-              _quantization.patchMaterial(mat, quantization);
-            }
-            // Street-lamp glow — NPCs/objects near a lamp brighten like the
-            // terrain and buildings do (grid lookup, no real lights)
-            patchStandardMaterialLampGlow(mat);
-          });
-
-          mesh.frustumCulled = true;
-          mesh.castShadow = false;
-          mesh.receiveShadow = false;
-          // Warm the GPU at mount: force one real draw so this model type's
-          // shader programs link and its textures/buffers upload NOW (mount is
-          // staggered by spawn batches) instead of inside gl.render the frame
-          // the player first LOOKS at one — measured as the remaining 50-90ms
-          // render-internal spikes. warmFramesRef below keeps the group
-          // visible long enough for that draw to actually happen.
-          uploadOnFirstDraw(mesh);
-        }
-      }
-    });
-    materialsRef.current = Array.from(materialSet);
+    // Warm-up window for the creation-time forced draw (see modelClonePool);
+    // on reuse the meshes' own frustum culling makes these frames ~free.
     warmFramesRef.current = 3;
 
-    // Set up the mixer only — actions are created lazily (getOrCreateAction)
-    if (clonedModel.animations && clonedModel.animations.length > 0) {
-      mixerRef.current = new THREE.AnimationMixer(scene);
-    }
+    // scale omitted from deps: stable per instance, only used for the sphere
+    boundsRef.current.radius = pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]);
 
-    // Calculate bounding sphere efficiently
-    const bbox = new THREE.Box3().setFromObject(scene);
-    const center = new THREE.Vector3();
-    bbox.getCenter(center);
-
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-
-    const radius = Math.max(size.x, size.y, size.z) / 2;
-    boundsRef.current.set(center, radius * Math.max(...scale));
-
-    // Return cleanup function
-    return () => {
-      // Mark component as unmounted to prevent state updates
-      mountedRef.current = false;
-
-      // Stop animations
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-      }
-
-      // Dispose per-instance GPU resources: the material clones and each
-      // shared cloned skeleton's bone texture. Geometry is SHARED with the
-      // source GLTF scene — never dispose it here.
-      for (const mat of materialsRef.current) {
-        mat.dispose();
-      }
-      const skeletons = new Set<THREE.Skeleton>();
-      scene.traverse((node: any) => {
-        if (node.isSkinnedMesh && node.skeleton) skeletons.add(node.skeleton);
-      });
-      skeletons.forEach((skeleton) => skeleton.dispose());
-
-      // Clear references to help garbage collection
-      actionsRef.current.clear();
-      materialsRef.current = [];
-      mixerRef.current = null;
-      sceneRef.current = null;
-    };
-  }, [scene, clonedModel.animations, quantization]); // scale omitted: stable per instance, only used for bounding sphere
+    return () => releaseModelClone(pooled);
+  }, [pooled]);
 
   // E-key animation toggle (only when not driven by a state machine) —
   // subscribes to the ONE shared module-level keydown listener.
@@ -321,7 +199,7 @@ export const GameObject = ({
       if (manualAnimationsPlaying) {
         // Materialize + play every clip (original behavior: all clips
         // run together while the debug toggle is on)
-        for (const clip of clonedModel.animations ?? []) {
+        for (const clip of pooled.animations ?? []) {
           const action = getOrCreateAction(clip.name);
           if (action) {
             action.paused = false;
@@ -332,7 +210,7 @@ export const GameObject = ({
           }
         }
       } else {
-        actionsRef.current.forEach((action) => {
+        pooled.actions.forEach((action) => {
           action.paused = true;
         });
       }
@@ -343,7 +221,7 @@ export const GameObject = ({
     return () => {
       manualAnimationSubscribers.delete(apply);
     };
-  }, [animationControl, clonedModel]);
+  }, [animationControl, pooled]);
 
   // The pool unmounts a destroyed object on its next batch — up to several
   // frames after onDestroy. Whether this instance has colliders at all is
@@ -357,15 +235,22 @@ export const GameObject = ({
       colliders.trimeshColliders.length >
       0;
 
-  // Handle animations and frustum culling
-  useFrame((state, delta) => {
+  // Per-frame work (fade, hard-kill, frustum visibility, collider gating,
+  // animation LOD) — run by the shared driver (driveGameObjectFrames), not a
+  // per-instance useFrame. The ref is refreshed every render so the driver
+  // always calls the closure over current props/state.
+  const frameUpdaterRef = useRef<GameObjectFrameUpdater>(() => {});
+  frameUpdaterRef.current = (_, delta) => {
     // onDestroy fires ONCE — re-firing every frame until the pool's next
     // batch actually unmounts us rewrote the despawn-ledger timestamp each
     // frame, delaying the eventual respawn cooldown.
     if (destroyedRef.current) return;
 
-    const objectPosition = positionRef.current || new THREE.Vector3(...coordinates);
-    // Distances are only ever COMPARED here — stay in squared space (no sqrt)
+    const objectPosition =
+      positionRef.current ?? _fallbackPosition.set(coordinates[0], coordinates[1], coordinates[2]);
+    // The ONE distance for everything below (fade, kill, proximity, collider
+    // gate, animation LOD) — 2D and squared: heights don't matter at these
+    // radii and the values are only ever COMPARED (no sqrt).
     const distanceSq = getDistance2DSq(camera.position, objectPosition);
 
     // Fade in/out
@@ -399,18 +284,11 @@ export const GameObject = ({
     // (steady-state objects skip the whole loop)
     if (fade.opacity !== appliedOpacityRef.current) {
       appliedOpacityRef.current = fade.opacity;
-      const mats = materialsRef.current;
+      const mats = pooled.materials;
       for (let i = 0; i < mats.length; i++) {
         mats[i].opacity = fade.opacity;
         mats[i].transparent = fade.opacity < 1;
       }
-    }
-
-    // Update shared frustum once per frame (first GameObject instance wins)
-    if (state.clock.elapsedTime !== frustumUpdatedAt) {
-      frustumUpdatedAt = state.clock.elapsedTime;
-      projScreenMatrix.multiplyMatrices(state.camera.projectionMatrix, state.camera.matrixWorldInverse);
-      frustum.setFromProjectionMatrix(projScreenMatrix);
     }
 
     // Update bounding sphere position - using boundsRef instead of global bounds
@@ -418,16 +296,13 @@ export const GameObject = ({
 
     const paddedRadius = boundsRef.current.radius * frustumPadding;
 
-    // For very large objects, we can add an additional check
-    // based on distance to camera rather than just frustum
-    const objectRadiusWithScale = boundsRef.current.radius;
-    const distanceToCameraSq = camera.position.distanceToSquared(objectPosition);
-
-    // Scale the "close to camera" threshold by the object's render distance
+    // For very large objects, add an additional check based on distance to
+    // camera rather than just frustum. Uses the same 2D distance as the rest
+    // of the loop — errs toward VISIBLE (never hides something the frustum
+    // test alone would show).
     const proximityFactor = renderDistance / DEFAULT_RENDER_DISTANCE;
-    const closeThreshold = objectRadiusWithScale * 3 * proximityFactor;
-
-    const isCloseToCamera = distanceToCameraSq < closeThreshold * closeThreshold;
+    const closeThreshold = boundsRef.current.radius * 3 * proximityFactor;
+    const isCloseToCamera = distanceSq < closeThreshold * closeThreshold;
 
     // An object is visible if:
     // 1. It intersects with the padded frustum (using temporary larger radius), OR
@@ -438,7 +313,7 @@ export const GameObject = ({
     boundsRef.current.radius = originalRadius; // Restore original radius
 
     // Warm-up: stay visible for the first few frames after mount so the
-    // meshes' forced first draw (uploadOnFirstDraw in the mount effect) can
+    // meshes' forced first draw (uploadOnFirstDraw at clone creation) can
     // actually happen — an object mounted behind the player would otherwise
     // be hidden here before its programs/textures ever reach the GPU.
     if (warmFramesRef.current > 0) {
@@ -469,7 +344,7 @@ export const GameObject = ({
 
     // State-machine-driven animation commands (cheap — always processed so
     // state changes apply even while the mixer itself is LOD-skipped)
-    if (animationControl && mixerRef.current && animationControl.dirty) {
+    if (animationControl && pooled.mixer && animationControl.dirty) {
       animationControl.dirty = false;
       const cmd = animationControl.pendingCommand;
       if (cmd) {
@@ -477,7 +352,7 @@ export const GameObject = ({
         if (targetAction) {
           // Stop the materialized actions to clear the mixer (clips nothing
           // ever played were never bound — there's nothing else to stop)
-          actionsRef.current.forEach((action) => {
+          pooled.actions.forEach((action) => {
             action.stop();
           });
           // Play only the target
@@ -495,7 +370,7 @@ export const GameObject = ({
     // Animation LOD: skinned/keyframe updates are the per-frame CPU cost of
     // animated spawns. Skip entirely while frustum-culled; halve the rate at
     // distance. Delta accumulates so loops stay continuous on reappear.
-    const mixer = mixerRef.current;
+    const mixer = pooled.mixer;
     if (mixer && (animationControl || isPlaying)) {
       animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
       animFrameParityRef.current = !animFrameParityRef.current;
@@ -506,7 +381,14 @@ export const GameObject = ({
         animDeltaRef.current = 0;
       }
     }
-  });
+  };
+
+  useEffect(() => {
+    frameUpdaters.add(frameUpdaterRef);
+    return () => {
+      frameUpdaters.delete(frameUpdaterRef);
+    };
+  }, []);
 
   useEffect(() => {
     const task = async () => {
