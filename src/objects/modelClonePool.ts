@@ -33,6 +33,66 @@ import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
 
 const MAX_POOLED_PER_KEY = 8;
 
+// ── Root-relative skinning (float32 far-from-origin fix) ───────────────────
+// three's stock Skeleton.update writes bone.matrixWorld × boneInverse — an
+// ABSOLUTE world matrix — into the float32 bone texture, and the shader
+// cancels those huge translations against bindMatrixInverse (≈ inverse mesh
+// world, also huge) PER VERTEX in float32. Far from the world origin the
+// cancellation loses precision and skinned actors (beebles) visibly jitter,
+// growing with distance — the same failure class the coordinate-precision
+// rules cover for static geometry (see CLAUDE.md).
+//
+// Fix: store ROOT-RELATIVE bone matrices (rootWorld⁻¹ × boneWorld ×
+// boneInverse — the huge translations cancel on the CPU in float64), and
+// freeze each skinned mesh's bindMatrixInverse at its CONSTANT root-relative
+// value (mesh nodes never move relative to their model root; only bones
+// animate). Mathematically identical — meshWorld⁻¹·boneWorld ≡
+// meshRel⁻¹·(rootWorld⁻¹·boneWorld) — but every float32-stored intermediate
+// (bone texture, bind uniforms) stays model-sized. Covers the GPU skinning
+// path AND the CPU one (applyBoneTransform — raycasts, skinned bounds).
+
+const _rootInverse = new THREE.Matrix4();
+const _boneOffset = new THREE.Matrix4();
+const _identityMatrix = new THREE.Matrix4();
+
+class RootRelativeSkeleton extends THREE.Skeleton {
+  private readonly root: THREE.Object3D;
+
+  constructor(bones: THREE.Bone[], boneInverses: THREE.Matrix4[], root: THREE.Object3D) {
+    super(bones, boneInverses);
+    this.root = root;
+  }
+
+  update(): void {
+    const bones = this.bones;
+    const boneInverses = this.boneInverses;
+    const boneMatrices = this.boneMatrices;
+
+    // The renderer calls update() after the scene graph's matrixWorld pass,
+    // so root.matrixWorld is current. Inverting here is float64 (JS numbers);
+    // one extra 4×4 multiply per bone is noise next to the skinning itself.
+    _rootInverse.copy(this.root.matrixWorld).invert();
+
+    for (let i = 0, il = bones.length; i < il; i++) {
+      const matrix = bones[i] ? bones[i].matrixWorld : _identityMatrix;
+      _boneOffset.multiplyMatrices(_rootInverse, matrix).multiply(boneInverses[i]);
+      _boneOffset.toArray(boneMatrices, i * 16);
+    }
+
+    if (this.boneTexture !== null) {
+      this.boneTexture.needsUpdate = true;
+    }
+  }
+}
+
+/** Object3D's updateMatrixWorld WITHOUT SkinnedMesh's attached-mode sync
+ *  (which would overwrite bindMatrixInverse with the huge inverse world
+ *  matrix every frame) — ours is frozen at its constant root-relative value,
+ *  the pairing partner of RootRelativeSkeleton's bone matrices. */
+function updateMatrixWorldKeepBind(this: THREE.SkinnedMesh, force?: boolean): void {
+  THREE.Object3D.prototype.updateMatrixWorld.call(this, force);
+}
+
 export interface PooledModelClone {
   key: string;
   scene: THREE.Group;
@@ -115,7 +175,7 @@ function cloneModelWithAnimations(gltf: any): {
     if (!skeleton) {
       const bones = srcSkeleton.bones.map((bone: THREE.Bone) => clonedBones.get(bone.name) ?? bone);
       const boneInverses = srcSkeleton.boneInverses.map((matrix: THREE.Matrix4) => matrix.clone());
-      skeleton = new THREE.Skeleton(bones, boneInverses);
+      skeleton = new RootRelativeSkeleton(bones, boneInverses, scene);
       skeletonMap.set(srcSkeleton, skeleton);
     }
     node.bind(skeleton, node.bindMatrix);
@@ -123,6 +183,17 @@ function cloneModelWithAnimations(gltf: any): {
     if (originalMesh.material) {
       node.material = cloneMaterialShared(originalMesh.material as THREE.Material);
     }
+  }
+
+  // Freeze each skinned mesh's bindMatrixInverse at its ROOT-RELATIVE value
+  // (see RootRelativeSkeleton). The clone is detached here, so one world pass
+  // makes matrixWorld the root-chain transform; meshWorld⁻¹ · sceneWorld is
+  // then exactly the mesh-relative-to-root inverse, constant for the clone's
+  // lifetime — the attached-mode per-frame sync is disabled by the override.
+  scene.updateMatrixWorld(true);
+  for (const node of clonedSkinned) {
+    node.bindMatrixInverse.copy(node.matrixWorld).invert().multiply(scene.matrixWorld);
+    node.updateMatrixWorld = updateMatrixWorldKeepBind;
   }
 
   return { scene, animations };

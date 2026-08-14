@@ -36,8 +36,9 @@ export interface PowerLinesProps {
 /** Fill a wire InstancedMesh with the 3 wires × 3 sagging segments from each
  *  pole to its successor. Both ends' crossarm offsets use the POLE's frame —
  *  the next pole's tangent differs by at most a few degrees of wiggle,
- *  invisible at pole height. Also sets an explicit world-space bounding
- *  sphere from the span endpoints so frustum culling stays ON (the
+ *  invisible at pole height. The span extents feed finalizeInstancedChunk,
+ *  which rebases the absolute translations to a chunk-local origin and sets
+ *  the explicit bounding sphere so frustum culling stays ON (the
  *  auto-computed instanced bounds only cover the unit wire geometry). */
 const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]): void => {
   const xAxis = new THREE.Vector3(1, 0, 0);

@@ -99,10 +99,11 @@ export interface InstancePlacement {
  * each point to a position + yaw (local +X faces along yaw). Frustum culling
  * stays ON: instanced bounds don't auto-fit scattered instances (three would
  * have to walk every matrix), but the placements are known right here, so an
- * explicit world-space bounding sphere is computed from their min/max —
- * padded by the geometry's own bounds so tall poles / long arms survive any
- * per-instance yaw. (The mesh sits at the world origin — instance positions
- * are absolute — so the sphere needs no further transform.)
+ * explicit bounding sphere is computed from their min/max — padded by the
+ * geometry's own bounds so tall poles / long arms survive any per-instance
+ * yaw. Matrices are composed with ABSOLUTE positions and then REBASED to a
+ * chunk-local origin by finalizeInstancedChunk (float32 far-from-origin —
+ * see its doc).
  */
 export const instancedFromPoints = <P,>(
   geometry: THREE.BufferGeometry,
@@ -142,12 +143,26 @@ export const instancedFromPoints = <P,>(
   return mesh;
 };
 
-/** Shared tail of every instanced-chunk build: set an explicit world-space
- *  bounding sphere from the instance extents (+pad) so frustum culling works
- *  (instance positions are absolute and the mesh sits at the world origin, so
- *  the sphere needs no further transform), then queue the one-time GPU warm
- *  draw — the buffer upload is paid at (budget-staggered) chunk build time,
- *  not when the player first turns toward the chunk. */
+/** Shared tail of every instanced-chunk build — far-from-origin REBASE +
+ *  culling bounds + GPU warm-up.
+ *
+ *  Instance matrices arrive filled with ABSOLUTE world translations. Rendered
+ *  that way (mesh at the world origin), the GPU multiplies a huge instance
+ *  translation against the view matrix's huge opposite translation in
+ *  float32 — the classic far-from-origin cancellation, and dressing visibly
+ *  jittered past ~100k units (the exact failure mode the coordinate-precision
+ *  rules exist for — see CLAUDE.md). So the mesh is parked AT the extents
+ *  center and every instance translation is made RELATIVE to it: the
+ *  chunk→camera translation then resolves on the CPU in float64
+ *  (modelViewMatrix) and everything the GPU touches stays chunk-sized.
+ *  Subtracting after the float32 compose leaves only a CONSTANT sub-ULP
+ *  placement offset (~0.06u at 1M units — invisible), never per-frame jitter.
+ *
+ *  The explicit bounding sphere keeps frustum culling ON (instanced bounds
+ *  don't auto-fit scattered instances); it is LOCAL to the mesh — three
+ *  applies matrixWorld when culling. The warm draw pays the buffer upload at
+ *  (budget-staggered) chunk build time, not when the player first turns
+ *  toward the chunk. */
 export const finalizeInstancedChunk = (
   mesh: THREE.InstancedMesh,
   minX: number,
@@ -158,8 +173,20 @@ export const finalizeInstancedChunk = (
   maxZ: number,
   pad: number
 ): void => {
+  const originX = (minX + maxX) / 2;
+  const originY = (minY + maxY) / 2;
+  const originZ = (minZ + maxZ) / 2;
+  const matrices = mesh.instanceMatrix.array as Float32Array;
+  for (let i = 0; i < mesh.count; i++) {
+    const t = i * 16 + 12; // column-major translation slot
+    matrices[t] -= originX;
+    matrices[t + 1] -= originY;
+    matrices[t + 2] -= originZ;
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.position.set(originX, originY, originZ);
   mesh.boundingSphere = new THREE.Sphere(
-    new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2),
+    new THREE.Vector3(0, 0, 0),
     Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
   );
   uploadOnFirstDraw(mesh);

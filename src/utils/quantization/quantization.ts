@@ -41,9 +41,13 @@ export namespace _quantization {
 
     #ifdef USE_INSTANCING
 
-      // Instance transforms carry their own absolute world translation, which
-      // the object-origin rebase below cannot reach — instanced quantized
-      // materials keep the original absolute-space math.
+      // Instanced quantized materials keep the original absolute-space math.
+      // (Dressing chunks rebase their instance translations to a chunk-local
+      // origin with the chunk translation on modelMatrix — see
+      // finalizeInstancedChunk — so modelMatrix * instanceMatrix is still the
+      // correct absolute world position here; quantizing it would just
+      // reintroduce float32 absolute precision. No instanced material is
+      // quantized today.)
       mvPosition = instanceMatrix * mvPosition;
       vec4 qWorldPos = modelMatrix * mvPosition;
       qWorldPos.xyz = quantizeWorldPos( qWorldPos.xyz );
