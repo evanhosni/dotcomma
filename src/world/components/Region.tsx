@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useMemo } from "react";
-import { RegionContext, useWorldStore } from "./context";
+import { RegionContext, useDomainStore } from "./context";
 
 export interface RegionProps extends React.PropsWithChildren {
   name: string;
@@ -13,7 +13,7 @@ export interface RegionProps extends React.PropsWithChildren {
  * Region JSX order is preserved — voronoi assignment depends on it.
  */
 export const Region = ({ name, id, children }: RegionProps) => {
-  const store = useWorldStore("Region");
+  const store = useDomainStore("Region");
 
   useLayoutEffect(() => {
     store.regions.set(id, { id, name });

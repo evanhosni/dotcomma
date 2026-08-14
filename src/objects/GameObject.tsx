@@ -2,7 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { patchStandardMaterialLampGlow } from "../sky/lampGlow";
+import { patchStandardMaterialLampGlow } from "../lighting/lampGlow";
 import { _quantization } from "../utils/quantization/quantization";
 import { TaskQueue } from "../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
@@ -10,7 +10,7 @@ import { getDistance2DSq } from "../utils/utils";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import { AnimationControl } from "./state/types";
-import { frustumHiddenObjects } from "./frustumVisibility";
+import { GameObjectAttributes } from "./types";
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 const DELETE_OBJECT_BUFFER = 1.2;
@@ -131,14 +131,19 @@ function cloneModelWithAnimations(gltf: any): {
   return clone;
 }
 
-interface GameObjectProps {
+/** The shared per-object base: every GLTF-model game object (and the actor
+ *  components wrapping one) renders through <GameObject>, which owns the
+ *  attributes and behavior common to all of them — render-distance fade +
+ *  hard-kill, frustum culling, collision (collider creation/gating), model
+ *  cloning, animation LOD, quantization, and GPU warm-up. Base attribute
+ *  types live in objects/types.ts (GameObjectAttributes). */
+export interface GameObjectProps extends GameObjectAttributes {
   model: string;
   coordinates: THREE.Vector3Tuple;
   id: string;
   scale?: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  renderDistance?: number;
   despawnDistance?: number; // hard-kill distance; defaults to renderDistance * DELETE_OBJECT_BUFFER
   frustumPadding?: number;
   onDestroy: (id: string) => void;
@@ -146,7 +151,6 @@ interface GameObjectProps {
   isStatic?: boolean;
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
-  quantization?: number; // per-object vertex quantization grid size; defaults to the global grid
 }
 
 interface ColliderState {
@@ -281,10 +285,6 @@ export const GameObject = ({
     return () => {
       // Mark component as unmounted to prevent state updates
       mountedRef.current = false;
-
-      if (groupRef.current) {
-        frustumHiddenObjects.delete(groupRef.current);
-      }
 
       // Stop animations
       if (mixerRef.current) {
@@ -446,17 +446,11 @@ export const GameObject = ({
       isVisible = true;
     }
 
-    // Set visibility directly on the group ref — no React re-render. Only
-    // touch the shared Set (and the group) on actual TRANSITIONS: steady-state
-    // add/delete of every object every frame was measurable Set churn.
+    // Set visibility directly on the group ref — no React re-render; only
+    // write on actual TRANSITIONS.
     if (groupRef.current && lastVisibleRef.current !== isVisible) {
       lastVisibleRef.current = isVisible;
       groupRef.current.visible = isVisible;
-      if (isVisible) {
-        frustumHiddenObjects.delete(groupRef.current);
-      } else {
-        frustumHiddenObjects.add(groupRef.current);
-      }
     }
 
     // Colliders gate on DISTANCE only — physics must not depend on where the

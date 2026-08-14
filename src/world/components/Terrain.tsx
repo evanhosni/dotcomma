@@ -1,11 +1,11 @@
 import { useContext, useLayoutEffect } from "react";
-import { WorldTerrainParams } from "../registry";
+import { TerrainParams } from "../types";
 import { BiomeNoiseConfig } from "../types";
-import { BiomeContext, RegionContext, RegionTerrainConfig, useWorldStore } from "./context";
+import { BiomeContext, RegionContext, RegionTerrainConfig, useDomainStore } from "./context";
 
-export interface TerrainConfigProps extends Partial<WorldTerrainParams> {
+export interface TerrainConfigProps extends Partial<TerrainParams> {
   /** Biome scope: the biome's height definition. Single source of truth —
-   *  evaluated by the shared pipeline (workers/vertexCompute.ts) on both the
+   *  evaluated by the shared pipeline (utils/workers/vertexCompute.ts) on both the
    *  workers and the main thread. */
   noise?: BiomeNoiseConfig;
 }
@@ -13,9 +13,9 @@ export interface TerrainConfigProps extends Partial<WorldTerrainParams> {
 /**
  * Scope-aware terrain rules. Where it's mounted decides what it configures:
  *
- * - Inside <World>:  global terrain params (seed, grid sizes, boundary/river
+ * - Inside <Domain>:  global terrain params (seed, grid sizes, boundary/river
  *   widths, base/road noise, city config). Unset props fall back to
- *   DEFAULT_WORLD_TERRAIN_PARAMS.
+ *   DEFAULT_TERRAIN_PARAMS.
  * - Inside <Region>: reserved — stored for future per-region terrain rules.
  * - Inside <Biome>:  the biome's height definition (`noise`), consumed by the
  *   shared vertex pipeline everywhere heights are computed.
@@ -23,15 +23,15 @@ export interface TerrainConfigProps extends Partial<WorldTerrainParams> {
  * Renders nothing — pure registration.
  */
 export const Terrain = (props: TerrainConfigProps) => {
-  const store = useWorldStore("Terrain");
+  const store = useDomainStore("Terrain");
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
 
-  const { noise, ...worldParams } = props;
+  const { noise, ...domainParams } = props;
   // Object props are registered under stringified deps so inline literals in
   // JSX don't re-register (and re-commit the world) on every parent render.
   const noiseKey = JSON.stringify(noise ?? null);
-  const worldKey = JSON.stringify(worldParams);
+  const domainKey = JSON.stringify(domainParams);
 
   useLayoutEffect(() => {
     if (biome) {
@@ -44,20 +44,20 @@ export const Terrain = (props: TerrainConfigProps) => {
       };
     }
     if (region) {
-      store.regionTerrain.set(region.regionId, worldParams as RegionTerrainConfig);
+      store.regionTerrain.set(region.regionId, domainParams as RegionTerrainConfig);
       store.invalidate();
       return () => {
         store.regionTerrain.delete(region.regionId);
         store.invalidate();
       };
     }
-    store.worldTerrain = worldParams;
+    store.domainTerrain = domainParams;
     store.invalidate();
     return () => {
-      store.worldTerrain = null;
+      store.domainTerrain = null;
       store.invalidate();
     };
-  }, [store, biome, region, noiseKey, worldKey]);
+  }, [store, biome, region, noiseKey, domainKey]);
 
   return null;
 };

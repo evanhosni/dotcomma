@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
 import { useDevMode } from "../../context/DevContext";
-import { getActiveRegions, getWorldTerrainParams } from "../../world/registry";
+import { getActiveRegions, getTerrainParams } from "../../world/domains/utils";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 const BIOME_POLL_INTERVAL = 1; // seconds
 
@@ -130,7 +130,7 @@ const OverlayHUD = () => {
   const memGraphMax = useRef(GRAPH_MAX_DEFAULTS[I_MEM]);
 
   // Disable per-render auto-reset so gl.info accumulates stats across all
-  // render passes (portal + main). We manually reset once per frame below.
+  // render passes. We manually reset once per frame below.
   useEffect(() => {
     gl.info.autoReset = false;
     return () => { gl.info.autoReset = true; };
@@ -202,7 +202,7 @@ const OverlayHUD = () => {
 
   useFrame((_, delta) => {
     // Capture accumulated render stats from all previous frame's render passes
-    // (portal + main), then reset for the next frame's accumulation.
+    // then reset for the next frame's accumulation.
     const renderCalls = gl.info.render.calls;
     const renderTris = gl.info.render.triangles;
     gl.info.reset();
@@ -276,7 +276,7 @@ const OverlayHUD = () => {
       const pos = camera.position;
       const regions = getActiveRegions();
       if (regions.length > 0) {
-        const params = getWorldTerrainParams();
+        const params = getTerrainParams();
         voronoi
           .create({
             seed: params.seed,

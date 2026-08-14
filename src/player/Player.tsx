@@ -1,13 +1,14 @@
 import type Rapier from "@dimforge/rapier3d-compat";
 import { PointerLockControls } from "@react-three/drei";
+import type { PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 import { useFrame, useThree } from "@react-three/fiber";
-import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
+import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
-import { usePortalContext } from "../portals/PortalContext";
-import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/vertexData";
+import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
+import { relockPointerAfterSwitch } from "../world/domains/navigation";
 import { useInput } from "./useInput";
 
 /** Default spawn: BODY-CENTER position high above the origin — the player
@@ -194,8 +195,7 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
   const { terrain_loaded, playerPosition } = useGameContext();
   const { noclip } = useDevMode();
 
-  const { playerRigidBodyRef, activeIndoorId } = usePortalContext();
-  const rigidBodyRef = playerRigidBodyRef;
+  const rigidBodyRef = useRef<RapierRigidBody | null>(null);
   const verticalVelocity = useRef(0);
   const slideSpeed = useRef(0);
   const cameraReady = useRef(false);
@@ -251,6 +251,16 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
+  // Carry pointer lock across a client-side world switch: the old canvas's
+  // teardown force-released it, so re-request on OUR controls' element (drei
+  // only flips isLocked when pointerLockElement === its connected element).
+  // No-op except right after switchDomain.
+  const pointerControlsRef = useRef<PointerLockControlsImpl | null>(null);
+  useEffect(() => {
+    relockPointerAfterSwitch(() => pointerControlsRef.current?.lock());
+  }, []);
+
+
   useFrame((_, delta) => {
     const rb = rigidBodyRef.current;
     const controller = controllerRef.current;
@@ -276,9 +286,8 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
 
     const pos = rb.translation();
 
-    // Hold player in place until terrain colliders are loaded (outdoor world only)
-    const needsTerrain = !activeIndoorId;
-    if (needsTerrain && !terrain_loaded && !noclip) {
+    // Hold player in place until terrain colliders are loaded
+    if (!terrain_loaded && !noclip) {
       rb.setTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] }, true);
       verticalVelocity.current = 0;
       _camTarget.set(spawn[0], spawn[1] + PLAYER_HEIGHT * 0.5, spawn[2]);
@@ -525,7 +534,6 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
         if (
           stuckFrames.current >= STUCK_FRAMES_TRIGGER &&
           !unsticking.current &&
-          !activeIndoorId &&
           terrain_loaded &&
           !respawning.current
         ) {
@@ -566,8 +574,8 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
     // clearly below the surface, put the player back on it. The tolerance is
     // generous (coarse-LOD colliders can legitimately sit a little below the
     // analytic surface); genuine tunneling blows past it within a frame or
-    // two. Outdoors only — interiors sit far above terrain.
-    if (!activeIndoorId && !noclip && terrain_loaded && !respawning.current) {
+    // two.
+    if (!noclip && terrain_loaded && !respawning.current) {
       groundCheckFrame.current++;
       if (groundCheckFrame.current % GROUND_CHECK_INTERVAL === 0) {
         const cx = finalPos.x;
@@ -577,8 +585,7 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
           const body = rigidBodyRef.current;
           if (!body) return;
           const cur = body.translation();
-          // Stale sample — the player moved columns (or teleported through a
-          // portal) between the request and now.
+          // Stale sample — the player moved columns between the request and now.
           if (Math.abs(cur.x - cx) > 3 || Math.abs(cur.z - cz) > 3) return;
           if (cur.y - PLAYER_HEIGHT / 2 >= surface - EMBED_TOLERANCE) return; // recovered meanwhile
           body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
@@ -588,8 +595,8 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
       }
     }
 
-    // Safety net: if player falls through terrain, respawn at ground height + 10 (outdoor only)
-    if (!activeIndoorId && finalPos.y < FALL_RESET_Y && !respawning.current) {
+    // Safety net: if player falls through terrain, respawn at ground height + 10
+    if (finalPos.y < FALL_RESET_Y && !respawning.current) {
       respawning.current = true;
       verticalVelocity.current = 0;
       getVertexData(finalPos.x, finalPos.z).then((vd) => {
@@ -617,7 +624,7 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
 
   return (
     <>
-      <PointerLockControls />
+      <PointerLockControls ref={pointerControlsRef} />
       <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={spawn} colliders={false} ccd>
         <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
       </RigidBody>

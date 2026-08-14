@@ -1,5 +1,5 @@
 import React, { useContext, useLayoutEffect, useMemo } from "react";
-import { BiomeContext, RegionContext, useWorldStore } from "./context";
+import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
 export interface BiomeProps extends React.PropsWithChildren {
   name: string;
@@ -16,7 +16,7 @@ export interface BiomeProps extends React.PropsWithChildren {
  * components (e.g. <GrassField>) that gate their own placement by biome.
  */
 export const Biome = ({ name, id, joinable = true, blendable = true, blendWidth, children }: BiomeProps) => {
-  const store = useWorldStore("Biome");
+  const store = useDomainStore("Biome");
   const region = useContext(RegionContext);
   if (!region) throw new Error("<Biome> must be mounted inside <Region>");
   const regionId = region.regionId;

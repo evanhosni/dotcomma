@@ -1,10 +1,10 @@
 import { useContext, useLayoutEffect } from "react";
 import { _material } from "../../utils/material/_material";
 import { MaterialData, RegionMaterialData } from "../types";
-import { BiomeContext, RegionContext, useWorldStore } from "./context";
+import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
 export interface MaterialConfigProps {
-  /** World scope: texture filename (public/textures/) blended near region boundaries (rivers). */
+  /** Domain scope: texture filename (public/textures/) blended near region boundaries (rivers). */
   riverTexture?: string;
   /** Region scope: texture filename blended near biome boundaries within the region. */
   texture?: string;
@@ -17,14 +17,14 @@ export interface MaterialConfigProps {
 /**
  * Scope-aware material config. Where it's mounted decides what it configures:
  *
- * - Inside <World>:  the river texture blended between regions.
+ * - Inside <Domain>:  the river texture blended between regions.
  * - Inside <Region>: the biome-boundary texture for that region.
  * - Inside <Biome>:  the biome's terrain fragment shader (`getMaterial`).
  *
  * Renders nothing — pure registration.
  */
 export const Material = ({ riverTexture, texture, getRegionMaterial, getMaterial }: MaterialConfigProps) => {
-  const store = useWorldStore("Material");
+  const store = useDomainStore("Material");
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
 
@@ -56,10 +56,10 @@ export const Material = ({ riverTexture, texture, getRegionMaterial, getMaterial
         store.invalidate();
       };
     }
-    store.worldMaterial = { riverTexture };
+    store.domainMaterial = { riverTexture };
     store.invalidate();
     return () => {
-      store.worldMaterial = null;
+      store.domainMaterial = null;
       store.invalidate();
     };
   }, [store, biome, region, riverTexture, texture, getRegionMaterial, getMaterial]);

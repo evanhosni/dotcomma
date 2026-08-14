@@ -5,8 +5,8 @@ import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
-import { getActiveWorldConfig } from "../registry";
-import { getMaterial } from "../material";
+import { getActiveDomainConfig } from "../domains/utils";
+import { getMaterial } from "./material";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
 import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
 
@@ -160,7 +160,7 @@ const ensureTerrainWorker = (): Promise<void> => {
   if (terrainWorkerInitPromise) return terrainWorkerInitPromise;
 
   terrainWorkerInitPromise = new Promise((resolve) => {
-    terrainWorker = new Worker(new URL("../../workers/terrain.worker.ts", import.meta.url), { type: "module" });
+    terrainWorker = new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" });
 
     terrainWorker.onmessage = (e: MessageEvent) => {
       if (e.data.type === "INIT_DONE") {
@@ -170,7 +170,7 @@ const ensureTerrainWorker = (): Promise<void> => {
       }
     };
 
-    const config = getActiveWorldConfig();
+    const config = getActiveDomainConfig();
     terrainWorker.postMessage({ type: "INIT", config });
   });
 
@@ -182,6 +182,44 @@ const handleTerrainWorkerMessage = (e: MessageEvent) => {
     pendingChunkResolve(e.data);
     pendingChunkResolve = null;
   }
+};
+
+/** Domain switch (resetDomainSystems): the chunk registry, queues, indexes, and
+ *  the worker are all MODULE state that survives a <TerrainRenderer> remount —
+ *  unmount only detaches terrain.group from the scene. Tear it all down so the
+ *  next world starts empty and its worker re-inits with the new config.
+ *  (The geometry pool is kept: pooled BufferGeometries are a pure function of
+ *  LOD size/segments and get fully rewritten on acquire. Colliders die with
+ *  the physics world when the canvas remounts.) */
+export const resetTerrainSystem = () => {
+  terrainWorker?.terminate();
+  terrainWorker = null;
+  terrainWorkerReady = false;
+  terrainWorkerInitPromise = null;
+  pendingChunkResolve = null;
+  for (const key of Object.keys(terrain.chunks)) {
+    const { chunk } = terrain.chunks[key];
+    releaseGeometry(chunk.lod, chunk.plane.geometry);
+    terrain.group.remove(chunk.plane);
+    delete terrain.chunks[key];
+  }
+  terrain.active_chunk = null;
+  terrain.queued_to_build.length = 0;
+  terrain.queued_to_destroy.clear();
+  pendingIndex.clear();
+  pendingSet.clear();
+  blockerIndex.clear();
+  coverIndex.clear();
+  queueDirty = false;
+  cachedDesired = null;
+  desiredAtX = Infinity;
+  desiredAtZ = Infinity;
+  terrainDirty = true;
+  lastSortX = Infinity;
+  lastSortZ = Infinity;
+  swappableKeys.clear();
+  cancelledKeys.clear();
+  pruneKeys.length = 0;
 };
 
 const buildChunkInWorker = (
@@ -416,8 +454,8 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
 };
 
 /** The terrain chunk system (LOD quadtree, build loop, colliders).
- *  Mounted by <World> once the world tree has committed — world/biome data
- *  and the worker config come from the registry. */
+ *  Mounted by <Domain> once the domain tree has committed — region/biome data
+ *  and the worker config come from the active-domain accessors. */
 export const TerrainRenderer = () => {
   const { camera, scene } = useThree();
   const [gameLoaded, setGameLoaded] = useState(false);

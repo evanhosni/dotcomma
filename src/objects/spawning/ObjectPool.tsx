@@ -3,7 +3,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
-import { getActiveRegions, getActiveWorldConfig } from "../../world/registry";
+import { getActiveRegions, getActiveDomainConfig } from "../../world/domains/utils";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -138,7 +138,7 @@ export const ObjectPool = () => {
   const { terrain_loaded, progress, terrainHighLODPending } = useGameContext();
 
   // Collect all spawn descriptors from the active world (registered by
-  // <Actor> components; mounted by <World> after the first commit)
+  // <Actor> components; mounted by <Domain> after the first commit)
   const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
 
   // Build descriptor lookup map
@@ -170,7 +170,7 @@ export const ObjectPool = () => {
 
   // Initialize spawn worker
   useEffect(() => {
-    const config = getActiveWorldConfig();
+    const config = getActiveDomainConfig();
     initSpawnWorker(config, maxFootprint).then(() => {
       workerReadyRef.current = true;
     });

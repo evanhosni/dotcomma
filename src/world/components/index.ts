@@ -1,4 +1,4 @@
-export { World } from "./World";
+export { Domain } from "./Domain";
 export { Region } from "./Region";
 export type { RegionProps } from "./Region";
 export { Biome } from "./Biome";
@@ -7,8 +7,8 @@ export { Terrain } from "./Terrain";
 export type { TerrainConfigProps } from "./Terrain";
 export { Material } from "./Material";
 export type { MaterialConfigProps } from "./Material";
-export { Skybox, SkyboxSystem, SKYBOX_DEFAULTS } from "./Skybox";
-export type { SkyboxProps } from "./Skybox";
+export { Skybox, SkyboxSystem, SKYBOX_DEFAULTS } from "../sky/Skybox";
+export type { SkyboxProps } from "../sky/Skybox";
 export { Actor, Actors, createActor } from "./Actor";
 export type { ActorRegistrationProps, ActorsProps } from "./Actor";
-export { BiomeContext, RegionContext, WorldDataContext } from "./context";
+export { BiomeContext, RegionContext, DomainDataContext } from "./context";
