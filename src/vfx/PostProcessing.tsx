@@ -9,7 +9,7 @@ interface PostProcessingProps {
   quantization?: number;
   /** Cap on PRESENTED frames (main camera only). The rAF loop — physics,
    *  state machines, everything dt-based — keeps running at display rate;
-   *  only the final gl.render (and the portal RTs feeding it) skip. A steady
+   *  only the final gl.render skips. A steady
    *  60 reads smoother than a fluctuating 100. Unset/0 = uncapped. */
   fpsCap?: number;
 }

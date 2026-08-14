@@ -6,7 +6,7 @@
  * the same public API surface to ObjectPool.
  */
 
-import { WorldConfig } from "../../workers/vertexCompute";
+import { DomainConfig } from "../../utils/workers/vertexCompute";
 import { ActorDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
@@ -40,11 +40,12 @@ const handleMessage = (e: MessageEvent) => {
  * Must be called before generateSpawnPoints.
  */
 export const initSpawnWorker = (
-  config: WorldConfig,
+  config: DomainConfig,
   maxFootprint: number
 ): Promise<void> => {
+  worker?.terminate(); // ObjectPool remounts on world switch — never leak the old worker
   worker = new Worker(
-    new URL("../../workers/spawn.worker.ts", import.meta.url),
+    new URL("../../utils/workers/spawn.worker.ts", import.meta.url),
     { type: "module" }
   );
 
@@ -124,6 +125,17 @@ export interface SpawnChunkBucket {
 }
 
 const clientChunkCache = new Map<string, SpawnChunkBucket>();
+
+/** Domain switch (resetDomainSystems): kill the worker and every cached point —
+ *  spawn points are world-config-dependent, and the next ObjectPool mount
+ *  re-inits via initSpawnWorker with the new committed config. */
+export const resetSpawnWorker = () => {
+  worker?.terminate();
+  worker = null;
+  workerReady = false;
+  pendingRequests.clear();
+  clientChunkCache.clear();
+};
 
 const newCachedChunk = (cx: number, cz: number): SpawnChunkBucket => ({
   centerX: (cx + 0.5) * SPAWN_CHUNK_SIZE,

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useLayoutEffect, useMemo } from "react";
 import { ActorDescriptor } from "../../objects/spawning/types";
-import { BiomeContext, useWorldStore } from "./context";
+import { BiomeContext, useDomainStore } from "./context";
 
 const ActorsContext = createContext<Partial<ActorDescriptor> | null>(null);
 
@@ -37,10 +37,10 @@ export type ActorRegistrationProps = ActorDescriptor;
  *
  * Renders nothing — the spawn system instantiates `component` at generated
  * spawn points. Mass stateless scenery should be DRESSING instead (see
- * src/dressing/) — instanced chunks, no per-object components.
+ * objects/dressing/) — instanced chunks, no per-object components.
  */
 export const Actor = (props: ActorRegistrationProps) => {
-  const store = useWorldStore("Actor");
+  const store = useDomainStore("Actor");
   const biome = useContext(BiomeContext);
   if (!biome) throw new Error("<Actor> must be mounted inside <Biome>");
   const inherited = useContext(ActorsContext);

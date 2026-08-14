@@ -1,8 +1,8 @@
 /**
  * Main-render FPS cap.
  *
- * Caps ONLY the presented frame — the explicit `gl.render` in SceneRender and
- * the portal render-to-texture passes that feed it. The rAF loop itself keeps
+ * Caps ONLY the presented frame — the explicit `gl.render` in SceneRender
+ * (and any render-to-texture pass feeding it). The rAF loop itself keeps
  * running at display rate, so every `useFrame` consumer (player physics, NPC
  * state machines, spawn batching, timers — all dt-based) is completely
  * unaffected; on a skipped frame the previous image simply stays on screen.
@@ -51,7 +51,7 @@ export const consumeMainRenderFrame = (): boolean => {
 };
 
 /** True when the current rAF tick will present a frame. Render-to-texture
- *  passes that only exist to feed the main render (portals) consult this so
+ *  passes that only exist to feed the main render should consult this so
  *  they don't burn GPU on frames nobody will see. Everything gameplay-rated
  *  (physics, animation timing) must NOT gate on it. */
 export const isMainRenderFrame = (): boolean => renderThisFrame;

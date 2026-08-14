@@ -3,7 +3,7 @@ import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiGetDistanceToWallParams, 
 
 // ONE worker: the only voronoi.create callers are Skybox.tsx and Overlay.tsx
 // (low-rate biome lookups). Terrain-side voronoi runs inlined inside the
-// terrain/spawn/grass workers (workers/vertexCompute.ts) — the old dedicated
+// terrain/spawn/grass workers (utils/workers/vertexCompute.ts) — the old dedicated
 // terrain worker and its CREATE_BULK batching path had no callers left and
 // were removed (a whole idle Worker was constructed at module import).
 export const voronoiWorker = new Worker(new URL("./voronoi.worker.ts", import.meta.url), {

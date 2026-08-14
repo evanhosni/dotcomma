@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../sky/dayNight";
-import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../sky/lampGlow";
+import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../lighting/dayNight";
+import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
 import { Biome } from "../../world/types";
 import commonShader from "../../world/shaders/common.glsl";
 

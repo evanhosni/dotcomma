@@ -1,7 +1,7 @@
 // ── Terrain Tuning Constants ─────────────────────────────────────────────────
 // Adjust these to tweak terrain quality, performance, and draw distance.
 
-/** World-space size of the base terrain chunk (width & depth). */
+/** Domain-space size of the base terrain chunk (width & depth). */
 export const CHUNK_SIZE = 420;
 
 /** Per-LOD chunk sizes (must be integer multiples of CHUNK_SIZE). */

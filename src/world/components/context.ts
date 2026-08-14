@@ -1,14 +1,13 @@
 import { createContext, useContext } from "react";
 import { ActorDescriptor } from "../../objects/spawning/types";
-import { WorldTerrainParams } from "../registry";
-import { BiomeNoiseConfig, MaterialData, RegionMaterialData } from "../types";
+import { BiomeNoiseConfig, MaterialData, RegionMaterialData, TerrainParams } from "../types";
 
 /**
- * Registration store backing the <World> component tree.
+ * Registration store backing the <Domain> component tree.
  *
  * Config components (<Region>, <Biome>, <Terrain>, <Material>, <Skybox>,
  * <Actor>) write into these maps from useLayoutEffect and call
- * invalidate(); <World> commits the assembled world after layout effects
+ * invalidate(); <Domain> commits the assembled world after layout effects
  * settle. Map insertion order follows JSX tree order, which preserves
  * region/biome ordering (voronoi assignment depends on it).
  */
@@ -42,13 +41,13 @@ export interface SkyboxSettings {
 }
 
 export interface SkyboxRecord extends SkyboxSettings {
-  scope: "world" | "region" | "biome";
+  scope: "domain" | "region" | "biome";
   scopeId?: number; // region or biome id for scoped skyboxes
 }
 
-export interface WorldStore {
-  worldTerrain: Partial<WorldTerrainParams> | null;
-  worldMaterial: { riverTexture?: string } | null;
+export interface DomainStore {
+  domainTerrain: Partial<TerrainParams> | null;
+  domainMaterial: { riverTexture?: string } | null;
   regions: Map<number, RegionRecord>;
   regionTerrain: Map<number, RegionTerrainConfig>;
   regionMaterials: Map<number, () => Promise<RegionMaterialData>>;
@@ -60,15 +59,15 @@ export interface WorldStore {
   biomeMaterials: Map<string, { biomeId: number; getMaterial: () => Promise<MaterialData> }>;
   /** key: `${regionId}/${biomeId}/${descriptorId}` */
   actors: Map<string, { biomeId: number; descriptor: ActorDescriptor }>;
-  /** key: `${scope}/${scopeId ?? "world"}` */
+  /** key: `${scope}/${scopeId ?? "domain"}` */
   skyboxes: Map<string, SkyboxRecord>;
-  /** Schedules a <World> re-commit. Safe to call from effects/cleanups. */
+  /** Schedules a <Domain> re-commit. Safe to call from effects/cleanups. */
   invalidate: () => void;
 }
 
-export const createWorldStore = (invalidate: () => void): WorldStore => ({
-  worldTerrain: null,
-  worldMaterial: null,
+export const createDomainStore = (invalidate: () => void): DomainStore => ({
+  domainTerrain: null,
+  domainMaterial: null,
   regions: new Map(),
   regionTerrain: new Map(),
   regionMaterials: new Map(),
@@ -80,17 +79,17 @@ export const createWorldStore = (invalidate: () => void): WorldStore => ({
   invalidate,
 });
 
-export const WorldStoreContext = createContext<WorldStore | null>(null);
+export const DomainStoreContext = createContext<DomainStore | null>(null);
 
 /** Bumped on every registration change; `ready` flips true after the first commit. */
-export const WorldDataContext = createContext<{ version: number; ready: boolean }>({ version: 0, ready: false });
+export const DomainDataContext = createContext<{ version: number; ready: boolean }>({ version: 0, ready: false });
 
 export const RegionContext = createContext<{ regionId: number } | null>(null);
 
 export const BiomeContext = createContext<{ biomeId: number; regionId: number } | null>(null);
 
-export const useWorldStore = (component: string): WorldStore => {
-  const store = useContext(WorldStoreContext);
-  if (!store) throw new Error(`<${component}> must be mounted inside <World>`);
+export const useDomainStore = (component: string): DomainStore => {
+  const store = useContext(DomainStoreContext);
+  if (!store) throw new Error(`<${component}> must be mounted inside <Domain>`);
   return store;
 };

@@ -1,51 +1,64 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { DevProvider } from "./context/DevContext";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
-import { DayNightLights } from "./sky/DayNightLights";
+import { DayNightLights } from "./lighting/DayNightLights";
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
-import { GlitchCityWorld } from "./world/GlitchCityWorld";
-import { HomeWorld } from "./world/HomeWorld";
+import { GlitchCityDomain } from "./world/domains/glitch-city/domain";
+import { HomeDomain } from "./world/domains/home/domain";
+import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
+import { resetDomainSystems } from "./world/domains/reset";
+import { DomainId } from "./world/domains/types";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
+// Back button/gesture = escape pod, plus the domain-switch listener this
+// component subscribes to below. URL paths are FAKE (pushState only) — see
+// world/domains/navigation.ts.
+initDomainNavigation();
+
 /**
- * One route per world. Navigation BETWEEN worlds is a full page load (the
- * in-world link uses window.location) — workers and the world registry are
- * initialized once per page load, so client-side world switches would leave
- * the terrain/spawn workers running on the previous world's config.
+ * ONE page, one canvas at a time — no real routes. The CRT monitor switches
+ * domains client-side (switchDomain pushes a fake URL path), and this
+ * component remounts the canvas in TWO PHASES: render null so the outgoing
+ * domain (GL context, physics, contexts, all effects) unmounts completely,
+ * then reset the module-level domain systems (workers, caches, active-domain
+ * accessors — resetDomainSystems), then mount the incoming domain on a clean
+ * slate. A full page load would do the same job, but it would put a REAL
+ * navigation entry in history — and the whole point of the fake paths is that
+ * every entry behind the player is same-document, so the back button can only
+ * ever fire popstate (the escape pod), never unload the game.
  */
 const Dotcomma = () => {
+  const [domain, setDomain] = useState<DomainId | null>(getCurrentDomain());
+
+  useEffect(() => onDomainChange(() => setDomain(null)), []);
+  useEffect(() => {
+    if (domain === null) {
+      resetDomainSystems();
+      setDomain(getCurrentDomain());
+    }
+  }, [domain]);
+
   return (
-    <BrowserRouter>
-      <DevProvider>
-        <DevOverlay />
-        <LogsOverlay />
-        <Routes>
-          <Route
-            path="/glitch-city"
-            element={
-              <CustomCanvas>
-                <DayNightLights />
-                <GlitchCityWorld />
-              </CustomCanvas>
-            }
-          />
-          <Route
-            path="*"
-            element={
-              // Home terrain is flat at height 0 — spawn standing at the origin
-              <CustomCanvas background="#000000" playerSpawn={[0, 0, 0]}>
-                <HomeWorld />
-              </CustomCanvas>
-            }
-          />
-        </Routes>
-      </DevProvider>
-    </BrowserRouter>
+    <DevProvider>
+      <DevOverlay />
+      <LogsOverlay />
+      {domain === "glitch-city" && (
+        <CustomCanvas>
+          <DayNightLights />
+          <GlitchCityDomain />
+        </CustomCanvas>
+      )}
+      {domain === "home" && (
+        // Home terrain is flat at height 0 — spawn standing at the origin
+        <CustomCanvas background="#000000" playerSpawn={[0, 0, 0]}>
+          <HomeDomain />
+        </CustomCanvas>
+      )}
+    </DevProvider>
   );
 };
 

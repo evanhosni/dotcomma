@@ -5,20 +5,20 @@ import { useDevMode } from "../context/DevContext";
 import { GameContextProvider } from "../context/GameContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
-import { PortalContextProvider } from "../portals/PortalContext";
-import { DayNightProvider } from "../sky/DayNightContext";
+import { DayNightProvider } from "../lighting/DayNightContext";
 import { initCursor } from "../utils/cursor/cursor";
 import { traceSpan } from "../utils/spikeTrace";
 import { consumeMainRenderFrame, isMainRenderFrame } from "../vfx/frameCap";
 
-/** Portal useFrame hooks use non-zero priorities (-1, 1), which disables R3F's
- *  auto-rendering. This component replaces it with an explicit render at the end.
+/** Several useFrame hooks use non-zero priorities (frame-cap decision at -10,
+ *  Player at -3), which disables R3F's auto-rendering. This component replaces
+ *  it with an explicit render at the end.
  *
  *  FPS cap (set via <PostProcessing fpsCap>): the whole rAF loop still runs —
  *  physics, state machines, and every dt-based useFrame are untouched — but
  *  gl.render is skipped on off-cadence ticks (the previous frame stays on
  *  screen). The decision is made ONCE per tick at priority -10, BEFORE the
- *  portal RT passes (0.9 / 1) so they can skip frames nobody will see. */
+ *  rest of the frame's hooks. */
 const SceneRender = () => {
   const { gl, scene, camera } = useThree();
   useEffect(() => {
@@ -73,16 +73,7 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
   );
 };
 
-/** PreCustomCanvas needs PortalContext, so wrap it */
-const PreCustomCanvasWithPortal = ({ background, playerSpawn, children }: CustomCanvasProps) => (
-  <PortalContextProvider>
-    <PreCustomCanvas background={background} playerSpawn={playerSpawn}>
-      {children}
-    </PreCustomCanvas>
-  </PortalContextProvider>
-);
-
-/** The game canvas. The active world (<GlitchCityWorld/>, <HomeWorld/>) is
+/** The game canvas. The active world (<GlitchCityDomain/>, <HomeDomain/>) is
  *  passed as children by the route in index.tsx. */
 export const CustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
   const defaultCanvasProps = {
@@ -95,9 +86,9 @@ export const CustomCanvas = ({ background = "#555555", playerSpawn, children }: 
     <Canvas {...mergedCanvasProps}>
       <GameContextProvider>
         <DayNightProvider>
-          <PreCustomCanvasWithPortal background={background} playerSpawn={playerSpawn}>
+          <PreCustomCanvas background={background} playerSpawn={playerSpawn}>
             {children}
-          </PreCustomCanvasWithPortal>
+          </PreCustomCanvas>
         </DayNightProvider>
       </GameContextProvider>
     </Canvas>
