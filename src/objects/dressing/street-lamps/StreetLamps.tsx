@@ -3,20 +3,23 @@ import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import { useRef, useState } from "react";
 import * as THREE from "three";
 import {
-  activeLampHeads,
-  clearLampGridIfEmpty,
-  driveLampLighting,
   getLampPostGeometry,
   LAMP_ARM_X,
   LAMP_COLLIDER_DISTANCE,
-  LAMP_EMISSIVE_STRENGTH,
   LAMP_POLE_HEIGHT,
   LAMP_POST_MATERIAL,
   lampYaw,
   patchLampMask,
-} from "../../actors/street-lamp/StreetLamp";
+} from "./lampGeometry";
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
-import { LAMP_COLOR_WARM, markLampGridDirty } from "../../../lighting/lampGlow";
+import {
+  activeLampHeads,
+  clearLampGridIfEmpty,
+  driveLampLighting,
+  LAMP_COLOR_WARM,
+  LAMP_EMISSIVE_STRENGTH,
+  markLampGridDirty,
+} from "../../../lighting/lampGlow";
 import {
   instancedFromPoints,
   useChunkRegistry,
@@ -47,11 +50,12 @@ export interface StreetLampsProps extends GameObjectAttributes, DensityPlacement
 }
 
 /**
- * DRESSING: instanced street lights — the city's lamp path (the per-object
- * street-lamp ACTOR in objects/actors/street-lamp remains for other uses; its
- * geometry/material/lighting exports are shared here so both look
- * identical). One InstancedMesh per chunk sharing ONE aLampMask-patched
- * material. Keeps everything that matters:
+ * DRESSING: instanced street lights — the ONLY lamp path (a per-object lamp
+ * ACTOR existed alongside this and was removed: a lamp is mass, identical,
+ * stateless scenery, which is the definition of dressing, and the duplicate
+ * meant every piece of shared object logic had to be applied twice). One
+ * InstancedMesh per chunk sharing ONE aLampMask-patched material. It keeps
+ * everything that matters:
  *   - lamp-grid lighting: every mounted lamp's head registers in
  *     activeLampHeads, so terrain/buildings still receive its glow;
  *   - night emissive ramp: material intensity driven once per frame (all

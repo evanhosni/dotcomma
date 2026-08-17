@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import * as THREE from "three";
-import { GameObject } from "../../GameObject";
+import { GameObject } from "../GameObject";
 import { ActorProps } from "../../spawning/types";
 
 export const XLElement = (props: ActorProps) => {

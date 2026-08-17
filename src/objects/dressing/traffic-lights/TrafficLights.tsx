@@ -6,8 +6,6 @@ import {
   activeLampHeads,
   clearLampGridIfEmpty,
   driveLampLighting,
-} from "../../actors/street-lamp/StreetLamp";
-import {
   LAMP_COLOR_GREEN,
   LAMP_COLOR_RED,
   LAMP_COLOR_YELLOW,

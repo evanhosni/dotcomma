@@ -1,7 +1,6 @@
 import * as THREE from "three";
-import { patchStandardMaterialLampGlow } from "../lighting/lampGlow";
-import { _quantization } from "../utils/quantization/quantization";
-import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
+import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { prepareActorMaterial } from "./Actor";
 
 /**
  * Pool of prepared GLTF model clones, keyed by (model url | quantization
@@ -273,12 +272,13 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
           mat.opacity = 0;
           (mat as any).fog = false;
 
-          if (!child.userData?.skipQuantization) {
-            _quantization.patchMaterial(mat, quantization);
-          }
-          // Street-lamp glow — NPCs/objects near a lamp brighten like the
-          // terrain and buildings do (grid lookup, no real lights)
-          patchStandardMaterialLampGlow(mat);
+          // ALL shared actor material logic in one call — quantization, lamp
+          // glow, world curvature (see actors/Actor.tsx). A new world-wide
+          // effect is added there, never here.
+          prepareActorMaterial(mat, {
+            quantization,
+            skipQuantization: child.userData?.skipQuantization,
+          });
         });
 
         mesh.frustumCulled = true;

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { getWindowLightsProgress } from "./dayNight";
 
 /**
  * Street-lamp glow channel — "poor man's point lights" for the shaders we
@@ -125,6 +126,49 @@ export const updateLampGrid = (heads: Iterable<LampHead>, cameraX: number, camer
 
 export const setLampGlowIntensity = (value: number): void => {
   LAMP_GRID_UNIFORMS.uLampGlowIntensity.value = value;
+};
+
+// ── Glow-source registry + driver ───────────────────────────────────────────
+// Lives here, with the grid it feeds, rather than inside any one game object:
+// street lamps (dressing) and traffic signals (dressing) both register heads,
+// and a future actor could too. Nothing that registers a head should have to
+// own the machinery that renders it.
+
+/** Domain-space glow sources of every mounted light — street-lamp heads and
+ *  traffic-signal lamps (which mutate their head's `color` as they switch). */
+export const activeLampHeads = new Map<string, LampHead>();
+
+/** Lamp glow at full night — windows sit around 1.4, street lights burn much
+ *  brighter. Scales a lamp material's emissiveIntensity. */
+export const LAMP_EMISSIVE_STRENGTH = 12;
+
+/** Last head gone → nobody drives the grid anymore; clear it (and the shader
+ *  early-out) so no ghost light pools linger on the terrain. */
+export const clearLampGridIfEmpty = (): void => {
+  if (activeLampHeads.size === 0) {
+    updateLampGrid([], 0, 0);
+    setLampGlowIntensity(0);
+  }
+};
+
+const GRID_UPDATE_INTERVAL = 20; // frames between grid rewrites
+
+// The FIRST caller each frame does the global work (same module-level time
+// guard as the terrain/building shared-uniform writes), so no separate system
+// component has to be mounted for the lighting to run.
+let lampDriveTime = -1;
+let lampDriveFrame = 0;
+
+/** Drive the global glow channel: the dusk/dawn intensity ramp every frame,
+ *  a grid rewrite every GRID_UPDATE_INTERVAL frames. Safe (and free) to call
+ *  from every feature that owns glow sources — it self-dedupes on frame time. */
+export const driveLampLighting = (camera: THREE.Camera, time: number): void => {
+  if (time === lampDriveTime) return;
+  lampDriveTime = time;
+  setLampGlowIntensity(getWindowLightsProgress());
+  if (lampDriveFrame++ % GRID_UPDATE_INTERVAL === 0) {
+    updateLampGrid(activeLampHeads.values(), camera.position.x, camera.position.z);
+  }
 };
 
 /** Uniform declarations for shaders that inject lampGlowAccumGLSL manually

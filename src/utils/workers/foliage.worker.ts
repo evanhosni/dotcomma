@@ -8,20 +8,20 @@
  *
  * Messages:
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "GENERATE_GRASS", id: number, chunkX: number, chunkZ: number, params: GrassChunkParams }
+ *   IN:  { type: "GENERATE_FOLIAGE", id: number, chunkX: number, chunkZ: number, params: FoliageChunkParams }
  *   OUT: { type: "INIT_DONE" }
- *   OUT: { type: "GRASS_RESULT", id, count, minY, maxY, offsets: Float32Array, bladeData: Float32Array }
+ *   OUT: { type: "FOLIAGE_RESULT", id, count, minY, maxY, offsets: Float32Array, instanceData: Float32Array }
  */
 
 import { DomainConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
 
 const GRID_STEP = 2; // world units between terrain samples
-const MAX_BLADES_PER_CHUNK = 16384;
-const BLADE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
+const MAX_INSTANCES_PER_CHUNK = 16384;
+const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
 
-// ── Inline params type (mirrors GrassChunkParams in foliage/grass/grassWorker.ts) ──
+// ── Inline params type (mirrors FoliageChunkParams in foliage/grass/grassWorker.ts) ──
 
-interface GrassChunkParams {
+interface FoliageChunkParams {
   seed: string;
   chunkSize: number;
   density: number; // blades per 1,000,000 sq units
@@ -52,10 +52,10 @@ const EMPTY_RESULT = () => ({
   minY: 0,
   maxY: 0,
   offsets: new Float32Array(0),
-  bladeData: new Float32Array(0),
+  instanceData: new Float32Array(0),
 });
 
-const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams) => {
+const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParams) => {
   const size = params.chunkSize;
   const minX = chunkX * size;
   const minZ = chunkZ * size;
@@ -116,11 +116,11 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
   };
 
   // ── Blade placement ──
-  const count = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_BLADES_PER_CHUNK);
+  const count = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
   const rand = mulberry32(Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31));
 
   const offsets = new Float32Array(count * 3);
-  const bladeData = new Float32Array(count * 3); // phase, scale, tint
+  const instanceData = new Float32Array(count * 3); // phase, scale, tint
   let placed = 0;
   let minY = Infinity;
   let maxY = -Infinity;
@@ -158,13 +158,13 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
       }
     }
 
-    const y = height - BLADE_SINK;
+    const y = height - INSTANCE_SINK;
     offsets[placed * 3] = x;
     offsets[placed * 3 + 1] = y;
     offsets[placed * 3 + 2] = z;
-    bladeData[placed * 3] = phase;
-    bladeData[placed * 3 + 1] = scale;
-    bladeData[placed * 3 + 2] = tint;
+    instanceData[placed * 3] = phase;
+    instanceData[placed * 3 + 1] = scale;
+    instanceData[placed * 3 + 2] = tint;
     placed++;
     if (y < minY) minY = y;
     if (y > maxY) maxY = y;
@@ -181,7 +181,7 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
   const fadeKey = new Float32Array(placed);
   for (let i = 0; i < placed; i++) {
     order[i] = i;
-    const v = bladeData[i * 3] * 1.618 + bladeData[i * 3 + 2] * 12.9898;
+    const v = instanceData[i * 3] * 1.618 + instanceData[i * 3 + 2] * 12.9898;
     fadeKey[i] = v - Math.floor(v);
   }
   order.sort((a, b) => fadeKey[b] - fadeKey[a]);
@@ -192,9 +192,9 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
     outOffsets[k * 3] = offsets[i * 3];
     outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
     outOffsets[k * 3 + 2] = offsets[i * 3 + 2];
-    outBladeData[k * 3] = bladeData[i * 3];
-    outBladeData[k * 3 + 1] = bladeData[i * 3 + 1];
-    outBladeData[k * 3 + 2] = bladeData[i * 3 + 2];
+    outBladeData[k * 3] = instanceData[i * 3];
+    outBladeData[k * 3 + 1] = instanceData[i * 3 + 1];
+    outBladeData[k * 3 + 2] = instanceData[i * 3 + 2];
   }
 
   return {
@@ -202,7 +202,7 @@ const generateChunk = (chunkX: number, chunkZ: number, params: GrassChunkParams)
     minY: placed > 0 ? minY : 0,
     maxY: placed > 0 ? maxY : 0,
     offsets: outOffsets,
-    bladeData: outBladeData,
+    instanceData: outBladeData,
   };
 };
 
@@ -218,25 +218,25 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  if (type === "GENERATE_GRASS") {
+  if (type === "GENERATE_FOLIAGE") {
     const { id, chunkX, chunkZ, params } = e.data;
     if (!initialized) {
       (self as any).postMessage({
-        type: "GRASS_RESULT",
+        type: "FOLIAGE_RESULT",
         id,
         count: 0,
         minY: 0,
         maxY: 0,
         offsets: new Float32Array(0),
-        bladeData: new Float32Array(0),
+        instanceData: new Float32Array(0),
       });
       return;
     }
 
     const result = generateChunk(chunkX, chunkZ, params);
-    (self as any).postMessage({ type: "GRASS_RESULT", id, ...result }, [
+    (self as any).postMessage({ type: "FOLIAGE_RESULT", id, ...result }, [
       result.offsets.buffer,
-      result.bladeData.buffer,
+      result.instanceData.buffer,
     ]);
     return;
   }

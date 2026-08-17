@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { _curvature } from "../../vfx/curvature";
 import { GameObjectAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
 
@@ -68,11 +69,37 @@ export const useDressingRenderDistance = (
 
 // ── Shared assets ──
 
-/** Create geometries/materials once and dispose them on unmount. */
+/**
+ * ALL shared material logic for the dressing class. A feature creates its
+ * materials however it likes; every one of them passes through here, so a new
+ * dressing feature cannot forget a world-wide effect (and none of them has to
+ * know one exists).
+ *
+ *  - WORLD CURVATURE (vfx/curvature.ts): instanced scenery sinks with the
+ *    ground it stands on. Without it, lamps and markers float over a curved
+ *    horizon.
+ *
+ * Quantization is deliberately NOT applied: dressing renders instanced, and
+ * the quantization patch's instanced branch works in absolute space (see
+ * utils/quantization) — no instanced material is quantized today.
+ */
+export const prepareDressingMaterial = (material: THREE.Material): void => {
+  _curvature.patchMaterial(material);
+};
+
+/** Create geometries/materials once, prepare every material through
+ *  prepareDressingMaterial, and dispose them all on unmount. */
 export const useDressingAssets = <T extends Record<string, { dispose: () => void }>>(
   create: () => T
 ): T => {
-  const assets = useMemo(create, []);
+  const assets = useMemo(() => {
+    const created = create();
+    for (const key of Object.keys(created)) {
+      const asset = created[key] as unknown as THREE.Material;
+      if (asset?.isMaterial) prepareDressingMaterial(asset);
+    }
+    return created;
+  }, []);
   useEffect(
     () => () => {
       for (const key of Object.keys(assets)) assets[key].dispose();

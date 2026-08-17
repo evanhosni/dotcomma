@@ -33,6 +33,10 @@ export const GlitchCityDomain = React.memo(() => (
         the PRESENTED frame — the rAF loop (physics, AI, spawning, all
         dt-based) keeps running at display rate. A steady capped 60 with
         headroom reads smoother than a fluctuating 100. */}
+    {/* curvature = the illusory planet radius: past curvatureStart units
+        everything sinks by (d - start)² / (2 × radius), so the world falls
+        away behind a curved horizon (vfx/curvature.ts). Visual only —
+        the player still walks a flat plane. */}
     <PostProcessing quantization={0.025} />
 
     <CityRegion />
