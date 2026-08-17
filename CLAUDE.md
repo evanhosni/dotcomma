@@ -55,7 +55,17 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 
 **The hierarchy is also the FOLDER hierarchy** (`src/world/domains/<domain>/regions/<region>/biomes/<biome>/`): everything specific to a biome lives in that biome's folder, everything specific to a region in its region folder, everything specific to a domain in its domain folder (e.g. `CityLights` lives in the city biome's folder because only the city mounts it). Only genuinely shared/global code lives above the domains.
 
-**The three game-object classes** (`src/objects/` — all extend the shared base attributes in `src/objects/types.ts`: renderDistance, quantization, placement filters `biomeIds`/`heightRange`/`slopeRange`/`roadDistanceRange`, density/footprint): **ACTORS** are objects with their own identity, state, or interaction — creatures, buildings — each mounted as its own React component through the spawn lifecycle (`ObjectPool`); their `ActorDescriptor` extends the base. **DRESSING** is mass stateless identical scenery — street lamps, road markers, traffic lights, power lines — rendered as InstancedMeshes per 256u chunk with zero per-object components. **FOLIAGE** is vegetation at another order of magnitude — up to ~16k instances per 32u chunk, placement streamed as Float32Arrays straight into GPU instance attributes, animation (billboarding/sway) in the vertex shader (`src/objects/foliage/`). All three get off-thread deterministic placement (spawn.worker / cityDressing.worker / grass.worker). The `<Dressing>`/`<Foliage>` group components share one defaults-group factory (`src/objects/utils.tsx`); `<GameObject>` (`src/objects/GameObject.tsx`) is the shared per-object base component every GLTF actor renders through (fades, frustum culling, colliders, animation LOD, quantization, GPU warm-up). Rule of thumb: unique geometry, interaction, or behavior → actor; many + identical + stateless → dressing; thousands-per-chunk vegetation → foliage.
+**The three game-object classes** (`src/objects/` — all extend the shared base attributes in `src/objects/types.ts`: renderDistance, quantization, placement filters `biomeIds`/`heightRange`/`slopeRange`/`roadDistanceRange`, density/footprint): **ACTORS** are objects with their own identity, state, or interaction — creatures, buildings — each mounted as its own React component through the spawn lifecycle (`ObjectPool`); their `ActorDescriptor` extends the base. **DRESSING** is mass stateless identical scenery — street lamps, road markers, traffic lights, power lines — rendered as InstancedMeshes per 256u chunk with zero per-object components. **FOLIAGE** is vegetation at another order of magnitude — up to ~16k instances per 32u chunk, placement streamed as Float32Arrays straight into GPU instance attributes, animation (billboarding/sway) in the vertex shader. All three get off-thread deterministic placement (spawn.worker / cityDressing.worker / foliage.worker).
+
+**EVERY game object is built on its class's BASE, and each base owns ALL logic its members share** — this is structural, not stylistic: a world-wide effect (world curvature, vertex quantization, lamp glow, the shared frame driver, GPU warm-up) is implemented ONCE per base and inherited by belonging to the class. An object that hand-rolls what its base does will silently miss the next one (this is exactly what happened before the bases were consolidated: adding curvature needed six separate patch sites).
+
+| class | base | what the base owns | a member is |
+|---|---|---|---|
+| ACTOR | `objects/actors/Actor.tsx` | `useActorLifecycle` (ONE shared frame driver, the single 2D squared distance, fade + hard-kill despawn, frustum visibility + warm-up, distance-gated colliders with hysteresis and a global activation throttle, a "near" gate for dynamic content, matrix freezing) and `prepareActorMaterial` (quantization + lamp glow + curvature) | `<GameObject>` (`actors/GameObject.tsx`, the standard GLTF actor: pooled clone, its colliders, animation LOD) — or, for actors that own their geometry and render shape, `useActorLifecycle` directly (`Building`) |
+| DRESSING | `objects/dressing/Dressing.tsx` | `useDressingChunks` (camera-following 256u chunk lifecycle on one budgeted queue), `useDressingAssets` + `prepareDressingMaterial` (creation, curvature, disposal), `instancedFromPoints` / `finalizeInstancedChunk` (assembly + far-from-origin rebase + culling bounds + warm-up), `useChunkRegistry` | a component with ONLY its own placement query, geometry/materials, and optional animation (`StreetLamps`, `RoadMarkers`, `TrafficLights`, `PowerLines`) |
+| FOLIAGE | `objects/foliage/Foliage.tsx` | the ENTIRE pipeline — chunk lifecycle, worker streaming, the instanced billboard mesh, the shader (billboarding, sway, per-instance fade, quantization, curvature, night dim), the distance LOD, disposal | `createFoliage({…})` with a plant's art + defaults; every knob stays overridable at the mount (`grass/GrassField.tsx` is ~60 lines) |
+
+Rule of thumb: unique geometry, interaction, or behavior → actor; many + identical + stateless → dressing; thousands-per-chunk vegetation → foliage. Both `<Dressing>`/`<Foliage>` group components come from one defaults-group factory (`src/objects/utils.tsx`).
 
 **Domains share ONE page** (no router — URL paths are FAKE, `pushState` only; `src/world/domains/navigation.ts`): `src/index.tsx` renders one `<CustomCanvas>` for the active domain — `GlitchCityDomain` (`src/world/domains/glitch-city/domain.tsx`, path `/glitch-city`) is the main game domain; `HomeDomain` (`src/world/domains/home/domain.tsx`, path `/`, catch-all) is the landing page: it passes `terrain={false}` to `<Domain>` — the streaming chunk terrain system is SKIPPED (overkill for a perfectly flat world) and the ground is `HomeGround` (`domains/home/regions/home/HomeGround.tsx`): ONE static black fill plane + a lit white-wireframe grid plane (MeshStandardMaterial, grid spacing 4.375u = the old LOD1 chunk density) that follows the camera snapped to the grid, + one flat cuboid collider. HomeGround sets `terrain_loaded`/`progress` itself (the Player is gated on them, normally set by TerrainRenderer). The region/flat-noise config still COMMITS (zeroed base/road noise, `home` region, height-less `wire` biome) so the analytic height pipeline — Player backstop/respawn via `getVertexData` — keeps reading height 0; don't remove `<Terrain>`/`<HomeRegion>` when touching this domain. The scene has ZERO ambient light, so the grid renders pure black until `CrtMonitor` (`domains/home/regions/home/CrtMonitor.tsx`) — a HUGE 4:3 CRT at [0,2.2,-36], the domain selector — powers on ~1s after the player first clicks in (pointer lock; classic line-expand turn-on, eased fade). Its green screen-glow point light is PARKED at intensity 0 from mount (fixed NUM_POINT_LIGHTS — a light appearing later would recompile the lit shaders at the frame of entry, the nightfall-hitch class). The screen shows 7 domain PAGES (mouse wheel scrolls, cooldown-gated one page per flick; `DOMAINS` array at the top of the file): page 1 is /glitch-city with a preview thumbnail, pages 2–7 are locked "???" — unlock by giving an entry a label+href. Clicking the screen while a settled unlocked page shows (screen-center raycast + cursor grow, interact reach 14 — bigger than doors, the screen is huge) loads that domain. Page text is a canvas atlas (one 4:3 row per page, Kode Mono, redrawn on fonts.ready) with dark-outlined text composited over the thumbnail; the thumbnail is a HAND-BUILT mini diorama (`domainDiorama.ts` next to it — grass hills | city blocks+roads | desert dunes cross-section, sine-bump heights and hand-picked biome colors, NONE of the real generation pipeline) baked ONCE into a 64px nearest-filtered render target; the screen shader adds barrel curvature, scanlines, a rolling band, flicker, and vignette. Otherwise empty except for the floating `HomeTitle` text and `ClickToEnter` — an HTML full-page gate (not an in-world object): a transparent backdrop that swallows every click (drei's PointerLockControls listens on DOCUMENT, so the backdrop must stopPropagation, not just cover the canvas) until the "- click to enter -" text is clicked, which dispatches a synthetic document click so drei's own handler locks the element the controls are actually connected to (`events.connected` — requesting lock on any element we pick ourselves engages the browser lock while mouse-look stays dead). **Navigation between domains is CLIENT-SIDE** (`switchDomain` in `src/world/domains/navigation.ts`, called by the CRT click): it pushes a fake URL path and index.tsx remounts the canvas in TWO PHASES — render null (old domain unmounts fully), `resetDomainSystems()` (`src/world/domains/reset.ts` terminates the terrain/spawn/grass/dressing workers + clears their client caches + module chunk state + unpublishes the active domain so `whenDomainReady()` blocks until the next commit), then mount the new domain (pointer lock is CARRIED ACROSS: the canvas teardown force-releases it, so the incoming Player calls `relockPointerAfterSwitch` on mount with its own drei `controls.lock` — retried briefly, legal under the CRT click's ~5s transient activation; a synthetic document click was tried and REJECTED: it also reaches the outgoing canvas's still-attached controls handler, whose detached element makes requestPointerLock throw). Real navigation was DELIBERATELY removed: pushState-only history means every entry behind the player is same-document, so the browser BACK button/gesture can only ever fire `popstate` — `navigation.ts` restores the URL and fires `ESCAPE_POD_EVENT` (back = in-game escape pod, it can never unload the game; a sentinel entry is also pushed on first pointer lock because Chrome's history intervention skips gesture-less entries). Refresh really reloads and boots whatever fake path is in the URL. (A refresh-key → rescue-respawn intercept existed briefly and was removed by preference; F5/Ctrl+R ARE cancelable on keydown if ever wanted again — unlike Ctrl+W, which is browser-reserved and uninterceptable outside fullscreen keyboard lock.)
 
@@ -65,7 +75,7 @@ Each domain's config components (`Domain`, `Region`, `Biome`, `Terrain`, `Materi
 
 Voronoi diagrams assign regions/biomes to world coordinates. Terrain blends at biome boundaries using distance-to-wall calculations.
 
-**Heights have a single source of truth**: `src/utils/workers/vertexCompute.ts` is the ONLY height implementation. The terrain, spawn, and grass workers run it off-thread; the main thread (`src/world/terrain/vertexData.ts`, used by Player respawn) imports and runs the SAME module, initialized with the same serialized `DomainConfig` from the active domain. Biome heights are defined declaratively via the biome-level `<Terrain noise={…}>` config; biomes with bespoke height logic (city — block plateaus riding the regional base noise) have their branch inside `vertexCompute.ts`. Never add a second height code path.
+**Heights have a single source of truth**: `src/utils/workers/vertexCompute.ts` is the ONLY height implementation. The terrain, spawn, foliage and dressing workers run it off-thread; the main thread (`src/world/terrain/vertexData.ts`, used by Player respawn) imports and runs the SAME module, initialized with the same serialized `DomainConfig` from the active domain. Biome heights are defined declaratively via the biome-level `<Terrain noise={…}>` config; biomes with bespoke height logic (city — block plateaus riding the regional base noise) have their branch inside `vertexCompute.ts`. Never add a second height code path.
 
 **Flatten-ground pads** (`flattenGround: true` on an ActorDescriptor — buildings, future houses, ANY biome): the terrain flattens a PAD under every instance — flat at the actor's raw ground height inside `flattenRadius` (default footprint × 0.45), blending back over `flattenSkirt` (default footprint × 0.35). The chicken-and-egg (spawn points come from terrain height; terrain depends on spawn points) is resolved by making these actors' placement FULLY DETERMINISTIC: the flatten engine in `vertexCompute.ts` rolls the exact spawn.worker density seeds/filters per canonical 128u tile with ITERATED LOCAL spacing (Matérn-II rounds: reject on any earlier-ordered POOL member within own footprint, then let rejected-but-viable candidates re-enter against the actual winners for FLATTEN_SPACING_ROUNDS rounds — a single round was tried and REJECTED: it saturates at ~45% of greedy packing and visibly thinned the city; plain greedy-vs-accepted was also REJECTED: acceptance chains cross tile windows and tiles disagreed. Round-k locality = k×footprint, covered by the spacing window pad), and BOTH the height function (`applyFlattenPads`) and spawn.worker (`getFlattenPoints`) consume that one function, so every instance sits exactly on a pad. Pad candidates evaluate filters against the RAW pad-free height (`computingFlatten` guard; `computeVertexDataRaw` for sparse scans/tests — a coarse scan through the padded path computes a pad tile per lonely sample), and pads only activate in biomes some flatten descriptor targets. Set `biomeIds`/`density` etc. per mount as usual — see the grass biome's `grass-building` (distinct id: descriptors dedupe by id, and "building" belongs to the city). PERFORMANCE (each pad candidate costs one raw height evaluation, per worker): (1) far VISUAL-ONLY terrain LODs skip pads entirely (`skipPads = !lod.hasCollider` — a LOD5 chunk spans ~256 pad tiles and builds exploded ~9×, stalling terrain and therefore spawning; collider LODs keep pads so physics matches); (2) the player's frequent ground checks use `getVertexDataRaw` as a cheap PRE-FILTER only, and the padded CONFIRM runs in the dressing worker (`getVertexSample`, re-exported from `world/terrain/vertexData.ts`) — a padded lookup that misses its flatten tile costs ~30–70ms, which the worker absorbs instead of the frame; one-off callers like respawn keep the main-thread padded path. Raw height is NOT a lower bound on the real surface: pads EXCAVATE as well as fill (the height lerps toward the actor's ground height), so uphill of a building on a slope the true ground sits BELOW raw — measured up to 8.3u, past the backstop's 2u tolerance on 6% of pads. Any below-surface test must CONFIRM with the padded height before acting (`resolveEmbeddedSurface` in Player.tsx); trusting raw alone made the fall-through backstop teleport the player out of a building's excavation every 3 frames, an infinite bounce when sliding into a building on a slope; (3) candidates are cached per cell across tiles (overlapping tile windows re-evaluated boundary cells ~2.2×); (4) overlapping pad influences apply in ascending mask order so the dominant pad keeps its flat zone exact even when a dense neighbor's skirt reaches in.
 
@@ -82,17 +92,6 @@ src/
                        #   PlacementFilters, DensityPlacement) defined here
     utils.tsx          # createDefaultsGroup — the shared group-defaults factory behind
                        #   <Dressing>/<Foliage> (a group's props = defaults for children)
-    GameObject.tsx     # Shared per-object base component (GLTF model loader): fades,
-                       #   frustum culling, collider creation/gating, animation LOD,
-                       #   quantization, GPU warm-up. Every GLTF actor renders through it.
-                       #   Per-frame work runs through ONE shared driver
-                       #   (driveGameObjectFrames, subscribed by ObjectPool) — instances
-                       #   register latest-closure refs, NOT their own useFrame
-    modelClonePool.ts  # Pool of prepared GLTF clones keyed by (model | quantization):
-                       #   despawn/respawn churn reuses parked clones (patched materials,
-                       #   mixer, measured bounds) instead of re-running the clone
-                       #   pipeline; bounded per key, evictions dispose; deferred
-                       #   cancellable release (StrictMode-safe); survives domain switches
     spawning/          # ACTOR spawn lifecycle: ObjectPool.tsx (mount/unmount + radii),
                        #   generateSpawnPoints.ts (spawn.worker client + caches),
                        #   collectDescriptors.ts, types.ts (ActorDescriptor/ActorProps —
@@ -102,41 +101,41 @@ src/
     colliders/         # Physics collider components + collider.worker.ts (geometry →
                        #   collider transform; co-located with its client)
     state/             # State machine, mouse events, triggers for interactive objects
-    actors/            # ACTOR class implementations — kept OUTSIDE biome folders because
-      beeble/          #   one actor may exist in multiple biomes. Each folder has the
-      big-beeble/      #   object component (+ optional stateMachine.ts) and actor.tsx:
-      xl-element/      #   an ActorDescriptor + `export const XxxActor =
-      xxl-element/     #   createActor(XxxDescriptor)` (props at the mount site are
-      apartment/       #   overrides). Variants EXTEND a base descriptor by spreading it
+    actors/            # ACTOR class. Actor.tsx is THE BASE — everything every actor
+      Actor.tsx        #   shares: useActorLifecycle (ONE shared frame driver for all
+                       #   mounted actors — driveActorFrames, subscribed by ObjectPool,
+                       #   instances register latest-closure refs, NOT their own
+                       #   useFrame; the single 2D squared distance; fade + hard-kill
+                       #   despawn; frustum visibility + mount warm-up; distance-gated
+                       #   colliders with hysteresis + a global activation throttle;
+                       #   a "near" gate for dynamic content; matrix freezing) and
+                       #   prepareActorMaterial (quantization + lamp glow + curvature —
+                       #   the ONLY place actor materials are patched). A new
+                       #   world-wide effect is added here, once.
+      GameObject.tsx   # The standard GLTF actor, built on the base: pooled model
+                       #   clone, colliders from the GLTF, animation LOD. Most actors
+                       #   are just one of these; actors that own their geometry and
+                       #   render shape (Building) use useActorLifecycle directly.
+      modelClonePool.ts # Pool of prepared GLTF clones keyed by (model | quantization):
+                       #   despawn/respawn churn reuses parked clones (materials already
+                       #   through prepareActorMaterial, mixer bound, bounds measured)
+                       #   instead of re-running the clone pipeline; bounded per key,
+                       #   evictions dispose; deferred cancellable release
+                       #   (StrictMode-safe); survives domain switches
+      beeble/          # Actor implementations — kept OUTSIDE biome folders because one
+      big-beeble/      #   actor may exist in multiple biomes. Each folder has the
+      xl-element/      #   object component (+ optional stateMachine.ts) and actor.tsx:
+      xxl-element/     #   an ActorDescriptor + `export const XxxActor =
+      apartment/       #   createActor(XxxDescriptor)` (props at the mount site are
+                       #   overrides). Variants EXTEND a base descriptor by spreading it
                        #   (see building/skyscraper.tsx).
-      street-lamp/     # Procedural low-poly lamp post (no GLTF), all lamps fade
-                       #   in/out together with getWindowLightsProgress(). Lighting =
-                       #   lighting/lampGlow.ts GRID DATA TEXTURE: world binned into 24u
-                       #   cells (one lamp head per texel — xyz + color index; falloff
-                       #   radius = cell size), rewritten from ALL glow sources (lamps +
-                       #   traffic signals, each in its own color) every few frames by the
-                       #   FIRST lamp instance per frame (module-level time guard, same
-                       #   pattern as GameObject's shared frustum update — no separate
-                       #   system component to mount) — the terrain shader and
-                       #   patched building/door/GLTF-actor materials sample their
-                       #   3×3 cell neighborhood (9 reads/fragment, CONSTANT cost for
-                       #   any lamp count), so if a lamp is rendered its light is
-                       #   rendered — NO real point lights anywhere, nothing depends on
-                       #   player distance (a pool of real lights was tried and
-                       #   scrapped: nearest-N lights visibly ignite on approach). Edge
-                       #   fade = smoothstep of camera distance × a short mount fade
-                       #   (spawn chunks can mount lamps mid-band). Each lamp is ONE
-                       #   merged vertex-colored mesh + ONE material clone (aLampMask
-                       #   attribute gates the emissive to the head; clones share one
-                       #   program via a fixed cache key). NOTE: the CITY no longer
-                       #   mounts this actor — it uses the INSTANCED dressing variant
-                       #   (objects/dressing/street-lamps/StreetLamps.tsx, sharing this
-                       #   file's geometry/lighting exports); the per-object actor
-                       #   remains for lower-density uses elsewhere.
       building/        # Procedural building: seeded exterior massing with the
                        #   backrooms-style BSP interior physically nested inside;
                        #   clickable hinged doors gate interior mounting
                        #   (generatePlan.ts → buildingAssets.ts cache → Building.tsx).
+                       #   Extends the actor base through useActorLifecycle (despawn,
+                       #   collider + children gates, matrix freeze, shared driver) —
+                       #   Building.tsx itself holds only doors, interior, children.
                        #   skyscraper.tsx: variant descriptor spreading BuildingDescriptor.
                        #   (The old render-to-texture portal system this replaced has
                        #   been REMOVED from the codebase entirely.)
@@ -145,8 +144,12 @@ src/
                        #   useDressingChunks (camera-following 256u chunk lifecycle:
                        #   ONE shared budgeted TaskQueue, 1.3× removal hysteresis,
                        #   instance buffers disposed on drop), useDressingAssets
-                       #   (geometry/material creation + disposal), instancedFromPoints /
-                       #   setInstanceTransform (chunk assembly), useChunkRegistry
+                       #   (geometry/material creation + disposal) which runs EVERY
+                       #   material through prepareDressingMaterial (world curvature —
+                       #   the one place dressing materials are patched),
+                       #   instancedFromPoints / finalizeInstancedChunk (chunk assembly,
+                       #   far-from-origin rebase, culling bounds, GPU warm-up) /
+                       #   setInstanceTransform, useChunkRegistry
                        #   (per-chunk side-state pruned on unmount). Feature components
                        #   contain ONLY their unique logic (points to fetch,
                        #   geometry/materials, optional animation); placement knobs are
@@ -162,14 +165,20 @@ src/
       dressingWorker.ts # Worker client for cityDressing.worker.ts (shared across all
                        #   dressing features; init from the active domain's DomainConfig)
       street-lamps/
-        StreetLamps.tsx # INSTANCED street lamps — the city's lamp path: DENSITY_POINTS
-                       #   placement (density/footprint/roadDistanceRange props), one
-                       #   InstancedMesh per chunk sharing ONE aLampMask-patched material
-                       #   (global night ramp written once per frame), lamp heads
-                       #   registered in the street-lamp actor's activeLampHeads so the
-                       #   lamp-grid lighting is unchanged, and real cuboid colliders
-                       #   mounted only for lamps within LAMP_COLLIDER_DISTANCE of the
-                       #   camera. No per-lamp edge fade (pops at 440u)
+        StreetLamps.tsx # INSTANCED street lamps — the ONLY lamp path (a per-object lamp
+                       #   ACTOR existed alongside this and was REMOVED: a lamp is mass,
+                       #   identical, stateless scenery = dressing by definition, and the
+                       #   duplicate meant shared object logic had to be applied twice).
+                       #   DENSITY_POINTS placement (density/footprint/roadDistanceRange
+                       #   props), one InstancedMesh per chunk sharing ONE
+                       #   aLampMask-patched material (global night ramp written once per
+                       #   frame), lamp heads registered in lampGlow's activeLampHeads,
+                       #   and real cuboid colliders mounted only for lamps within
+                       #   LAMP_COLLIDER_DISTANCE of the camera. No per-lamp edge fade
+                       #   (pops at 440u)
+        lampGeometry.ts # The lamp art: merged low-poly post geometry (vertex colors +
+                       #   aLampMask attribute gating the emissive to the head) and the
+                       #   material template + patchLampMask
       road-markers/
         RoadMarkers.tsx # Raised pavement markers on city road centerlines (instanced
                        #   unlit studs; no paint, no colliders). streetSpacing /
@@ -211,19 +220,28 @@ src/
                        #   BARRIERS also used this enumerator — built, then removed by
                        #   preference; both sides at lateral ≈ freewayWidth + 1.3 worked)
     foliage/           # FOLIAGE class (mass GPU vegetation — the third class).
-      Foliage.tsx      #   Class definition + <Foliage> group (createDefaultsGroup).
+      Foliage.tsx      #   THE BASE, and it is the WHOLE pipeline: <Foliage> group
+                       #   (createDefaultsGroup) + <FoliageField> (chunk lifecycle,
+                       #   worker streaming, the instanced billboard mesh, the shader —
+                       #   billboarding, wind sway, per-instance fade, quantization,
+                       #   world curvature, night dim — the distance LOD, disposal) +
+                       #   createFoliage(defaults), the plant-type factory.
                        #   Deliberately NOT built on the Dressing chunk base: foliage
                        #   runs ~16k instances per 32u chunk, so placement streams from
-                       #   its worker as transferable Float32Arrays straight into GPU
-                       #   instance attributes and all animation (billboarding, wind
-                       #   sway) runs in the vertex shader; per-chunk bounding spheres
-                       #   keep frustum culling effective. A foliage feature owns its
-                       #   chunk pipeline.
+                       #   the worker as transferable Float32Arrays straight into GPU
+                       #   instance attributes and all animation runs in the vertex
+                       #   shader; per-chunk bounding spheres keep frustum culling
+                       #   effective. A new plant is NOT a new pipeline.
+      types.ts         # FoliageProps — every knob of the pipeline (placement filters +
+                       #   density, color/texture, width/height, sway, seed, …)
+      foliageWorker.ts # Worker client for foliage.worker.ts (ONE shared worker across
+                       #   every mounted field, whatever the plant)
       grass/
-        GrassField.tsx # Reference implementation: instanced billboard grass (GPU sway,
-                       #   one draw call per 32u chunk, spawn-style filter props)
-        grassWorker.ts # Worker client for grass.worker.ts (shared across GrassField instances)
-        types.ts       # GrassFieldProps (extends the objects/types.ts base)
+        GrassField.tsx # The first plant type, ~60 lines: the procedurally drawn blade
+                       #   texture + createFoliage({ seed: "grass", … }). Copy it for a
+                       #   shrub/fern — different art, different seed, same base.
+                       #   (Two plant types must not share a seed: same seed + density =
+                       #   same points, so the fields would grow through each other.)
   world/
     CustomCanvas.tsx   # Three.js canvas + physics world setup + explicit SceneRender
     types.ts           # Region, Biome (data model), BiomeNoiseConfig, MaterialData,
@@ -335,8 +353,22 @@ src/
                        #   dimmed by nightBlend; directional swings sun → moon.
                        #   Unlit shaders (terrain/grass) dim via NIGHT_BLEND_UNIFORM +
                        #   NIGHT_GROUND_DIM instead (building interiors stay bright)
-    lampGlow.ts        # The lamp-glow GRID DATA TEXTURE (see street-lamp above) +
-                       #   material patchers (patchStandardMaterialLampGlow)
+    lampGlow.ts        # The lamp-glow GRID DATA TEXTURE: world binned into 24u cells
+                       #   (one glow head per texel — xyz + color index; falloff radius
+                       #   = cell size), rewritten every few frames from ALL registered
+                       #   sources. Owns the registry (activeLampHeads — street lamps
+                       #   and traffic signals, each in its own color) and the driver
+                       #   (driveLampLighting: the dusk/dawn intensity ramp every frame,
+                       #   a grid rewrite every 20; a module-level time guard means the
+                       #   FIRST caller per frame does the work, so no system component
+                       #   has to be mounted). The terrain shader and patched
+                       #   building/door/GLTF-actor materials sample their 3×3 cell
+                       #   neighborhood (9 reads/fragment, CONSTANT cost for any lamp
+                       #   count) — so if a lamp is rendered, its light is rendered. NO
+                       #   real point lights anywhere, nothing depends on player
+                       #   distance (a pool of real lights was tried and scrapped:
+                       #   nearest-N lights visibly ignite on approach). Plus the
+                       #   material patcher (patchStandardMaterialLampGlow)
   player/
     Player.tsx         # First-person controller + physics. SLOPES are three
                        #   bands, not a hard stop: ≤25° full speed; 25–45° the
@@ -419,7 +451,8 @@ src/
       buildDomainConfig.ts # Serializes regions into DomainConfig for workers
       terrain.worker.ts # Off-thread chunk height computation
       spawn.worker.ts  # Off-thread spawn point generation
-      grass.worker.ts  # Off-thread grass blade placement (coarse height grid + bilinear interp)
+      foliage.worker.ts # Off-thread foliage placement, every plant type (coarse height
+                       #   grid + bilinear interp per instance)
       cityDressing.worker.ts # Off-thread city dressing placement (road markers, traffic
                        #   lights, freeway-side points) — runs the vertexCompute
                        #   enumerators + the per-chunk biome probe. Also DENSITY_POINTS:
@@ -430,7 +463,26 @@ src/
       cityFeatures.test.ts # Smoke tests: determinism, chunk-split dedupe, validity
   vfx/                 # Global VFX logic
     frameCap.ts        # Main-render FPS cap (presented frames only; rAF loop unaffected)
-    PostProcessing.tsx # Config carrier: quantization grid, optional pixelation, fpsCap
+    curvature.ts       # WORLD CURVATURE — the "walking on a globe" illusion. Past
+                       #   uCurveStart units from the camera every vertex sinks by
+                       #   (d - start)² / (2R) along WORLD down, measured on HORIZONTAL
+                       #   camera distance, so the ground falls away behind a curved
+                       #   horizon. A VERTEX effect, never post-processing: bending the
+                       #   finished image moves pixels without moving depth, so
+                       #   occlusion/parallax/the horizon would all disagree with the
+                       #   geometry. Purely visual — physics, raycasts, spawn placement
+                       #   and the height pipeline stay FLAT, and every interaction reach
+                       #   (doors 6u, CRT 14u) sits inside the flat zone. Operates on the
+                       #   camera-relative VIEW position, so it never forms an absolute
+                       #   world coordinate (see Coordinate Precision) and runs AFTER
+                       #   quantization. Applied from exactly FOUR places, never per
+                       #   object: the terrain vertex shader, the foliage base's shader,
+                       #   prepareActorMaterial, prepareDressingMaterial. The sky is
+                       #   deliberately exempt (a dome pinned to the camera). Frustum
+                       #   culling still uses UNBENT bounds; there are no shadow casters
+                       #   in the project, so no depth-pass patch exists
+    PostProcessing.tsx # Config carrier: quantization grid, curvature (radius +
+                       #   flat-zone start), optional pixelation, fpsCap
   index.tsx            # Boot: initDomainNavigation + one <CustomCanvas> per active domain
 ```
 
@@ -459,7 +511,7 @@ Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density g
 - **Declarative hierarchy, data-model core** — content is declared as JSX (each domain's `domain.tsx`), but the commit produces the same plain `Region[]`/`Biome[]` data model (`src/world/types.ts`) the pipeline always used. Non-React code reads it from the active-domain accessors (`src/world/domains/utils.ts`: `getActiveRegions()`, `getActiveDomainConfig()`, `await whenDomainReady()`).
 - **Hierarchy ownership rule** — code lives at the level it belongs to: biome-specific things in the biome folder, region-specific in the region folder, domain-specific in the domain folder; only genuinely shared systems live above the domains (world/, objects/, utils/, lighting/, vfx/).
 - **Pattern files** — folders keep their data/config in consistently named files: `types.ts`, `constants.ts`, `defaults.ts`, `utils.ts` at the appropriate level (e.g. `world/types.ts`, `world/defaults.ts`, `world/domains/constants.ts`). No grab-bag singleton modules.
-- **Extend the base** — new game objects extend the shared base: descriptors/props extend `GameObjectAttributes`/`DensityPlacement` (`objects/types.ts`), GLTF actors render through `<GameObject>`, actor variants spread a base descriptor (skyscraper), group components come from `createDefaultsGroup`.
+- **Every object extends its class base** — the load-bearing rule of `objects/`. Descriptors/props extend `GameObjectAttributes`/`DensityPlacement` (`objects/types.ts`); an ACTOR is a `<GameObject>` or uses `useActorLifecycle` (`actors/Actor.tsx`); DRESSING uses `useDressingChunks`/`useDressingAssets` (`dressing/Dressing.tsx`); FOLIAGE is `createFoliage(defaults)` (`foliage/Foliage.tsx`). Actor variants spread a base descriptor (skyscraper); group components come from `createDefaultsGroup`. Shared behavior goes IN the base — if you are about to apply a world-wide effect inside one object's file, that object is bypassing its base.
 - **Scope-aware config components** — `<Terrain>`, `<Material>`, `<Skybox>` mean different things under `<Domain>`, `<Region>`, or `<Biome>` (they read `RegionContext`/`BiomeContext`). Registration components render `null`; visual components (e.g. `GrassField`) render normally.
 - **Registration effects use stringified deps** — inline object props (noise params, descriptors) are registered under `JSON.stringify` deps so parent re-renders don't re-commit the domain.
 - **Utility namespaces**: `_noise.terrain()`, `_math.seedRand()`, `_material.loadTextures()`, `voronoi.create()`
@@ -521,10 +573,15 @@ Pick the class first: unique geometry, interaction, or behavior → ACTOR (below
 2. Mount it inside a biome's `<Actors>` group (props on `<Actors>` are shared defaults for all children; a child's own props win)
 3. Place GLTF model in `public/models/`
 
-**Foliage** (mass vegetation — thousands of instances per chunk, its own class; see `src/objects/foliage/Foliage.tsx` for a new-feature guide by example):
-1. Mount `<GrassField>` (`src/objects/foliage/grass/GrassField.tsx`) inside the biome's `<Foliage>` group — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override)
-2. Filter props (`density`, `heightRange`, `slopeRange`/`slopeBlend`) plus visuals (`color`, optional `png` billboard texture, `bladeWidth`/`bladeHeight`, `sway`/`swaySpeed`, `renderDistance`, `quantization` to override the global vertex-quantization grid)
-3. Placement runs in `grass.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk
+**Foliage** (mass vegetation — thousands of instances per chunk, its own class):
+
+*To USE an existing plant:* mount `<GrassField>` (`src/objects/foliage/grass/GrassField.tsx`) inside the biome's `<Foliage>` group — it auto-restricts to the enclosing biome via `BiomeContext` (pass `biomeIds` explicitly to override). Every knob is an override at the mount: filters (`density`, `heightRange`, `slopeRange`/`slopeBlend`) and visuals (`color`, `png` or a procedural `texture`, `width`/`height`, `sway`/`swaySpeed`, `renderDistance`, `seed`, `quantization`). Placement runs in `foliage.worker.ts`; rendering is one instanced, camera-facing, GPU-swaying draw call per 32-unit chunk.
+
+*To ADD a plant type* (shrub, fern, wheat) — there is NO pipeline to write, the base (`src/objects/foliage/Foliage.tsx`) is the whole thing:
+1. Create `src/objects/foliage/<name>/<Name>Field.tsx` — copy `grass/GrassField.tsx` (~60 lines): draw or load the billboard art, then `export const XField = createFoliage({ … })` with this plant's defaults.
+2. Give it its OWN `seed`. Two plant types sharing a seed at the same density place on identical points and grow through each other.
+3. Mount it in a biome's `<Foliage>` group. Nothing else — chunking, streaming, the shader, curvature, quantization, the LOD and disposal all come from the base.
+4. Only touch `Foliage.tsx` if the new plant needs behavior no plant has yet (a new shader term, a new filter) — and then it belongs to EVERY plant, which is the point.
 
 **Procedural buildings** (seeded shape, real nested interiors, clickable doors — no GLTF):
 1. `src/objects/actors/building/` — `<Building>` generates a deterministic building from a seed (default: spawn coordinates), interior-first: rooms-per-floor × floors set the interior area, which sets the exterior footprint and height (so the shell realistically wraps the inside). Exterior: 4–8-sided masses — boxy slabs or rotated faceted canisters — grayscale segments with occasional accent colors, lips/bulges, gentle lean, scattered oval/skewed-quad windows, rooftop caps + crooked pipes; colors baked as vertex colors so all buildings share one material. Night window lights: each building has `windowLightChance` (0–1 fraction of windows that light per night; default 0.6, 0 = never) and `windowLightIntensity` (emissive strength of lit glass, default 1.4) — a shader patch on the shared exterior material (per-vertex vec3 `aWindow` = stable per-window random + chance + intensity, global uniforms driven by `getWindowLightsProgress()` and `getNightIndex()`) hashes each window against the per-night seed, so a DIFFERENT subset pops on sporadically over LIGHTS_TRANSITION_DURATION_MS each nightfall (off at dawn the same way), washing the glass yellowish with an emissive glow. No extra draw calls or light objects.
@@ -536,13 +593,13 @@ Pick the class first: unique geometry, interaction, or behavior → ACTOR (below
 
 **Interactive actors** (physics, state machines, custom logic):
 1. Create `src/objects/actors/<name>/` with the object component (+ `stateMachine.ts` if needed)
-2. Use `GameObject` for GLTF loading + colliders, `useStateMachine` / `useMouseEvents` for behavior
+2. Use `GameObject` (`objects/actors/GameObject.tsx`) for GLTF loading + colliders — it already carries the actor base's lifecycle. An actor with its own geometry/render shape calls `useActorLifecycle` (`objects/actors/Actor.tsx`) instead of writing its own `useFrame`, and runs its materials through `prepareActorMaterial`. Behavior: `useStateMachine` / `useMouseEvents`
 3. Add an `actor.tsx` with an `ActorDescriptor` (its `component` = your custom component) and `createActor`; mount it in a biome's `<Actors>` group (see `src/objects/actors/beeble/`)
 4. Place GLTF model in `public/models/`
 
 ### New Dressing feature (instanced stateless scenery)
 
-1. Create `src/objects/dressing/<name>/<Name>.tsx`. Structure: props with defaults for every placement knob (extend the shared base types where they fit, plus `renderDistance`, resolved via `useDressingRenderDistance(own, default)` so a `<Dressing>` group can override it), `useDressingAssets` for geometries/materials, `useDressingChunks({ renderDistance, build })` for the chunk lifecycle, and `instancedFromPoints` to assemble each chunk. Per-chunk side-state (animation clocks, external registrations) goes through `useChunkRegistry` so it's cleaned up when chunks unmount — see `traffic-lights` (animation + glow sources) and `street-lamps` (lamp heads + colliders) for the two patterns.
+1. Create `src/objects/dressing/<name>/<Name>.tsx`. Structure: props with defaults for every placement knob (extend the shared base types where they fit, plus `renderDistance`, resolved via `useDressingRenderDistance(own, default)` so a `<Dressing>` group can override it), `useDressingAssets` for geometries/materials — creating them ANYWHERE ELSE skips `prepareDressingMaterial` and your scenery will float over the curved horizon — `useDressingChunks({ renderDistance, build })` for the chunk lifecycle, and `instancedFromPoints` to assemble each chunk. Per-chunk side-state (animation clocks, external registrations) goes through `useChunkRegistry` so it's cleaned up when chunks unmount — see `traffic-lights` (animation + glow sources) and `street-lamps` (lamp heads + colliders) for the two patterns.
 2. Placement comes from the dressing worker (`dressingWorker.ts`): reuse `getDensityPoints` for spawn-style density placement (density + footprint + road-band filters — how street lamps place), or add a bespoke enumerator to `vertexCompute.ts` + a message type to `cityDressing.worker.ts` for structured placement (lattices, intersections — how markers/signals/power lines place). Enumerators must be deterministic and duplicate-free under chunked queries (ownership by position); add a case to `src/utils/workers/cityFeatures.test.ts`.
 3. Mount it inside the biome's `<Dressing>` group.
 
@@ -564,8 +621,8 @@ The world is unbounded, so **the split between float64 and float32 is an archite
   - **Terrain** (`world/shaders/vertex.glsl`) additionally WRAPS the chunk origin to `WORLD_WRAP` (4200) so `vWorldPos`/`vWorldUv` stay small for texturing and `fwidth()`. Consumers that compare against ABSOLUTE CPU-side positions — the lamp-glow grid lookup and the `TERRAIN_POINT_LIGHTS` loop — must use `vWorldPosAbs` (the unwrapped position, also exported by the vertex shader) instead: comparing them against the wrapped `vWorldPos` aliased lighting onto the wrong chunks (lit/unlit tiles per wrap cell). `vWorldPosAbs` carries float32 absolute error (~0.06u at 1M) — fine for smooth lighting falloffs, NEVER for tiling/quantization/`fwidth()`. 4200 is a common multiple of every world-space period downstream — the 26.25u texture tile (×160), the 75u sidewalk tile (×56), the 200u fbm cell (×21) — and of both quantization grids (0.025 ×168000, 0.2 ×21000), so the wrap is invisible: `fract()`/tiling land on identical values and the quantization lattice keeps its world phase. Chunk centers are always multiples of 210, which makes the `mod()` exact. **Anything new that reads `vWorldPos` with a world-space period must divide 4200**, or it seams every 4200 units — which is why `fbm` became `worldFbm(worldXZ, scale, octaves)` with a matching repeat period (`common.glsl`); feeding it raw absolute coordinates also pushed `hash()`'s `sin()` past what float32 can resolve, degenerating the noise into banding.
   - **Quantization** (`utils/quantization/quantization.ts`) snaps the object-relative offset with `qPhase = mod(modelMatrix[3].xyz, uGridSize)` re-anchoring the lattice to the world, so the wobble doesn't slide with the object. `qPhase` inherits the float32 model matrix's error but is CONSTANT per object — a fixed sub-cell offset, not flicker. The `USE_INSTANCING` branch keeps the old absolute math (`modelMatrix * instanceMatrix` is still the correct absolute position under the dressing rebase below — quantizing it would just reintroduce float32 absolute precision); no instanced material is quantized today.
   - **Dressing instancing** (`finalizeInstancedChunk` in `objects/dressing/Dressing.tsx`) — every instanced chunk (markers, lamps, signals, poles, wires) is REBASED: instance matrices are composed with absolute float64 placement, then the mesh is parked at the extents center and the stored translations made relative to it, so the chunk→camera translation resolves on the CPU in float64 (`modelViewMatrix`) and the GPU only sees chunk-sized numbers. Meshes at the world origin with absolute instance translations visibly JITTERED past ~100k units. The explicit culling sphere is LOCAL to the mesh (three applies matrixWorld). All four features flow through this one function — keep it that way.
-  - **Skinned actors** (`RootRelativeSkeleton` in `objects/modelClonePool.ts`) — three's stock skinning writes ABSOLUTE `bone.matrixWorld × boneInverse` into the float32 bone texture and cancels it against `bindMatrixInverse` per-vertex on the GPU, so beebles jittered far from the origin. The clone pipeline instead stores ROOT-RELATIVE bone matrices (`rootWorld⁻¹ × boneWorld × boneInverse`, cancelled in float64 on the CPU) and freezes each skinned mesh's `bindMatrixInverse` at its constant root-relative value (mesh nodes never move relative to the model root; the per-frame attached-mode sync is overridden away). Mathematically identical for the GPU path. The CPU path must be kept in step BY HAND: three's `applyBoneTransform` reads the absolute `bone.matrixWorld` itself (it never touches the skeleton's bone matrices), so the frozen bind alone made it return near-WORLD-space points, which `computeBoundingSphere`/`computeBoundingBox`/`raycast` then re-multiplied by `matrixWorld` — a culling sphere at twice the actor's world position, so beebles VANISHED once that constant offset subtended more than the FOV (i.e. as the player approached). It is overridden per skinned mesh (`applyBoneTransformRootRelative`, using the skeleton's cached `rootInverse`), and each mesh's `boundingBox`/`boundingSphere` are FROZEN at creation in rest pose at the origin (padded by `SKINNED_BOUNDS_PAD`) — three would otherwise compute them lazily at the first frustum test, out at the spawn coordinates, and cache that for the clone's whole life including pool reuse.
-  - **Grass** (`objects/foliage/grass/GrassField.tsx`) keeps its `offset` attribute absolute but puts the chunk mesh AT its chunk origin and works from `offset - modelMatrix[3].xyz` (exact — a blade is never more than one chunk away). Chunk size 32 is a whole multiple of both grids, so the relative lattice IS the world lattice. Camera-relative and wind terms deliberately keep using the absolute offset: they are differences or low-frequency phases, and the wind must stay continuous across chunk borders.
+  - **Skinned actors** (`RootRelativeSkeleton` in `objects/actors/modelClonePool.ts`) — three's stock skinning writes ABSOLUTE `bone.matrixWorld × boneInverse` into the float32 bone texture and cancels it against `bindMatrixInverse` per-vertex on the GPU, so beebles jittered far from the origin. The clone pipeline instead stores ROOT-RELATIVE bone matrices (`rootWorld⁻¹ × boneWorld × boneInverse`, cancelled in float64 on the CPU) and freezes each skinned mesh's `bindMatrixInverse` at its constant root-relative value (mesh nodes never move relative to the model root; the per-frame attached-mode sync is overridden away). Mathematically identical for the GPU path. The CPU path must be kept in step BY HAND: three's `applyBoneTransform` reads the absolute `bone.matrixWorld` itself (it never touches the skeleton's bone matrices), so the frozen bind alone made it return near-WORLD-space points, which `computeBoundingSphere`/`computeBoundingBox`/`raycast` then re-multiplied by `matrixWorld` — a culling sphere at twice the actor's world position, so beebles VANISHED once that constant offset subtended more than the FOV (i.e. as the player approached). It is overridden per skinned mesh (`applyBoneTransformRootRelative`, using the skeleton's cached `rootInverse`), and each mesh's `boundingBox`/`boundingSphere` are FROZEN at creation in rest pose at the origin (padded by `SKINNED_BOUNDS_PAD`) — three would otherwise compute them lazily at the first frustum test, out at the spawn coordinates, and cache that for the clone's whole life including pool reuse.
+  - **Foliage** (`objects/foliage/Foliage.tsx`) keeps its `offset` attribute absolute but puts the chunk mesh AT its chunk origin and works from `offset - modelMatrix[3].xyz` (exact — an instance is never more than one chunk away). Chunk size 32 is a whole multiple of both grids, so the relative lattice IS the world lattice. Camera-relative and wind terms deliberately keep using the absolute offset: they are differences or low-frequency phases, and the wind must stay continuous across chunk borders.
 - **Physics is float32 too** (Rapier), and this is NOT addressed: collider/contact resolution degrades at the same rate (~8mm at 100k, ~6cm at 1M) — so a MOVING kinematic body (beeble, player) at extreme distances still carries Rapier-level position noise even though its rendering is now precision-clean; idle/static objects are fully stable. Fixing it means a real scene-graph floating origin — rebasing bodies, camera, and every `camera.position` consumer — while generation keeps its absolute coordinates behind a `+ worldOrigin` conversion.
 
 ## Performance Notes
@@ -578,24 +635,24 @@ The world is unbounded, so **the split between float64 and float32 is an archite
 - `getDistanceToWall` uses inline segment-distance math (no THREE object allocations).
 - `BuildChunk` reads position buffers directly as Float32Array (no Vector3 per vertex).
 - **LOD ring tuning** (`lodConfig.ts`): LOD1 (96 seg, 4.375u spacing) covers only the innermost 420u ring — it previously reached 840u and carried 92% of ALL terrain triangles. LOD2 runs 24 segments (17.5u) to soften the density cliff. The player always stands on LOD1, so the measured slope-slide tuning is unaffected.
-- **GameObject per-frame work runs through ONE shared driver** (`driveGameObjectFrames` in `GameObject.tsx`, subscribed by ObjectPool's useFrame): instances register a latest-closure ref instead of their own `useFrame`, so hundreds of mounted actors cost one R3F subscriber (no subscription churn per spawn batch) and the shared frustum is computed exactly once per frame. The loop uses ONE 2D squared distance for everything (fade, kill, proximity, collider gate, animation LOD) and never allocates.
-- **Animation LOD** (`GameObject.tsx`): mixers don't update while frustum-culled and run at half rate past 40% of render distance; skipped time accumulates (capped) so loops stay continuous. NOTE: this skips interpolant evaluation only — the renderer still runs `skeleton.update()` + a bone-texture upload for every VISIBLE skinned mesh; only frustum culling removes skinning cost.
-- **GLTF clones are POOLED per (model | quantization)** (`objects/modelClonePool.ts`): despawn/respawn churn used to re-run the full clone pipeline per mount (scene clone, traversals, material clones + shader patches, skeleton rebind, bbox measure) and dispose it all again on unmount — a reused clone now costs a map lookup + opacity reset. Bounded per key; only evictions dispose (materials + skeleton bone textures; geometry is SHARED with the source GLTF, never disposed). Release is deferred one macrotask and cancellable so React 18 StrictMode dev remounts can't hand a still-mounted scene to another component. Pools survive domain switches (clones are domain-agnostic; no-override materials follow the live global quantization uniform — override values are baked, hence part of the key).
+- **ALL actor per-frame work runs through ONE shared driver** (`driveActorFrames` in `actors/Actor.tsx`, subscribed by ObjectPool's useFrame): every actor — GLTF or procedural, buildings included — registers a latest-closure ref via `useActorLifecycle` instead of its own `useFrame`, so hundreds of mounted actors cost one R3F subscriber (no subscription churn per spawn batch) and the shared frustum is computed exactly once per frame. The loop uses ONE 2D squared distance for everything (fade, kill, proximity, collider gate, near gate, animation LOD) and never allocates. Do NOT add a `useFrame` to an actor — pass `onFrame` to the lifecycle.
+- **Animation LOD** (`actors/GameObject.tsx`): mixers don't update while frustum-culled and run at half rate past 40% of render distance; skipped time accumulates (capped) so loops stay continuous. NOTE: this skips interpolant evaluation only — the renderer still runs `skeleton.update()` + a bone-texture upload for every VISIBLE skinned mesh; only frustum culling removes skinning cost.
+- **GLTF clones are POOLED per (model | quantization)** (`objects/actors/modelClonePool.ts`): despawn/respawn churn used to re-run the full clone pipeline per mount (scene clone, traversals, material clones + shader patches, skeleton rebind, bbox measure) and dispose it all again on unmount — a reused clone now costs a map lookup + opacity reset. Bounded per key; only evictions dispose (materials + skeleton bone textures; geometry is SHARED with the source GLTF, never disposed). Release is deferred one macrotask and cancellable so React 18 StrictMode dev remounts can't hand a still-mounted scene to another component. Pools survive domain switches (clones are domain-agnostic; no-override materials follow the live global quantization uniform — override values are baked, hence part of the key).
 - **Skeletons are shared across a clone's meshes** (`cloneModelWithAnimations` in `modelClonePool.ts`): all skinned meshes bound to one source skeleton share ONE cloned skeleton (beeble: 10 meshes, 1 skeleton) — a skeleton per mesh multiplied skinning + bone-texture uploads 10×. Bones indexed by name in one pass; materials deduped per source material; clip actions bind LAZILY on first command (beeble ships 10 junk clips) and persist on the pooled record.
 - **Beeble physics LOD** (`Beeble.tsx`): idle grounded beebles skip the character-controller shape cast entirely; beyond `PHYSICS_FULL_RATE_DIST` (80u) moving beebles resolve collisions every 3rd frame with accumulated dt (speed preserved).
 - **Never attach R3F pointer handlers to spawned actors** — even no-ops register the object in R3F's interaction list, which raycasts it RECURSIVELY (CPU-skinned triangle tests included) on every pointermove at mouse-polling rate. All actor input goes through window listeners + the manual screen-center raycast in `useMouseEvents` (which angular-pre-tests before touching triangles).
 - **Throttled per-N-frame work is PHASE-OFFSET per instance** (hash of spawn coords/seed) — counters all starting at 0 made every object in a spawn batch do its "every 3rd frame" work on the SAME frames, preserving the spikes the throttle was meant to remove.
-- **GPU uploads are paid at MOUNT, not at first look** (`utils/uploadOnFirstDraw.ts`): three uploads a mesh's buffers/textures AND links its shader program on its first actual DRAW, so content mounted behind the player (a spawn radius is a circle; the player faces one way) deferred all of it to the frame the player first turned toward it — a fast 180° cashed in every deferred upload at once (the turn-around lag spike). The helper forces one off-frustum draw (vertex cost only), then restores culling. Applied to terrain chunks, building meshes, grass chunks, dressing chunks, and GLTF actors (paid once per pooled clone at CREATION — modelClonePool; GameObject additionally holds `group.visible` true for 3 warm-up frames — its own frustum culling would otherwise hide the group before the forced draw could happen; those late actor compiles were the last 50-90ms render-internal spikes). Apply it to any NEW mass content that can mount off-screen.
+- **GPU uploads are paid at MOUNT, not at first look** (`utils/uploadOnFirstDraw.ts`): three uploads a mesh's buffers/textures AND links its shader program on its first actual DRAW, so content mounted behind the player (a spawn radius is a circle; the player faces one way) deferred all of it to the frame the player first turned toward it — a fast 180° cashed in every deferred upload at once (the turn-around lag spike). The helper forces one off-frustum draw (vertex cost only), then restores culling. Applied to terrain chunks, building meshes, grass chunks, dressing chunks, and GLTF actors (paid once per pooled clone at CREATION — modelClonePool; the actor base additionally holds `group.visible` true for 3 warm-up frames — its own frustum culling would otherwise hide the group before the forced draw could happen; those late actor compiles were the last 50-90ms render-internal spikes). Apply it to any NEW mass content that can mount off-screen.
 - **Lag-spike attribution stays wired in** (`utils/spikeTrace.ts`, `window.__spikeTrace`): hot systems trace their heavy spans (`render` = the whole gl.render — a spike INSIDE it is GPU/driver work; `terrain:finish`, `building:phase*`, `building:finish`, `spawn:commit`, collider-commit markers). To hunt a spike: record rAF deltas, and on a long frame read `__spikeTrace.traceWindow(frameStart, frameEnd)` — an empty window with no heap jump means the browser/OS, not the game. Overhead is one timestamp pair per traced call; leave it on.
-- **GameObject fades** write material opacity only when it changes (steady-state objects skip the loop).
+- **Actor fades** write material opacity only when it changes — the base calls `applyFade` only on an actual change, so steady-state actors skip the loop.
 - **TaskQueue is time-budgeted** (6ms slices, then yields a macrotask): awaiting a synchronous task only yields a MICROtask, so without the budget a burst of queued work (collider builds, building geometry) would still run inside one frame. The slice clock resets at real macrotask boundaries (worker round-trips) via a self-rearming zero-timeout, so awaiting a worker doesn't falsely exhaust the budget and force a yield after every task.
 - **Procedural building assets build through a TaskQueue** (`Building.tsx`): cache-hit seeds mount synchronously (despawn/respawn churn); NEW seeds render null while the build runs as FOUR queued tasks (plan → exterior → interior → assembly, `beginProceduralBuildingBuild`) — the queue's time budget only yields BETWEEN tasks, so as one monolithic task a heavy skyscraper was a single long frame no budget could split. Full off-thread (worker) geometry building was evaluated and deferred: the pipeline leans on THREE triangulators (ExtrudeGeometry with holes, mergeGeometries), so a worker port means serializing every buffer back — revisit only if the sliced builds still hitch.
 - **Building asset cache is REFCOUNTED** (`buildingAssets.ts`): mounted buildings retain their entry; eviction only ever disposes refcount-0 entries (LRU by release time, `MAX_IDLE_CACHE`). The old fixed-size FIFO disposed geometry still attached to RENDERED meshes once mounted buildings exceeded the cap (~300–600 in the city vs 64 slots) — a correctness bug, not just perf. Slab profiles triangulate once per (thickness, holes) and are copied for floor/ceiling/collider.
 - **Buildings freeze their matrix subtree when far** (`matrixAutoUpdate`/`matrixWorldAutoUpdate` off outside children range, re-enabled inside it): hundreds of static buildings were paying `compose()` per Object3D per frame. Doors/colliders/children only act inside the live zone, so alignment is guaranteed by construction. The interior mesh renders only inside ~`CHILDREN_ACTIVE_DISTANCE` (it's fully occluded beyond a few pixels of door opening).
-- **Grass worker pre-probes chunk emptiness** (one center `computeVertexData`, mirroring the dressing worker's `probeEmpty`) before running the 17×17 placement grid, and `GrassField` never requests chunks whose nearest point exceeds the fade-zero distance — blades past the fade are invisible but still cost full vertex work.
-- **Grass blade counts are distance-tiered via `instanceCount` truncation** (`GRASS_LOD_*` in `GrassField.tsx`): the worker delivers each chunk's instances SORTED by the shader's per-blade fade key (longest-lived first), so each sweep can truncate a chunk's `instanceCount` to exactly the blades its distance hasn't faded to zero — visually free — plus a mild mid-band density taper (tunable). Measured: grass was 14.6M of 14.8M rendered triangles; this halved the total (96→145 fps standing in the city). If the worker's instance ORDER ever changes, this truncation silently becomes spatially biased — keep the fade-key sort.
+- **The foliage worker pre-probes chunk emptiness** (one center `computeVertexData`, mirroring the dressing worker's `probeEmpty`) before running the 17×17 placement grid, and the foliage base never requests chunks whose nearest point exceeds the fade-zero distance — instances past the fade are invisible but still cost full vertex work.
+- **Foliage instance counts are distance-tiered via `instanceCount` truncation** (`LOD_TAPER_*` in `Foliage.tsx`): the worker delivers each chunk's instances SORTED by the shader's per-instance fade key (longest-lived first), so each sweep can truncate a chunk's `instanceCount` to exactly the instances its distance hasn't faded to zero — visually free — plus a mild mid-band density taper (tunable). Measured: grass was 14.6M of 14.8M rendered triangles; this halved the total (96→145 fps standing in the city). If the worker's instance ORDER ever changes, this truncation silently becomes spatially biased — keep the fade-key sort.
 - **The lamp-glow grid is dirty-gated** (`markLampGridDirty` in `lighting/lampGlow.ts`): anything that adds/removes/recolors a head in `activeLampHeads` MUST call it, or the 64KB grid re-upload skips your change (there's a head-count backstop, but same-count swaps would be missed). Dressing InstancedMeshes get explicit per-chunk `boundingSphere`s and real frustum culling — never set `frustumCulled = false` on a chunk whose bounds are known.
-- **City street lamps are INSTANCED dressing** (`objects/dressing/street-lamps`): one draw call + ONE shared material per chunk, no per-lamp components. The per-object street-lamp ACTOR (one mesh + one material clone per lamp, program shared via a fixed customProgramCacheKey) remains for lower-density use elsewhere.
+- **Street lamps are INSTANCED dressing** (`objects/dressing/street-lamps`): one draw call + ONE shared material per chunk, no per-lamp components. The per-object street-lamp ACTOR that used to exist alongside it was REMOVED — a second implementation of the same object in the wrong class.
 - **Dressing vs actors is a measured perf boundary**: rendering the dressing set (markers, lamps, signals, poles) as per-object spawn components cost ~10–20 fps; instanced chunks recover it. Don't add mass scenery as actors.
 
 ### Outrunning the generators (fast-travel collapse)
@@ -628,7 +685,7 @@ All overlays, menus, and HUD elements should follow the established style set by
 - SCREAMING_SNAKE_CASE for constants and enums
 - **Hierarchy ownership**: DOMAIN → REGION → BIOME is both the content hierarchy and the folder hierarchy — put code at the level it belongs to (biome-specific in the biome folder, and so on up); only genuinely shared code lives outside `world/domains/`
 - **Pattern files per folder**: `types.ts`, `constants.ts`, `defaults.ts`, `utils.ts` at the appropriate level — no grab-bag singleton modules (the old `registry.ts` was split this way)
-- **Extend, don't duplicate**: game objects extend the shared base (`objects/types.ts`, `<GameObject>`, `createDefaultsGroup`); actor variants spread a base descriptor
+- **Extend, don't duplicate**: every game object extends its CLASS BASE (`objects/actors/Actor.tsx`, `objects/dressing/Dressing.tsx`, `objects/foliage/Foliage.tsx`) plus the shared attribute types (`objects/types.ts`); actor variants spread a base descriptor
 - Feature-based directory structure — co-locate assets (shaders, textures) with their biome/feature
 - Prefer editing existing files over creating new ones
 - Keep biome implementations self-contained; don't add cross-biome dependencies

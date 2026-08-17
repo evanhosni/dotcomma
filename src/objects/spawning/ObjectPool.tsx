@@ -4,7 +4,7 @@ import React, { useCallback, useMemo, useRef, useState, useEffect } from "react"
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
 import { getActiveRegions, getActiveDomainConfig } from "../../world/domains/utils";
-import { driveGameObjectFrames } from "../GameObject";
+import { driveActorFrames } from "../actors/Actor";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -406,7 +406,7 @@ export const ObjectPool = () => {
   // per-instance useFrames were that many R3F subscriber invocations plus
   // subscription churn per spawn batch. Lives here because <Domain> always
   // mounts the pool, so any actor in a domain tree is driven.
-  useFrame(driveGameObjectFrames);
+  useFrame(driveActorFrames);
 
   useFrame(() => {
     frameCountRef.current++;

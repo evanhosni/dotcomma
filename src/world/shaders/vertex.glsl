@@ -20,6 +20,22 @@ varying vec3 vWorldPosAbs;
 
 uniform float uGridSize;
 
+// World curvature ("walking on a globe") — see vfx/curvature.ts. Applied to
+// the VIEW-space position only: vWorldPos/vWorldNormal and every distance
+// varying stay FLAT, so texturing, the fwidth() seam guards and the lamp-glow
+// lookup are all untouched by it.
+uniform float uCurveStart;
+uniform float uCurveK;
+
+vec3 curveViewPos(vec3 viewPos) {
+  if (uCurveK <= 0.0) return viewPos;
+  vec3 up = viewMatrix[1].xyz;              // world +Y in view space
+  float h = dot(viewPos, up);
+  float r = length(viewPos - up * h);       // horizontal camera distance
+  float d = max(0.0, r - uCurveStart);
+  return viewPos - up * (uCurveK * d * d);
+}
+
 // ── Distance-from-origin precision ───────────────────────────────────────
 // NOTHING in this shader may form an ABSOLUTE world coordinate. GLSL is
 // float32: its resolution is ~0.008u at 100k units from the world origin and
@@ -85,5 +101,5 @@ void main() {
   vHeight = worldPos.y;
 
   vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldPos - wrapOrigin);
-  gl_Position = projectionMatrix * vec4(viewPos, 1.0);
+  gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);
 }

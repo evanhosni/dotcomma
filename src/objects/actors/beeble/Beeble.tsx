@@ -2,7 +2,7 @@ import { RigidBody, CapsuleCollider, useRapier } from "@react-three/rapier";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { GameObject } from "../../GameObject";
+import { GameObject } from "../GameObject";
 import { ActorProps } from "../../spawning/types";
 import { useMouseEvents } from "../../state/useMouseEvents";
 import { useStateMachine } from "../../state/useStateMachine";

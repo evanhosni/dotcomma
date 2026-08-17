@@ -1,3 +1,4 @@
+import { _curvature } from "../../vfx/curvature";
 import { _material } from "../../utils/material/_material";
 import { _quantization } from "../../utils/quantization/quantization";
 import { getAllBiomes } from "../../utils/utils";
@@ -45,6 +46,12 @@ export const getMaterial = async () => {
   });
 
   material.uniforms.uGridSize = _quantization.uniforms.uGridSize;
+  // World curvature — shared uniform objects, so the terrain bends in lockstep
+  // with everything standing on it (see vfx/curvature.ts). Assigned here rather
+  // than through combineBiomeMaterials so they stay out of the generated
+  // fragment-shader uniform block: they are vertex-only.
+  material.uniforms.uCurveStart = _curvature.uniforms.uCurveStart;
+  material.uniforms.uCurveK = _curvature.uniforms.uCurveK;
   // fwidth() in the city shader guards the freeway lane paint against
   // dash-phase interpolation sweeps (GLSL1 needs the derivatives extension).
   material.extensions.derivatives = true;

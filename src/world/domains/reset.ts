@@ -1,5 +1,5 @@
 import { resetDressingWorker } from "../../objects/dressing/dressingWorker";
-import { resetGrassWorker } from "../../objects/foliage/grass/grassWorker";
+import { resetFoliageWorker } from "../../objects/foliage/foliageWorker";
 import { resetSpawnWorker } from "../../objects/spawning/generateSpawnPoints";
 import { resetTerrainSystem } from "../terrain/TerrainRenderer";
 import { resetActiveDomain } from "./utils";
@@ -24,7 +24,7 @@ import { resetActiveDomain } from "./utils";
 export const resetDomainSystems = () => {
   resetTerrainSystem();
   resetSpawnWorker();
-  resetGrassWorker();
+  resetFoliageWorker();
   resetDressingWorker();
   resetActiveDomain();
 };

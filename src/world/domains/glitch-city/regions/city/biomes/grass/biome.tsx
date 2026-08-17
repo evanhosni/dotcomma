@@ -39,8 +39,8 @@ export const CityGrassBiome = () => (
         slopeRange={[0, 28]} // terrain shader fades grass texture out past ~0.25 rad, keep blades on the green
         slopeBlend={12}
         color="#6fff00"
-        bladeWidth={0.14}
-        bladeHeight={1.3}
+        width={0.14}
+        height={1.3}
         sway={0.5}
         quantization={0.2}
       />
