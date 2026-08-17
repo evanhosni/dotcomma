@@ -32,6 +32,10 @@ import { uploadOnFirstDraw } from "../utils/uploadOnFirstDraw";
  */
 
 const MAX_POOLED_PER_KEY = 8;
+/** Slack on the rest-pose bounds of skinned meshes, so an animated pose
+ *  reaching past the bind pose isn't culled. Conservative is free here —
+ *  GameObject does its own (tighter) distance/frustum test on top. */
+const SKINNED_BOUNDS_PAD = 1.5;
 
 // ── Root-relative skinning (float32 far-from-origin fix) ───────────────────
 // three's stock Skeleton.update writes bone.matrixWorld × boneInverse — an
@@ -51,12 +55,20 @@ const MAX_POOLED_PER_KEY = 8;
 // (bone texture, bind uniforms) stays model-sized. Covers the GPU skinning
 // path AND the CPU one (applyBoneTransform — raycasts, skinned bounds).
 
-const _rootInverse = new THREE.Matrix4();
 const _boneOffset = new THREE.Matrix4();
 const _identityMatrix = new THREE.Matrix4();
+const _skinIndex = new THREE.Vector4();
+const _skinWeight = new THREE.Vector4();
+const _basePosition = new THREE.Vector3();
+const _skinnedVertex = new THREE.Vector3();
 
 class RootRelativeSkeleton extends THREE.Skeleton {
   private readonly root: THREE.Object3D;
+  /** root.matrixWorld⁻¹ as of the last update() — identity until then, which
+   *  is correct while the fresh clone is still detached at the origin. Shared
+   *  with applyBoneTransformRootRelative so the CPU path doesn't invert a
+   *  matrix per vertex. */
+  readonly rootInverse = new THREE.Matrix4();
 
   constructor(bones: THREE.Bone[], boneInverses: THREE.Matrix4[], root: THREE.Object3D) {
     super(bones, boneInverses);
@@ -71,11 +83,11 @@ class RootRelativeSkeleton extends THREE.Skeleton {
     // The renderer calls update() after the scene graph's matrixWorld pass,
     // so root.matrixWorld is current. Inverting here is float64 (JS numbers);
     // one extra 4×4 multiply per bone is noise next to the skinning itself.
-    _rootInverse.copy(this.root.matrixWorld).invert();
+    this.rootInverse.copy(this.root.matrixWorld).invert();
 
     for (let i = 0, il = bones.length; i < il; i++) {
       const matrix = bones[i] ? bones[i].matrixWorld : _identityMatrix;
-      _boneOffset.multiplyMatrices(_rootInverse, matrix).multiply(boneInverses[i]);
+      _boneOffset.multiplyMatrices(this.rootInverse, matrix).multiply(boneInverses[i]);
       _boneOffset.toArray(boneMatrices, i * 16);
     }
 
@@ -83,6 +95,42 @@ class RootRelativeSkeleton extends THREE.Skeleton {
       this.boneTexture.needsUpdate = true;
     }
   }
+}
+
+/** three's stock applyBoneTransform pairs the ABSOLUTE bone.matrixWorld with
+ *  bindMatrixInverse (normally ≈ meshWorld⁻¹, so the two cancel into mesh-LOCAL
+ *  space). Ours is frozen at the root-relative value, so the stock version
+ *  returns near-WORLD-space points — and every caller (computeBoundingSphere /
+ *  computeBoundingBox / raycast) then applies matrixWorld on top, DOUBLING the
+ *  object's world position: the culling sphere ends up thousands of units away
+ *  from the mesh, and skinned actors vanish the moment the sphere's constant
+ *  offset subtends more than the FOV (i.e. as the player gets CLOSE). Inserting
+ *  the root inverse restores the cancellation the frozen bind expects. */
+function applyBoneTransformRootRelative(
+  this: THREE.SkinnedMesh,
+  index: number,
+  vector: THREE.Vector3
+): THREE.Vector3 {
+  const skeleton = this.skeleton as RootRelativeSkeleton;
+  const geometry = this.geometry;
+
+  _skinIndex.fromBufferAttribute(geometry.attributes.skinIndex as THREE.BufferAttribute, index);
+  _skinWeight.fromBufferAttribute(geometry.attributes.skinWeight as THREE.BufferAttribute, index);
+
+  _basePosition.copy(vector).applyMatrix4(this.bindMatrix);
+  vector.set(0, 0, 0);
+
+  for (let i = 0; i < 4; i++) {
+    const weight = _skinWeight.getComponent(i);
+    if (weight === 0) continue;
+    const boneIndex = _skinIndex.getComponent(i);
+    _boneOffset
+      .multiplyMatrices(skeleton.rootInverse, skeleton.bones[boneIndex].matrixWorld)
+      .multiply(skeleton.boneInverses[boneIndex]);
+    vector.addScaledVector(_skinnedVertex.copy(_basePosition).applyMatrix4(_boneOffset), weight);
+  }
+
+  return vector.applyMatrix4(this.bindMatrixInverse);
 }
 
 /** Object3D's updateMatrixWorld WITHOUT SkinnedMesh's attached-mode sync
@@ -130,6 +178,7 @@ const pools = new Map<string, PooledModelClone[]>();
 function cloneModelWithAnimations(gltf: any): {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
+  skinnedMeshes: THREE.SkinnedMesh[];
 } {
   const scene: THREE.Group = gltf.scene.clone(true);
   const animations: THREE.AnimationClip[] = gltf.animations ?? [];
@@ -194,16 +243,17 @@ function cloneModelWithAnimations(gltf: any): {
   for (const node of clonedSkinned) {
     node.bindMatrixInverse.copy(node.matrixWorld).invert().multiply(scene.matrixWorld);
     node.updateMatrixWorld = updateMatrixWorldKeepBind;
+    node.applyBoneTransform = applyBoneTransformRootRelative;
   }
 
-  return { scene, animations };
+  return { scene, animations, skinnedMeshes: clonedSkinned };
 }
 
 /** Fresh clone, fully prepared: materials patched (quantization + lamp glow),
  *  fade state initialized, GPU warm draw queued, mixer created, bounds
  *  measured. Runs ONCE per pooled record — reuses skip all of it. */
 const createClone = (key: string, gltf: any, quantization: number | undefined): PooledModelClone => {
-  const { scene, animations } = cloneModelWithAnimations(gltf);
+  const { scene, animations, skinnedMeshes } = cloneModelWithAnimations(gltf);
 
   const materialSet = new Set<THREE.Material>();
   const skeletonSet = new Set<THREE.Skeleton>();
@@ -246,10 +296,29 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
   });
 
   // Bind-pose bounds, measured once (the scene is detached and untransformed
-  // here, so this is the model's own extent — instances scale it).
+  // here, so this is the model's own extent — instances scale it). This also
+  // populates each skinned mesh's cached local boundingBox, since Box3
+  // computes and keeps one per mesh.
   const bbox = new THREE.Box3().setFromObject(scene);
   const size = new THREE.Vector3();
   bbox.getSize(size);
+
+  // FREEZE the skinned meshes' own culling/raycast bounds here, in rest pose
+  // while the clone still sits at the origin. three otherwise computes them
+  // LAZILY at the first frustum test — i.e. once the actor is already out at
+  // its spawn coordinates — and caches the result for the clone's whole life
+  // (pool reuse included), so a stale, world-sized sphere would keep culling
+  // the mesh at the wrong place. Padded because the rest pose is not the
+  // widest pose an animation reaches.
+  for (const node of skinnedMeshes) {
+    if (node.boundingBox === null) node.computeBoundingBox();
+    if (node.boundingSphere === null) node.boundingSphere = new THREE.Sphere();
+    const box = node.boundingBox!;
+    box.getBoundingSphere(node.boundingSphere);
+    const pad = node.boundingSphere.radius * (SKINNED_BOUNDS_PAD - 1);
+    box.expandByScalar(pad);
+    node.boundingSphere.radius += pad;
+  }
 
   return {
     key,
