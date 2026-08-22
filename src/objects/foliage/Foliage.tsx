@@ -134,10 +134,15 @@ void main() {
   float scale = instanceData.y;
 
   // every instance gets its own fade-out distance scattered across the outer
-  // half of the render distance, so density thins gradually instead of
-  // hitting a wall
+  // 70% of the render distance, so density thins progressively from ~a third
+  // of the way out instead of holding full density and hitting a wall — the
+  // dominant cost lever at long render distances (full density to 0.55×R made
+  // a 500u field ~40% more triangles). The two constants must sum to 1 so no
+  // instance survives past uRenderDistance (the chunk-request gate and the
+  // instanceCount truncation in FoliageField both assume it — keep all three
+  // in sync).
   float instRand = fract(phase * 1.618 + instanceData.z * 12.9898);
-  float fadeEnd = uRenderDistance * (0.55 + 0.45 * instRand);
+  float fadeEnd = uRenderDistance * (0.3 + 0.7 * instRand);
   float dist = distance(cameraPosition.xz, offset.xz);
   float fade = 1.0 - smoothstep(fadeEnd * 0.7, fadeEnd, dist);
 
@@ -199,6 +204,7 @@ interface FoliageChunk {
   cz: number;
   mesh: THREE.Mesh | null; // null = built but empty
   count: number; // full instance count — instanceCount is truncated by distance
+  lowDetail: boolean; // which shared base quad the geometry currently points at
 }
 
 // ── Distance-tiered instance counts ──
@@ -207,16 +213,39 @@ interface FoliageChunk {
 // is exact: the dropped tail is precisely the instances the fade has already
 // shrunk to nothing — they cost full vertex work otherwise (measured: grass
 // was 14.6M of 14.8M rendered triangles). The TAPER below that additionally
-// thins mid-distance density toward a floor — a real (mild) visual reduction,
-// tune the constants to taste.
-const LOD_TAPER_START = 250; // full density inside this distance
-const LOD_TAPER_END = 600; // density floor reached here
-const LOD_TAPER_MIN = 0.6; // fraction of full density at the floor
+// thins mid-distance density toward a floor — a real visual reduction (the
+// dropped tail is the shortest-lived, already-smallest instances, so it reads
+// as extra thinning rather than popping). For the taper to do anything it must
+// fall FASTER than the fade truncation (frac is the min of the two): the fade
+// drops from 1 to 0 across 0.3R→R, so a taper reaching its floor by ~0.7R
+// undercuts it in the mid band; the old 600u endpoint fell slower than the
+// fade everywhere once the fade start moved to 0.3R, making the taper dead.
+const LOD_TAPER_START = 150; // full density inside this distance
+const LOD_TAPER_END = 350; // density floor reached here
+const LOD_TAPER_MIN = 0.25; // fraction of full density at the floor
 const CHUNK_HALF_DIAG = (FOLIAGE_CHUNK_SIZE * Math.SQRT2) / 2;
+
+// ── Distance-tiered blade GEOMETRY ──
+// The near quad carries 3 height segments (8 verts, 6 tris) purely so the wind
+// bend curves instead of shearing — sub-pixel curvature past ~100u on a ~1u
+// blade. Chunks beyond BLADE_DETAIL_DIST swap their shared base attributes for
+// a 1-segment quad (4 verts, 2 tris): at a 500u render distance ~90% of the
+// retained instances sit out there, so this cuts total foliage triangles ~60%
+// for no visible change. The swap only re-points the geometry at the other
+// shared index/position/uv buffers (a VAO re-setup on the next draw, nothing
+// re-uploads); instance attributes, bounds and instanceCount are untouched,
+// and it adds NO per-frame work — it rides the sweep that already runs.
+// Hysteresis must exceed a chunk cell's diagonal (~45u): the settled early-out
+// below can defer a sweep by up to one cell of camera travel, and a smaller
+// band would let that staleness thrash the swap.
+// To A/B this LOD in isolation, set BLADE_DETAIL_DIST = Infinity (disables it).
+const BLADE_DETAIL_DIST = 100; // beyond this (chunk-nearest), use the low quad
+const BLADE_DETAIL_HYSTERESIS = 46; // swap back to full detail below DIST − this
 
 // ── Shared resources (module-level, never disposed) ──
 
 let baseQuadGeometry: THREE.PlaneGeometry | null = null;
+let lowQuadGeometry: THREE.PlaneGeometry | null = null;
 
 /** 1x1 quad with the pivot at the bottom; 3 height segments so sway bends
  *  smoothly. Shared by EVERY chunk of every field. */
@@ -226,6 +255,25 @@ const getBaseQuadGeometry = (): THREE.PlaneGeometry => {
     baseQuadGeometry.translate(0, 0.5, 0);
   }
   return baseQuadGeometry;
+};
+
+/** The far-chunk quad: 1 segment (4 verts, 2 tris vs 8/6) — the wind bend
+ *  shears instead of curving, invisible past BLADE_DETAIL_DIST. Shared by
+ *  EVERY far chunk of every field. */
+const getLowQuadGeometry = (): THREE.PlaneGeometry => {
+  if (!lowQuadGeometry) {
+    lowQuadGeometry = new THREE.PlaneGeometry(1, 1, 1, 1);
+    lowQuadGeometry.translate(0, 0.5, 0);
+  }
+  return lowQuadGeometry;
+};
+
+/** Point a chunk's geometry at one of the two shared base quads. */
+const applyBladeDetail = (geo: THREE.BufferGeometry, low: boolean): void => {
+  const base = low ? getLowQuadGeometry() : getBaseQuadGeometry();
+  geo.setIndex(base.getIndex());
+  geo.setAttribute("position", base.getAttribute("position"));
+  geo.setAttribute("uv", base.getAttribute("uv"));
 };
 
 /** Dispose a chunk's geometry WITHOUT killing the shared quad: the base
@@ -264,7 +312,7 @@ export const FoliageField: React.FC<FoliageProps> = ({
   seed = "foliage",
   quantization,
 }) => {
-  const renderDistance = useFoliageRenderDistance(renderDistanceProp, 120);
+  const renderDistance = useFoliageRenderDistance(renderDistanceProp, 500);
   const groupRef = useRef<THREE.Group>(null);
   const chunksRef = useRef(new Map<number, FoliageChunk>());
   const pendingRef = useRef(new Set<number>());
@@ -402,15 +450,18 @@ export const FoliageField: React.FC<FoliageProps> = ({
       pendingRef.current.delete(key);
 
       if (result.count === 0) {
-        chunksRef.current.set(key, { cx, cz, mesh: null, count: 0 });
+        chunksRef.current.set(key, { cx, cz, mesh: null, count: 0, lowDetail: false });
         return;
       }
 
-      const base = getBaseQuadGeometry();
+      // Born at the detail its distance calls for — the sweep only handles
+      // crossings after that.
+      const ccx = (cx + 0.5) * FOLIAGE_CHUNK_SIZE - camera.position.x;
+      const ccz = (cz + 0.5) * FOLIAGE_CHUNK_SIZE - camera.position.z;
+      const lowDetail = Math.sqrt(ccx * ccx + ccz * ccz) - CHUNK_HALF_DIAG > BLADE_DETAIL_DIST;
+
       const geo = new THREE.InstancedBufferGeometry();
-      geo.setIndex(base.getIndex());
-      geo.setAttribute("position", base.getAttribute("position"));
-      geo.setAttribute("uv", base.getAttribute("uv"));
+      applyBladeDetail(geo, lowDetail);
       geo.setAttribute("offset", new THREE.InstancedBufferAttribute(result.offsets, 3));
       geo.setAttribute("instanceData", new THREE.InstancedBufferAttribute(result.instanceData, 3));
       geo.instanceCount = result.count;
@@ -432,7 +483,7 @@ export const FoliageField: React.FC<FoliageProps> = ({
       // Pay the ~200KB instance-attribute upload NOW (chunk arrivals are
       // already budget-staggered) instead of when the player turns toward it.
       uploadOnFirstDraw(mesh);
-      chunksRef.current.set(key, { cx, cz, mesh, count: result.count });
+      chunksRef.current.set(key, { cx, cz, mesh, count: result.count, lowDetail });
       groupRef.current?.add(mesh);
     });
   };
@@ -484,12 +535,21 @@ export const FoliageField: React.FC<FoliageProps> = ({
         // chunk's nearest possible instance so nothing visible is ever cut;
         // +0.03 pads the uniform-hash count estimate.
         const dNear = Math.max(0, Math.sqrt(distSq) - CHUNK_HALF_DIAG);
-        const t = (dNear / renderDistance - 0.55) / 0.45;
+        const t = (dNear / renderDistance - 0.3) / 0.7;
         const fadeFrac = 1 - Math.min(Math.max(t, 0), 1) + 0.03;
         const taperT = Math.min(Math.max((dNear - LOD_TAPER_START) / (LOD_TAPER_END - LOD_TAPER_START), 0), 1);
         const taperFrac = 1 - taperT * (1 - LOD_TAPER_MIN);
         const frac = Math.min(1, fadeFrac, taperFrac);
         (chunk.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = Math.ceil(chunk.count * frac);
+
+        // Blade-geometry tier (see the BLADE_DETAIL constants above).
+        const low = chunk.lowDetail
+          ? dNear > BLADE_DETAIL_DIST - BLADE_DETAIL_HYSTERESIS
+          : dNear > BLADE_DETAIL_DIST;
+        if (low !== chunk.lowDetail) {
+          chunk.lowDetail = low;
+          applyBladeDetail(chunk.mesh.geometry, low);
+        }
       }
     });
 
@@ -501,7 +561,7 @@ export const FoliageField: React.FC<FoliageProps> = ({
 
     const radius = Math.ceil(renderDistance / FOLIAGE_CHUNK_SIZE);
     // The per-instance fade (see VERTEX_SHADER) zeroes width AND height at
-    // fadeEnd = renderDistance × (0.55 + 0.45 × instRand), instRand < 1 — so
+    // fadeEnd = renderDistance × (0.3 + 0.7 × instRand), instRand < 1 — so
     // NO instance survives past renderDistance. A chunk whose nearest AABB
     // point is at or beyond that can only hold fully-faded (zero-size)
     // instances: never request it. Keep in sync with the shader's fade

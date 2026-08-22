@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import { FLOOR_LIFT, generateBuildingPlan, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
+import { buildProxyHullVertices } from "./proxyCollider";
 import { edgeLength, edgePoint, interpRing, ringPoints } from "./rings";
 import { BuildingOptions, BuildingPlan, DoorPlan, ExteriorLoft, WallBox, WindowSpec } from "./types";
 
@@ -53,6 +54,10 @@ export interface ProceduralBuildingAssets {
    *  edge (the leaf extends +x), so rotating the parent group swings it. */
   doorGeometry: THREE.BufferGeometry;
   doors: DoorPlacement[];
+  /** Point cloud for the COARSE convex collider that stands in while the real
+   *  colliders are out of range (see proxyCollider.ts). A plain typed array —
+   *  nothing to dispose. */
+  proxyHullVertices: Float32Array;
 }
 
 // Interior surface colors come from the plan (derived from the building's
@@ -714,6 +719,7 @@ const assembleBuildingAssets = (
       width: d.width,
       height: d.height,
     })),
+    proxyHullVertices: buildProxyHullVertices(plan),
   };
 
   // Inserted at refcount 0 — the mounting <Building>'s retain effect pins it

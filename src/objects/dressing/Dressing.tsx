@@ -289,6 +289,109 @@ export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry
   return registryRef.current;
 };
 
+// ── Distance-gated colliders ──
+
+/** A collider site: where one piece of dressing stands, and which way it faces.
+ *  `yaw` is carried through from the placement point because a collider that
+ *  isn't square in plan (a power-line crossarm) has to match the instance's
+ *  rotation — the same yaw instancedFromPoints applied to the visual. */
+export interface DressingColliderPoint {
+  key: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+/** Registry entry shape the collider scan needs: the chunk's placement points. */
+export interface ChunkWithPoints extends ChunkRegistryEntry {
+  points: { x: number; y: number; z: number; yaw?: number }[];
+}
+
+/**
+ * The handful of dressing pieces close enough to the camera to be worth a real
+ * collider. Instanced scenery can't carry colliders per instance — thousands of
+ * Rapier shapes would cost far more than the draw calls the instancing saved —
+ * so each feature mounts real colliders ONLY within `distance` and lets the rest
+ * be scenery you walk through at range (nothing is there to touch them).
+ *
+ * This lives in the base because it is identical for every feature that wants
+ * it, and the cheap version of it is wrong in two ways worth stating:
+ *   - the registry sweep must run EVERY interval even when the scan is skipped —
+ *     `forEachAlive` is what prunes unmounted chunks and fires their `onRemove`
+ *     (lamp heads leaving the glow grid);
+ *   - change detection is NUMERIC (count + coordinate hash), not a joined key
+ *     string, and the whole scan is skipped while the camera has barely moved
+ *     and the alive chunk set is unchanged — nothing can have entered or left
+ *     range, and this runs across every mounted chunk of the feature.
+ *
+ * Returns the in-range points; render one <RigidBody> per entry, keyed by `key`.
+ */
+export const useDressingColliders = <T extends ChunkWithPoints>(
+  registry: { forEachAlive: (cb: (entry: T) => void) => void },
+  options: { distance: number; scanIntervalFrames?: number },
+): DressingColliderPoint[] => {
+  const { distance, scanIntervalFrames = 10 } = options;
+  const [colliders, setColliders] = React.useState<DressingColliderPoint[]>([]);
+  const frameCount = useRef(0);
+  const aliveScratch = useRef<T[]>([]);
+  const lastScan = useRef({
+    x: Infinity,
+    z: Infinity,
+    chunkCount: -1,
+    pointCount: -1,
+    colliderCount: -1,
+    colliderHash: 0,
+  });
+
+  useFrame(({ camera }) => {
+    if (frameCount.current++ % scanIntervalFrames !== 0) return;
+
+    const alive = aliveScratch.current;
+    alive.length = 0;
+    let pointCount = 0;
+    registry.forEachAlive((chunk) => {
+      alive.push(chunk);
+      pointCount += chunk.points.length;
+    });
+
+    const last = lastScan.current;
+    const movedSq = (camera.position.x - last.x) ** 2 + (camera.position.z - last.z) ** 2;
+    if (movedSq < 4 && alive.length === last.chunkCount && pointCount === last.pointCount) {
+      alive.length = 0;
+      return;
+    }
+    last.x = camera.position.x;
+    last.z = camera.position.z;
+    last.chunkCount = alive.length;
+    last.pointCount = pointCount;
+
+    const near: DressingColliderPoint[] = [];
+    let hash = 0;
+    const maxDistSq = distance * distance;
+    for (const chunk of alive) {
+      for (const p of chunk.points) {
+        const dx = p.x - camera.position.x;
+        const dz = p.z - camera.position.z;
+        if (dx * dx + dz * dz < maxDistSq) {
+          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z, yaw: p.yaw ?? 0 });
+          hash += p.x * 31 + p.z * 17 + p.y;
+        }
+      }
+    }
+    alive.length = 0;
+    // Coordinates are deterministic, so an equal count + hash means the same
+    // set — no re-render unless something actually entered or left range.
+    if (near.length !== last.colliderCount || hash !== last.colliderHash) {
+      last.colliderCount = near.length;
+      last.colliderHash = hash;
+      setColliders(near);
+    }
+  });
+
+  return colliders;
+};
+
 // ── Chunk lifecycle ──
 
 export interface DressingChunkBounds {

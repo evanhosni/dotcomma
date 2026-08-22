@@ -12,11 +12,9 @@ const GRAPH_WIDTH = 120;
 const GRAPH_HEIGHT = 30;
 const GRAPH_HISTORY = GRAPH_WIDTH; // one sample per pixel
 
-// A low/high spike is held for this long, then cleared so the readout tracks
-// recent behavior instead of the worst thing that ever happened. A new record
-// restarts the countdown.
-const SPIKE_HOLD = 5; // seconds
-const SPIKE_BAR_WIDTH = 36; // px
+// Low/high spikes are held indefinitely — the readout is the worst thing that
+// happened since the last reset, and BACKSPACE clears both back to "--".
+const SPIKE_RESET_KEY = "Backspace";
 
 // Every numeric readout is padded to a fixed character width so that a value
 // gaining or losing a digit never shifts what sits to its right (the font is
@@ -77,19 +75,6 @@ function drawGraph(ctx: CanvasRenderingContext2D, history: number[], maxVal: num
   ctx.stroke();
 }
 
-// Countdown bar shown beside a spike value: full when the record was just set,
-// empty when it is about to expire. Returns the fill element to size per frame.
-function createSpikeBar(): { track: HTMLDivElement; fill: HTMLDivElement } {
-  const track = document.createElement("div");
-  track.style.cssText =
-    `display:inline-block;vertical-align:middle;width:${SPIKE_BAR_WIDTH}px;height:5px;` +
-    "margin-left:6px;border-radius:2px;background:rgba(255,68,68,0.18);overflow:hidden;visibility:hidden;";
-  const fill = document.createElement("div");
-  fill.style.cssText = "height:100%;width:100%;background:#f44;border-radius:2px;";
-  track.appendChild(fill);
-  return { track, fill };
-}
-
 const OverlayHUD = () => {
   const { gl, camera } = useThree();
   const { progress, terrain_loaded } = useGameContext();
@@ -97,7 +82,6 @@ const OverlayHUD = () => {
   const spans = useRef<HTMLSpanElement[]>([]);
   const avgSpans = useRef<HTMLSpanElement[]>([]);
   const spikeSpans = useRef<HTMLSpanElement[]>([]);
-  const spikeBars = useRef<{ track: HTMLDivElement; fill: HTMLDivElement }[]>([]);
   const graphs = useRef<{ ctx: CanvasRenderingContext2D; history: number[] }[]>([]);
 
   const frames = useRef(0);
@@ -114,14 +98,12 @@ const OverlayHUD = () => {
   const avgTime = useRef(0);
   const wasActive = useRef(false);
 
-  // Worst-case spikes over the same sampling window as the averages, each held
-  // for SPIKE_HOLD seconds after it was last beaten. FPS tracks the worst 0.5s
-  // window (a sustained dip); MS tracks the worst SINGLE frame (a one-frame
-  // hitch), so the two are not reciprocals of each other.
+  // Worst-case spikes over the same sampling window as the averages, held until
+  // BACKSPACE clears them. FPS tracks the worst 0.5s window (a sustained dip);
+  // MS tracks the worst SINGLE frame (a one-frame hitch), so the two are not
+  // reciprocals of each other.
   const minFps = useRef(Infinity);
-  const minFpsAge = useRef(0);
   const maxMs = useRef(0);
-  const maxMsAge = useRef(0);
   const fpsWindowClean = useRef(false);
 
   // Peak resource counts, and the auto-scaling ceiling for the memory graph
@@ -136,6 +118,17 @@ const OverlayHUD = () => {
     return () => { gl.info.autoReset = true; };
   }, [gl]);
 
+  // Backspace clears the held low/high records (there is no expiry timer)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== SPIKE_RESET_KEY) return;
+      minFps.current = Infinity;
+      maxMs.current = 0;
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   // Build the DOM overlay imperatively (outside R3F's reconciler)
   useEffect(() => {
     const column = getOrCreateLeftColumn();
@@ -149,7 +142,6 @@ const OverlayHUD = () => {
     const createdSpans: HTMLSpanElement[] = [];
     const createdAvgSpans: HTMLSpanElement[] = [];
     const createdSpikeSpans: HTMLSpanElement[] = [];
-    const createdSpikeBars: { track: HTMLDivElement; fill: HTMLDivElement }[] = [];
     const createdGraphs: { ctx: CanvasRenderingContext2D; history: number[] }[] = [];
 
     LABELS.forEach((label, i) => {
@@ -167,17 +159,12 @@ const OverlayHUD = () => {
         createdAvgSpans.push(avg);
       }
 
-      // Worst-case spike in red + its expiry bar (FPS and MS only — the memory
-      // row's peak never expires, so it needs no countdown)
+      // Worst-case spike in red (FPS and MS only)
       if (i <= I_MS) {
         const spike = document.createElement("span");
         spike.style.color = "#f44";
         container.appendChild(spike);
         createdSpikeSpans.push(spike);
-
-        const bar = createSpikeBar();
-        container.appendChild(bar.track);
-        createdSpikeBars.push(bar);
       }
 
       // Add graph canvas after FPS, MS, Mem rows
@@ -191,7 +178,6 @@ const OverlayHUD = () => {
     spans.current = createdSpans;
     avgSpans.current = createdAvgSpans;
     spikeSpans.current = createdSpikeSpans;
-    spikeBars.current = createdSpikeBars;
     graphs.current = createdGraphs;
     column.appendChild(container);
 
@@ -226,39 +212,16 @@ const OverlayHUD = () => {
     elapsed.current += delta;
     if (!sampling) fpsWindowClean.current = false;
 
-    // Expire held spikes first, so a window closing this frame can immediately
-    // set the next record
-    if (sampling) {
-      if (minFps.current < Infinity) {
-        minFpsAge.current += delta;
-        if (minFpsAge.current >= SPIKE_HOLD) {
-          minFps.current = Infinity;
-          minFpsAge.current = 0;
-        }
-      }
-      if (maxMs.current > 0) {
-        maxMsAge.current += delta;
-        if (maxMsAge.current >= SPIKE_HOLD) {
-          maxMs.current = 0;
-          maxMsAge.current = 0;
-        }
-      }
-    }
-
     if (elapsed.current >= 0.5) {
       lastFps.current = Math.round(frames.current / elapsed.current);
       if (fpsWindowClean.current && lastFps.current < minFps.current) {
         minFps.current = lastFps.current;
-        minFpsAge.current = 0;
       }
       frames.current = 0;
       elapsed.current = 0;
       fpsWindowClean.current = true;
     }
-    if (sampling && ms > maxMs.current) {
-      maxMs.current = ms;
-      maxMsAge.current = 0;
-    }
+    if (sampling && ms > maxMs.current) maxMs.current = ms;
 
     // Renderer resources — works in every browser, and unlike the JS heap these
     // actually track where a Three.js scene spends its memory
@@ -313,20 +276,9 @@ const OverlayHUD = () => {
     }
 
     const sp = spikeSpans.current;
-    const bars = spikeBars.current;
     if (sp.length === 2) {
-      const hasLow = minFps.current < Infinity;
-      const hasHigh = maxMs.current > 0;
-      sp[I_FPS].textContent = `   low ${pad(hasLow ? minFps.current : "--", W_FPS)}`;
-      sp[I_MS].textContent = `   high ${pad(hasHigh ? maxMs.current.toFixed(1) : "--", W_MS)}`;
-      bars[I_FPS].track.style.visibility = hasLow ? "visible" : "hidden";
-      bars[I_MS].track.style.visibility = hasHigh ? "visible" : "hidden";
-      if (hasLow) {
-        bars[I_FPS].fill.style.width = `${Math.max(0, 1 - minFpsAge.current / SPIKE_HOLD) * 100}%`;
-      }
-      if (hasHigh) {
-        bars[I_MS].fill.style.width = `${Math.max(0, 1 - maxMsAge.current / SPIKE_HOLD) * 100}%`;
-      }
+      sp[I_FPS].textContent = `   low ${pad(minFps.current < Infinity ? minFps.current : "--", W_FPS)}`;
+      sp[I_MS].textContent = `   high ${pad(maxMs.current > 0 ? maxMs.current.toFixed(1) : "--", W_MS)}`;
     }
 
     // Update text

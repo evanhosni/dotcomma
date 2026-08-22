@@ -59,5 +59,5 @@ export const GrassField = createFoliage({
   swaySpeed: 1.2,
   slopeRange: [0, 35],
   slopeBlend: 10,
-  renderDistance: 120,
+  renderDistance: 500,
 });
