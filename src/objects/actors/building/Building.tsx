@@ -1,4 +1,4 @@
-import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
+import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { getNightIndex, getWindowLightsProgress } from "../../../lighting/dayNight";
@@ -14,6 +14,7 @@ import {
   releaseProceduralBuildingAssets,
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
+import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
 import { BuildingOptions, BuildingProps } from "./types";
 
 // Beyond this camera distance all of the building's colliders are unmounted
@@ -195,6 +196,7 @@ export const Building = ({
 }: BuildingProps) => {
   const resolvedSeed =
     seed !== undefined ? String(seed) : `${Math.round(coordinates[0])}_${Math.round(coordinates[2])}`;
+  const { world, rapier } = useRapier();
 
   // Keyed on the stringified options so inline array props don't rebuild
   // assets on every parent render (same pattern as the world registrations).
@@ -301,6 +303,9 @@ export const Building = ({
   // loop reading the stale closure sees every door already settled and goes
   // straight back to sleep, eating the click (the "click 3 times" bug).
   const [doorsOpen, setDoorsOpen] = useState<boolean[]>([]);
+  // The proxy collider deliberately keeps NO React state — see
+  // proxyCollider.ts. The handle owns its Rapier body for its whole lifetime.
+  const proxyRef = useRef<ProxyColliderHandle | null>(null);
   const doorsOpenRef = useRef<boolean[]>([]);
   const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const hingeRefs = useRef<(THREE.Group | null)[]>([]);
@@ -404,6 +409,28 @@ export const Building = ({
   useEffect(() => {
     if (collidersActive) traceEvent("building:colliders-on");
   }, [collidersActive]);
+
+  // ---- Proxy collider: the building's COARSE convex hull, mounted exactly when
+  // the real (doored, per-wall) colliders aren't — so a building ALWAYS has a
+  // collider and NPCs can't walk through distant walls (see proxyCollider.ts).
+  // Built IMPERATIVELY rather than as <RigidBody>/<ConvexHullCollider>: every
+  // building past the collider gate carries one, and hundreds of extra Object3Ds
+  // would pay compose() per frame — the very cost this actor's matrix freezing
+  // exists to avoid. It also sidesteps that freeze: a React collider mounted
+  // under a group whose matrixWorldAutoUpdate is off has no current world matrix
+  // to read. Fixed body, no scene graph, no per-frame work at all — the handle
+  // is solid from creation, so there is no frame in which this building is
+  // passable, and no distance gate of its own. ----
+  useEffect(() => {
+    if (!assets || collidersActive) return;
+    const handle = createProxyCollider({ world, rapier }, coordinates, assets.proxyHullVertices);
+    proxyRef.current = handle;
+    return () => {
+      proxyRef.current = null;
+      handle.dispose();
+    };
+    // coordinates is a stable per-spawn tuple; the collider gate drives this
+  }, [assets, collidersActive, world, rapier]);
 
   // Click the hovered door to swing it open/closed
   useEffect(() => {

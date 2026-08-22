@@ -1,11 +1,11 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody } from "@react-three/rapier";
-import { useRef, useState } from "react";
 import * as THREE from "three";
 import {
   getLampPostGeometry,
   LAMP_ARM_X,
   LAMP_COLLIDER_DISTANCE,
+  LAMP_PARTS,
   LAMP_POLE_HEIGHT,
   LAMP_POST_MATERIAL,
   lampYaw,
@@ -25,17 +25,21 @@ import {
   useChunkRegistry,
   useDressingAssets,
   useDressingChunks,
+  useDressingColliders,
   useDressingRenderDistance,
 } from "../Dressing";
 import { DensityPlacement, GameObjectAttributes } from "../../types";
-import { DensityPoint, getDensityPoints } from "../dressingWorker";
+import { getDensityPoints } from "../dressingWorker";
 
 const COLLIDER_SCAN_INTERVAL_FRAMES = 10;
 
 interface LampChunk {
   group: THREE.Group;
   headKeys: string[];
-  points: DensityPoint[];
+  /** Lamp bases WITH their yaw — the collider scan's input. The arm and head
+   *  are off-axis, so their colliders need the same yaw the instance was drawn
+   *  with (see useDressingColliders). */
+  points: { x: number; y: number; z: number; yaw: number }[];
 }
 
 export interface StreetLampsProps extends GameObjectAttributes, DensityPlacement {
@@ -72,22 +76,6 @@ export const StreetLamps = ({
 }: StreetLampsProps) => {
   const resolvedDistance = useDressingRenderDistance(renderDistance, 440);
   const { camera } = useThree();
-  const frameCount = useRef(0);
-  const [colliders, setColliders] = useState<{ key: string; x: number; y: number; z: number }[]>(
-    []
-  );
-  // Last full collider scan: camera position + alive-chunk-set signature
-  // (skip gate) and the in-range lamp set's numeric signature (state-update
-  // change detection) — all cheap number compares, no string joins.
-  const lastScanRef = useRef({
-    x: Infinity,
-    z: Infinity,
-    chunkCount: -1,
-    pointCount: -1,
-    colliderCount: -1,
-    colliderHash: 0,
-  });
-  const aliveScratchRef = useRef<LampChunk[]>([]);
 
   const registry = useChunkRegistry<LampChunk>((chunk) => {
     for (const key of chunk.headKeys) activeLampHeads.delete(key);
@@ -116,8 +104,10 @@ export const StreetLamps = ({
       if (points.length === 0) return null;
 
       const headKeys: string[] = [];
+      const colliderPoints: { x: number; y: number; z: number; yaw: number }[] = [];
       const mesh = instancedFromPoints(getLampPostGeometry(), assets.material, points, (p) => {
         const yaw = lampYaw(p.x, p.z);
+        colliderPoints.push({ x: p.x, y: p.y, z: p.z, yaw });
         // Register the head for the lamp-grid lighting (same as the actor).
         const key = `sli_${p.x}_${p.z}`;
         activeLampHeads.set(key, {
@@ -134,78 +124,53 @@ export const StreetLamps = ({
 
       const group = new THREE.Group();
       group.add(mesh);
-      registry.add({ group, headKeys, points });
+      registry.add({ group, headKeys, points: colliderPoints });
       markLampGridDirty(); // new heads registered above
       return group;
     },
+  });
+
+  // Real colliders for the few lamps near the player. The scan (and the
+  // registry's prune sweep, which is what unregisters departed lamp heads) lives
+  // in the base — traffic lights and power-line posts do exactly the same thing,
+  // and this used to be ~55 lines duplicated here.
+  const colliders = useDressingColliders(registry, {
+    distance: LAMP_COLLIDER_DISTANCE,
+    scanIntervalFrames: COLLIDER_SCAN_INTERVAL_FRAMES,
   });
 
   useFrame((state) => {
     // Shared lighting driver + the global night ramp (one write for all lamps).
     driveLampLighting(camera, state.clock.elapsedTime);
     assets.material.emissiveIntensity = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
-
-    // Colliders for the few lamps near the player.
-    if (frameCount.current++ % COLLIDER_SCAN_INTERVAL_FRAMES !== 0) return;
-
-    // The registry sweep must run EVERY interval even when the scan below is
-    // skipped — forEachAlive is what prunes unmounted chunks and unregisters
-    // their lamp heads. Collect alive chunks + a cheap chunk-set signature
-    // (count + total points) while at it.
-    const alive = aliveScratchRef.current;
-    alive.length = 0;
-    let pointCount = 0;
-    registry.forEachAlive((chunk) => {
-      alive.push(chunk);
-      pointCount += chunk.points.length;
-    });
-
-    // Skip the per-lamp distance scan when the camera has moved < 2u since
-    // the last scan and the alive chunk set is unchanged — nothing can have
-    // entered or left collider range.
-    const last = lastScanRef.current;
-    const movedSq =
-      (camera.position.x - last.x) ** 2 + (camera.position.z - last.z) ** 2;
-    if (movedSq < 4 && alive.length === last.chunkCount && pointCount === last.pointCount) {
-      alive.length = 0;
-      return;
-    }
-    last.x = camera.position.x;
-    last.z = camera.position.z;
-    last.chunkCount = alive.length;
-    last.pointCount = pointCount;
-
-    const near: { key: string; x: number; y: number; z: number }[] = [];
-    let hash = 0;
-    const maxDistSq = LAMP_COLLIDER_DISTANCE * LAMP_COLLIDER_DISTANCE;
-    for (const chunk of alive) {
-      for (const p of chunk.points) {
-        const dx = p.x - camera.position.x;
-        const dz = p.z - camera.position.z;
-        if (dx * dx + dz * dz < maxDistSq) {
-          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z });
-          hash += p.x * 31 + p.z * 17 + p.y;
-        }
-      }
-    }
-    alive.length = 0;
-    // Numeric change detection (coords are deterministic, so equal
-    // sum + count means the same lamp set) instead of a joined key string.
-    if (near.length !== last.colliderCount || hash !== last.colliderHash) {
-      last.colliderCount = near.length;
-      last.colliderHash = hash;
-      setColliders(near);
-    }
   });
 
   return (
     <>
       <group ref={groupRef} />
+      {/* Pole, arm and head, all solid. The body carries the lamp's yaw so the
+          off-axis arm and head line up with the instance that's drawn; box sizes
+          come from LAMP_PARTS, the same numbers the geometry is built from. */}
       {colliders.map((c) => (
-        <RigidBody key={c.key} type="fixed" colliders={false} position={[c.x, c.y, c.z]}>
+        <RigidBody
+          key={c.key}
+          type="fixed"
+          colliders={false}
+          position={[c.x, c.y, c.z]}
+          rotation={[0, c.yaw, 0]}
+        >
+          {/* Slightly proud of the 0.22u pole so its corner can't be clipped. */}
           <CuboidCollider
             args={[0.12, LAMP_POLE_HEIGHT / 2, 0.12]}
             position={[0, LAMP_POLE_HEIGHT / 2, 0]}
+          />
+          <CuboidCollider
+            args={[LAMP_PARTS.arm.w / 2, LAMP_PARTS.arm.h / 2, LAMP_PARTS.arm.d / 2]}
+            position={[LAMP_PARTS.arm.x, LAMP_PARTS.arm.y, 0]}
+          />
+          <CuboidCollider
+            args={[LAMP_PARTS.head.w / 2, LAMP_PARTS.head.h / 2, LAMP_PARTS.head.d / 2]}
+            position={[LAMP_PARTS.head.x, LAMP_PARTS.head.y, 0]}
           />
         </RigidBody>
       ))}

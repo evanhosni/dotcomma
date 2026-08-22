@@ -33,7 +33,10 @@ export const GrassBiome = () => (
           descriptors dedupe by id. */}
       <BuildingActor id="grass-building" biomeIds={[GRASS_BIOME_ID]} density={25} />
     </Actors>
-    <Foliage renderDistance={1000}>
+    {/* GrassField's baked default (500) governs the render distance — a
+        renderDistance on this group is shadowed by the field's own defaults
+        (createFoliage spreads them as props, which beat group context). */}
+    <Foliage>
       <GrassField
         density={8000000}
         slopeRange={[0, 28]} // terrain shader fades grass texture out past ~0.25 rad, keep blades on the green

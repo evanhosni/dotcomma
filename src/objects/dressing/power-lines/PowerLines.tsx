@@ -1,3 +1,4 @@
+import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
@@ -6,15 +7,30 @@ import {
   finalizeInstancedChunk,
   instancedFromPoints,
   setInstanceTransform,
+  useChunkRegistry,
   useDressingAssets,
   useDressingChunks,
+  useDressingColliders,
   useDressingRenderDistance,
   yawFromDir,
 } from "../Dressing";
 import { CityFreewaySidePoint, getFreewaySidePoints } from "../dressingWorker";
 
 const POLE_HEIGHT = 11;
+// Collider half-width: a touch proud of the 0.3u pole so its corner can't be
+// clipped. The WIRES are deliberately left non-solid — they hang at pole height
+// across the freeway, and a collider on them would be an invisible wall in
+// mid-air; the post and its crossarm are solid, the spans between them are not.
+const POLE_HALF_WIDTH = 0.19;
+// Poles only collide this close to the camera (see useDressingColliders).
+const COLLIDER_DISTANCE = 90;
 const ARM_HALF = 1.7; // crossarm half-length (perpendicular to the wires)
+// Crossarm box, shared by the GEOMETRY and its COLLIDER so the two can't drift
+// apart when the art changes. Runs along the pole's local Z (across the run),
+// which is why its collider has to inherit the instance's yaw.
+const ARM_THICKNESS = 0.2; // along local X
+const ARM_DEPTH = 0.25; // vertical
+const ARM_Y = POLE_HEIGHT - 0.85; // center height
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
 // Local attach points (y up the pole, z across it): crossarm ends + top.
 const ATTACH: [number, number][] = [
@@ -22,6 +38,12 @@ const ATTACH: [number, number][] = [
   [POLE_HEIGHT - 0.72, -(ARM_HALF - 0.25)],
   [POLE_HEIGHT - 0.05, 0],
 ];
+
+interface PoleChunk {
+  group: THREE.Group;
+  /** Pole bases — the collider scan's input (see useDressingColliders). */
+  points: { x: number; y: number; z: number }[];
+}
 
 export interface PowerLinesProps {
   renderDistance?: number;
@@ -91,7 +113,14 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
  * freeway (arterials + the belt ring). Each enumerated point carries its
  * successor's position, so every pole owns the wire span to the NEXT pole
  * and runs stay continuous across chunk borders; runs break naturally at
- * interchanges and street mouths. No colliders.
+ * interchanges and street mouths.
+ *
+ * The POST and its CROSSARM are solid within COLLIDER_DISTANCE (real cuboid
+ * colliders for the handful near the player — the same distance-gated pattern
+ * the street lamps use, useDressingColliders); poles further out are scenery,
+ * with nothing near them to collide. The WIRES are never solid: they are strung
+ * between poles at crossarm height, so a collider there is an invisible wall
+ * across the freeway.
  */
 export const PowerLines = ({
   renderDistance,
@@ -100,11 +129,12 @@ export const PowerLines = ({
   junctionClear = 26,
 }: PowerLinesProps) => {
   const resolvedDistance = useDressingRenderDistance(renderDistance, 420);
+  const registry = useChunkRegistry<PoleChunk>();
 
   const assets = useDressingAssets(() => ({
     poleGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.3, POLE_HEIGHT, 0.3).translate(0, POLE_HEIGHT / 2, 0), // pole
-      new THREE.BoxGeometry(0.2, 0.25, ARM_HALF * 2).translate(0, POLE_HEIGHT - 0.85, 0), // crossarm
+      new THREE.BoxGeometry(ARM_THICKNESS, ARM_DEPTH, ARM_HALF * 2).translate(0, ARM_Y, 0), // crossarm
     ]),
     // Unit wire piece spanning 0..1 along +X — scaled per segment.
     wireGeometry: new THREE.BoxGeometry(1, 0.06, 0.06).translate(0.5, 0, 0),
@@ -151,9 +181,46 @@ export const PowerLines = ({
         fillWireSpans(wires, spans);
         group.add(wires);
       }
+      registry.add({
+        group,
+        // yaw travels with the point: the crossarm collider must face the same
+        // way the instanced pole does.
+        points: points.map((p) => ({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ) })),
+      });
       return group;
     },
   });
 
-  return <group ref={groupRef} />;
+  // Real pole colliders for the posts near the player (base hook). This also
+  // owns the registry's prune sweep — PowerLines has no other frame loop.
+  const colliders = useDressingColliders(registry, { distance: COLLIDER_DISTANCE });
+
+  return (
+    <>
+      <group ref={groupRef} />
+      {/* Post + crossarm, both solid. The body carries the instance's yaw, so
+          the crossarm's collider lies along the same axis as the one that's
+          drawn (the post is square in plan, so the rotation is a no-op for it).
+          The WIRES get nothing: they span between poles at crossarm height, and
+          a collider there is an invisible wall across the freeway. */}
+      {colliders.map((c) => (
+        <RigidBody
+          key={c.key}
+          type="fixed"
+          colliders={false}
+          position={[c.x, c.y, c.z]}
+          rotation={[0, c.yaw, 0]}
+        >
+          <CuboidCollider
+            args={[POLE_HALF_WIDTH, POLE_HEIGHT / 2, POLE_HALF_WIDTH]}
+            position={[0, POLE_HEIGHT / 2, 0]}
+          />
+          <CuboidCollider
+            args={[ARM_THICKNESS / 2, ARM_DEPTH / 2, ARM_HALF]}
+            position={[0, ARM_Y, 0]}
+          />
+        </RigidBody>
+      ))}
+    </>
+  );
 };

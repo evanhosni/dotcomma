@@ -16,6 +16,15 @@ export const LAMP_POLE_HEIGHT = 10.8;
 export const LAMP_ARM_X = 1.25; // lamp head offset along the arm
 export const LAMP_COLLIDER_DISTANCE = 60;
 
+/** The lamp's parts as boxes, in POST-LOCAL space (+X along the arm), shared by
+ *  the geometry below and by the colliders StreetLamps mounts — one source, so
+ *  changing the art can't leave a collider behind in the old shape. */
+export const LAMP_PARTS = {
+  pole: { w: 0.22, h: LAMP_POLE_HEIGHT, d: 0.22, x: 0, y: LAMP_POLE_HEIGHT / 2 },
+  arm: { w: 1.5, h: 0.18, d: 0.18, x: 0.65, y: LAMP_POLE_HEIGHT - 0.1 },
+  head: { w: 0.85, h: 0.3, d: 0.45, x: LAMP_ARM_X, y: LAMP_POLE_HEIGHT - 0.35 },
+};
+
 /** Deterministic yaw from a lamp's position, so a lamp faces the same way on
  *  every load (and every chunk rebuild). */
 export const lampYaw = (x: number, z: number): number => Math.abs(x * 7.13 + z * 3.71) % 6.283;
@@ -42,12 +51,14 @@ const paintPart = (g: THREE.BufferGeometry, hex: number, lampMask: number): THRE
 export const getLampPostGeometry = (): THREE.BufferGeometry => {
   if (!lampPostGeometry) {
     const DARK = 0x2d3033;
-    const H = LAMP_POLE_HEIGHT;
+    const { pole, arm, head } = LAMP_PARTS;
+    const box = (p: { w: number; h: number; d: number; x: number; y: number }) =>
+      new THREE.BoxGeometry(p.w, p.h, p.d).translate(p.x, p.y, 0);
     lampPostGeometry = mergeGeometries([
       paintPart(new THREE.BoxGeometry(0.5, 0.35, 0.5).translate(0, 0.18, 0), DARK, 0), // base
-      paintPart(new THREE.BoxGeometry(0.22, H, 0.22).translate(0, H / 2, 0), DARK, 0), // pole
-      paintPart(new THREE.BoxGeometry(1.5, 0.18, 0.18).translate(0.65, H - 0.1, 0), DARK, 0), // arm
-      paintPart(new THREE.BoxGeometry(0.85, 0.3, 0.45).translate(LAMP_ARM_X, H - 0.35, 0), 0xd8d3c2, 1), // head
+      paintPart(box(pole), DARK, 0),
+      paintPart(box(arm), DARK, 0),
+      paintPart(box(head), 0xd8d3c2, 1),
     ]);
   }
   return lampPostGeometry;
