@@ -8,7 +8,6 @@ import * as THREE from "three";
 import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
-import { relockPointerAfterSwitch } from "../world/domains/navigation";
 import { useInput } from "./useInput";
 
 /** Default spawn: BODY-CENTER position high above the origin — the player
@@ -182,17 +181,15 @@ const resolveEmbeddedSurface = async (
 const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
   Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
 
-export interface PlayerProps {
-  /** Where the player's FEET start (ground-level position). When set, the
-   *  capsule spawns standing there (center = y + half height) instead of
-   *  free-falling from the default sky spawn. Home page: [0, 0, 0]. */
-  spawnPosition?: [number, number, number];
-}
-
-export const Player = ({ spawnPosition }: PlayerProps) => {
+/** The first-person controller. Mounted ONCE by CustomCanvas and persists
+ *  across domain switches; the active domain publishes its spawn through
+ *  GameContext (<Domain playerSpawn>), and the outgoing domain resets
+ *  terrain_loaded on unmount, so the hold-at-spawn branch below carries the
+ *  player to the new domain's spawn until its ground exists. */
+export const Player = () => {
   const inputRef = useInput();
   const { camera } = useThree();
-  const { terrain_loaded, playerPosition } = useGameContext();
+  const { terrain_loaded, playerPosition, playerSpawn: spawnPosition } = useGameContext();
   const { noclip } = useDevMode();
 
   const rigidBodyRef = useRef<RapierRigidBody | null>(null);
@@ -211,9 +208,9 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
 
   const { world, rapier } = useRapier();
 
-  // BODY-CENTER spawn: the prop is a feet/ground position (+ a hair of
-  // clearance so the capsule never starts penetrating; snap-to-ground settles
-  // it on the first step), the default is the sky drop.
+  // BODY-CENTER spawn: the domain's spawn is a feet/ground position (+ a hair
+  // of clearance so the capsule never starts penetrating; snap-to-ground
+  // settles it on the first step), the default is the sky drop.
   const spawn = useMemo<[number, number, number]>(
     () =>
       spawnPosition
@@ -251,14 +248,9 @@ export const Player = ({ spawnPosition }: PlayerProps) => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
-  // Carry pointer lock across a client-side world switch: the old canvas's
-  // teardown force-released it, so re-request on OUR controls' element (drei
-  // only flips isLocked when pointerLockElement === its connected element).
-  // No-op except right after switchDomain.
+  // The canvas — and so the pointer-locked element — persists across domain
+  // switches, so the lock simply stays held; nothing to re-request.
   const pointerControlsRef = useRef<PointerLockControlsImpl | null>(null);
-  useEffect(() => {
-    relockPointerAfterSwitch(() => pointerControlsRef.current?.lock());
-  }, []);
 
 
   useFrame((_, delta) => {

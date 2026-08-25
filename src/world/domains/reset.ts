@@ -6,9 +6,11 @@ import { resetActiveDomain } from "./utils";
 
 /**
  * Tear down every module-level system between client-side domain switches.
- * Called by index.tsx in the gap where NO domain/canvas is mounted (two-phase
- * switch: unmount old → reset → mount new), so nothing is using the workers
- * or the active-domain accessors while they reset.
+ * Called by index.tsx in the gap where NO domain is mounted inside the
+ * persistent canvas (two-phase switch: unmount old → reset → mount new), so
+ * nothing is using the workers or the active-domain accessors while they
+ * reset. The canvas, GL context, physics world and Player are NOT reset —
+ * they outlive domains by design.
  *
  * Workers are terminated (their in-worker caches die with them) and their
  * client caches cleared; the active domain unpublishes so whenDomainReady()

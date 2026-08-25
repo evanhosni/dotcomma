@@ -1,7 +1,10 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useThree } from "@react-three/fiber";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import { useGameContext } from "../../context/GameContext";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
 import { buildDomainConfig } from "../../utils/workers/buildDomainConfig";
-import { DEFAULT_RIVER_TEXTURE, DEFAULT_TERRAIN_PARAMS } from "../defaults";
+import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND, DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import { setActiveDomain } from "../domains/utils";
 import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import { Biome, Region, TerrainParams } from "../types";
@@ -32,11 +35,43 @@ interface DomainProps extends React.PropsWithChildren {
    *  domain config still commits, so the analytic height pipeline
    *  (getVertexData — Player backstop/respawn) keeps working. */
   terrain?: boolean;
+  /** Scene background color (default DEFAULT_SCENE_BACKGROUND; the home page
+   *  is black). The canvas persists across domain switches, so this is a
+   *  domain attribute, not a canvas prop. */
+  background?: string;
+  /** Where the player's FEET spawn (ground-level). Unset = the default sky
+   *  drop onto the terrain. Home page: [0, 0, 0]. */
+  playerSpawn?: [number, number, number];
 }
 
-export const Domain = ({ terrain = true, children }: DomainProps) => {
+export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, playerSpawn, children }: DomainProps) => {
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
+  const { scene } = useThree();
+  const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
+
+  // The canvas, physics world, Player and GameContext all OUTLIVE a domain
+  // (index.tsx swaps domains inside ONE persistent <CustomCanvas>, so a
+  // switch never loses the GL context or recompiles shaders). Per-domain
+  // scene state therefore lives here: background, player spawn, and — on
+  // unmount ONLY — the terrain gate reset, so the Player holds at the next
+  // domain's spawn until its ground exists. Not on mount: child effects run
+  // BEFORE this one, and HomeGround/TerrainRenderer set terrain_loaded from
+  // theirs — resetting here afterwards would clobber them.
+  useLayoutEffect(() => {
+    scene.background = new THREE.Color(background);
+    return () => {
+      scene.background = new THREE.Color(DEFAULT_SCENE_BACKGROUND);
+    };
+  }, [scene, background]);
+  useEffect(() => {
+    setPlayerSpawn(playerSpawn ?? null);
+    return () => {
+      setPlayerSpawn(null);
+      setTerrainLoaded(false);
+      setProgress(0);
+    };
+  }, [setPlayerSpawn, setTerrainLoaded, setProgress, playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
 
   const storeRef = useRef<DomainStore | null>(null);
   if (!storeRef.current) {

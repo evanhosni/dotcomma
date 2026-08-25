@@ -20,13 +20,16 @@ const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElem
 initDomainNavigation();
 
 /**
- * ONE page, one canvas at a time — no real routes. The CRT monitor switches
- * domains client-side (switchDomain pushes a fake URL path), and this
- * component remounts the canvas in TWO PHASES: render null so the outgoing
- * domain (GL context, physics, contexts, all effects) unmounts completely,
- * then reset the module-level domain systems (workers, caches, active-domain
- * accessors — resetDomainSystems), then mount the incoming domain on a clean
- * slate. A full page load would do the same job, but it would put a REAL
+ * ONE page, ONE canvas, one domain at a time — no real routes. The CRT
+ * monitor switches domains client-side (switchDomain pushes a fake URL path),
+ * and this component swaps the domain INSIDE the persistent <CustomCanvas> in
+ * TWO PHASES: render no domain so the outgoing one (its terrain bodies,
+ * actors, contexts, all effects) unmounts completely, then reset the
+ * module-level domain systems (workers, caches, active-domain accessors —
+ * resetDomainSystems), then mount the incoming domain on a clean slate. The
+ * canvas itself — GL context, compiled shaders, physics world, Player — is
+ * never torn down, so a switch neither loses the context nor recompiles
+ * anything. A full page load would do the same job, but it would put a REAL
  * navigation entry in history — and the whole point of the fake paths is that
  * every entry behind the player is same-document, so the back button can only
  * ever fire popstate (the escape pod), never unload the game.
@@ -46,18 +49,15 @@ const Dotcomma = () => {
     <DevProvider>
       <DevOverlay />
       <LogsOverlay />
-      {domain === "glitch-city" && (
-        <CustomCanvas>
-          <DayNightLights />
-          <GlitchCityDomain />
-        </CustomCanvas>
-      )}
-      {domain === "home" && (
-        // Home terrain is flat at height 0 — spawn standing at the origin
-        <CustomCanvas background="#000000" playerSpawn={[0, 0, 0]}>
-          <HomeDomain />
-        </CustomCanvas>
-      )}
+      <CustomCanvas>
+        {domain === "glitch-city" && (
+          <>
+            <DayNightLights />
+            <GlitchCityDomain />
+          </>
+        )}
+        {domain === "home" && <HomeDomain />}
+      </CustomCanvas>
     </DevProvider>
   );
 };

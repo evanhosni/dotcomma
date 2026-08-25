@@ -180,8 +180,8 @@ export const resetTerrainSystem = () => {
     const { chunk } = terrain.chunks[key];
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     terrain.group.remove(chunk.plane);
-    // The heightfield bodies belong to the physics world, which dies with the
-    // canvas during a domain switch — drop the handles, nothing to remove.
+    // Heightfield bodies were already removed from the (persistent) physics
+    // world by TerrainRenderer's unmount cleanup; only the handle remains.
     chunk.colliderBody = null;
     delete terrain.chunks[key];
   }
@@ -446,7 +446,19 @@ export const TerrainRenderer = () => {
 
   useEffect(() => {
     scene.add(terrain.group);
-    return () => { scene.remove(terrain.group); };
+    return () => {
+      scene.remove(terrain.group);
+      // The physics world OUTLIVES this domain (one persistent canvas), so
+      // every heightfield body must leave with us — resetDomainSystems runs
+      // afterwards with no world handle and only clears the chunk records.
+      for (const key of Object.keys(terrain.chunks)) {
+        const { chunk } = terrain.chunks[key];
+        if (chunk.colliderBody !== null) {
+          world.removeRigidBody(chunk.colliderBody);
+          chunk.colliderBody = null;
+        }
+      }
+    };
   }, []);
 
   const destroyChunk = (chunkKey: string) => {

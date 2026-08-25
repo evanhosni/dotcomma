@@ -30,7 +30,8 @@ const FLAT_NOISE: TerrainNoiseParams = {
  * powers on after the player clicks in.
  */
 export const HomeDomain = React.memo(() => (
-  <Domain terrain={false}>
+  // Black background; flat ground at height 0, so spawn standing at the origin
+  <Domain terrain={false} background="#000000" playerSpawn={[0, 0, 0]}>
     <Terrain seed="home" baseNoise={FLAT_NOISE} roadNoise={FLAT_NOISE} />
     {/* Pitch-black sky to match the page background */}
     <Skybox topColor="#000000" horizonColor="#000000" bottomColor="#000000" />
