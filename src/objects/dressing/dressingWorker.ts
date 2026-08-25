@@ -2,7 +2,7 @@
  * City dressing placement — worker client.
  *
  * The enumerations (road markers, traffic lights, freeway-side points) run in
- * utils/workers/cityDressing.worker.ts on the shared vertex pipeline; one shared
+ * utils/workers/dressing.worker.ts on the shared vertex pipeline; one shared
  * worker serves every dressing component (RoadMarkers, TrafficLights,
  * PowerLines). The worker also runs the per-chunk biome
  * probe, so a request costs the main thread nothing but the postMessage.
@@ -26,7 +26,7 @@ export type { CityFreewaySidePoint, CitySitePoint, CityTrafficLightPoint, RoadMa
 
 const client = createWorkerClient({
   create: () =>
-    new Worker(new URL("../../utils/workers/cityDressing.worker.ts", import.meta.url), { type: "module" }),
+    new Worker(new URL("../../utils/workers/dressing.worker.ts", import.meta.url), { type: "module" }),
   init: async () => {
     await whenDomainReady();
     return { config: getActiveDomainConfig() };

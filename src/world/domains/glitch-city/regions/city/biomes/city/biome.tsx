@@ -23,7 +23,7 @@ export { CITY_BIOME_ID };
  *
  *  Content comes in the two spawn classes:
  *  - ACTORS: per-object spawns with identity/state/interaction (creatures,
- *    buildings) — one React component each via ObjectPool.
+ *    buildings) — one React component each via ActorPool.
  *  - DRESSING: mass stateless scenery (lamps, markers, signals, power
  *    lines) — instanced chunks, placement enumerated off-thread. */
 export const CityBiome = () => (

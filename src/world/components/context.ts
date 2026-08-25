@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { ActorDescriptor } from "../../objects/spawning/types";
+import { ActorDescriptor } from "../../objects/actors/spawning/types";
 import { BiomeNoiseConfig, MaterialData, RegionMaterialData, TerrainParams } from "../types";
 
 /**

@@ -114,7 +114,7 @@ const convexHull2D = (points: number[][]): number[][] => {
 // Every proxy is owned by one of these handles, created per building. The Rapier
 // body is created and destroyed IMPERATIVELY through it, never via React state:
 // a setState from the frame loop re-renders that Building, which defeats
-// ObjectPool's element-identity bailout (it hands back cached elements so
+// ActorPool's element-identity bailout (it hands back cached elements so
 // unchanged buildings never reconcile) — measured as a 1–5 fps LOSS on its own,
 // worse than the work it was gating.
 //

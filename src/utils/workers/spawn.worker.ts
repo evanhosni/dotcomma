@@ -18,7 +18,7 @@ import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenP
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
 // Type-only imports — erased at build time, so the React-dependent module
 // never enters the worker bundle.
-import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/spawning/types";
+import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
 
 const SPAWN_CHUNK_SIZE = 250;
 

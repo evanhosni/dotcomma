@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { TaskQueue } from "../../utils/task-queue/TaskQueue";
+import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
 import {
   BoxColliderProps,
   CapsuleColliderProps,

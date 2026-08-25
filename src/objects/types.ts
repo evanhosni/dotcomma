@@ -9,8 +9,8 @@
  *   - ACTORS   — base: objects/actors/Actor.tsx
  *     Per-object spawns with identity, state, or interaction — beebles,
  *     buildings. One React component each, mounted through the spawn
- *     lifecycle (objects/spawning/ObjectPool.tsx). Descriptor type:
- *     ActorDescriptor (objects/spawning/types.ts). Hundreds at once, tops.
+ *     lifecycle (objects/actors/spawning/ActorPool.tsx). Descriptor type:
+ *     ActorDescriptor (objects/actors/spawning/types.ts). Hundreds at once, tops.
  *   - DRESSING — base: objects/dressing/Dressing.tsx
  *     Mass stateless identical scenery — street lamps, road markers, traffic
  *     lights, power lines. InstancedMesh per 256u chunk, zero per-object

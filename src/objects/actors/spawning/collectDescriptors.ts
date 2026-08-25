@@ -1,4 +1,4 @@
-import { Region } from "../../world/types";
+import { Region } from "../../../world/types";
 import { ActorDescriptor } from "./types";
 
 /**

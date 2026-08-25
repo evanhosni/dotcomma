@@ -1,4 +1,4 @@
-import { ActorDescriptor } from "../../spawning/types";
+import { ActorDescriptor } from "../spawning/types";
 import { createActor } from "../../../world/components";
 import { Beeble } from "./Beeble";
 

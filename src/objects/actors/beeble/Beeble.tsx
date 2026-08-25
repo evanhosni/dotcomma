@@ -2,11 +2,11 @@ import { RigidBody, CapsuleCollider, useRapier } from "@react-three/rapier";
 import { RootState } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { GameObject } from "../GameObject";
+import { ModelActor } from "../ModelActor";
 import { ActorFrameContext } from "../Actor";
-import { ActorProps } from "../../spawning/types";
-import { useMouseEvents } from "../../state/useMouseEvents";
-import { useStateMachine } from "../../state/useStateMachine";
+import { ActorProps } from "../spawning/types";
+import { useMouseEvents } from "../state/useMouseEvents";
+import { useStateMachine } from "../state/useStateMachine";
 import { framePhaseFromCoords } from "../../../utils/utils";
 import { BEEBLE_SM } from "./stateMachine";
 import type { RapierRigidBody } from "@react-three/rapier";
@@ -42,7 +42,7 @@ const _nextTranslation = { x: 0, y: 0, z: 0 };
 
 /** The beeble NPC. ALL of its per-frame work — state machine, mouse events,
  *  the kinematic character controller — runs through ONE callback handed to
- *  <GameObject onFrame>, i.e. inside the shared actor frame driver. It used to
+ *  <ModelActor onFrame>, i.e. inside the shared actor frame driver. It used to
  *  own three useFrame subscribers (physics + one inside each hook) on top of
  *  the driver, each recomputing the camera distance the base already had. */
 export const Beeble = (props: ActorProps) => {
@@ -182,7 +182,7 @@ export const Beeble = (props: ActorProps) => {
           group in R3F's interaction list, costing a recursive raycast (full
           CPU-skinned triangle tests) per beeble on every pointermove. */}
       <group ref={groupRef as any}>
-        <GameObject
+        <ModelActor
           model="/models/beeble.glb"
           positionRef={positionRef}
           animationControl={sm.animationControl}

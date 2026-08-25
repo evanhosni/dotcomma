@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ObjectPool } from "../../objects/spawning/ObjectPool";
+import { ActorPool } from "../../objects/actors/spawning/ActorPool";
 import { buildDomainConfig } from "../../utils/workers/buildDomainConfig";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import { setActiveDomain } from "../domains/utils";
@@ -59,7 +59,7 @@ export const Domain = ({ terrain = true, children }: DomainProps) => {
         {ready && (
           <>
             {terrain && <TerrainRenderer />}
-            <ObjectPool />
+            <ActorPool />
             <SkyboxSystem />
           </>
         )}

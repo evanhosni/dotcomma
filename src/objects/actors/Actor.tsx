@@ -12,7 +12,7 @@ import { _curvature } from "../../vfx/curvature";
  *
  * An actor is a thing with its own identity, state, or interaction — a beeble,
  * a building — mounted as its own React component by the spawn lifecycle
- * (objects/spawning/ObjectPool.tsx). Every actor, whether its content is a
+ * (objects/actors/spawning/ActorPool.tsx). Every actor, whether its content is a
  * GLTF model or procedural geometry, gets the SAME behavior from this file:
  *
  *   - ONE shared frame driver for every mounted actor (no useFrame per
@@ -27,7 +27,7 @@ import { _curvature } from "../../vfx/curvature";
  *   - and prepareActorMaterial: ALL shared material logic in one call.
  *
  * There are two ways to build on it, and both are "extending Actor":
- *   - <GameObject> (actors/GameObject.tsx) — the standard GLTF actor. Most
+ *   - <ModelActor> (actors/ModelActor.tsx) — the standard GLTF actor. Most
  *     actors just render one of these.
  *   - useActorLifecycle — the hook underneath it, for actors that own their
  *     geometry and render shape (Building). They get identical lifecycle
@@ -56,7 +56,7 @@ const COLLIDER_ACTIVATION_WINDOW_S = 0.05;
 let lastColliderActivationTime = -Infinity;
 
 // ── Shared frame driver ─────────────────────────────────────────────────────
-// ONE frame subscriber for ALL mounted actors (driven by ObjectPool's
+// ONE frame subscriber for ALL mounted actors (driven by ActorPool's
 // useFrame) instead of a useFrame per instance: with hundreds of actors up,
 // per-instance hooks meant that many R3F subscriber invocations and
 // subscription churn on every spawn batch. Instances register a "latest
@@ -69,7 +69,7 @@ const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
 
 /** Runs every mounted actor's per-frame work. Called once per frame from
- *  ObjectPool's frame loop — which <Domain> always mounts, so any actor
+ *  ActorPool's frame loop — which <Domain> always mounts, so any actor
  *  inside a domain tree is driven. */
 export const driveActorFrames = (state: RootState, delta: number): void => {
   if (frameUpdaters.size === 0) return;
@@ -186,7 +186,7 @@ export interface ActorLifecycle {
   destroyedRef: React.MutableRefObject<boolean>;
   /** Re-arm this instance for a fresh life: fade back to invisible, warm-up
    *  window reopened, destroy flag cleared. Actors backed by a POOLED clone
-   *  (GameObject) call this on mount, since the clone's materials carry the
+   *  (ModelActor) call this on mount, since the clone's materials carry the
    *  previous life's opacity. */
   resetLife: () => void;
 }

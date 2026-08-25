@@ -16,8 +16,8 @@ import {
   onMouseScrollUp,
   playerOutsideRange,
   randomInterval,
-} from "../../state/triggers";
-import { BehaviorContext, StateMachineConfig } from "../../state/types";
+} from "../state/triggers";
+import { BehaviorContext, StateMachineConfig } from "../state/types";
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
