@@ -17,7 +17,8 @@ import { DomainConfig, initCompute, computeVertexData, seedRand } from "./vertex
 import { smoothstep } from "../math/_math";
 
 const GRID_STEP = 2; // world units between terrain samples
-const MAX_INSTANCES_PER_CHUNK = 16384;
+// 64u chunks at the grass field's 8M density place ~32k blades per chunk.
+const MAX_INSTANCES_PER_CHUNK = 65536;
 const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
 
 // ── Inline params type (mirrors FoliageChunkParams in foliage/grass/grassWorker.ts) ──
