@@ -14,34 +14,13 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, seedRand } from "./vertexCompute";
+import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints } from "./vertexCompute";
+import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
+// Type-only imports — erased at build time, so the React-dependent module
+// never enters the worker bundle.
+import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/spawning/types";
 
 const SPAWN_CHUNK_SIZE = 250;
-
-// ── Inline types (avoid importing from types.ts which depends on React) ──
-
-interface SpawnPoint {
-  x: number;
-  z: number;
-  height: number;
-  biomeId: number;
-  descriptorId: string;
-}
-
-interface SerializedDescriptor {
-  id: string;
-  footprint: number;
-  density: number;
-  clustering: number;
-  renderDistance: number;
-  priority?: number;
-  biomeIds?: number[];
-  heightRange?: [number, number];
-  slopeRange?: [number, number];
-  roadDistanceRange?: [number, number];
-  spacingOverrides?: Record<string, number>;
-  flattenGround?: boolean;
-}
 
 // ── Inline Spatial Hash ──
 
@@ -227,29 +206,18 @@ const generateForChunk = (
 
     if (desc.density <= 0) continue;
 
-    const cellSize = Math.sqrt(1_000_000 / desc.density);
-    const startCellX = Math.floor(chunkMinX / cellSize);
-    const endCellX = Math.floor((chunkMinX + SPAWN_CHUNK_SIZE) / cellSize);
-    const startCellZ = Math.floor(chunkMinZ / cellSize);
-    const endCellZ = Math.floor((chunkMinZ + SPAWN_CHUNK_SIZE) / cellSize);
+    // Shared density scheme (utils/workers/densityPlacement.ts) — the flatten
+    // engine replays these exact rolls for flattenGround actors.
+    const cellSize = densityCellSize(desc.density);
+    const [startCellX, endCellX] = densityCellRange(chunkMinX, chunkMinX + SPAWN_CHUNK_SIZE, cellSize);
+    const [startCellZ, endCellZ] = densityCellRange(chunkMinZ, chunkMinZ + SPAWN_CHUNK_SIZE, cellSize);
+    const probability = densityProbability(desc.density, cellSize);
 
     for (let gx = startCellX; gx <= endCellX; gx++) {
       for (let gz = startCellZ; gz <= endCellZ; gz++) {
-        const seed = `${desc.id}_${gx}_${gz}`;
-        const rand = seedRand(seed);
-
-        // Clustering gate
-        if (desc.clustering > 0) {
-          const clusterSeed = `cluster_${desc.id}_${gx}_${gz}`;
-          const clusterRand = seedRand(clusterSeed);
-          if (clusterRand < desc.clustering * 0.7) continue;
-        }
-
-        const jitterX = seedRand(seed + "_x");
-        const jitterZ = seedRand(seed + "_z");
-
-        const x = gx * cellSize + jitterX * cellSize;
-        const z = gz * cellSize + jitterZ * cellSize;
+        const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
+        if (!roll) continue;
+        const { x, z } = roll;
 
         // Only place within this chunk
         if (
@@ -261,32 +229,13 @@ const generateForChunk = (
           continue;
         }
 
-        const probability = (desc.density * cellSize * cellSize) / 1_000_000;
-        if (rand > probability) continue;
-
         // Get vertex data from inlined compute pipeline
         const vd = computeVertexData(x, z);
 
-        // Biome restriction
-        if (desc.biomeIds && desc.biomeIds.length > 0) {
-          if (!desc.biomeIds.includes(vd.biomeId)) continue;
-        }
-
-        // Height restriction
-        if (desc.heightRange) {
-          if (vd.height < desc.heightRange[0] || vd.height > desc.heightRange[1])
-            continue;
-        }
-
-        // Road distance restriction (distance to the road centerline —
-        // in the city: keeps buildings inside blocks, lamps on sidewalks)
-        if (desc.roadDistanceRange) {
-          if (
-            vd.distanceToRoadCenter < desc.roadDistanceRange[0] ||
-            vd.distanceToRoadCenter > desc.roadDistanceRange[1]
-          )
-            continue;
-        }
+        // Biome / height / road-distance restrictions (road distance = distance
+        // to the road centerline — in the city: keeps buildings inside blocks,
+        // lamps on sidewalks)
+        if (!passesPlacementFilters(vd, desc)) continue;
 
         // Spacing check via spatial hash
         if (

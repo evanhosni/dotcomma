@@ -1,4 +1,4 @@
-import { TerrainNoiseParams } from "../utils/noise/_noise";
+import { TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
 export interface CityConfig {
   seed: string;

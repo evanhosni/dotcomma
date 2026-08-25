@@ -27,7 +27,24 @@ export interface UseMouseEventsOptions {
    *  value (hash of spawn coords) so batch-mounted actors don't all raycast
    *  on the same frame. */
   framePhase?: number;
+  /** The owner calls the returned `tick(camera, distanceSq)` from its actor
+   *  `onFrame` instead of this hook subscribing its own useFrame (see
+   *  useStateMachine's option of the same name). `distanceSq` is the actor
+   *  base's 2D squared camera distance — a lower bound on the 3D one, so it
+   *  gates the raycast for free. */
+  externallyDriven?: boolean;
 }
+
+export interface MouseEventsHandle {
+  tick: (camera: THREE.Camera, distanceSq?: number) => void;
+}
+
+/** Raise a one-shot mouse flag on a blackboard. The dirty bit lets the state
+ *  machine clear the one-shot set only on frames where something was raised. */
+const raise = (bb: Record<string, any>, flag: string): void => {
+  bb[flag] = true;
+  bb.__mouse_dirty = true;
+};
 
 const DEFAULT_DISTANCE = 5;
 
@@ -59,7 +76,7 @@ export function useMouseEvents(
   sm: StateMachineHandle,
   groupRef: React.MutableRefObject<THREE.Group | null>,
   options: UseMouseEventsOptions = {},
-): void {
+): MouseEventsHandle {
   const bb = sm.blackboard;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
@@ -99,7 +116,7 @@ export function useMouseEvents(
   );
 
   // Raycast from screen center, throttled to every 3 frames
-  useFrame(({ camera }) => {
+  const tick = (camera: THREE.Camera, distanceSq2D = 0): void => {
     frameCountRef.current++;
 
     // Only raycast every 3 frames; reuse last result on skip frames
@@ -110,13 +127,16 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      // Cheap 3D distance pre-check — skip all geometry work if the
-      // player is too far for any event to fire
-      const dist3DSq = camera.position.distanceToSquared(groupRef.current.position);
-      // Add padding for object height/radius
+      // Cheap distance pre-check — skip all geometry work if the player is
+      // too far for any event to fire. The caller's 2D squared distance (when
+      // driven by the actor base) rejects first without touching the group.
+      // Add padding for object height/radius.
       const threshold = maxEventDist + 3;
+      const thresholdSq = threshold * threshold;
+      const dist3DSq =
+        distanceSq2D > thresholdSq ? Infinity : camera.position.distanceToSquared(groupRef.current.position);
 
-      if (dist3DSq > threshold * threshold) {
+      if (dist3DSq > thresholdSq) {
         hitDistRef.current = Infinity;
       } else {
         _raycaster.setFromCamera(_center, camera);
@@ -193,17 +213,24 @@ export function useMouseEvents(
 
     if (isHovering && !activeHoverRef.current) {
       activeHoverRef.current = true;
-      bb.__mouse_hover_enter = true;
+      raise(bb, "__mouse_hover_enter");
       bb.__mouse_hover_active = true;
       if (growCursor) showCursor();
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
-      bb.__mouse_hover_leave = true;
+      raise(bb, "__mouse_hover_leave");
       // Write false instead of delete — deleting keys forces the blackboard
       // into dictionary mode; truthiness semantics are identical
       bb.__mouse_hover_active = false;
       if (growCursor) hideCursor();
     }
+  };
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
+
+  const externallyDriven = options.externallyDriven ?? false;
+  useFrame(({ camera }) => {
+    if (!externallyDriven) tickRef.current(camera);
   });
 
   // DOM event listeners — use our manual raycast hit distance instead of
@@ -214,62 +241,50 @@ export function useMouseEvents(
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
       if (dist() > d.leftClick) return;
-      console.log("onMouseLeftClick");
-      bb.__mouse_left_click = true;
+      raise(bb, "__mouse_left_click");
     };
 
-    const handleContextMenu = (e: MouseEvent) => {
+    const handleContextMenu = () => {
       if (dist() > d.rightClick) return;
-      console.log("onMouseRightClick");
-      bb.__mouse_right_click = true;
+      raise(bb, "__mouse_right_click");
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > d.leftClickDown) return;
-        console.log("onMouseLeftClickDown");
-        bb.__mouse_left_click_down = true;
+        raise(bb, "__mouse_left_click_down");
       } else if (e.button === 1) {
         if (dist() > d.middleClick) return;
-        console.log("onMouseMiddleClick");
-        bb.__mouse_middle_click = true;
+        raise(bb, "__mouse_middle_click");
       } else if (e.button === 2) {
         if (dist() > d.rightClickDown) return;
-        console.log("onMouseRightClickDown");
-        bb.__mouse_right_click_down = true;
+        raise(bb, "__mouse_right_click_down");
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > d.leftClickUp) return;
-        console.log("onMouseLeftClickUp");
-        bb.__mouse_left_click_up = true;
+        raise(bb, "__mouse_left_click_up");
       } else if (e.button === 2) {
         if (dist() > d.rightClickUp) return;
-        console.log("onMouseRightClick");
-        bb.__mouse_right_click = true;
-        console.log("onMouseRightClickUp");
-        bb.__mouse_right_click_up = true;
+        raise(bb, "__mouse_right_click");
+        raise(bb, "__mouse_right_click_up");
       }
     };
 
     const handleDblClick = () => {
       if (dist() > d.doubleClick) return;
-      console.log("onMouseDoubleClick");
-      bb.__mouse_double_click = true;
+      raise(bb, "__mouse_double_click");
     };
 
     const handleWheel = (e: WheelEvent) => {
       if (dist() > d.scroll) return;
-      console.log("onMouseScroll");
-      bb.__mouse_scroll = true;
+      raise(bb, "__mouse_scroll");
       if (e.deltaY < 0 && dist() <= d.scrollUp) {
-        console.log("onMouseScrollUp");
-        bb.__mouse_scroll_up = true;
+        raise(bb, "__mouse_scroll_up");
       } else if (e.deltaY > 0 && dist() <= d.scrollDown) {
-        console.log("onMouseScrollDown");
-        bb.__mouse_scroll_down = true;
+        raise(bb, "__mouse_scroll_down");
       }
     };
 
@@ -290,9 +305,10 @@ export function useMouseEvents(
     };
   }, [bb, d]);
 
-  // No return value: all events are handled via the DOM listeners + manual
-  // raycast above. Deliberately NOTHING is attached to the R3F group —
-  // returning even no-op pointer handlers registered every actor in R3F's
-  // interaction list, triggering a recursive raycast (full CPU-skinned
-  // triangle tests) per actor on every pointermove.
+  // All events are handled via the DOM listeners + manual raycast above.
+  // Deliberately NOTHING is attached to the R3F group — returning even no-op
+  // pointer handlers registered every actor in R3F's interaction list,
+  // triggering a recursive raycast (full CPU-skinned triangle tests) per
+  // actor on every pointermove. The handle only exposes the frame tick.
+  return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq) => tickRef.current(camera, distanceSq) }), []);
 }

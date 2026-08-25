@@ -2,7 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
-import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../lighting/dayNight";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
 import { _quantization } from "../../utils/quantization/quantization";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
@@ -87,28 +87,15 @@ uniform float uSwaySpeed;
 uniform float uWidth;
 uniform float uHeight;
 uniform float uRenderDistance;
-uniform float uGridSize;
-// World curvature — see vfx/curvature.ts. Foliage bends with the ground it
-// stands on because both run this identical function on the view position.
-uniform float uCurveStart;
-uniform float uCurveK;
 
 varying vec2 vUv;
 varying float vTint;
 
-vec3 quantizeWorldPos(vec3 worldPos) {
-  if (uGridSize <= 0.0) return worldPos;
-  return floor(worldPos / uGridSize + 0.5) * uGridSize;
-}
-
-vec3 curveViewPos(vec3 viewPos) {
-  if (uCurveK <= 0.0) return viewPos;
-  vec3 up = viewMatrix[1].xyz;
-  float h = dot(viewPos, up);
-  float r = length(viewPos - up * h);
-  float d = max(0.0, r - uCurveStart);
-  return viewPos - up * (uCurveK * d * d);
-}
+// Quantization + world curvature — the SAME chunks (uniform declarations +
+// functions) every patched material and the terrain shader use, interpolated
+// from their single sources so foliage bends with the ground it stands on.
+${_quantization.QUANTIZE_GLSL}
+${_curvature.CURVE_GLSL}
 
 void main() {
   vUv = uv;
@@ -189,7 +176,7 @@ void main() {
   // per-instance tint variation + slight darkening toward the base
   vec3 col = uColor * tex.rgb * (0.85 + vTint * 0.3) * (0.75 + 0.25 * vUv.y);
   // unlit shader — dim with the day/night cycle like the terrain does
-  col *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
+  ${nightDimGLSL("col")}
   gl_FragColor = vec4(col, 1.0);
 }
 `;

@@ -6,6 +6,9 @@
  * worker serves every dressing component (RoadMarkers, TrafficLights,
  * PowerLines). The worker also runs the per-chunk biome
  * probe, so a request costs the main thread nothing but the postMessage.
+ *
+ * Lifecycle/plumbing (lazy boot, INIT handshake, request ids, teardown) comes
+ * from the shared worker-client base — this file is only the typed wrappers.
  */
 
 import {
@@ -15,66 +18,29 @@ import {
   RoadMarkerPoint,
   VertexResult,
 } from "../../utils/workers/vertexCompute";
+import type { DensityPointParams } from "../../utils/workers/densityPlacement";
+import { createWorkerClient } from "../../utils/workers/workerClient";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 
 export type { CityFreewaySidePoint, CitySitePoint, CityTrafficLightPoint, RoadMarkerPoint };
 
-let worker: Worker | null = null;
-let initPromise: Promise<void> | null = null;
-const pendingRequests = new Map<number, (points: any[]) => void>();
-let nextRequestId = 0;
-
-const handleMessage = (e: MessageEvent) => {
-  if (e.data.type === "DRESSING_RESULT") {
-    const resolve = pendingRequests.get(e.data.id);
-    if (resolve) {
-      resolve(e.data.points);
-      pendingRequests.delete(e.data.id);
-    }
-  }
-};
+const client = createWorkerClient({
+  create: () =>
+    new Worker(new URL("../../utils/workers/cityDressing.worker.ts", import.meta.url), { type: "module" }),
+  init: async () => {
+    await whenDomainReady();
+    return { config: getActiveDomainConfig() };
+  },
+  resultType: "DRESSING_RESULT",
+});
 
 /** Domain switch (resetDomainSystems): drop the worker so the next dressing
  *  request re-inits it with the new world's config. In-flight requests never
  *  resolve — callers unmounted with the old world. */
-export const resetDressingWorker = () => {
-  worker?.terminate();
-  worker = null;
-  initPromise = null;
-  pendingRequests.clear();
-};
+export const resetDressingWorker = client.reset;
 
-/** Lazily spin up + init the shared worker (idempotent). */
-const ensureWorker = async (): Promise<void> => {
-  if (!initPromise) {
-    initPromise = (async () => {
-      await whenDomainReady();
-      const config = getActiveDomainConfig();
-      worker = new Worker(new URL("../../utils/workers/cityDressing.worker.ts", import.meta.url), {
-        type: "module",
-      });
-      await new Promise<void>((resolve) => {
-        worker!.onmessage = (e: MessageEvent) => {
-          if (e.data.type === "INIT_DONE") {
-            worker!.onmessage = handleMessage;
-            resolve();
-          }
-        };
-        worker!.postMessage({ type: "INIT", config });
-      });
-    })();
-  }
-  return initPromise;
-};
-
-const request = async (message: Record<string, unknown>): Promise<any[]> => {
-  await ensureWorker();
-  const id = nextRequestId++;
-  return new Promise((resolve) => {
-    pendingRequests.set(id, resolve);
-    worker!.postMessage({ ...message, id });
-  });
-};
+const request = (message: Record<string, unknown>): Promise<any[]> =>
+  client.request<{ points: any[] }>(message).then((r) => r.points);
 
 /** Raised-pavement-marker positions along city road centerlines. */
 export const getRoadMarkers = (
@@ -110,14 +76,7 @@ export const getFreewaySidePoints = (
 ): Promise<CityFreewaySidePoint[]> =>
   request({ type: "FREEWAY_SIDES", minX, minZ, maxX, maxZ, spacing, lateral, junctionClear, withNext });
 
-export interface DensityPointParams {
-  seedTag: string;
-  density: number;
-  footprint: number;
-  biomeIds?: number[];
-  roadDistanceRange?: [number, number];
-  heightRange?: [number, number];
-}
+export type { DensityPointParams };
 
 export interface DensityPoint {
   x: number;

@@ -18,23 +18,13 @@ varying vec3 vWorldNormal;
 varying vec3 vWorldPos;
 varying vec3 vWorldPosAbs;
 
-uniform float uGridSize;
-
-// World curvature ("walking on a globe") — see vfx/curvature.ts. Applied to
-// the VIEW-space position only: vWorldPos/vWorldNormal and every distance
-// varying stay FLAT, so texturing, the fwidth() seam guards and the lamp-glow
-// lookup are all untouched by it.
-uniform float uCurveStart;
-uniform float uCurveK;
-
-vec3 curveViewPos(vec3 viewPos) {
-  if (uCurveK <= 0.0) return viewPos;
-  vec3 up = viewMatrix[1].xyz;              // world +Y in view space
-  float h = dot(viewPos, up);
-  float r = length(viewPos - up * h);       // horizontal camera distance
-  float d = max(0.0, r - uCurveStart);
-  return viewPos - up * (uCurveK * d * d);
-}
+// quantizeWorldPos() and curveViewPos() (world curvature — "walking on a
+// globe", see vfx/curvature.ts; applied to the VIEW-space position only, so
+// vWorldPos/vWorldNormal and every distance varying stay FLAT) are PREPENDED
+// by world/terrain/material.ts from their single sources
+// (_quantization.QUANTIZE_GLSL, _curvature.CURVE_GLSL) — the same chunks every
+// patched material and the foliage shader use. WORLD_WRAP arrives as a
+// material define (world/shaders/constants.ts).
 
 // ── Distance-from-origin precision ───────────────────────────────────────
 // NOTHING in this shader may form an ABSOLUTE world coordinate. GLSL is
@@ -60,12 +50,6 @@ vec3 curveViewPos(vec3 viewPos) {
 // multiples of 210 (=WORLD_WRAP/20), which makes the mod() below exact.
 // Anything new that reads vWorldPos with a world-space period must divide
 // WORLD_WRAP, or it will seam every 4200 units.
-#define WORLD_WRAP 4200.0
-
-vec3 quantizeWorldPos(vec3 worldPos) {
-  if (uGridSize <= 0.0) return worldPos;
-  return floor(worldPos / uGridSize + 0.5) * uGridSize;
-}
 
 void main() {
   vDistanceToBiomeBoundaryCenter = distanceToBiomeBoundaryCenter;

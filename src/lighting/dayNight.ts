@@ -41,6 +41,11 @@ export type DayNightPhase = "day" | "dusk" | "night" | "dawn";
 export const NIGHT_BLEND_UNIFORM = { value: 0 };
 /** How dark unlit custom shaders (terrain, grass) get at full night. */
 export const NIGHT_GROUND_DIM = 0.22;
+/** The GLSL line an unlit custom shader uses to dim `target` (an rgb
+ *  expression) by the night blend — expects `uniform float uNightBlend`
+ *  bound to NIGHT_BLEND_UNIFORM. */
+export const nightDimGLSL = (target: string): string =>
+  `${target} *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);`;
 
 let nightBlend = 0; // 0 = full day, 1 = full night
 let phase: DayNightPhase = "day";

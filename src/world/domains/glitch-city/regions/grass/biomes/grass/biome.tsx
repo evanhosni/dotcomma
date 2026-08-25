@@ -4,7 +4,8 @@ import { GrassField } from "../../../../../../../objects/foliage/grass/GrassFiel
 import { Actors, Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
 
-export const GRASS_BIOME_ID = 3;
+import { GRASS_BIOME_ID } from "../../../../../../constants";
+export { GRASS_BIOME_ID };
 
 /** Grassland biome: rolling noise terrain covered in swaying billboard grass.
  *  Shares biome id 3 with the city region's CityGrassBiome — registrations for

@@ -1,7 +1,8 @@
 import { Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
 
-export const DUST_BIOME_ID = 2;
+import { DUST_BIOME_ID } from "../../../../../../constants";
+export { DUST_BIOME_ID };
 
 /** Desert biome: dusty dunes. */
 export const DustBiome = () => (

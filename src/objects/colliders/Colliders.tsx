@@ -142,8 +142,8 @@ export const TrimeshCollider = ({
   positionRef,
   isStatic = true,
 }: {
-  vertices: number[];
-  indices: number[];
+  vertices: Float32Array;
+  indices: Uint32Array;
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
@@ -151,14 +151,11 @@ export const TrimeshCollider = ({
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
-  // Stable typed arrays: react-three-rapier spreads `args` into the deps that
-  // own the Rapier shape, so a FRESH Float32Array/Uint32Array per render
-  // removed and recreated the trimesh collider (full QBVH rebuild) on every
-  // parent re-render.
-  const args = useMemo<[Float32Array, Uint32Array]>(
-    () => [new Float32Array(vertices || []), new Uint32Array(indices || [])],
-    [vertices, indices],
-  );
+  // Stable args: react-three-rapier spreads `args` into the deps that own the
+  // Rapier shape, so a FRESH array per render removed and recreated the
+  // trimesh collider (full QBVH rebuild) on every parent re-render. The
+  // worker already delivers the exact typed arrays Rapier wants — no copy.
+  const args = useMemo<[Float32Array, Uint32Array]>(() => [vertices, indices], [vertices, indices]);
 
   return (
     <RigidBody

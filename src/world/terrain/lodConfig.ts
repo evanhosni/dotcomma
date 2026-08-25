@@ -28,8 +28,15 @@ export const LOD5_SEGMENTS = 1;
 export const LOD1_MAX_DISTANCE = CHUNK_SIZE;
 export const LOD2_MAX_DISTANCE = CHUNK_SIZE * 4;
 export const LOD3_MAX_DISTANCE = CHUNK_SIZE * 8;
-export const LOD4_MAX_DISTANCE = CHUNK_SIZE * 24;
-export const LOD5_MAX_DISTANCE = CHUNK_SIZE * 48;
+/** The outer rings are bounded by the camera far plane (Player.tsx
+ *  CAMERA_FAR = 7200): terrain past it is clipped by the projection and can
+ *  never be seen. LOD5 used to reach 20160u — ~100 chunks per root scan that
+ *  were generated in the worker, given pooled geometry and kept forever
+ *  without ever producing a pixel, on the same worker that streams the
+ *  chunks the player stands on. One LOD5 chunk of slack past the far plane
+ *  keeps the horizon edge solid through the world curvature. */
+export const LOD4_MAX_DISTANCE = CHUNK_SIZE * 16; // 6720
+export const LOD5_MAX_DISTANCE = CHUNK_SIZE * 20; // 8400 (> CAMERA_FAR)
 
 /** Vertical depth of skirt geometry added around chunk edges to hide LOD seams. */
 export const SKIRT_DEPTH = 30;

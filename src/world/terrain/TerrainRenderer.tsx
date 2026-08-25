@@ -1,14 +1,15 @@
-import { RigidBody, HeightfieldCollider } from "@react-three/rapier";
+import { useRapier } from "@react-three/rapier";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
+import { createWorkerClient } from "../../utils/workers/workerClient";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { getActiveDomainConfig } from "../domains/utils";
 import { getMaterial } from "./material";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
-import { Chunk, TerrainColliderProps, TerrainProps } from "./types";
+import { Chunk, TerrainProps } from "./types";
 
 /** Check if two chunks' AABBs overlap (works across different chunk sizes). */
 const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
@@ -141,6 +142,12 @@ const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
 };
 
 const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
+  // three computes a geometry's bounding sphere lazily on its first frustum
+  // test and caches it for the object's life — a pooled geometry rewritten
+  // for a new chunk otherwise keeps the FIRST chunk's sphere (mis-centered
+  // and undersized wherever heights differ: edge-of-screen popping).
+  geom.boundingSphere = null;
+  geom.boundingBox = null;
   let pool = geometryPool.get(lod.level);
   if (!pool) {
     pool = [];
@@ -150,39 +157,15 @@ const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
 };
 
 // ── Terrain Worker ──────────────────────────────────────────────────────────
-let terrainWorker: Worker | null = null;
-let terrainWorkerReady = false;
-let terrainWorkerInitPromise: Promise<void> | null = null;
-let pendingChunkResolve: ((result: any) => void) | null = null;
-
-const ensureTerrainWorker = (): Promise<void> => {
-  if (terrainWorkerReady) return Promise.resolve();
-  if (terrainWorkerInitPromise) return terrainWorkerInitPromise;
-
-  terrainWorkerInitPromise = new Promise((resolve) => {
-    terrainWorker = new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" });
-
-    terrainWorker.onmessage = (e: MessageEvent) => {
-      if (e.data.type === "INIT_DONE") {
-        terrainWorkerReady = true;
-        terrainWorker!.onmessage = handleTerrainWorkerMessage;
-        resolve();
-      }
-    };
-
-    const config = getActiveDomainConfig();
-    terrainWorker.postMessage({ type: "INIT", config });
-  });
-
-  return terrainWorkerInitPromise;
-};
-
-const handleTerrainWorkerMessage = (e: MessageEvent) => {
-  if (e.data.type === "CHUNK_BUILT" && pendingChunkResolve) {
-    pendingChunkResolve(e.data);
-    pendingChunkResolve = null;
-  }
-};
+// Plumbing (lazy boot, INIT handshake, request ids, teardown) from the shared
+// worker-client base; chunk builds are serialized by the build loop, so at
+// most one request is in flight.
+const terrainClient = createWorkerClient({
+  create: () => new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" }),
+  init: () => ({ config: getActiveDomainConfig() }),
+  resultType: "CHUNK_BUILT",
+});
+const ensureTerrainWorker = terrainClient.ensure;
 
 /** Domain switch (resetDomainSystems): the chunk registry, queues, indexes, and
  *  the worker are all MODULE state that survives a <TerrainRenderer> remount —
@@ -192,15 +175,14 @@ const handleTerrainWorkerMessage = (e: MessageEvent) => {
  *  LOD size/segments and get fully rewritten on acquire. Colliders die with
  *  the physics world when the canvas remounts.) */
 export const resetTerrainSystem = () => {
-  terrainWorker?.terminate();
-  terrainWorker = null;
-  terrainWorkerReady = false;
-  terrainWorkerInitPromise = null;
-  pendingChunkResolve = null;
+  terrainClient.reset();
   for (const key of Object.keys(terrain.chunks)) {
     const { chunk } = terrain.chunks[key];
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     terrain.group.remove(chunk.plane);
+    // The heightfield bodies belong to the physics world, which dies with the
+    // canvas during a domain switch — drop the handles, nothing to remove.
+    chunk.colliderBody = null;
     delete terrain.chunks[key];
   }
   terrain.active_chunk = null;
@@ -240,22 +222,18 @@ const buildChunkInWorker = (
   normals: Float32Array;
   colliderHeights: Float32Array | null;
 }> => {
-  return new Promise((resolve) => {
-    pendingChunkResolve = resolve;
-    // The local vertex grid is a pure function of (chunkSize, segments) — the
-    // worker regenerates it from these params instead of the main thread
-    // building + transferring two arrays per chunk. Normals and the Rapier
-    // column-major collider heights come back precomputed too.
-    terrainWorker!.postMessage({
-      type: "BUILD_CHUNK",
-      id: 0,
-      segments,
-      chunkSize,
-      offsetX,
-      offsetZ,
-      skipPads,
-      needCollider,
-    });
+  // The local vertex grid is a pure function of (chunkSize, segments) — the
+  // worker regenerates it from these params instead of the main thread
+  // building + transferring two arrays per chunk. Normals and the Rapier
+  // column-major collider heights come back precomputed too.
+  return terrainClient.request({
+    type: "BUILD_CHUNK",
+    segments,
+    chunkSize,
+    offsetX,
+    offsetZ,
+    skipPads,
+    needCollider,
   });
 };
 
@@ -267,7 +245,7 @@ for (const lod of LOD_LEVELS) {
 
 // Subdivision thresholds: a node of this size subdivides when player is closer than threshold
 const subdivideThreshold: { [size: number]: number } = {
-  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (10080)
+  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (6720)
   [LOD5_CHUNK_SIZE / 2]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
   [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
 };
@@ -458,13 +436,11 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
  *  and the worker config come from the active-domain accessors. */
 export const TerrainRenderer = () => {
   const { camera, scene } = useThree();
-  const [gameLoaded, setGameLoaded] = useState(false);
+  const { world, rapier } = useRapier();
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
-  const [colliderVersion, setColliderVersion] = useState(0);
   const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending } = useGameContext();
-  const collidersChanged = React.useRef(false);
   const lastRemainingRef = React.useRef<number>(-1);
   const isUpdatingTerrain = React.useRef(false);
 
@@ -477,7 +453,10 @@ export const TerrainRenderer = () => {
     const entry = terrain.chunks[chunkKey];
     if (!entry) return;
     const chunk = entry.chunk;
-    if (chunk.collider !== null) collidersChanged.current = true;
+    if (chunk.colliderBody !== null) {
+      world.removeRigidBody(chunk.colliderBody); // removes its heightfield too
+      chunk.colliderBody = null;
+    }
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     terrain.group.remove(chunk.plane);
     delete terrain.chunks[chunkKey];
@@ -497,12 +476,19 @@ export const TerrainRenderer = () => {
   }, []);
 
   useFrame(() => {
-    if (terrainMaterial && !isUpdatingTerrain.current) {
-      isUpdatingTerrain.current = true;
-      UpdateTerrain(terrainMaterial).finally(() => {
-        isUpdatingTerrain.current = false;
-      });
+    if (!terrainMaterial || isUpdatingTerrain.current) return;
+    // Steady-state gate, evaluated SYNCHRONOUSLY: UpdateTerrain is async, so
+    // reaching the same early-out inside it cost a promise chain + microtask
+    // drain every frame with the camera parked.
+    if (!terrainDirty && cachedDesired !== null) {
+      const mdx = camera.position.x - desiredAtX;
+      const mdz = camera.position.z - desiredAtZ;
+      if (mdx * mdx + mdz * mdz <= DESIRED_MOVE_EPS_SQ) return;
     }
+    isUpdatingTerrain.current = true;
+    UpdateTerrain(terrainMaterial).finally(() => {
+      isUpdatingTerrain.current = false;
+    });
   });
 
   /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
@@ -712,13 +698,6 @@ export const TerrainRenderer = () => {
       setRemainingChunks(newRemaining);
     }
 
-    // Single batched collider re-render per frame
-    if (collidersChanged.current) {
-      collidersChanged.current = false;
-      traceEvent("terrain:collider-commit"); // Rapier heightfield builds land in the following React commit
-      setColliderVersion((v) => v + 1);
-    }
-
     // Stay "dirty" while anything is still in flight, and for one extra pass
     // after the last build so ProcessSwaps gets to make it visible.
     terrainDirty =
@@ -732,7 +711,9 @@ export const TerrainRenderer = () => {
     const plane = new THREE.Mesh(acquireGeometry(lod), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
-    plane.receiveShadow = true;
+    // No shadow maps in the project; leaving receiveShadow on would recompile
+    // every terrain program with USE_SHADOWMAP the day a light casts one.
+    plane.receiveShadow = false;
     plane.rotation.x = -Math.PI / 2;
     // Chunks built behind the player otherwise defer their whole buffer
     // upload to the frame the player first turns toward them.
@@ -743,7 +724,7 @@ export const TerrainRenderer = () => {
       offset: new THREE.Vector2(offset.x, offset.y),
       plane: plane,
       rebuildIterator: null,
-      collider: null,
+      colliderBody: null,
       lod: lod,
     };
 
@@ -884,7 +865,6 @@ export const TerrainRenderer = () => {
 
     if (chunk.lod.hasCollider && workerResult.colliderHeights) {
       GenerateColliders(chunk, offset, workerResult.colliderHeights);
-      collidersChanged.current = true;
     }
 
     traceEvent(`terrain:finish L${chunk.lod.level}`, performance.now() - traceT0);
@@ -895,45 +875,31 @@ export const TerrainRenderer = () => {
   /** heights arrive COLUMN-MAJOR from the worker (col = X axis = ix, row =
    *  Z axis = iz — the order Rapier's heightfield wants), so no transpose or
    *  allocation happens here. */
+  /** Builds the chunk's heightfield straight into the Rapier world (same
+   *  desc <HeightfieldCollider args=[nrows, ncols, heights, scale]> produced,
+   *  on a fixed body at the chunk offset). Imperative, like the buildings'
+   *  proxy hulls: a React <RigidBody> per chunk put ~64 bodies through
+   *  r-t-r's per-frame body sync, and every built chunk re-rendered this
+   *  component to reconcile the whole collider list. The desc is created
+   *  before the body so a failure can't leave an empty body behind. */
   const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2, heights: Float32Array) => {
     const segments = chunk.lod.segments;
     const cs = chunk.lod.chunkSize;
-
-    chunk.collider = {
-      chunkKey: chunk.key,
-      heights,
-      nrows: segments,
-      ncols: segments,
-      position: offset.toArray(),
-      chunkSize: cs,
-      // Built ONCE, here — see the note on TerrainColliderProps.args
-      args: [segments, segments, heights as unknown as number[], { x: cs, y: 1, z: cs }],
-      bodyPosition: [offset.x, 0, offset.y],
-    };
+    const t0 = performance.now();
+    const desc = rapier.ColliderDesc.heightfield(segments, segments, heights, { x: cs, y: 1, z: cs });
+    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.y));
+    try {
+      world.createCollider(desc, body);
+    } catch (e) {
+      world.removeRigidBody(body);
+      console.error("terrain heightfield collider failed:", e);
+      return;
+    }
+    chunk.colliderBody = body;
+    traceEvent("terrain:collider", performance.now() - t0);
   };
 
-  // Rebuilt only when a collider actually changed (colliderVersion) — other
-  // state renders (progress, material) must not re-reconcile ~64 collider
-  // elements against a 300+-entry chunk map.
-  const colliderElements = React.useMemo(() => {
-    const els: React.ReactElement[] = [];
-    for (const key in terrain.chunks) {
-      const collider = terrain.chunks[key].chunk.collider;
-      if (collider) els.push(<TerrainCollider key={collider.chunkKey} desc={collider} />);
-    }
-    return els;
-  }, [colliderVersion]);
-
-  return <>{colliderElements}</>;
+  // No React children: chunks live in terrain.group (added to the scene in
+  // the mount effect) and colliders live in the Rapier world.
+  return null;
 };
-
-/** Memoized on the (stable) collider descriptor: every collider change bumps
- *  colliderVersion and re-renders this list, and an unmemoized re-render tears
- *  down and rebuilds the Rapier heightfield for EVERY chunk. */
-export const TerrainCollider: React.FC<{ desc: TerrainColliderProps }> = React.memo(({ desc }) => {
-  return (
-    <RigidBody type="fixed" position={desc.bodyPosition} colliders={false}>
-      <HeightfieldCollider args={desc.args} />
-    </RigidBody>
-  );
-});

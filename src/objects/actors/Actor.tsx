@@ -67,9 +67,6 @@ type ActorFrameUpdater = (state: RootState, delta: number) => void;
 const frameUpdaters = new Set<React.MutableRefObject<ActorFrameUpdater>>();
 const frustum = new THREE.Frustum();
 const projScreenMatrix = new THREE.Matrix4();
-// Scratch for actors whose positionRef is not yet populated — set and used
-// synchronously within one updater call, never allocated per frame.
-const _fallbackPosition = new THREE.Vector3();
 
 /** Runs every mounted actor's per-frame work. Called once per frame from
  *  ObjectPool's frame loop — which <Domain> always mounts, so any actor
@@ -78,7 +75,7 @@ export const driveActorFrames = (state: RootState, delta: number): void => {
   if (frameUpdaters.size === 0) return;
   projScreenMatrix.multiplyMatrices(state.camera.projectionMatrix, state.camera.matrixWorldInverse);
   frustum.setFromProjectionMatrix(projScreenMatrix);
-  frameUpdaters.forEach((updater) => updater.current(state, delta));
+  for (const updater of frameUpdaters) updater.current(state, delta);
 };
 
 // ── Shared material logic ───────────────────────────────────────────────────
@@ -240,6 +237,21 @@ export const useActorLifecycle = ({
   // fresh mount ungated for up to checkInterval frames.
   const everCheckedRef = useRef(false);
 
+  // Per-life constants, derived once per RENDER (not per frame) — these run
+  // inside the hottest loop in the project, for every mounted actor.
+  const killDistance = despawnDistance ?? renderDistance * DESPAWN_BUFFER;
+  const killDistanceSq = killDistance * killDistance;
+  const renderDistanceSq = renderDistance * renderDistance;
+  // Very large actors also pass the frustum test on proximity: the padded-
+  // sphere test errs toward VISIBLE, never hiding something the frustum alone
+  // would show.
+  const closeThreshold = (boundsRadius ?? 0) * 3 * (renderDistance / DEFAULT_RENDER_DISTANCE);
+  const closeThresholdSq = closeThreshold * closeThreshold;
+  const paddedBoundsRadius = (boundsRadius ?? 0) * frustumPadding;
+  // Static actors never move — their position vector is built once.
+  const staticPosition = useRef(new THREE.Vector3()).current;
+  if (!positionRef) staticPosition.set(coordinates[0], coordinates[1], coordinates[2]);
+
   // The driver calls this closure, refreshed every render so it always sees
   // current props/state.
   const frameUpdaterRef = useRef<ActorFrameUpdater>(() => {});
@@ -249,8 +261,7 @@ export const useActorLifecycle = ({
     // delaying the eventual respawn cooldown.
     if (destroyedRef.current) return;
 
-    const position =
-      positionRef?.current ?? _fallbackPosition.set(coordinates[0], coordinates[1], coordinates[2]);
+    const position = positionRef?.current ?? staticPosition;
     // The ONE distance for everything below (fade, kill, gates, visibility,
     // and whatever onFrame does) — 2D and squared: heights don't matter at
     // these radii and the values are only ever COMPARED (no sqrt).
@@ -258,8 +269,7 @@ export const useActorLifecycle = ({
     distanceSqRef.current = distanceSq;
 
     // Hard kill safety net
-    const killDistance = despawnDistance ?? renderDistance * DESPAWN_BUFFER;
-    if (distanceSq > killDistance * killDistance) {
+    if (distanceSq > killDistanceSq) {
       destroyedRef.current = true;
       onDestroy(id);
       return;
@@ -268,7 +278,7 @@ export const useActorLifecycle = ({
     // Fade in/out, and the fade-out kill
     if (applyFade) {
       const fade = fadeRef.current;
-      const beyond = distanceSq > renderDistance * renderDistance;
+      const beyond = distanceSq > renderDistanceSq;
       if (beyond !== fade.fadingOut) fade.fadingOut = beyond;
       if (fade.fadingOut) {
         fade.opacity = Math.max(0, fade.opacity - delta / FADE_DURATION);
@@ -291,11 +301,8 @@ export const useActorLifecycle = ({
     let visible = true;
     if (boundsRadius !== undefined) {
       boundsRef.center.copy(position);
-      // Very large actors also pass on proximity: the padded-sphere test errs
-      // toward VISIBLE, never hiding something the frustum alone would show.
-      const closeThreshold = boundsRadius * 3 * (renderDistance / DEFAULT_RENDER_DISTANCE);
-      boundsRef.radius = boundsRadius * frustumPadding;
-      visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThreshold * closeThreshold;
+      boundsRef.radius = paddedBoundsRadius;
+      visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
       // Warm-up: stay visible for the first frames after mount so the meshes'
       // forced first draw can happen — an actor mounted behind the player
       // would otherwise be hidden before its programs/textures reach the GPU.

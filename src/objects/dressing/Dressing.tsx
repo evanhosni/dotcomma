@@ -1,4 +1,5 @@
 import { useFrame } from "@react-three/fiber";
+import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
@@ -308,6 +309,47 @@ export interface ChunkWithPoints extends ChunkRegistryEntry {
   points: { x: number; y: number; z: number; yaw?: number }[];
 }
 
+/** Default camera distance inside which a dressing feature mounts real
+ *  colliders (see useDressingColliders). Thin street furniture only needs
+ *  to be solid where the player can actually reach it. */
+export const DRESSING_COLLIDER_DISTANCE = 90;
+
+/** A solid box of a dressing piece in INSTANCE-LOCAL space (+X along the
+ *  arm/crossarm, y up): the same numbers its geometry is built from, so the
+ *  collider can never drift from the art. `x`/`y` are the box CENTER. */
+export interface DressingColliderPart {
+  w: number;
+  h: number;
+  d: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Real colliders for the in-range pieces of a dressing feature: one fixed
+ * body per point (carrying the instance's yaw so off-axis parts line up
+ * with what's drawn) with a cuboid per part. Street lamps, traffic signals
+ * and power poles all mount exactly this — it used to be three copies of the
+ * same JSX.
+ */
+export const DressingPartColliders = ({
+  colliders,
+  parts,
+}: {
+  colliders: DressingColliderPoint[];
+  parts: DressingColliderPart[];
+}) => (
+  <>
+    {colliders.map((c) => (
+      <RigidBody key={c.key} type="fixed" colliders={false} position={[c.x, c.y, c.z]} rotation={[0, c.yaw, 0]}>
+        {parts.map((p, i) => (
+          <CuboidCollider key={i} args={[p.w / 2, p.h / 2, p.d / 2]} position={[p.x, p.y, 0]} />
+        ))}
+      </RigidBody>
+    ))}
+  </>
+);
+
 /**
  * The handful of dressing pieces close enough to the camera to be worth a real
  * collider. Instanced scenery can't carry colliders per instance — thousands of
@@ -329,9 +371,9 @@ export interface ChunkWithPoints extends ChunkRegistryEntry {
  */
 export const useDressingColliders = <T extends ChunkWithPoints>(
   registry: { forEachAlive: (cb: (entry: T) => void) => void },
-  options: { distance: number; scanIntervalFrames?: number },
+  options: { distance?: number; scanIntervalFrames?: number } = {},
 ): DressingColliderPoint[] => {
-  const { distance, scanIntervalFrames = 10 } = options;
+  const { distance = DRESSING_COLLIDER_DISTANCE, scanIntervalFrames = 10 } = options;
   const [colliders, setColliders] = React.useState<DressingColliderPoint[]>([]);
   const frameCount = useRef(0);
   const aliveScratch = useRef<T[]>([]);
@@ -509,8 +551,11 @@ export const useDressingChunks = ({
     }
 
     // Drop chunks leaving range (hysteresis so borders don't thrash)
+    const dropDistSq = renderDistance * 1.3 * (renderDistance * 1.3);
     chunks.forEach((entry, key) => {
-      if (Math.hypot(camX - entry.centerX, camZ - entry.centerZ) > renderDistance * 1.3) {
+      const ddx = camX - entry.centerX;
+      const ddz = camZ - entry.centerZ;
+      if (ddx * ddx + ddz * ddz > dropDistSq) {
         entry.disposed = true;
         if (entry.object) {
           group.remove(entry.object);

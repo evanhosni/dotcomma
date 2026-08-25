@@ -1,5 +1,5 @@
 import React from "react";
-import { TerrainNoiseParams } from "../../../utils/noise/_noise";
+import { TerrainNoiseParams } from "../../../utils/workers/vertexCompute";
 import { Domain, Skybox, Terrain } from "../../components";
 import { HomeRegion } from "./regions";
 import { ClickToEnter } from "./regions/home/ClickToEnter";

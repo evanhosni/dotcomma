@@ -71,4 +71,8 @@ export interface StateMachineHandle {
   forceTransition: (stateId: string) => void;
   blackboard: Record<string, any>;
   animationControl: AnimationControl;
+  /** Advance the machine by one step (transition scan + current behavior).
+   *  Called by the owner's actor `onFrame` when the hook was created with
+   *  `externallyDriven`; otherwise the hook's own useFrame calls it. */
+  tick: (state: import("@react-three/fiber").RootState, delta: number) => void;
 }

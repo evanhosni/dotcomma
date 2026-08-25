@@ -1,13 +1,13 @@
 import * as THREE from "three";
 import { GLTF } from "three/examples/jsm/loaders/GLTFLoader";
+import { createWorkerClient } from "../../utils/workers/workerClient";
 import { COLLIDER_TYPE, ColliderWorkerMessage, WholeTrimeshWorkerMessage } from "./types";
 
-export const colliderWorker = new Worker(new URL("./collider.worker.ts", import.meta.url), {
-  type: "module",
+// Domain-agnostic (geometry → collider transform), so it is never reset on a
+// domain switch; no INIT handshake. Plumbing from the shared worker-client base.
+const colliderClient = createWorkerClient({
+  create: () => new Worker(new URL("./collider.worker.ts", import.meta.url), { type: "module" }),
 });
-
-let messageId = 0;
-const pendingResolves = new Map<number, (data: any) => void>();
 
 interface ColliderState {
   capsuleColliders: any[];
@@ -31,37 +31,46 @@ function buildCacheKey(
   return `${modelUrl}|${scale[0]},${scale[1]},${scale[2]}|${rotation[0]},${rotation[1]},${rotation[2]}|${wholeTrimesh}|${excludeStr}`;
 }
 
-colliderWorker.onmessage = (event) => {
-  const { id, data } = event.data;
-  const resolve = pendingResolves.get(id);
-  if (resolve) {
-    pendingResolves.delete(id);
-    resolve(data);
-  }
+/** Every typed array in the message is TRANSFERRED (they are private copies —
+ *  see getPositionArray), so the geometry crosses to the worker without a
+ *  structured clone. */
+const collectTransferables = (msg: ColliderWorkerMessage | WholeTrimeshWorkerMessage): Transferable[] => {
+  const out: Transferable[] = [];
+  const add = (m: { positions: Float32Array; index: Uint32Array | null }) => {
+    out.push(m.positions.buffer);
+    if (m.index) out.push(m.index.buffer);
+  };
+  if (msg.type === COLLIDER_TYPE.WHOLE_TRIMESH) (msg as WholeTrimeshWorkerMessage).meshes.forEach(add);
+  else add(msg as ColliderWorkerMessage);
+  return out;
 };
 
-function postToWorker(msg: any): Promise<any> {
-  return new Promise((resolve) => {
-    const id = messageId++;
-    pendingResolves.set(id, resolve);
-    colliderWorker.postMessage({ id, ...msg });
-  });
-}
+const postToWorker = (msg: ColliderWorkerMessage | WholeTrimeshWorkerMessage): Promise<any> =>
+  colliderClient.request<{ data: any }>(msg as any, collectTransferables(msg)).then((r) => r.data);
 
 /**
- * Extract raw position array from a geometry, handling InterleavedBufferAttribute.
+ * A PRIVATE Float32Array copy of a geometry's positions (handles
+ * InterleavedBufferAttribute). A copy, not the live buffer: the original is
+ * shared with every rendered clone of the GLTF, and transferring it to the
+ * worker would detach it from the renderer.
  */
-function getPositionArray(geometry: THREE.BufferGeometry): number[] {
+function getPositionArray(geometry: THREE.BufferGeometry): Float32Array {
   const attr = geometry.attributes.position;
   if (attr instanceof THREE.InterleavedBufferAttribute) {
-    const out: number[] = [];
+    const out = new Float32Array(attr.count * 3);
     for (let i = 0; i < attr.count; i++) {
-      out.push(attr.getX(i), attr.getY(i), attr.getZ(i));
+      out[i * 3] = attr.getX(i);
+      out[i * 3 + 1] = attr.getY(i);
+      out[i * 3 + 2] = attr.getZ(i);
     }
     return out;
   }
-  return Array.from(attr.array);
+  return new Float32Array(attr.array as ArrayLike<number>);
 }
+
+/** A private Uint32Array copy of the index (any source integer width). */
+const getIndexArray = (geometry: THREE.BufferGeometry): Uint32Array | null =>
+  geometry.index ? new Uint32Array(geometry.index.array as ArrayLike<number>) : null;
 
 /**
  * Build the combined transform matrix for a GLTF child mesh.
@@ -132,7 +141,7 @@ export const createColliders = async (
         const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
         meshes.push({
           positions: getPositionArray(child.geometry),
-          index: child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null,
+          index: getIndexArray(child.geometry),
           matrix: Array.from(matrix.elements),
         });
       });
@@ -161,7 +170,7 @@ export const createColliders = async (
 
       const matrix = buildCombinedMatrix(child, sceneWorldInverse, scale, rotation);
       const positions = getPositionArray(child.geometry);
-      const index = child.geometry.index ? Array.from(child.geometry.index.array as ArrayLike<number>) : null;
+      const index = getIndexArray(child.geometry);
 
       const msg: ColliderWorkerMessage = {
         type,

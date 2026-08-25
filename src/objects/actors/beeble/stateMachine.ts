@@ -254,13 +254,22 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__inflate_done = false;
         bb.__inflate_meshes = [];
 
-        if (!ctx.groupRef.current) return;
+        const group = ctx.groupRef.current;
+        if (!group) return;
 
-        ctx.groupRef.current.traverse((node: any) => {
+        // The model's geometry is SHARED with the source GLTF (and the clone
+        // itself is POOLED — see modelClonePool). Every mesh gets a private
+        // clone to morph, and the cleanup below puts the shared geometry back
+        // and disposes the clones: without it every ascended beeble leaked
+        // its vertex buffers AND handed a sphere-morphed body to the next
+        // beeble that reused its pooled clone.
+        const swapped: { node: THREE.Mesh; original: THREE.BufferGeometry; cloned: THREE.BufferGeometry }[] = [];
+        group.traverse((node: any) => {
           if (node.isMesh && node.geometry) {
-            // Clone geometry so we only mutate this instance
-            const cloned = (node.geometry as THREE.BufferGeometry).clone();
+            const originalGeometry = node.geometry as THREE.BufferGeometry;
+            const cloned = originalGeometry.clone();
             node.geometry = cloned;
+            swapped.push({ node, original: originalGeometry, cloned });
 
             const posAttr = cloned.getAttribute("position");
             if (!posAttr) return;
@@ -286,6 +295,15 @@ export const BEEBLE_SM: StateMachineConfig = {
             bb.__inflate_meshes.push({ posAttr, original, spherePositions });
           }
         });
+
+        return () => {
+          for (const s of swapped) {
+            s.node.geometry = s.original;
+            s.cloned.dispose();
+          }
+          bb.__inflate_meshes = [];
+          group.scale.set(1, 1, 1);
+        };
       },
       onUpdate: (ctx) => {
         const bb = ctx.blackboard;

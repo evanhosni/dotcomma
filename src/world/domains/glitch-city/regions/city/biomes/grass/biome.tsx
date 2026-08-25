@@ -4,7 +4,8 @@ import { GrassField } from "../../../../../../../objects/foliage/grass/GrassFiel
 import { Actors, Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
 
-export const CITY_GRASS_BIOME_ID = 3;
+import { GRASS_BIOME_ID as CITY_GRASS_BIOME_ID } from "../../../../../../constants";
+export { CITY_GRASS_BIOME_ID };
 
 /** Grassland biome as it appears inside the city region (rolling noise
  *  terrain covered in swaying billboard grass). Shares biome id 3 with the

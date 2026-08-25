@@ -1,9 +1,10 @@
-import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import { getActiveDomainConfig, whenDomainReady } from "../../../world/domains/utils";
 import {
+  DressingColliderPart,
+  DressingPartColliders,
   finalizeInstancedChunk,
   instancedFromPoints,
   setInstanceTransform,
@@ -22,8 +23,6 @@ const POLE_HEIGHT = 11;
 // across the freeway, and a collider on them would be an invisible wall in
 // mid-air; the post and its crossarm are solid, the spans between them are not.
 const POLE_HALF_WIDTH = 0.19;
-// Poles only collide this close to the camera (see useDressingColliders).
-const COLLIDER_DISTANCE = 90;
 const ARM_HALF = 1.7; // crossarm half-length (perpendicular to the wires)
 // Crossarm box, shared by the GEOMETRY and its COLLIDER so the two can't drift
 // apart when the art changes. Runs along the pole's local Z (across the run),
@@ -32,6 +31,12 @@ const ARM_THICKNESS = 0.2; // along local X
 const ARM_DEPTH = 0.25; // vertical
 const ARM_Y = POLE_HEIGHT - 0.85; // center height
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
+/** Post + crossarm, both solid (the post is square in plan, so the body's yaw
+ *  only matters for the crossarm, which runs across the wires). */
+const POLE_COLLIDER_PARTS: DressingColliderPart[] = [
+  { w: POLE_HALF_WIDTH * 2, h: POLE_HEIGHT, d: POLE_HALF_WIDTH * 2, x: 0, y: POLE_HEIGHT / 2 },
+  { w: ARM_THICKNESS, h: ARM_DEPTH, d: ARM_HALF * 2, x: 0, y: ARM_Y },
+];
 // Local attach points (y up the pole, z across it): crossarm ends + top.
 const ATTACH: [number, number][] = [
   [POLE_HEIGHT - 0.72, ARM_HALF - 0.25],
@@ -115,7 +120,7 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
  * and runs stay continuous across chunk borders; runs break naturally at
  * interchanges and street mouths.
  *
- * The POST and its CROSSARM are solid within COLLIDER_DISTANCE (real cuboid
+ * The POST and its CROSSARM are solid within DRESSING_COLLIDER_DISTANCE (real cuboid
  * colliders for the handful near the player — the same distance-gated pattern
  * the street lamps use, useDressingColliders); poles further out are scenery,
  * with nothing near them to collide. The WIRES are never solid: they are strung
@@ -193,34 +198,16 @@ export const PowerLines = ({
 
   // Real pole colliders for the posts near the player (base hook). This also
   // owns the registry's prune sweep — PowerLines has no other frame loop.
-  const colliders = useDressingColliders(registry, { distance: COLLIDER_DISTANCE });
+  const colliders = useDressingColliders(registry);
 
   return (
     <>
       <group ref={groupRef} />
-      {/* Post + crossarm, both solid. The body carries the instance's yaw, so
-          the crossarm's collider lies along the same axis as the one that's
-          drawn (the post is square in plan, so the rotation is a no-op for it).
-          The WIRES get nothing: they span between poles at crossarm height, and
-          a collider there is an invisible wall across the freeway. */}
-      {colliders.map((c) => (
-        <RigidBody
-          key={c.key}
-          type="fixed"
-          colliders={false}
-          position={[c.x, c.y, c.z]}
-          rotation={[0, c.yaw, 0]}
-        >
-          <CuboidCollider
-            args={[POLE_HALF_WIDTH, POLE_HEIGHT / 2, POLE_HALF_WIDTH]}
-            position={[0, POLE_HEIGHT / 2, 0]}
-          />
-          <CuboidCollider
-            args={[ARM_THICKNESS / 2, ARM_DEPTH / 2, ARM_HALF]}
-            position={[0, ARM_Y, 0]}
-          />
-        </RigidBody>
-      ))}
+      {/* Post + crossarm, both solid (base component; the body carries the
+          instance's yaw so the crossarm lies along the drawn axis). The WIRES
+          get nothing: they span between poles at crossarm height, and a
+          collider there is an invisible wall across the freeway. */}
+      <DressingPartColliders colliders={colliders} parts={POLE_COLLIDER_PARTS} />
     </>
   );
 };

@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../../lighting/dayNight";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
+import { ditherGLSL } from "../../vfx/dither";
 import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
 import { Biome } from "../../world/types";
 import commonShader from "../../world/shaders/common.glsl";
@@ -51,9 +52,11 @@ export namespace _material {
       riverTexture?: THREE.Texture;
       biomeTexture?: THREE.Texture;
       varyingDeclarations?: string[];
+      /** Preprocessor defines for both shaders (values as GLSL literals). */
+      defines?: Record<string, string>;
     } = {},
   ): Promise<THREE.ShaderMaterial> => {
-    const { riverTexture, biomeTexture, varyingDeclarations = [] } = options;
+    const { riverTexture, biomeTexture, varyingDeclarations = [], defines = {} } = options;
     // Collect all uniforms and fragment shaders from biomes
     // uNightBlend / the lamp-grid uniforms are SHARED objects — updated by
     // the day/night cycle and StreetLampPool, so every terrain material
@@ -150,7 +153,7 @@ export namespace _material {
 
       // Day/night: terrain is unlit, so scene-light dimming can't reach it —
       // darken directly by the shared night blend.
-      gl_FragColor.rgb *= mix(1.0, ${NIGHT_GROUND_DIM.toFixed(3)}, uNightBlend);
+      ${nightDimGLSL("gl_FragColor.rgb")}
 
       // Street-lamp glow: real gradient pools of light on the road (added
       // AFTER the night dim so lamps genuinely brighten the ground). Uses the
@@ -167,8 +170,12 @@ export namespace _material {
       // intensity; parked pool lights have intensity 0 and contribute nothing.
       // vWorldPosAbs, not vWorldPos: the view matrix expects an ABSOLUTE
       // world position, and the wrapped one lit the wrong chunks.
+      // Gated on the night blend: every scene point light (city beacons)
+      // follows the night ramp, so by day the whole block — including the
+      // two mat4 transforms + normalize that ran BEFORE the per-light
+      // zero-color skip — is dead work on every terrain fragment.
       #if NUM_POINT_LIGHTS > 0
-      {
+      if (uNightBlend > 0.001) {
         vec3 plViewPos = (viewMatrix * vec4(vWorldPosAbs, 1.0)).xyz;
         vec3 plViewNormal = normalize((viewMatrix * vec4(vWorldNormal, 0.0)).xyz);
         vec3 pointLightSum = vec3(0.0);
@@ -194,15 +201,18 @@ export namespace _material {
           : ""
       }
 
-      // ±0.5/255 screen-space hash dither — the night dim and point-light
-      // falloff are slow gradients that band into visible rings at 8 bits.
-      gl_FragColor.rgb += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+      // Screen-space hash dither — the night dim and point-light falloff are
+      // slow gradients that band into visible rings at 8 bits.
+      ${ditherGLSL("gl_FragColor.rgb")}
     }
   `;
 
     return new THREE.ShaderMaterial({
       // wireframe: true,
       uniforms: combinedUniforms,
+      // `#define`s prepended to BOTH shaders by three (WORLD_WRAP, the city
+      // band widths) — see world/terrain/material.ts.
+      defines,
       vertexShader,
       fragmentShader,
       lights: TERRAIN_POINT_LIGHTS,

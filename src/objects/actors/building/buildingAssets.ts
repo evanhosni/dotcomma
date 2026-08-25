@@ -648,6 +648,9 @@ export const releaseProceduralBuildingAssets = (seed: string, optionsKey: string
 export const beginProceduralBuildingBuild = (
   seed: string,
   opts: BuildingOptions,
+  /** The caller's already-stringified options (peek/retain/release use the
+   *  same string) — saves a JSON round-trip per new seed. */
+  optionsKey: string = JSON.stringify(opts),
 ): { steps: Array<() => void>; finish: () => ProceduralBuildingAssets } => {
   let plan: ReturnType<typeof generateBuildingPlan>;
   let ext: ReturnType<typeof buildExteriorGeometry>;
@@ -665,7 +668,7 @@ export const beginProceduralBuildingBuild = (
       },
     ],
     finish: () => {
-      const key = `${seed}|${JSON.stringify(opts)}`;
+      const key = `${seed}|${optionsKey}`;
       const existing = cache.get(key);
       if (existing) return existing.assets;
       return assembleBuildingAssets(key, plan, ext, interior);

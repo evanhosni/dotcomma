@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { CitySitePoint, getCityLightSites } from "../../../../../../../objects/dressing/dressingWorker";
 import { getNightBlend } from "../../../../../../../lighting/dayNight";
+import { ditherGLSL } from "../../../../../../../vfx/dither";
 import { TaskQueue } from "../../../../../../../utils/task-queue/TaskQueue";
 
 // Fixed pool size — the scene's light count must stay constant from first
@@ -123,7 +124,7 @@ export const CityLights = ({
     mat.onBeforeCompile = (shader) => {
       shader.fragmentShader = shader.fragmentShader.replace(
         "outgoingLight = diffuseColor.rgb;",
-        `diffuseColor.a += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+        `${ditherGLSL("diffuseColor.a")}
 	outgoingLight = diffuseColor.rgb;`,
       );
     };
@@ -152,8 +153,10 @@ export const CityLights = ({
     const camX = camera.position.x;
     const camZ = camera.position.z;
 
-    const moved = lastScan.current ? Math.hypot(camX - lastScan.current.x, camZ - lastScan.current.z) : Infinity;
-    if (!scanning.current && moved > RESCAN_DISTANCE) {
+    const movedSq = lastScan.current
+      ? (camX - lastScan.current.x) ** 2 + (camZ - lastScan.current.z) ** 2
+      : Infinity;
+    if (!scanning.current && movedSq > RESCAN_DISTANCE * RESCAN_DISTANCE) {
       scanning.current = true;
       const sx = camX;
       const sz = camZ;
@@ -211,13 +214,26 @@ export const CityLights = ({
         const sprite = spriteRefs.current[i];
         if (site) {
           light.position.set(site.x, site.y + heightOffset, site.z);
-          light.intensity = intensity;
           if (sprite) sprite.position.copy(light.position);
         } else {
           light.position.set(0, PARK_Y, 0);
-          light.intensity = 0;
         }
       }
+    }
+
+    // Beacon intensity rides the night blend (per frame, one multiply per
+    // pool light). The beacons are invisible against daylight anyway, and a
+    // zero-intensity light is what lets the terrain shader's point-light
+    // loop — and three's own per-light loop in every lit material — skip
+    // them: at full intensity by day, six lights were shaded on every lit
+    // fragment on screen for nothing.
+    const nightBlend = getNightBlend();
+    const litIntensity = intensity * nightBlend;
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const light = lightRefs.current[i];
+      if (!light) continue;
+      const target = assigned[i] ? litIntensity : 0;
+      if (light.intensity !== target) light.intensity = target;
     }
 
     // Aura strength: always faintly present, blooming toward full at night so
@@ -225,7 +241,7 @@ export const CityLights = ({
     // the visibility floor the additive passes buy nothing — hide the sprites
     // (visibility is per-frame: it follows the day/night blend, not the
     // reselection above).
-    const effectiveAuraOpacity = aura ? auraOpacity * (0.2 + 0.8 * getNightBlend()) : 0;
+    const effectiveAuraOpacity = aura ? auraOpacity * (0.2 + 0.8 * nightBlend) : 0;
     auraMaterial.opacity = effectiveAuraOpacity;
     const showAura = aura && effectiveAuraOpacity >= AURA_MIN_VISIBLE_OPACITY;
     for (let i = 0; i < POOL_SIZE; i++) {

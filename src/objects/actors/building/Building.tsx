@@ -6,6 +6,7 @@ import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
 import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
+import { framePhaseFromCoords } from "../../../utils/utils";
 import { prepareActorMaterial, useActorLifecycle } from "../Actor";
 import {
   beginProceduralBuildingBuild,
@@ -26,6 +27,10 @@ const DESPAWN_BUFFER = 1.1;
 const CHILDREN_ACTIVE_DISTANCE = 150;
 const DOOR_INTERACT_DISTANCE = 6; // click/hover reach
 const DOOR_HOVER_GATE = 30; // building distance under which the door raycast runs
+// Door leaves render only inside this distance: a leaf is a few pixels tall
+// past ~200u, yet each one is its own lit draw call — with hundreds of
+// buildings mounted out to renderDistance that was hundreds of draws.
+const DOOR_VISIBLE_DISTANCE = 220;
 const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
 const DOOR_SWING_RATE = 4;
 
@@ -204,7 +209,7 @@ export const Building = ({
   // spreads, so their identities are stable across this component's own
   // re-renders (door clicks, gate flips) — without the memo every render
   // paid a JSON.stringify.
-  const optionsKey = useMemo(() => {
+  const { opts: buildOptions, key: optionsKey } = useMemo(() => {
     const opts: BuildingOptions = {
       exteriorSize,
       numberOfSides,
@@ -225,7 +230,7 @@ export const Building = ({
       windowLightIntensity,
       interiorColors,
     };
-    return JSON.stringify(opts);
+    return { opts, key: JSON.stringify(opts) };
   }, [
     exteriorSize,
     numberOfSides,
@@ -260,7 +265,7 @@ export const Building = ({
     // monolithic task a heavy skyscraper was a single long frame no budget
     // could split (an occasional roaming lag spike). Cancelled builds just
     // stop; partial geometry was never rendered, so there's nothing to free.
-    const build = beginProceduralBuildingBuild(resolvedSeed, JSON.parse(optionsKey) as BuildingOptions);
+    const build = beginProceduralBuildingBuild(resolvedSeed, buildOptions, optionsKey);
     build.steps.forEach((step, phase) => {
       buildQueue.addTask(async () => {
         if (!cancelled) traceSpan(`building:phase${phase}`, step);
@@ -315,7 +320,10 @@ export const Building = ({
   const doorsMovingRef = useRef(false);
 
   const interiorMeshRef = useRef<THREE.Mesh>(null);
-  const doorFrameRef = useRef(0);
+  const doorsGroupRef = useRef<THREE.Group>(null);
+  // Phase-offset like every other throttled counter: a batch of buildings
+  // starting at 0 ran their door raycasts on the same frames.
+  const doorFrameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 3));
 
   // ---- The shared ACTOR lifecycle (objects/actors/Actor.tsx) ----
   // Self-despawn, the collider gate (with its activation throttle), the
@@ -351,7 +359,12 @@ export const Building = ({
       // The interior mesh is fully occluded by the shell from outside — cull
       // its draw call beyond children range (ref write, no re-render; the
       // base's near gate already carries the hysteresis, so it can't flicker).
-      if (ctx.checked && interiorMeshRef.current) interiorMeshRef.current.visible = nearActive;
+      if (ctx.checked) {
+        if (interiorMeshRef.current) interiorMeshRef.current.visible = nearActive;
+        if (doorsGroupRef.current) {
+          doorsGroupRef.current.visible = ctx.distanceSq < DOOR_VISIBLE_DISTANCE * DOOR_VISIBLE_DISTANCE;
+        }
+      }
 
       // ---- Door hover (screen-center raycast, every 3rd frame, only nearby) ----
       if (doorFrameRef.current++ % 3 === 0) {
@@ -480,18 +493,21 @@ export const Building = ({
         material={materials?.interior ?? DEFAULT_INTERIOR}
       />
 
-      {/* Doors — real leaves hinged at one edge */}
-      {assets.doors.map((d, i) => (
-        <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
-          <group ref={(el) => (hingeRefs.current[i] = el)} position={[-d.width / 2, 0, 0]}>
-            <mesh
-              ref={(el) => (doorMeshRefs.current[i] = el)}
-              geometry={assets.doorGeometry}
-              material={DOOR_MATERIAL}
-            />
+      {/* Doors — real leaves hinged at one edge (drawn only within
+          DOOR_VISIBLE_DISTANCE; the gate is a ref write in onFrame) */}
+      <group ref={doorsGroupRef}>
+        {assets.doors.map((d, i) => (
+          <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
+            <group ref={(el) => (hingeRefs.current[i] = el)} position={[-d.width / 2, 0, 0]}>
+              <mesh
+                ref={(el) => (doorMeshRefs.current[i] = el)}
+                geometry={assets.doorGeometry}
+                material={DOOR_MATERIAL}
+              />
+            </group>
           </group>
-        </group>
-      ))}
+        ))}
+      </group>
 
       {/* Physics — shell trimesh (door openings walkable), interior walls,
           slab trimesh, ramps, and the closed door leaves */}

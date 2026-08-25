@@ -1,8 +1,9 @@
 import { RigidBody, CapsuleCollider, useRapier } from "@react-three/rapier";
-import { useFrame } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { RootState } from "@react-three/fiber";
+import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GameObject } from "../GameObject";
+import { ActorFrameContext } from "../Actor";
 import { ActorProps } from "../../spawning/types";
 import { useMouseEvents } from "../../state/useMouseEvents";
 import { useStateMachine } from "../../state/useStateMachine";
@@ -18,23 +19,32 @@ const MAX_SLOPE_ANGLE = 35 * (Math.PI / 180);
 const CC_OFFSET = 0.02;
 const SNAP_TO_GROUND = 0.3;
 const GRAVITY = -100;
-// Physics LOD: character-controller shape casts are the per-frame CPU cost of
-// each beeble. Within this camera distance they resolve every frame; beyond
-// it, every Nth frame with accumulated dt (speed is preserved — movement per
-// step is velocity × accumulated time). Idle grounded beebles skip entirely.
-const PHYSICS_FULL_RATE_DIST = 80;
-const PHYSICS_THROTTLE_FRAMES = 3;
+// Distance LOD for the per-frame CPU work of a beeble — the character-
+// controller shape cast AND the state machine (transition scan + behavior).
+// Within this camera distance both run every frame; beyond it, every Nth
+// frame with the accumulated dt (speed is preserved — movement per step is
+// velocity × accumulated time; behaviors are all dt-based). Idle grounded
+// beebles skip the shape cast entirely. Mouse events only fire within a few
+// units, so the far-rate machine never delays a click.
+const FULL_RATE_DIST = 80;
+const FULL_RATE_DIST_SQ = FULL_RATE_DIST * FULL_RATE_DIST;
+const THROTTLE_FRAMES = 3;
 const MAX_PHYSICS_CATCHUP = 0.15;
 
 const HAS_CLICK_TRIGGER = BEEBLE_SM.triggers.some((t) => t.id === "mouse-left-click");
 
 // Scratch objects for the per-frame physics step — computeColliderMovement
 // and setNextKinematicTranslation both consume their argument synchronously,
-// and useFrame callbacks run sequentially, so module-level reuse is safe
+// and actor frames run sequentially, so module-level reuse is safe
 // (allocating fresh {x,y,z} literals per active beeble per frame was GC churn).
 const _desiredMovement = { x: 0, y: 0, z: 0 };
 const _nextTranslation = { x: 0, y: 0, z: 0 };
 
+/** The beeble NPC. ALL of its per-frame work — state machine, mouse events,
+ *  the kinematic character controller — runs through ONE callback handed to
+ *  <GameObject onFrame>, i.e. inside the shared actor frame driver. It used to
+ *  own three useFrame subscribers (physics + one inside each hook) on top of
+ *  the driver, each recomputing the camera distance the base already had. */
 export const Beeble = (props: ActorProps) => {
   const groupRef = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
@@ -42,22 +52,22 @@ export const Beeble = (props: ActorProps) => {
   const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
   const verticalVelocity = useRef(0);
   const pendingDtRef = useRef(0);
-  const framePhase = useRef(
-    framePhaseFromCoords(props.coordinates[0], props.coordinates[2], PHYSICS_THROTTLE_FRAMES),
-  ).current;
-  const physicsFrameRef = useRef(framePhase);
+  const pendingSmDtRef = useRef(0);
+  const framePhase = useRef(framePhaseFromCoords(props.coordinates[0], props.coordinates[2], THROTTLE_FRAMES)).current;
+  const frameRef = useRef(framePhase);
   const groundedRef = useRef(false);
   const hasComputedRef = useRef(false);
 
   const { world } = useRapier();
 
-  const sm = useStateMachine(BEEBLE_SM, positionRef, groupRef);
+  const sm = useStateMachine(BEEBLE_SM, positionRef, groupRef, { externallyDriven: true });
   // Mouse interaction is fully handled inside useMouseEvents (window
   // listeners + a manual screen-center raycast) — nothing is attached to the
   // R3F group, see the note at the end of useMouseEvents.
-  useMouseEvents(sm, groupRef, {
+  const mouse = useMouseEvents(sm, groupRef, {
     shouldGrowCursor: props.cursorOverride ?? HAS_CLICK_TRIGGER,
     framePhase,
+    externallyDriven: true,
   });
 
   useEffect(() => {
@@ -73,83 +83,90 @@ export const Beeble = (props: ActorProps) => {
     };
   }, [world]);
 
-  useFrame((state, delta) => {
-    const rb = rigidBodyRef.current;
-    const controller = controllerRef.current;
-    if (!rb || !controller) return;
+  const onFrame = useCallback(
+    (state: RootState, delta: number, ctx: ActorFrameContext) => {
+      const clampedDelta = Math.min(delta, 0.1);
+      const isFar = ctx.distanceSq > FULL_RATE_DIST_SQ;
+      const throttledFrame = isFar && frameRef.current++ % THROTTLE_FRAMES !== 0;
 
-    const bb = sm.blackboard;
-    const velX = bb.__vel_x ?? 0;
-    const velZ = bb.__vel_z ?? 0;
-    const velY = bb.__vel_y;
+      // ---- State machine (sets the velocity blackboard the physics reads) ----
+      pendingSmDtRef.current = Math.min(pendingSmDtRef.current + clampedDelta, MAX_PHYSICS_CATCHUP);
+      if (!throttledFrame) {
+        sm.tick(state, pendingSmDtRef.current);
+        pendingSmDtRef.current = 0;
+      }
 
-    const pos = rb.translation();
+      // ---- Mouse hover/click raycast (self-throttled, distance-gated) ----
+      mouse.tick(state.camera, ctx.distanceSq);
 
-    physicsFrameRef.current++;
-    pendingDtRef.current = Math.min(pendingDtRef.current + Math.min(delta, 0.1), MAX_PHYSICS_CATCHUP);
+      // ---- Kinematic character controller ----
+      const rb = rigidBodyRef.current;
+      const controller = controllerRef.current;
+      if (!rb || !controller) return;
 
-    // Idle short-circuit: standing still on the ground with no vertical
-    // motion — nothing to resolve, skip the shape cast entirely.
-    const idle =
-      hasComputedRef.current &&
-      groundedRef.current &&
-      velY === undefined &&
-      velX === 0 &&
-      velZ === 0 &&
-      verticalVelocity.current === 0;
-    if (idle) {
+      const bb = sm.blackboard;
+      const velX = bb.__vel_x ?? 0;
+      const velZ = bb.__vel_z ?? 0;
+      const velY = bb.__vel_y;
+
+      pendingDtRef.current = Math.min(pendingDtRef.current + clampedDelta, MAX_PHYSICS_CATCHUP);
+
+      // Idle short-circuit: standing still on the ground with no vertical
+      // motion — nothing to resolve, skip the shape cast entirely.
+      const idle =
+        hasComputedRef.current &&
+        groundedRef.current &&
+        velY === undefined &&
+        velX === 0 &&
+        velZ === 0 &&
+        verticalVelocity.current === 0;
+      if (idle) {
+        pendingDtRef.current = 0;
+        return;
+      }
+
+      if (throttledFrame) return;
+
+      const dt = pendingDtRef.current;
       pendingDtRef.current = 0;
-      return;
-    }
+      const pos = rb.translation();
 
-    // Distance LOD: far-away beebles resolve collisions every Nth frame with
-    // the accumulated dt, so their speed is unchanged.
-    const dxCam = state.camera.position.x - pos.x;
-    const dzCam = state.camera.position.z - pos.z;
-    const isFar = dxCam * dxCam + dzCam * dzCam > PHYSICS_FULL_RATE_DIST * PHYSICS_FULL_RATE_DIST;
-    if (isFar && physicsFrameRef.current % PHYSICS_THROTTLE_FRAMES !== 0) return;
+      // Gravity integration
+      const grounded = controller.computedGrounded();
+      groundedRef.current = grounded;
+      if (velY !== undefined) {
+        verticalVelocity.current = velY;
+      } else if (grounded && verticalVelocity.current <= 0) {
+        verticalVelocity.current = 0;
+      } else {
+        verticalVelocity.current += GRAVITY * dt;
+      }
 
-    const dt = pendingDtRef.current;
-    pendingDtRef.current = 0;
+      _desiredMovement.x = velX * dt;
+      _desiredMovement.y = verticalVelocity.current * dt;
+      _desiredMovement.z = velZ * dt;
 
-    // Gravity integration
-    const grounded = controller.computedGrounded();
-    groundedRef.current = grounded;
-    if (velY !== undefined) {
-      verticalVelocity.current = velY;
-    } else if (grounded && verticalVelocity.current <= 0) {
-      verticalVelocity.current = 0;
-    } else {
-      verticalVelocity.current += GRAVITY * dt;
-    }
+      const collider = rb.collider(0);
+      if (collider) {
+        controller.computeColliderMovement(collider, _desiredMovement);
+        const corrected = controller.computedMovement();
+        hasComputedRef.current = true;
 
-    _desiredMovement.x = velX * dt;
-    _desiredMovement.y = verticalVelocity.current * dt;
-    _desiredMovement.z = velZ * dt;
+        _nextTranslation.x = pos.x + corrected.x;
+        _nextTranslation.y = pos.y + corrected.y;
+        _nextTranslation.z = pos.z + corrected.z;
+        rb.setNextKinematicTranslation(_nextTranslation);
+      }
 
-    const collider = rb.collider(0);
-    if (collider) {
-      controller.computeColliderMovement(collider, _desiredMovement);
-      const corrected = controller.computedMovement();
-      hasComputedRef.current = true;
-
-      _nextTranslation.x = pos.x + corrected.x;
-      _nextTranslation.y = pos.y + corrected.y;
-      _nextTranslation.z = pos.z + corrected.z;
-      rb.setNextKinematicTranslation(_nextTranslation);
-    }
-
-    const finalPos = rb.translation();
-    positionRef.current.set(finalPos.x, finalPos.y, finalPos.z);
-
-    if (groupRef.current) {
-      groupRef.current.position.set(
-        finalPos.x,
-        finalPos.y - BEEBLE_HEIGHT / 2,
-        finalPos.z,
-      );
-    }
-  });
+      // The body only moves at the physics step, so its current translation is
+      // still `pos` — no second wasm read.
+      positionRef.current.set(pos.x, pos.y, pos.z);
+      if (groupRef.current) {
+        groupRef.current.position.set(pos.x, pos.y - BEEBLE_HEIGHT / 2, pos.z);
+      }
+    },
+    [sm, mouse],
+  );
 
   return (
     <>
@@ -172,6 +189,7 @@ export const Beeble = (props: ActorProps) => {
           {...props}
           isStatic={false}
           scale={[1.2, 1.2, 1.2]}
+          onFrame={onFrame}
         />
       </group>
     </>

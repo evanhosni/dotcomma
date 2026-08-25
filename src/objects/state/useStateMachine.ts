@@ -1,4 +1,4 @@
-import { useFrame } from "@react-three/fiber";
+import { RootState, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
@@ -54,12 +54,24 @@ const getConfigMaps = (config: StateMachineConfig) => {
   return maps;
 };
 
+export interface UseStateMachineOptions {
+  /** The owner drives the machine itself by calling `handle.tick(state,
+   *  delta)` from its actor `onFrame` (the shared actor frame driver) instead
+   *  of this hook subscribing its own useFrame. Actors should always do this —
+   *  a useFrame per actor is the subscription churn the shared driver exists
+   *  to remove (CLAUDE.md: "Do NOT add a useFrame to an actor"). */
+  externallyDriven?: boolean;
+}
+
 export function useStateMachine(
   config: StateMachineConfig,
   positionRef: React.MutableRefObject<THREE.Vector3>,
-  groupRef: React.MutableRefObject<THREE.Group | null>
+  groupRef: React.MutableRefObject<THREE.Group | null>,
+  options: UseStateMachineOptions = {},
 ): StateMachineHandle {
   const { playerPosition } = useGameContext();
+  const playerPositionRef = useRef(playerPosition);
+  playerPositionRef.current = playerPosition;
 
   const { stateMap, triggerMap } = getConfigMaps(config);
 
@@ -120,8 +132,9 @@ export function useStateMachine(
     [stateMap]
   );
 
-  useFrame((threeState, delta) => {
+  const tick = useCallback((threeState: RootState, delta: number) => {
     const elapsed = threeState.clock.elapsedTime;
+    const playerPosition = playerPositionRef.current;
 
     _playerDiff.subVectors(playerPosition, positionRef.current);
     const playerDistanceSq =
@@ -180,11 +193,22 @@ export function useStateMachine(
     }
 
     // Clear one-shot mouse event flags — fixed key set reset to false (the
-    // old for...in + delete forced the blackboard into dictionary mode)
+    // old for...in + delete forced the blackboard into dictionary mode).
+    // Only when useMouseEvents actually raised one this frame (__mouse_dirty):
+    // events fire within a few units of the player, so for every other actor
+    // this was 13 dead property writes per frame.
     const bb = blackboardRef.current;
-    for (let i = 0; i < MOUSE_ONE_SHOT_FLAGS.length; i++) {
-      bb[MOUSE_ONE_SHOT_FLAGS[i]] = false;
+    if (bb.__mouse_dirty) {
+      bb.__mouse_dirty = false;
+      for (let i = 0; i < MOUSE_ONE_SHOT_FLAGS.length; i++) {
+        bb[MOUSE_ONE_SHOT_FLAGS[i]] = false;
+      }
     }
+  }, [config.initialState, enterState, positionRef, stateMap, triggerMap]);
+
+  const externallyDriven = options.externallyDriven ?? false;
+  useFrame((threeState, delta) => {
+    if (!externallyDriven) tick(threeState, delta);
   });
 
   useEffect(() => {
@@ -206,8 +230,9 @@ export function useStateMachine(
       },
       blackboard: blackboardRef.current,
       animationControl: animationControlRef.current,
+      tick,
     }),
-    []
+    [tick]
   );
 
   return handle;

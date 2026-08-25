@@ -83,24 +83,18 @@ const headScratch: LampHead[] = [];
 /** Rewrite the grid from the mounted lamp heads, centered on the camera.
  *  Called every few frames by the street-lamp driver; skipped entirely while
  *  clean and the origin cell is unchanged. */
-export const updateLampGrid = (heads: Iterable<LampHead>, cameraX: number, cameraZ: number): void => {
+export const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: number, cameraZ: number): void => {
   const originX = Math.floor(cameraX / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
   const originZ = Math.floor(cameraZ / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
-  headScratch.length = 0;
-  for (const head of heads) headScratch.push(head);
   // The head-count comparison is a backstop for registration paths that
-  // mutate activeLampHeads directly without marking dirty (the per-object
-  // street-lamp ACTOR) — a plain iteration, far cheaper than the fill +
-  // upload it guards.
-  if (
-    !gridDirty &&
-    originX === lastOriginX &&
-    originZ === lastOriginZ &&
-    headScratch.length === lastHeadCount
-  ) {
-    headScratch.length = 0;
+  // mutate activeLampHeads directly without marking dirty. Checked BEFORE
+  // touching the heads, so a clean skip costs a few comparisons rather than
+  // an O(heads) walk.
+  if (!gridDirty && originX === lastOriginX && originZ === lastOriginZ && heads.size === lastHeadCount) {
     return;
   }
+  headScratch.length = 0;
+  for (const head of heads.values()) headScratch.push(head);
 
   gridData.fill(0);
   LAMP_GRID_UNIFORMS.uLampGridOrigin.value.set(originX, originZ);
@@ -142,11 +136,21 @@ export const activeLampHeads = new Map<string, LampHead>();
  *  brighter. Scales a lamp material's emissiveIntensity. */
 export const LAMP_EMISSIVE_STRENGTH = 12;
 
+/** Unregister a chunk's glow heads (dressing chunk teardown) — marks the grid
+ *  dirty so the next rewrite drops them, and clears it when the last head is
+ *  gone. Street lamps and traffic signals both wire their useChunkRegistry
+ *  teardown to this. */
+export const unregisterLampHeads = (keys: Iterable<string>): void => {
+  for (const key of keys) activeLampHeads.delete(key);
+  markLampGridDirty();
+  clearLampGridIfEmpty();
+};
+
 /** Last head gone → nobody drives the grid anymore; clear it (and the shader
  *  early-out) so no ghost light pools linger on the terrain. */
 export const clearLampGridIfEmpty = (): void => {
   if (activeLampHeads.size === 0) {
-    updateLampGrid([], 0, 0);
+    updateLampGrid(activeLampHeads, 0, 0);
     setLampGlowIntensity(0);
   }
 };
@@ -167,13 +171,13 @@ export const driveLampLighting = (camera: THREE.Camera, time: number): void => {
   lampDriveTime = time;
   setLampGlowIntensity(getWindowLightsProgress());
   if (lampDriveFrame++ % GRID_UPDATE_INTERVAL === 0) {
-    updateLampGrid(activeLampHeads.values(), camera.position.x, camera.position.z);
+    updateLampGrid(activeLampHeads, camera.position.x, camera.position.z);
   }
 };
 
 /** Uniform declarations for shaders that inject lampGlowAccumGLSL manually
  *  (the terrain material auto-declares from its uniforms map instead). */
-export const lampGlowUniformsGLSL = `
+const lampGlowUniformsGLSL = `
 uniform sampler2D uLampGrid;
 uniform vec2 uLampGridOrigin;
 uniform float uLampGlowIntensity;
