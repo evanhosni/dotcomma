@@ -12,7 +12,7 @@ import {
   ringSpanAt,
 } from "./rings";
 import {
-  BuildingOptions,
+  BuildingAttributes,
   BuildingPlan,
   ChildSlot,
   DoorPlan,
@@ -83,7 +83,7 @@ const shade = (hex: number, f: number): number => {
  * wrap it — as plain data. Pure and deterministic: same seed + options, same
  * plan, every load.
  */
-export const generateBuildingPlan = (seed: string, opts: BuildingOptions): BuildingPlan => {
+export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): BuildingPlan => {
   const rng = seedrandom(`building:${seed}`);
   const range = (a: number, b: number): number => a + rng() * (b - a);
   const rangeInt = (a: number, b: number): number => Math.floor(a + rng() * (b + 1 - a));
@@ -216,13 +216,13 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   }
 
   // Exterior height is LINKED to the FINAL floor count: a collapsed story
-  // request also drops the shell (heightRange only applies when the floors
+  // request also drops the shell (shellHeightRange only applies when the floors
   // it advertises actually exist).
   let bh: number;
   if (opts.exteriorSize) {
     bh = opts.exteriorSize[1];
-  } else if (opts.heightRange && stories === requestedStories) {
-    bh = Math.max(range(opts.heightRange[0], opts.heightRange[1]), stories * storyHeight + 2);
+  } else if (opts.shellHeightRange && stories === requestedStories) {
+    bh = Math.max(range(opts.shellHeightRange[0], opts.shellHeightRange[1]), stories * storyHeight + 2);
   } else if (stories === 1) {
     // Single-floor shells vary a lot — some wear tall mass above their one
     // floor (mechanical space), reading as a bigger building than they are.

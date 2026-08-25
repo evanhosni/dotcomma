@@ -1,28 +1,17 @@
-import { ActorDescriptor, ActorProps } from "../spawning/types";
 import { createActor } from "../../../world/components";
+import { ActorDescriptor } from "../spawning/types";
 import { BuildingDescriptor } from "./actor";
-import { Building } from "./Building";
+import { BuildingAttributes } from "./types";
 
-/** Skyscraper variant: max floors under a much taller shell (the mass above
- *  the top floor reads as mechanical levels), with a gentler lean so tall
- *  neighbors don't collide. Most windows light up at night — towers read as
- *  busy from across the city. */
-export const Skyscraper = (props: ActorProps) => (
-  <Building
-    {...props}
-    stories={6}
-    roomCount={[3, 4, 5, 6]}
-    heightRange={[70, 115]}
-    maxLean={0.04}
-    windowLightChance={0.8}
-  />
-);
-
-/** Extends BuildingDescriptor — only what differs from a normal building. */
-export const SkyscraperDescriptor: ActorDescriptor = {
+/** Skyscraper: extends BuildingDescriptor — only what differs from a normal
+ *  building. Max floors under a much taller shell (the mass above the top
+ *  floor reads as mechanical levels), a gentler lean so tall neighbors don't
+ *  collide, and most windows lit at night so towers read as busy from across
+ *  the city. Every knob here is a BuildingAttributes field forwarded to the
+ *  <Building> instance — no wrapper component. */
+export const SkyscraperDescriptor: ActorDescriptor<BuildingAttributes> = {
   ...BuildingDescriptor,
   id: "skyscraper",
-  component: Skyscraper,
   footprint: 36,
   // Restricted to deep block interiors (see roadDistanceRange), so density is
   // raised to keep the skyline as populated as before the road filter.
@@ -31,6 +20,11 @@ export const SkyscraperDescriptor: ActorDescriptor = {
   roadDistanceRange: [28, 99999],
   // flattenGround inherited from BuildingDescriptor — skyscrapers get their
   // own (larger, footprint-derived) pad via the flattenRadius default.
+  stories: 6,
+  roomCount: [3, 4, 5, 6],
+  shellHeightRange: [70, 115],
+  maxLean: 0.04,
+  windowLightChance: 0.8,
 };
 
 export const SkyscraperActor = createActor(SkyscraperDescriptor);

@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useLayoutEffect, useMemo } from "react";
-import { ActorDescriptor } from "../../objects/actors/spawning/types";
+import { ActorAttributes } from "../../objects/types";
+import { ActorDescriptor, AnyActorDescriptor } from "../../objects/actors/spawning/types";
 import { BiomeContext, useDomainStore } from "./context";
 
-const ActorsContext = createContext<Partial<ActorDescriptor> | null>(null);
+const ActorsContext = createContext<Partial<AnyActorDescriptor> | null>(null);
 
-export interface ActorsProps extends React.PropsWithChildren, Partial<ActorDescriptor> {}
+export interface ActorsProps extends React.PropsWithChildren, Partial<AnyActorDescriptor> {}
 
 /**
  * Groups a biome's actors. Any descriptor props set here act as shared
@@ -20,14 +21,14 @@ export const Actors = ({ children, ...defaults }: ActorsProps) => {
   return <ActorsContext.Provider value={value}>{children}</ActorsContext.Provider>;
 };
 
-export type ActorRegistrationProps = ActorDescriptor;
+export type ActorRegistrationProps = AnyActorDescriptor;
 
 /**
  * Registers an ACTOR descriptor from inside a <Biome> — the per-object spawn
  * class (beebles, buildings: objects with their own identity, state, or
  * interaction; each mounts as its own React component through ActorPool).
- * Props are the full ActorDescriptor: `component`, `model`, `footprint`,
- * `density`, plus spawn restrictions (`biomeIds`, `heightRange`,
+ * Props are the full ActorDescriptor: `component`, `footprint`, `density`,
+ * the member's own attributes (`model`, `stories`, …), plus spawn restrictions (`biomeIds`, `heightRange`,
  * `slopeRange`, spacing, priority…). Defaults from an enclosing <Actors>
  * fill in unset optional props.
  *
@@ -47,7 +48,7 @@ export const Actor = (props: ActorRegistrationProps) => {
 
   // Merge <Actors> defaults under own props (explicit undefined doesn't
   // clobber an inherited value).
-  const descriptor: ActorDescriptor = { ...(inherited ?? {}) } as ActorDescriptor;
+  const descriptor: AnyActorDescriptor = { ...(inherited ?? {}) } as AnyActorDescriptor;
   for (const [key, value] of Object.entries(props)) {
     if (value !== undefined) (descriptor as any)[key] = value;
   }
@@ -80,6 +81,6 @@ export const Actor = (props: ActorRegistrationProps) => {
  *   <BeebleActor biomeIds={[CITY_BIOME_ID]} density={150} />
  */
 export const createActor =
-  (descriptor: ActorDescriptor) =>
-  (overrides: Partial<ActorDescriptor>): JSX.Element =>
+  <A extends ActorAttributes>(descriptor: ActorDescriptor<A>) =>
+  (overrides: Partial<ActorDescriptor<A>>): JSX.Element =>
     <Actor {...descriptor} {...overrides} />;

@@ -3,7 +3,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import { FLOOR_LIFT, generateBuildingPlan, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
 import { buildProxyHullVertices } from "./proxyCollider";
 import { edgeLength, edgePoint, interpRing, ringPoints } from "./rings";
-import { BuildingOptions, BuildingPlan, DoorPlan, ExteriorLoft, WallBox, WindowSpec } from "./types";
+import { BuildingAttributes, BuildingPlan, DoorPlan, ExteriorLoft, WallBox, WindowSpec } from "./types";
 
 /**
  * Turns a BuildingPlan into renderable geometry, cached per (seed, options).
@@ -61,7 +61,7 @@ export interface ProceduralBuildingAssets {
 }
 
 // Interior surface colors come from the plan (derived from the building's
-// exterior palette, overridable via BuildingOptions.interiorColors) — only
+// exterior palette, overridable via BuildingAttributes.interiorColors) — only
 // the glowing panel color is fixed.
 const LIGHT_PANEL_COLOR = 0xfff7d6;
 
@@ -647,7 +647,7 @@ export const releaseProceduralBuildingAssets = (seed: string, optionsKey: string
  *  (partial geometries were never rendered — no GL state to free). */
 export const beginProceduralBuildingBuild = (
   seed: string,
-  opts: BuildingOptions,
+  opts: BuildingAttributes,
   /** The caller's already-stringified options (peek/retain/release use the
    *  same string) — saves a JSON round-trip per new seed. */
   optionsKey: string = JSON.stringify(opts),

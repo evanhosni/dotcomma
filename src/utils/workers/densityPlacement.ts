@@ -15,7 +15,7 @@
  */
 
 import { seedRand } from "../math/_math";
-import type { PlacementFilters } from "../../objects/types";
+import type { GameObjectAttributes } from "../../objects/types";
 import type { VertexResult } from "./vertexCompute";
 
 /** Density cell edge for `density` instances per 1,000,000 sq units. */
@@ -60,12 +60,12 @@ export const rollDensityCell = (
   };
 };
 
-/** The shared placement filters (objects/types.ts PlacementFilters) against a
+/** The shared placement filters (objects/types.ts GameObjectAttributes) against a
  *  computed vertex. Slope is not part of the vertex result — the spawn worker
  *  and foliage worker evaluate slopeRange themselves. */
 export const passesPlacementFilters = (
   vd: Pick<VertexResult, "biomeId" | "height" | "distanceToRoadCenter">,
-  f: Pick<PlacementFilters, "biomeIds" | "heightRange" | "roadDistanceRange">,
+  f: Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange">,
 ): boolean => {
   if (f.biomeIds && f.biomeIds.length > 0 && !f.biomeIds.includes(vd.biomeId)) return false;
   if (f.heightRange && (vd.height < f.heightRange[0] || vd.height > f.heightRange[1])) return false;
@@ -79,7 +79,7 @@ export const passesPlacementFilters = (
 
 /** Parameters of the dressing worker's stateless density placement
  *  (DENSITY_POINTS) — shared by the client (dressingWorker.ts) and the worker. */
-export interface DensityPointParams extends Pick<PlacementFilters, "biomeIds" | "heightRange" | "roadDistanceRange"> {
+export interface DensityPointParams extends Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange"> {
   /** Seed namespace — distinct from spawn-system descriptor ids. */
   seedTag: string;
   /** Instances per 1,000,000 sq units. */

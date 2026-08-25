@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { ActorAttributes } from "../../types";
 import { ActorProps } from "../spawning/types";
 
 /** Which exterior/interior wall a door lives on (+z = local south face, etc). */
@@ -206,7 +207,7 @@ export enum WINDOW_SHAPE {
 }
 
 /** Generation knobs. Anything unset is seeded-random per building. */
-export interface BuildingOptions {
+export interface BuildingAttributes extends ActorAttributes {
   /** Exterior [width, height, depth] at ground level. */
   exteriorSize?: [number, number, number];
   /** Cross-section side counts to pick from. 4 = boxy slab, 5–8 = faceted
@@ -233,7 +234,7 @@ export interface BuildingOptions {
   /** Shell height range [min, max] — overrides the floors-derived height
    *  (clamped to fit the floors); the extra mass above the top floor reads
    *  as mechanical levels. Used by tall variants like the skyscraper. */
-  heightRange?: [number, number];
+  shellHeightRange?: [number, number];
   /** Interior floor count (default seeded 1–5). Drives the exterior height. */
   stories?: number;
   /** Rooms-per-floor choices — EACH floor rolls its own count from this
@@ -257,7 +258,7 @@ export interface BuildingOptions {
   interiorColors?: InteriorColors;
 }
 
-export interface BuildingProps extends ActorProps, BuildingOptions {
+export interface BuildingProps extends ActorProps<BuildingAttributes> {
   /** Deterministic shape seed. Defaults to the spawn coordinates, so the same
    *  spot regenerates the same building on every load. */
   seed?: string | number;

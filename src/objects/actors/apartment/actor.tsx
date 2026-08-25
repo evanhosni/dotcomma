@@ -1,10 +1,11 @@
 import { ActorDescriptor } from "../spawning/types";
 import { createActor } from "../../../world/components";
-import { Apartment } from "./Apartment";
+import { ModelActor, ModelActorAttributes } from "../ModelActor";
 
-export const ApartmentDescriptor: ActorDescriptor = {
+export const ApartmentDescriptor: ActorDescriptor<ModelActorAttributes> = {
   id: "apartment",
-  component: Apartment,
+  component: ModelActor,
+  wholeTrimesh: true,
   model: "/models/apartment.glb",
   scale: [1, 1, 1],
   footprint: 25,

@@ -1,12 +1,12 @@
 import React from "react";
 import * as THREE from "three";
-import { instancedFromPoints, useDressingAssets, useDressingChunks, useDressingRenderDistance, yawFromDir } from "../Dressing";
+import { instancedFromPoints, useDressingAssets, useDressingChunks, useDressingDefault, yawFromDir } from "../Dressing";
+import { DressingAttributes } from "../../types";
 import { getRoadMarkers } from "../dressingWorker";
 
 const MARKER_HEIGHT = 0.16;
 
-export interface RoadMarkersProps {
-  renderDistance?: number;
+export interface RoadMarkersProps extends DressingAttributes {
   /** Marker spacing along street / freeway centerlines (world units). */
   streetSpacing?: number;
   freewaySpacing?: number;
@@ -22,7 +22,7 @@ export const RoadMarkers = ({
   streetSpacing = 9,
   freewaySpacing = 11,
 }: RoadMarkersProps) => {
-  const resolvedDistance = useDressingRenderDistance(renderDistance, 340);
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
 
   const assets = useDressingAssets(() => {
     // Tapered stud: pull the top face's four vertices inward so the marker

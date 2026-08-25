@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
-import { GameObjectAttributes } from "../types";
+import { DressingAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
 
 /**
@@ -44,7 +44,9 @@ const dressingQueue = new TaskQueue();
 /** Shared defaults for a biome's dressing features (base game-object
  *  attributes; features fall back to their own defaults when neither prop
  *  nor group sets one). */
-export type DressingDefaults = Pick<GameObjectAttributes, "renderDistance">;
+/** The DressingAttributes a <Dressing> group can default for its children —
+ *  the ones every feature resolves through useDressingDefault. */
+export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance">;
 
 /**
  * Groups a biome's dressing features, mirroring <Actors>/<Foliage>: props set
@@ -59,13 +61,14 @@ export type DressingDefaults = Pick<GameObjectAttributes, "renderDistance">;
 const DressingGroup = createDefaultsGroup<DressingDefaults>();
 export const Dressing = DressingGroup.Group;
 
-/** Resolve a feature's renderDistance: own prop > <Dressing> group > feature default. */
-export const useDressingRenderDistance = (
-  own: number | undefined,
-  featureDefault: number
-): number => {
+/** Resolve a group-defaultable attribute: own prop > <Dressing> group > feature default. */
+export const useDressingDefault = <K extends keyof DressingDefaults>(
+  key: K,
+  own: DressingDefaults[K],
+  featureDefault: NonNullable<DressingDefaults[K]>
+): NonNullable<DressingDefaults[K]> => {
   const ctx = DressingGroup.useDefaults();
-  return own ?? ctx.renderDistance ?? featureDefault;
+  return (own ?? ctx[key] ?? featureDefault) as NonNullable<DressingDefaults[K]>;
 };
 
 // ── Shared assets ──

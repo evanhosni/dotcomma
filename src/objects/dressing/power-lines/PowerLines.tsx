@@ -1,3 +1,4 @@
+import { DressingAttributes } from "../../types";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
@@ -12,7 +13,8 @@ import {
   useDressingAssets,
   useDressingChunks,
   useDressingColliders,
-  useDressingRenderDistance,
+  DRESSING_COLLIDER_DISTANCE,
+  useDressingDefault,
   yawFromDir,
 } from "../Dressing";
 import { CityFreewaySidePoint, getFreewaySidePoints } from "../dressingWorker";
@@ -50,8 +52,7 @@ interface PoleChunk {
   points: { x: number; y: number; z: number }[];
 }
 
-export interface PowerLinesProps {
-  renderDistance?: number;
+export interface PowerLinesProps extends DressingAttributes {
   /** Pole spacing along the freeway (world units). */
   spacing?: number;
   /** Pole line offset past the freeway edge — default lands on the sidewalk band. */
@@ -129,11 +130,12 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
  */
 export const PowerLines = ({
   renderDistance,
+  colliderDistance,
   spacing = 55,
   lateralMargin = 5,
   junctionClear = 26,
 }: PowerLinesProps) => {
-  const resolvedDistance = useDressingRenderDistance(renderDistance, 420);
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 420);
   const registry = useChunkRegistry<PoleChunk>();
 
   const assets = useDressingAssets(() => ({
@@ -198,7 +200,9 @@ export const PowerLines = ({
 
   // Real pole colliders for the posts near the player (base hook). This also
   // owns the registry's prune sweep — PowerLines has no other frame loop.
-  const colliders = useDressingColliders(registry);
+  const colliders = useDressingColliders(registry, {
+    distance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
+  });
 
   return (
     <>

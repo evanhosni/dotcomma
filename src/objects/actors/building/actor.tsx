@@ -1,10 +1,11 @@
-import { ActorDescriptor, ActorProps } from "../spawning/types";
+import { ActorDescriptor } from "../spawning/types";
+import { BuildingAttributes } from "./types";
 import { createActor } from "../../../world/components";
 import { Building } from "./Building";
 
-export const BuildingDescriptor: ActorDescriptor = {
+export const BuildingDescriptor: ActorDescriptor<BuildingAttributes> = {
   id: "building",
-  component: Building as React.FC<ActorProps>,
+  component: Building,
   footprint: 30,
   // Buildings only place inside block interiors (off roads/sidewalks/ramps),
   // so density is set high to keep blocks packed — footprint spacing is the

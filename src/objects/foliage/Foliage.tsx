@@ -8,10 +8,9 @@ import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
-import { GameObjectAttributes } from "../types";
+import { FoliageAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
 import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./foliageWorker";
-import { FoliageProps } from "./types";
 
 /**
  * FOLIAGE — the mass-GPU-vegetation class of the game-object hierarchy (see
@@ -44,7 +43,7 @@ import { FoliageProps } from "./types";
  */
 
 /** Shared defaults for a biome's foliage features. */
-export type FoliageDefaults = Pick<GameObjectAttributes, "renderDistance">;
+export type FoliageDefaults = Pick<FoliageAttributes, "renderDistance">;
 
 /**
  * Groups a biome's foliage, mirroring <Actors>/<Dressing>: props set here act
@@ -283,7 +282,7 @@ const disposeChunkGeometry = (geo: THREE.BufferGeometry): void => {
  * Mount it inside a biome's <Foliage> group — with no explicit `biomeIds` it
  * restricts itself to the enclosing biome.
  */
-export const FoliageField: React.FC<FoliageProps> = ({
+export const FoliageField: React.FC<FoliageAttributes> = ({
   density = 800_000,
   biomeIds,
   heightRange,
@@ -588,7 +587,7 @@ export const FoliageField: React.FC<FoliageProps> = ({
 };
 
 /**
- * One-liner for a plant type: bakes a set of FoliageProps into a named
+ * One-liner for a plant type: bakes a set of FoliageAttributes into a named
  * component whose own props are overrides — the foliage twin of createActor.
  *
  *   export const GrassField = createFoliage({ seed: "grass", height: 1.2, … });
@@ -599,6 +598,6 @@ export const FoliageField: React.FC<FoliageProps> = ({
  * points, so the fields would grow through each other.
  */
 export const createFoliage =
-  (defaults: FoliageProps) =>
-  (overrides: FoliageProps): JSX.Element =>
+  (defaults: FoliageAttributes) =>
+  (overrides: FoliageAttributes): JSX.Element =>
     <FoliageField {...defaults} {...overrides} />;

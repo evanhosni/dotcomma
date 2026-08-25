@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { ActorDescriptor } from "../../objects/actors/spawning/types";
+import { AnyActorDescriptor } from "../../objects/actors/spawning/types";
 import { BiomeNoiseConfig, MaterialData, RegionMaterialData, TerrainParams } from "../types";
 
 /**
@@ -58,7 +58,7 @@ export interface DomainStore {
   /** key: `${regionId}/${biomeId}` */
   biomeMaterials: Map<string, { biomeId: number; getMaterial: () => Promise<MaterialData> }>;
   /** key: `${regionId}/${biomeId}/${descriptorId}` */
-  actors: Map<string, { biomeId: number; descriptor: ActorDescriptor }>;
+  actors: Map<string, { biomeId: number; descriptor: AnyActorDescriptor }>;
   /** key: `${scope}/${scopeId ?? "domain"}` */
   skyboxes: Map<string, SkyboxRecord>;
   /** Schedules a <Domain> re-commit. Safe to call from effects/cleanups. */
