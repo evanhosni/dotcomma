@@ -13,24 +13,12 @@ export interface Chunk {
   offset: THREE.Vector2;
   plane: THREE.Mesh;
   rebuildIterator: AsyncIterator<any> | null;
-  collider: TerrainColliderProps | null;
+  /** The chunk's Rapier heightfield body — built IMPERATIVELY (rapier-side
+   *  only, never a React <RigidBody>): r-t-r walks every React-registered
+   *  body every frame (getRigidBody + isSleeping wasm calls, and fixed bodies
+   *  never report sleeping, so also translation/rotation → compose/decompose
+   *  → lerp/slerp), and ~64 terrain bodies were the bulk of that list. Owned
+   *  by the chunk; removed in destroyChunk. */
+  colliderBody: import("@dimforge/rapier3d-compat").RigidBody | null;
   lod: import("./lodConfig").LODLevel;
-}
-
-export interface TerrainColliderProps {
-  chunkKey: string;
-  heights: Float32Array;
-  nrows: number;
-  ncols: number;
-  position: number[];
-  chunkSize: number;
-  /** STABLE references, built once when the collider is generated.
-   *  <HeightfieldCollider> feeds its `args` (spread elementwise) into the
-   *  dependency list that owns the Rapier shape — a fresh array/scale object
-   *  per render makes it REMOVE and REBUILD the heightfield every time the
-   *  parent re-renders. With every collider chunk re-rendering on each
-   *  collider change, that was tens of full heightfield rebuilds per built
-   *  chunk. Keep these identity-stable and the shape is created exactly once. */
-  args: [number, number, number[], { x: number; y: number; z: number }];
-  bodyPosition: [number, number, number];
 }

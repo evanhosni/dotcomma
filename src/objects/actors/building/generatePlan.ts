@@ -1,4 +1,5 @@
 import seedrandom from "seedrandom";
+import { clamp } from "../../../utils/math/_math";
 import {
   edgeLength,
   edgeNormal,
@@ -68,7 +69,6 @@ interface SplitWall {
   doorAt: number;
 }
 
-const clampNum = (x: number, a: number, b: number): number => Math.min(Math.max(x, a), b);
 
 const shade = (hex: number, f: number): number => {
   const r = Math.min(255, Math.round(((hex >> 16) & 0xff) * f));
@@ -112,7 +112,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   const doorHeight = Math.min(opts.doorSize?.[1] ?? 3.2, ceilingHeight - 0.2);
   const doorBandTop = doorHeight + range(0.8, 2);
 
-  let stories = clampNum(Math.round(opts.stories ?? rangeInt(1, 5)), 1, 6);
+  let stories = clamp(Math.round(opts.stories ?? rangeInt(1, 5)), 1, 6);
   const requestedStories = stories;
   // Rooms-per-floor choices: each story rolls its own count (a plain number
   // pins the count, but layouts still vary per floor). The footprint is
@@ -256,7 +256,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   const apothem = rect ? 1 : Math.cos(Math.PI / sides);
   const clampMargin = (lean: number): number => (0.9 + lean) / apothem;
   const ringAt = (y: number, rScale: number): RingLevel => {
-    const t = clampNum((y - doorBandTop) / Math.max(bh - doorBandTop, 1e-6), 0, 1);
+    const t = clamp((y - doorBandTop) / Math.max(bh - doorBandTop, 1e-6), 0, 1);
     const lean = leanMag * Math.pow(t, leanExp);
     const g = 1 + (topScale - 1) * Math.pow(t, 1.15);
     const cx = Math.cos(leanAngle) * lean;
@@ -474,7 +474,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
   // leans ~75% toward one shape; circles are opt-in), sizes/aspects vary,
   // quads get a subtle skew — windows are rarely symmetrical. ----
   const windows: BuildingPlan["windows"] = [];
-  const windowLightChance = clampNum(opts.windowLightChance ?? 0.6, 0, 1);
+  const windowLightChance = clamp(opts.windowLightChance ?? 0.6, 0, 1);
   const windowLightIntensity = Math.max(0, opts.windowLightIntensity ?? 1.4);
   const glass = pick(GLASS_COLORS);
   const windowShapes = opts.windowShapes?.length ? opts.windowShapes : [WINDOW_SHAPE.SQUARE];
@@ -506,13 +506,13 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     }
   }
   const windowTarget = opts.windowCount?.length
-    ? clampNum(Math.round(pick(opts.windowCount)), 0, cells.length)
+    ? clamp(Math.round(pick(opts.windowCount)), 0, cells.length)
     : Math.round(cells.length * range(0.35, 0.55));
   for (const cell of shuffle(cells).slice(0, windowTarget)) {
     const slotW = edgeLength(bandPts, cell.edge) / cell.slots;
     const shape = rng() < 0.75 ? primaryShape : pick(windowShapes);
     const w = Math.min(range(winMin, winMax), slotW * 0.8);
-    const h = clampNum(w * range(0.65, 1.4), 2.0, 4.6);
+    const h = clamp(w * range(0.65, 1.4), 2.0, 4.6);
     windows.push({
       loft: cell.loft,
       edge: cell.edge,
@@ -813,7 +813,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
     const dirX = (b[0] - a[0]) / len;
     const dirZ = (b[1] - a[1]) / len;
     const tMargin = (d.width / 2 + 0.6) / len;
-    let t = clampNum((d.t0 + d.t1) / 2, tMargin, 1 - tMargin);
+    let t = clamp((d.t0 + d.t1) / 2, tMargin, 1 - tMargin);
     for (let pass = 0; pass < 2; pass++) {
       for (const w of groundWalls) {
         // Wall endpoints in the plane
@@ -833,7 +833,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingOptions): Build
           if (perp > 0.6 || tE < -0.05 || tE > 1.05) continue;
           if (Math.abs(tE - t) * len < d.width / 2 + T + 0.4) {
             const shift = (d.width / 2 + T + 1) / len;
-            t = clampNum(tE + (t >= tE ? shift : -shift), tMargin, 1 - tMargin);
+            t = clamp(tE + (t >= tE ? shift : -shift), tMargin, 1 - tMargin);
           }
         }
       }

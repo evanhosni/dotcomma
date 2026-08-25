@@ -8,7 +8,12 @@
 
 import Delaunator from "delaunator";
 import Noise from "noise-ts";
-import seedrandom from "seedrandom";
+import { seedRand, smoothstep } from "../math/_math";
+import { CITY_BIOME_ID } from "../../world/constants";
+import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
+
+// The deterministic roll every worker uses — one implementation (utils/math).
+export { seedRand };
 
 // ══════════════════════════════════════════════════════════════════════
 // Types
@@ -123,10 +128,6 @@ interface VGrid {
 // ══════════════════════════════════════════════════════════════════════
 // Noise
 // ══════════════════════════════════════════════════════════════════════
-
-const MASTER_SEED = "mynamebierce";
-
-export const seedRand = (seed: any): number => seedrandom(seed + MASTER_SEED)();
 
 const noiseInstance = new Noise(seedRand("bierce"));
 
@@ -427,11 +428,6 @@ const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
 // ══════════════════════════════════════════════════════════════════════
 // City (block grid + triangle/roundabout cells + axis-aligned freeways)
 // ══════════════════════════════════════════════════════════════════════
-
-const smoothstepVal = (edge0: number, edge1: number, x: number): number => {
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-};
 
 /** Plateau height of a block index (edge blocks sit at 0). Keyed by index so
  *  adjacent cells of the same block — which have no road between them — are
@@ -1114,8 +1110,8 @@ const getCityTerrain = (
   const flatEdge = 0.5 - rampFrac;
   const fx = lx / gs - (ix + 0.5); // [-0.5, 0.5] across the cell
   const fy = ly / gs - (iy + 0.5);
-  const wx = 0.5 * smoothstepVal(flatEdge, 0.5, Math.abs(fx));
-  const wy = 0.5 * smoothstepVal(flatEdge, 0.5, Math.abs(fy));
+  const wx = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fx));
+  const wy = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fy));
   const dxi = fx >= 0 ? 1 : -1;
   const dyi = fy >= 0 ? 1 : -1;
   const hC = cityBlockElevation(city.seed, cur, city.maxBlockElevation);
@@ -1140,8 +1136,8 @@ const getCityTerrain = (
   // into a gentle road crown.)
   const freewayGrade = city.maxBlockElevation * 0.5;
   const freewayRamp =
-    smoothstepVal(2, CITY_FREEWAY_RAMP_END, arterialReal) *
-    smoothstepVal(2, CITY_FREEWAY_RAMP_END, beltReal);
+    smoothstep(2, CITY_FREEWAY_RAMP_END, arterialReal) *
+    smoothstep(2, CITY_FREEWAY_RAMP_END, beltReal);
   elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
 
   // Roundabout island: its own flat plateau, independent of the (possibly
@@ -1153,7 +1149,7 @@ const getCityTerrain = (
       cityUniqueLabel(Math.floor(ix / 2), Math.floor(iy / 2)),
       city.maxBlockElevation
     );
-    const islandMask = 1 - smoothstepVal(ringR - 12, ringR - 2, circleR);
+    const islandMask = 1 - smoothstep(ringR - 12, ringR - 2, circleR);
     elevation += (islandH - elevation) * islandMask;
   }
 
@@ -1178,7 +1174,7 @@ const getCityTerrain = (
       let pen = 0;
       if (!Number.isNaN(cityConsUx[i]) && !Number.isNaN(cityConsUx[j])) {
         const dot = cityConsUx[i] * cityConsUx[j] + cityConsUz[i] * cityConsUz[j];
-        pen = CITY_CHAMFER_DOT_PENALTY * smoothstepVal(CITY_CHAMFER_DOT_LO, CITY_CHAMFER_DOT_HI, dot);
+        pen = CITY_CHAMFER_DOT_PENALTY * smoothstep(CITY_CHAMFER_DOT_LO, CITY_CHAMFER_DOT_HI, dot);
       }
       const c = (cityConsD[i] + cityConsD[j] + pen) * CITY_CHAMFER_SCALE;
       if (c < chamfer) chamfer = c;
@@ -1189,7 +1185,7 @@ const getCityTerrain = (
   if (cur < 0) dist = 0; // biome-edge cells are all road (the rim ring road)
 
   // Curb: the road surface sits a step below the sidewalk.
-  elevation -= city.curbHeight * (1 - smoothstepVal(city.roadWidth - 2, city.roadWidth, dist));
+  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, dist));
 
   // Lane-paint channels: distance to the NEAREST freeway centerline
   // (arterial edge or belt) + the dash-phase coordinate along it (axis
@@ -1330,14 +1326,13 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
   try {
     for (let di = 0; di < descs.length; di++) {
       const desc = descs[di];
-      // EXACTLY the spawn.worker density algorithm (same seeds), minus the
-      // stateful spacing hash.
-      const cellSize = Math.sqrt(1_000_000 / desc.density);
-      const gx0 = Math.floor(pMinX / cellSize);
-      const gx1 = Math.floor(pMaxX / cellSize);
-      const gz0 = Math.floor(pMinZ / cellSize);
-      const gz1 = Math.floor(pMaxZ / cellSize);
-      const probability = (desc.density * cellSize * cellSize) / 1_000_000;
+      // EXACTLY the spawn.worker density algorithm (same seeds, same filters —
+      // both call the shared densityPlacement helpers), minus the stateful
+      // spacing hash.
+      const cellSize = densityCellSize(desc.density);
+      const [gx0, gx1] = densityCellRange(pMinX, pMaxX, cellSize);
+      const [gz0, gz1] = densityCellRange(pMinZ, pMaxZ, cellSize);
+      const probability = densityProbability(desc.density, cellSize);
       for (let gx = gx0; gx <= gx1; gx++) {
         for (let gz = gz0; gz <= gz1; gz++) {
           const candKey = `${di}:${gx},${gz}`;
@@ -1348,24 +1343,12 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
           }
           if (flattenCandCache.size > 65536) dropOldestHalf(flattenCandCache);
 
-          const seed = `${desc.id}_${gx}_${gz}`;
-          const rand = seedRand(seed);
           let cand: FlattenCandidate | null = null;
-          if (!(desc.clustering > 0 && seedRand(`cluster_${desc.id}_${gx}_${gz}`) < desc.clustering * 0.7)) {
-            const x = gx * cellSize + seedRand(seed + "_x") * cellSize;
-            const z = gz * cellSize + seedRand(seed + "_z") * cellSize;
-            if (rand <= probability) {
-              const vd = computeVertexData(x, z); // RAW (computingFlatten guard)
-              const passes =
-                (!desc.biomeIds || desc.biomeIds.length === 0 || desc.biomeIds.includes(vd.biomeId)) &&
-                (!desc.heightRange ||
-                  (vd.height >= desc.heightRange[0] && vd.height <= desc.heightRange[1])) &&
-                (!desc.roadDistanceRange ||
-                  (vd.distanceToRoadCenter >= desc.roadDistanceRange[0] &&
-                    vd.distanceToRoadCenter <= desc.roadDistanceRange[1]));
-              if (passes) {
-                cand = { x, z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
-              }
+          const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
+          if (roll) {
+            const vd = computeVertexData(roll.x, roll.z); // RAW (computingFlatten guard)
+            if (passesPlacementFilters(vd, desc)) {
+              cand = { x: roll.x, z: roll.z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
             }
           }
           flattenCandCache.set(candKey, cand);
@@ -1502,7 +1485,7 @@ const applyFlattenPads = (x: number, z: number, height: number): number => {
         const reach = p.radius + p.skirt;
         const dSq = dx * dx + dz * dz;
         if (dSq >= reach * reach) continue;
-        const mask = 1 - smoothstepVal(p.radius, reach, Math.sqrt(dSq));
+        const mask = 1 - smoothstep(p.radius, reach, Math.sqrt(dSq));
         // Insertion sort keeps (mask, y) ascending as we go
         let j = infCount++;
         while (
@@ -1629,7 +1612,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
       if (noiseConfig.scale !== undefined) h *= noiseConfig.scale;
       if (noiseConfig.offset !== undefined) h += noiseConfig.offset;
       biomeHeight = h * blend * riverFade;
-    } else if (cfg.cityConfig && biomeId === 1) {
+    } else if (cfg.cityConfig && biomeId === CITY_BIOME_ID) {
       // City biome — internal road distance + per-block plateau elevation
       const city = getCityTerrain(x, z, cfg.cityConfig, biomeWalls, distanceToBiomeBoundary, biomeWallAlong);
       distanceToRoadCenter = Math.min(city.dist, distanceToRiver);
@@ -1776,7 +1759,7 @@ export function getCityRoadMarkers(
 
   const tryEmit = (mx: number, mz: number, dirX: number, dirZ: number) => {
     const vd = computeVertexData(mx, mz);
-    if (vd.biomeId !== 1) return; // city biome only
+    if (vd.biomeId !== CITY_BIOME_ID) return; // city biome only
     if (vd.distanceToRiverCenter < 45) return;
     if (vd.distanceToRoadCenter > 2) return; // melted/chamfered zones drop out
     // Street/arterial markers exist only strictly INSIDE the belt freeway
@@ -2004,7 +1987,7 @@ export function getCityRoadMarkers(
         }
         if (mx < minX || mx >= maxX || mz < minZ || mz >= maxZ) continue; // chunk ownership
         const vd = computeVertexData(mx, mz);
-        if (vd.biomeId !== 1) continue; // kills the outward-side candidate
+        if (vd.biomeId !== CITY_BIOME_ID) continue; // kills the outward-side candidate
         if (Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) > 2.5) continue;
         if (vd.distanceToRoadCenter > 2) continue;
         if (vd.distanceToRiverCenter < 45) continue;
@@ -2195,7 +2178,7 @@ export function getCityTrafficLightPoints(
                 d
               );
               const vd = computeVertexData(p.x, p.y);
-              if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) break;
+              if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) break;
               // One-sided like the road markers: only strictly inside the belt
               // ring (skips the corridor AND the strip beyond it).
               if (vd.distanceToBiomeBoundaryCenter < beltR + city.freewayWidth + 5)
@@ -2289,7 +2272,7 @@ export function getCityFreewaySidePoints(
 
   const validate = (px: number, pz: number, ux: number, uz: number): Candidate => {
     const vd = computeVertexData(px, pz);
-    if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) return null;
+    if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) return null;
     // Stay clear of the belt corridor (arterials empty into it).
     if (Math.abs(vd.distanceToBiomeBoundaryCenter - beltR) < city.freewayWidth + junctionClear)
       return null;
@@ -2416,7 +2399,7 @@ export function getCityFreewaySidePoints(
     }
     if (owned && !owns(mx, mz)) return null;
     const vd = computeVertexData(mx, mz);
-    if (vd.biomeId !== 1 || vd.distanceToRiverCenter < 45) return null;
+    if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) return null;
     if (Math.abs(vd.distanceToBiomeBoundaryCenter - o) > 2.5) return null; // drift / wrong side
     if (vd.distanceToRoadCenter < minField) return null;
     // Yield to the arterials teeing into the belt.

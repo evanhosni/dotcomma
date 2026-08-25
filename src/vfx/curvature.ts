@@ -96,13 +96,6 @@ export namespace _curvature {
     uniforms.uCurveStart.value = start;
   };
 
-  /** How far the surface has dropped at a given HORIZONTAL camera distance.
-   *  (CPU mirror of the shader — for culling padding or debug readouts.) */
-  export const dropAt = (horizontalDistance: number): number => {
-    const d = Math.max(0, horizontalDistance - uniforms.uCurveStart.value);
-    return uniforms.uCurveK.value * d * d;
-  };
-
   const CURVE_STEP = /* glsl */ `
     mvPosition.xyz = curveViewPos( mvPosition.xyz );
     gl_Position = projectionMatrix * mvPosition;

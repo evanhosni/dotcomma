@@ -1,20 +1,9 @@
-import { _material } from "../../../../../../../utils/material/_material";
-import { MaterialData } from "../../../../../../types";
-import fragmentShader from "./shaders/fragment.glsl";
-
-export const getMaterial = async (): Promise<MaterialData> => {
-  const [grassTexture, grassDirtTexture, dirtTexture] = await _material.loadTextures([
-    "grass.png",
-    "grass-dirt.png",
-    "dirt.png",
-  ]);
-
-  return {
-    uniforms: {
-      grasstexture: { value: grassTexture },
-      grassdirttexture: { value: grassDirtTexture },
-      dirttexture: { value: dirtTexture },
-    },
-    fragmentShader,
-  };
-};
+/**
+ * The city region's grass biome shares biome id 3 with the grass region's
+ * GrassBiome; registrations for one id merge at commit (last wins), so the
+ * two MUST resolve to the same material. Rather than keep a byte-identical
+ * copy of material.ts + shaders/fragment.glsl here (they had already begun to
+ * drift), this duplicate re-exports the grass region's material — the biome
+ * folder still owns its component (biome.tsx), only the content is shared.
+ */
+export { getMaterial } from "../../../grass/biomes/grass/material";

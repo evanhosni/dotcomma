@@ -28,14 +28,18 @@ self.onmessage = function (event: MessageEvent) {
   const { id, ...msg } = event.data;
   taskQueue.addTask(async () => {
     const data = await handleTask(msg);
-    self.postMessage({ id, data });
+    // Trimesh results carry typed arrays — hand their buffers back by
+    // transfer instead of copying them a second time.
+    const transfer: Transferable[] = [];
+    if ("vertices" in data) transfer.push(data.vertices.buffer, data.indices.buffer);
+    (self as any).postMessage({ id, data }, transfer);
   });
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Compute axis-aligned bounding box from raw position array. */
-function computeAABB(positions: number[]): { min: THREE.Vector3; max: THREE.Vector3 } {
+function computeAABB(positions: Float32Array): { min: THREE.Vector3; max: THREE.Vector3 } {
   _min.set(Infinity, Infinity, Infinity);
   _max.set(-Infinity, -Infinity, -Infinity);
   for (let i = 0; i < positions.length; i += 3) {
@@ -51,7 +55,7 @@ function computeAABB(positions: number[]): { min: THREE.Vector3; max: THREE.Vect
 }
 
 /** Compute bounding sphere from raw position array. */
-function computeBSphere(positions: number[]): { center: THREE.Vector3; radius: number } {
+function computeBSphere(positions: Float32Array): { center: THREE.Vector3; radius: number } {
   const { min, max } = computeAABB(positions);
   const center = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
   let maxDistSq = 0;
@@ -94,7 +98,7 @@ async function handleTask(
   }
 }
 
-function handleCapsule(positions: number[]): CapsuleColliderProps {
+function handleCapsule(positions: Float32Array): CapsuleColliderProps {
   // Bounding box for height, bounding sphere for radius
   const { min, max } = computeAABB(positions);
   const bsphere = computeBSphere(positions);
@@ -116,7 +120,7 @@ function handleCapsule(positions: number[]): CapsuleColliderProps {
   };
 }
 
-function handleSphere(positions: number[]): SphereColliderProps {
+function handleSphere(positions: Float32Array): SphereColliderProps {
   const bsphere = computeBSphere(positions);
 
   const maxScale = Math.max(_scale.x, _scale.y, _scale.z);
@@ -131,7 +135,7 @@ function handleSphere(positions: number[]): SphereColliderProps {
   };
 }
 
-function handleBox(positions: number[]): BoxColliderProps {
+function handleBox(positions: Float32Array): BoxColliderProps {
   const { min, max } = computeAABB(positions);
 
   // Size = local size * scale from decomposed matrix
@@ -151,69 +155,76 @@ function handleBox(positions: number[]): BoxColliderProps {
   };
 }
 
-function handleTrimesh(positions: number[], index: number[] | null): TrimeshColliderProps {
-  // Transform all vertices by the full combined matrix
-  const vertices: number[] = new Array(positions.length);
+/** Transform `positions` by `matrix` into `out` starting at `outOffset`
+ *  (float index). */
+const transformInto = (positions: Float32Array, matrix: THREE.Matrix4, out: Float32Array, outOffset: number): void => {
   for (let i = 0; i < positions.length; i += 3) {
     _vertex.set(positions[i], positions[i + 1], positions[i + 2]);
-    _vertex.applyMatrix4(_matrix);
-    vertices[i] = _vertex.x;
-    vertices[i + 1] = _vertex.y;
-    vertices[i + 2] = _vertex.z;
+    _vertex.applyMatrix4(matrix);
+    out[outOffset + i] = _vertex.x;
+    out[outOffset + i + 1] = _vertex.y;
+    out[outOffset + i + 2] = _vertex.z;
   }
+};
 
-  // Copy or generate indices
-  let indices: number[];
+/** Sequential triangle indices for a non-indexed geometry of `vertCount`
+ *  vertices, offset by `base`, written into `out` from `outOffset`. */
+const sequentialIndices = (vertCount: number, base: number, out: Uint32Array, outOffset: number): void => {
+  for (let i = 0; i < vertCount; i++) out[outOffset + i] = base + i;
+};
+
+function handleTrimesh(positions: Float32Array, index: Uint32Array | null): TrimeshColliderProps {
+  // Transform all vertices by the full combined matrix
+  const vertices = new Float32Array(positions.length);
+  transformInto(positions, _matrix, vertices, 0);
+
+  // The incoming index is already a private copy — reuse it; otherwise
+  // generate sequential triangles.
+  let indices: Uint32Array;
   if (index) {
     indices = index;
   } else {
-    indices = [];
-    for (let i = 0; i < positions.length / 3; i += 3) {
-      indices.push(i, i + 1, i + 2);
-    }
+    const vertCount = positions.length / 3;
+    indices = new Uint32Array(vertCount - (vertCount % 3));
+    sequentialIndices(indices.length, 0, indices, 0);
   }
 
-  return {
-    vertices,
-    indices,
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-  };
+  return { vertices, indices, position: [0, 0, 0], rotation: [0, 0, 0] };
 }
 
 function handleWholeTrimesh(task: WholeTrimeshWorkerMessage): TrimeshColliderProps {
-  const allVertices: number[] = [];
-  const allIndices: number[] = [];
-  let vertexOffset = 0;
-
+  // Size the outputs up front — one allocation each, no push().
+  let totalFloats = 0;
+  let totalIndices = 0;
   for (const mesh of task.meshes) {
-    const mat = new THREE.Matrix4().fromArray(mesh.matrix);
+    totalFloats += mesh.positions.length;
+    const vertCount = mesh.positions.length / 3;
+    totalIndices += mesh.index ? mesh.index.length : vertCount - (vertCount % 3);
+  }
+  const allVertices = new Float32Array(totalFloats);
+  const allIndices = new Uint32Array(totalIndices);
 
-    // Transform vertices
-    for (let i = 0; i < mesh.positions.length; i += 3) {
-      _vertex.set(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]);
-      _vertex.applyMatrix4(mat);
-      allVertices.push(_vertex.x, _vertex.y, _vertex.z);
-    }
+  let floatOffset = 0;
+  let indexOffset = 0;
+  let vertexOffset = 0;
+  const mat = new THREE.Matrix4();
+  for (const mesh of task.meshes) {
+    mat.fromArray(mesh.matrix);
+    transformInto(mesh.positions, mat, allVertices, floatOffset);
+    floatOffset += mesh.positions.length;
 
     // Re-index with offset
     const vertCount = mesh.positions.length / 3;
     if (mesh.index) {
-      for (let i = 0; i < mesh.index.length; i++) {
-        allIndices.push(mesh.index[i] + vertexOffset);
-      }
+      for (let i = 0; i < mesh.index.length; i++) allIndices[indexOffset + i] = mesh.index[i] + vertexOffset;
+      indexOffset += mesh.index.length;
     } else {
-      for (let i = 0; i < vertCount; i += 3) {
-        allIndices.push(i + vertexOffset, i + 1 + vertexOffset, i + 2 + vertexOffset);
-      }
+      const n = vertCount - (vertCount % 3);
+      sequentialIndices(n, vertexOffset, allIndices, indexOffset);
+      indexOffset += n;
     }
     vertexOffset += vertCount;
   }
 
-  return {
-    vertices: allVertices,
-    indices: allIndices,
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-  };
+  return { vertices: allVertices, indices: allIndices, position: [0, 0, 0], rotation: [0, 0, 0] };
 }

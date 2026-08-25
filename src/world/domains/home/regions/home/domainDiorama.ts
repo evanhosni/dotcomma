@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { smoothstep } from "../../../../../utils/math/_math";
 
 /**
  * A tiny HAND-BUILT diorama of glitch-city — the preview thumbnail on the
@@ -21,10 +22,6 @@ const hash = (x: number, z: number): number => {
   return s - Math.floor(s);
 };
 
-const smoothstep = (a: number, b: number, x: number): number => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
 
 /** Distance from v to the nearest lattice line (multiples of 18, offset o). */
 const lineDist = (v: number, o: number): number => {

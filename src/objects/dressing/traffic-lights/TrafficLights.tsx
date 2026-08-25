@@ -1,19 +1,20 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import {
   activeLampHeads,
-  clearLampGridIfEmpty,
   driveLampLighting,
   LAMP_COLOR_GREEN,
   LAMP_COLOR_RED,
   LAMP_COLOR_YELLOW,
   LampHead,
   markLampGridDirty,
+  unregisterLampHeads,
 } from "../../../lighting/lampGlow";
 import {
+  DressingColliderPart,
+  DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
   useDressingAssets,
@@ -29,8 +30,6 @@ const POLE_HEIGHT = 7.6;
 // corner, and it swallows the 0.5u base (0.4u tall — steppable, not worth a
 // second shape).
 const POLE_HALF_WIDTH = 0.14;
-// Signals only collide this close to the camera (see useDressingColliders).
-const COLLIDER_DISTANCE = 90;
 const ARM_LENGTH = 3.2; // toward the intersection — hangs the head over the curb
 const LAMP_OFFSET = ARM_LENGTH + 0.26; // lamps proud of the head's front face
 /** Mast arm + signal head as boxes, in POLE-LOCAL space (+X toward the
@@ -40,6 +39,13 @@ const SIGNAL_PARTS = {
   arm: { w: ARM_LENGTH, h: 0.15, d: 0.15, x: ARM_LENGTH / 2, y: POLE_HEIGHT - 0.15 },
   head: { w: 0.45, h: 2.0, d: 0.75, x: ARM_LENGTH, y: POLE_HEIGHT - 1.25 },
 };
+/** Pole, mast arm and signal head, all solid. The LAMPS get nothing — they
+ *  sit on the head's face and are already inside its box. */
+const SIGNAL_COLLIDER_PARTS: DressingColliderPart[] = [
+  { w: POLE_HALF_WIDTH * 2, h: POLE_HEIGHT, d: POLE_HALF_WIDTH * 2, x: 0, y: POLE_HEIGHT / 2 },
+  SIGNAL_PARTS.arm,
+  SIGNAL_PARTS.head,
+];
 
 // Lamp order per light: instances 3i / 3i+1 / 3i+2 = red / yellow / green
 // (top to bottom on the head). state: 0 = green, 1 = yellow, 2 = red.
@@ -91,7 +97,7 @@ export interface TrafficLightsProps {
  * Lamps flip between green/yellow/red CHAOTICALLY — random next state,
  * random skewed hold times — via per-lamp instanceColor writes (two
  * InstancedMeshes per chunk). Pole, mast arm and signal head are all SOLID
- * within COLLIDER_DISTANCE — real cuboid colliders for the handful of signals
+ * within DRESSING_COLLIDER_DISTANCE — real cuboid colliders for the handful of signals
  * near the player, the same distance-gated pattern the street lamps use
  * (useDressingColliders); signals further out are scenery, with nothing near
  * them to collide. Each signal also registers a
@@ -102,11 +108,7 @@ export interface TrafficLightsProps {
 export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsProps) => {
   const resolvedDistance = useDressingRenderDistance(renderDistance, 340);
   const { camera } = useThree();
-  const registry = useChunkRegistry<SignalChunk>((chunk) => {
-    for (const key of chunk.headKeys) activeLampHeads.delete(key);
-    markLampGridDirty(); // heads left the set — next grid rewrite must run
-    clearLampGridIfEmpty();
-  });
+  const registry = useChunkRegistry<SignalChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
 
   const assets = useDressingAssets(() => ({
     bodyGeometry: mergeGeometries([
@@ -205,7 +207,7 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
   });
 
   // Real pole colliders for the signals near the player (base hook).
-  const colliders = useDressingColliders(registry, { distance: COLLIDER_DISTANCE });
+  const colliders = useDressingColliders(registry);
 
   useFrame((state, delta) => {
     // Shared lamp-grid driver (deduped per frame with the street lamps).
@@ -271,33 +273,9 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
   return (
     <>
       <group ref={groupRef} />
-      {/* Pole, mast arm and signal head, all solid. The body carries the
-          instance's yaw so the off-axis arm and head line up with what's drawn;
-          box sizes come from SIGNAL_PARTS, the same numbers the geometry is built
-          from. The LAMPS themselves get nothing — they sit on the head's face and
-          are already inside its box. */}
-      {colliders.map((c) => (
-        <RigidBody
-          key={c.key}
-          type="fixed"
-          colliders={false}
-          position={[c.x, c.y, c.z]}
-          rotation={[0, c.yaw, 0]}
-        >
-          <CuboidCollider
-            args={[POLE_HALF_WIDTH, POLE_HEIGHT / 2, POLE_HALF_WIDTH]}
-            position={[0, POLE_HEIGHT / 2, 0]}
-          />
-          <CuboidCollider
-            args={[SIGNAL_PARTS.arm.w / 2, SIGNAL_PARTS.arm.h / 2, SIGNAL_PARTS.arm.d / 2]}
-            position={[SIGNAL_PARTS.arm.x, SIGNAL_PARTS.arm.y, 0]}
-          />
-          <CuboidCollider
-            args={[SIGNAL_PARTS.head.w / 2, SIGNAL_PARTS.head.h / 2, SIGNAL_PARTS.head.d / 2]}
-            position={[SIGNAL_PARTS.head.x, SIGNAL_PARTS.head.y, 0]}
-          />
-        </RigidBody>
-      ))}
+      {/* Pole, mast arm and signal head, all solid (base component; the body
+          carries the instance's yaw so the off-axis parts line up). */}
+      <DressingPartColliders colliders={colliders} parts={SIGNAL_COLLIDER_PARTS} />
     </>
   );
 };

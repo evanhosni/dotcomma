@@ -2,12 +2,20 @@ import { useGLTF } from "@react-three/drei";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
+import { framePhaseFromCoords } from "../../utils/utils";
 import { createColliders } from "../colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "../colliders/Colliders";
-import { acquireModelClone, PooledModelClone, reclaimModelClone, releaseModelClone } from "./modelClonePool";
+import {
+  acquireModelClone,
+  acquirePooledModelClone,
+  PooledModelClone,
+  reclaimModelClone,
+  releaseModelClone,
+} from "./modelClonePool";
 import { AnimationControl } from "../state/types";
 import { GameObjectAttributes } from "../types";
-import { DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
+import { RootState } from "@react-three/fiber";
+import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
 
 export { MAX_COLLIDER_RENDER_DISTANCE };
 
@@ -57,6 +65,11 @@ export interface GameObjectProps extends GameObjectAttributes {
   isStatic?: boolean;
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
+  /** Owner's per-frame work (physics step, state machine, mouse events),
+   *  run inside the shared actor driver AFTER the animation LOD — the one
+   *  place an actor built on <GameObject> gets a frame callback. Never add a
+   *  useFrame in the owning component instead. */
+  onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
 }
 
 interface ColliderState {
@@ -82,22 +95,38 @@ export const GameObject = ({
   wholeTrimesh = false,
   excludeColliderNames,
   quantization,
+  onFrame,
 }: GameObjectProps) => {
   const gltf = useGLTF(model);
 
   // Prepared clone from the pool — despawn/respawn churn reuses parked clones
   // (materials already patched, mixer bound, bounds measured) instead of
-  // re-running the whole clone pipeline per mount. Acquired lazily during
-  // render (useGLTF has resolved by here); released in the ownership effect.
-  const cloneRef = useRef<PooledModelClone | null>(null);
-  if (cloneRef.current === null) {
-    cloneRef.current = acquireModelClone(model, gltf, quantization);
-  }
-  const pooled = cloneRef.current;
-  const scene = pooled.scene;
+  // re-running the whole clone pipeline per mount. A POOL HIT is taken
+  // synchronously during render (the common steady-state case); a MISS —
+  // the first N simultaneous mounts of a model — renders null and builds the
+  // clone through the shared task queue, the same peek-then-queue pattern as
+  // <Building>: a spawn batch of 20 fresh beebles used to run 20 full
+  // scene-clone + material-patch + bounds pipelines inside one React commit.
+  const [pooled, setPooled] = useState<PooledModelClone | null>(() =>
+    acquirePooledModelClone(model, quantization),
+  );
+  useEffect(() => {
+    if (pooled) return;
+    let cancelled = false;
+    taskQueue.addTask(async () => {
+      if (cancelled) return;
+      setPooled(acquireModelClone(model, gltf, quantization));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pooled, model, gltf, quantization]);
 
   const animDeltaRef = useRef(0);
-  const animFrameParityRef = useRef(false);
+  // Half-rate parity is PHASE-OFFSET per instance: starting every actor at
+  // `false` made a whole spawn batch run (and skip) its mixer updates on the
+  // same frames — the lockstep the codebase's phase-offset rule exists for.
+  const animFrameParityRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 2) === 1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
 
@@ -108,8 +137,8 @@ export const GameObject = ({
   // The actions map lives on the pooled record, so a reused clone keeps its
   // already-bound actions.
   const getOrCreateAction = (clipName: string): THREE.AnimationAction | null => {
-    const mixer = pooled.mixer;
-    if (!mixer) return null;
+    const mixer = pooled?.mixer;
+    if (!pooled || !mixer) return null;
     let action = pooled.actions.get(clipName);
     if (!action) {
       const clip = pooled.animations.find((c: THREE.AnimationClip) => c.name === clipName);
@@ -138,8 +167,10 @@ export const GameObject = ({
     despawnDistance,
     onDestroy,
     frustumPadding,
-    boundsRadius: pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]),
+    // Until the clone lands nothing renders, so the frustum test is moot.
+    boundsRadius: pooled ? pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]) : undefined,
     applyFade: (opacity) => {
+      if (!pooled) return;
       const mats = pooled.materials;
       for (let i = 0; i < mats.length; i++) {
         mats[i].opacity = opacity;
@@ -152,7 +183,13 @@ export const GameObject = ({
     colliderDistance: hasColliders
       ? Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2)
       : undefined,
-    onFrame: (_, delta, ctx) => {
+    onFrame: (state, delta, ctx) => {
+      // Owner's work first (state machine → velocities → physics), so the
+      // animation command it may raise this frame is applied right below.
+      onFrame?.(state, delta, ctx);
+
+      if (!pooled) return;
+
       // State-machine-driven animation commands (cheap — always processed so
       // state changes apply even while the mixer itself is LOD-skipped)
       if (animationControl && pooled.mixer && animationControl.dirty) {
@@ -201,6 +238,7 @@ export const GameObject = ({
   // dev remount's cleanup schedules a DEFERRED release that the immediate
   // re-setup cancels, so the clone never changes owner mid-remount.
   useEffect(() => {
+    if (!pooled) return;
     reclaimModelClone(pooled);
 
     // Fade starts invisible each life (also covers the StrictMode reclaim
@@ -217,7 +255,7 @@ export const GameObject = ({
   // E-key animation toggle (only when not driven by a state machine) —
   // subscribes to the ONE shared module-level keydown listener.
   useEffect(() => {
-    if (animationControl) return;
+    if (animationControl || !pooled) return;
 
     const apply = () => {
       setIsPlaying(manualAnimationsPlaying);
@@ -258,10 +296,12 @@ export const GameObject = ({
     taskQueue.addTask(task);
   }, [gltf]); // scale/rotation omitted: stable per instance, only used for collider creation
 
+  if (!pooled) return null; // clone still building on the queue
+
   return (
     <Suspense fallback={null}>
       <group ref={lifecycle.groupRef} visible={false}>
-        <primitive object={scene} scale={scale} rotation={rotation} />
+        <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
       {lifecycle.collidersActive && colliders && (
         <>

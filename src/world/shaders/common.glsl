@@ -21,7 +21,9 @@ float valueNoise(vec2 p, float period) {
 }
 
 /** FBM over a WRAPPED world XZ position. `scale` converts world units to
- *  noise cells; the result repeats every WORLD_WRAP (4200) world units, which
+ *  noise cells; the result repeats every WORLD_WRAP world units (a material
+ *  define from world/shaders/constants.ts — the same value vertex.glsl wraps
+ *  the chunk origin to), which
  *  is exactly what keeps it continuous across the wrap. `WORLD_WRAP * scale`
  *  must come out a whole number of cells — pick scales like 0.005 (21 cells).
  *  Feeding raw absolute coordinates here instead would push hash()'s sin()
@@ -29,7 +31,7 @@ float valueNoise(vec2 p, float period) {
  *  degenerates into banding far from the origin. */
 float worldFbm(vec2 worldXZ, float scale, int octaves) {
   vec2 p = worldXZ * scale;
-  float period = 4200.0 * scale;
+  float period = WORLD_WRAP * scale;
   float value = 0.0;
   float amplitude = 0.5;
   for (int i = 0; i < 4; i++) {

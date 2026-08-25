@@ -1,5 +1,4 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import * as THREE from "three";
 import {
   getLampPostGeometry,
@@ -14,13 +13,16 @@ import {
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
 import {
   activeLampHeads,
-  clearLampGridIfEmpty,
   driveLampLighting,
   LAMP_COLOR_WARM,
   LAMP_EMISSIVE_STRENGTH,
   markLampGridDirty,
+  unregisterLampHeads,
 } from "../../../lighting/lampGlow";
+import { CITY_BIOME_ID } from "../../../world/constants";
 import {
+  DressingColliderPart,
+  DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
   useDressingAssets,
@@ -32,6 +34,16 @@ import { DensityPlacement, GameObjectAttributes } from "../../types";
 import { getDensityPoints } from "../dressingWorker";
 
 const COLLIDER_SCAN_INTERVAL_FRAMES = 10;
+const DEFAULT_BIOME_IDS = [CITY_BIOME_ID];
+
+/** Pole (slightly proud of the 0.22u post so its corner can't be clipped),
+ *  arm and head — box sizes from LAMP_PARTS, the same numbers the geometry
+ *  is built from. */
+const LAMP_COLLIDER_PARTS: DressingColliderPart[] = [
+  { w: 0.24, h: LAMP_POLE_HEIGHT, d: 0.24, x: 0, y: LAMP_POLE_HEIGHT / 2 },
+  LAMP_PARTS.arm,
+  LAMP_PARTS.head,
+];
 
 interface LampChunk {
   group: THREE.Group;
@@ -51,6 +63,9 @@ export interface StreetLampsProps extends GameObjectAttributes, DensityPlacement
   footprint?: number;
   /** Road-field band lamps may stand on (default: the sidewalk). */
   roadDistanceRange?: [number, number];
+  /** Biomes lamps place in (default: the city — the only biome with the
+   *  road field the sidewalk band is measured against). */
+  biomeIds?: number[];
 }
 
 /**
@@ -73,15 +88,12 @@ export const StreetLamps = ({
   density = 4200,
   footprint = 14,
   roadDistanceRange = [8.2, 11.8],
+  biomeIds = DEFAULT_BIOME_IDS,
 }: StreetLampsProps) => {
   const resolvedDistance = useDressingRenderDistance(renderDistance, 440);
   const { camera } = useThree();
 
-  const registry = useChunkRegistry<LampChunk>((chunk) => {
-    for (const key of chunk.headKeys) activeLampHeads.delete(key);
-    markLampGridDirty(); // heads left the set — next grid rewrite must run
-    clearLampGridIfEmpty();
-  });
+  const registry = useChunkRegistry<LampChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
 
   // ONE material for every chunk (no per-lamp fade → no clones needed); the
   // shared cache key keeps it on the same compiled program as the actor's.
@@ -98,7 +110,7 @@ export const StreetLamps = ({
         seedTag: "street-lamp-i",
         density,
         footprint,
-        biomeIds: [1],
+        biomeIds,
         roadDistanceRange,
       });
       if (points.length === 0) return null;
@@ -142,38 +154,16 @@ export const StreetLamps = ({
   useFrame((state) => {
     // Shared lighting driver + the global night ramp (one write for all lamps).
     driveLampLighting(camera, state.clock.elapsedTime);
-    assets.material.emissiveIntensity = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
+    // Flat 0 all day / flat max all night — only write across the ramps.
+    const emissive = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
+    if (assets.material.emissiveIntensity !== emissive) assets.material.emissiveIntensity = emissive;
   });
 
   return (
     <>
       <group ref={groupRef} />
-      {/* Pole, arm and head, all solid. The body carries the lamp's yaw so the
-          off-axis arm and head line up with the instance that's drawn; box sizes
-          come from LAMP_PARTS, the same numbers the geometry is built from. */}
-      {colliders.map((c) => (
-        <RigidBody
-          key={c.key}
-          type="fixed"
-          colliders={false}
-          position={[c.x, c.y, c.z]}
-          rotation={[0, c.yaw, 0]}
-        >
-          {/* Slightly proud of the 0.22u pole so its corner can't be clipped. */}
-          <CuboidCollider
-            args={[0.12, LAMP_POLE_HEIGHT / 2, 0.12]}
-            position={[0, LAMP_POLE_HEIGHT / 2, 0]}
-          />
-          <CuboidCollider
-            args={[LAMP_PARTS.arm.w / 2, LAMP_PARTS.arm.h / 2, LAMP_PARTS.arm.d / 2]}
-            position={[LAMP_PARTS.arm.x, LAMP_PARTS.arm.y, 0]}
-          />
-          <CuboidCollider
-            args={[LAMP_PARTS.head.w / 2, LAMP_PARTS.head.h / 2, LAMP_PARTS.head.d / 2]}
-            position={[LAMP_PARTS.head.x, LAMP_PARTS.head.y, 0]}
-          />
-        </RigidBody>
-      ))}
+      {/* Pole, arm and head, all solid (base component; yaw-aligned bodies). */}
+      <DressingPartColliders colliders={colliders} parts={LAMP_COLLIDER_PARTS} />
     </>
   );
 };

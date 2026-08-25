@@ -2,8 +2,13 @@ import { _curvature } from "../../vfx/curvature";
 import { _material } from "../../utils/material/_material";
 import { _quantization } from "../../utils/quantization/quantization";
 import { getAllBiomes } from "../../utils/utils";
-import { getActiveRegions, getRiverTexture, whenDomainReady } from "../domains/utils";
-import vertexShader from "../shaders/vertex.glsl";
+import { getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
+import { glslFloat, WORLD_WRAP } from "../shaders/constants";
+import terrainVertexBody from "../shaders/vertex.glsl";
+
+// quantizeWorldPos() / curveViewPos() come from their single sources — the
+// raw .glsl asset can't import them, so they are prepended here.
+const vertexShader = `${_quantization.QUANTIZE_GLSL}\n${_curvature.CURVE_GLSL}\n${terrainVertexBody}`;
 
 /** Combines every active biome's fragment shader into the terrain material.
  *  Regions/biomes and the river texture come from the active domain committed by
@@ -25,9 +30,23 @@ export const getMaterial = async () => {
   // TODO: Handle multiple regions with different biome boundary textures
   const biomeTexture = regionMaterials.find((m) => m)?.biomeTexture;
 
+  // Numbers the .glsl assets used to retype by hand (and had to keep in sync
+  // with world/defaults.ts): the wrap period and the city band widths.
+  const params = getTerrainParams();
+  const defines = {
+    WORLD_WRAP: glslFloat(WORLD_WRAP),
+    /** Street half-width (centerline → curb) — the unit of the normalized road field. */
+    ROAD_HALF_WIDTH: glslFloat(params.cityConfig.roadWidth),
+    /** Freeway half-width in REAL units (lane paint is drawn from real distance). */
+    FREEWAY_HALF_WIDTH: glslFloat(params.cityConfig.freewayWidth),
+    /** Biome-boundary band width. */
+    BOUNDARY_WIDTH: glslFloat(params.boundaryWidth),
+  };
+
   const material = await _material.combineBiomeMaterials(biomes, vertexShader, {
     riverTexture,
     biomeTexture,
+    defines,
     varyingDeclarations: [
       "varying float vDistanceToBiomeBoundaryCenter;",
       "varying float vDistanceToRiverCenter;",

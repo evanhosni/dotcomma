@@ -30,7 +30,9 @@ import { prepareActorMaterial } from "./Actor";
  *    and is never disposed here.
  */
 
-const MAX_POOLED_PER_KEY = 8;
+// Sized past ObjectPool's MAX_MOUNTS_PER_BATCH (20): a batch that despawns
+// and respawns a wave of the same model should find every clone parked.
+const MAX_POOLED_PER_KEY = 24;
 /** Slack on the rest-pose bounds of skinned meshes, so an animated pose
  *  reaching past the bind pose isn't culled. Conservative is free here —
  *  GameObject does its own (tighter) distance/frustum test on top. */
@@ -343,24 +345,30 @@ const disposeClone = (clone: PooledModelClone): void => {
 const poolKey = (model: string, quantization: number | undefined): string =>
   `${model}|${quantization ?? "global"}`;
 
+/** A PARKED clone only — null on a pool miss. The cheap path a mount can take
+ *  synchronously during render; a miss falls back to the (heavy, queued)
+ *  acquireModelClone. Reused clones come back with their fade state reset. */
+export const acquirePooledModelClone = (model: string, quantization: number | undefined): PooledModelClone | null => {
+  const clone = pools.get(poolKey(model, quantization))?.pop();
+  if (!clone) return null;
+  // Reset shared state for the new life: the object fades in from zero.
+  for (const mat of clone.materials) {
+    mat.opacity = 0;
+    mat.transparent = true;
+  }
+  return clone;
+};
+
 /** Get a prepared clone — pooled if one is parked, freshly created otherwise.
- *  Reused clones come back with their fade state reset (opacity 0). */
+ *  Creation is the heavy path (scene deep-clone, material clones + shader
+ *  patches, skeleton rebind, bounds measure): callers run it from a task
+ *  queue, never inside a React render. */
 export const acquireModelClone = (
   model: string,
   gltf: any,
   quantization: number | undefined
-): PooledModelClone => {
-  const clone = pools.get(poolKey(model, quantization))?.pop();
-  if (clone) {
-    // Reset shared state for the new life: the object fades in from zero.
-    for (const mat of clone.materials) {
-      mat.opacity = 0;
-      mat.transparent = true;
-    }
-    return clone;
-  }
-  return createClone(poolKey(model, quantization), gltf, quantization);
-};
+): PooledModelClone =>
+  acquirePooledModelClone(model, quantization) ?? createClone(poolKey(model, quantization), gltf, quantization);
 
 /** Cancel a pending deferred release — called from the owning component's
  *  effect setup so a StrictMode remount keeps its clone. No-op when nothing

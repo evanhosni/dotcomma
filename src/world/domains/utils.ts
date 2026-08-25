@@ -40,7 +40,6 @@ export const resetActiveDomain = () => {
 /** Resolves once the first <Domain> commit has happened. */
 export const whenDomainReady = (): Promise<void> => readyPromise;
 
-export const isDomainReady = (): boolean => active !== null;
 
 export const getActiveRegions = (): Region[] => active?.regions ?? [];
 

@@ -10,7 +10,8 @@ import { CityLights } from "./CityLights";
 import { Actors, Biome, Material } from "../../../../../../components";
 import { getMaterial } from "./material";
 
-export const CITY_BIOME_ID = 1;
+import { CITY_BIOME_ID } from "../../../../../../constants";
+export { CITY_BIOME_ID };
 
 /** Urban biome: district city — staggered districts of rotated block grids
  *  (each a seeded multiple of 15°) separated by wide arterials, with

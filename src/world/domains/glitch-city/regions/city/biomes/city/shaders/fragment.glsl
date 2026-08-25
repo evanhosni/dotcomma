@@ -14,13 +14,16 @@ void main() {
   vec2 adjustedUV = fract(vWorldUv);
   float roadDist = vDistanceToRoadCenter;
 
-  // Band layout in STREET units (cityConfig.roadWidth = 7). The road field
-  // is normalized in vertexCompute, so freeways use the same bands stretched
-  // by freewayWidth / roadWidth.
-  //   0..7      road asphalt (curb dip is baked into the heightfield)
-  //   7..8      curb strip
-  //   8..12     sidewalk
-  //   12+       block interior (poured-concrete lots/plazas)
+  // Band layout in STREET units, relative to R = ROAD_HALF_WIDTH (a material
+  // define fed from cityConfig.roadWidth — world/terrain/material.ts — so the
+  // shader can't drift from the terrain's road field). The field is
+  // normalized in vertexCompute, so freeways use the same bands stretched by
+  // freewayWidth / roadWidth.
+  //   0..R        road asphalt (curb dip is baked into the heightfield)
+  //   R..R+1      curb strip
+  //   R+1..R+5    sidewalk
+  //   R+5+        block interior (poured-concrete lots/plazas)
+  float R = ROAD_HALF_WIDTH;
 
   // ── Road ──
   // (No painted centerline — raised pavement markers are real 3D instances,
@@ -28,7 +31,7 @@ void main() {
   vec4 roadColor = texture2D(roadtexture, adjustedUV);
 
   // Gutter darkening against the curb
-  float gutter = smoothstep(5.4, 7.0, roadDist) * (1.0 - smoothstep(7.0, 7.6, roadDist));
+  float gutter = smoothstep(R - 1.6, R, roadDist) * (1.0 - smoothstep(R, R + 0.6, roadDist));
   roadColor.rgb *= 1.0 - gutter * 0.25;
 
   // ── Curb / sidewalk / block interior ──
@@ -36,9 +39,9 @@ void main() {
   vec3 curbColor = min(sidewalkColor.rgb * 1.3, vec3(1.0));
   vec3 interiorColor = texture2D(sidewalktexture, fract(vWorldUv * 0.35)).rgb * vec3(0.8, 0.79, 0.77);
 
-  vec3 groundColor = mix(roadColor.rgb, curbColor, smoothstep(6.7, 7.5, roadDist));
-  groundColor = mix(groundColor, sidewalkColor.rgb, smoothstep(7.9, 8.9, roadDist));
-  groundColor = mix(groundColor, interiorColor, smoothstep(12.0, 14.2, roadDist));
+  vec3 groundColor = mix(roadColor.rgb, curbColor, smoothstep(R - 0.3, R + 0.5, roadDist));
+  groundColor = mix(groundColor, sidewalkColor.rgb, smoothstep(R + 0.9, R + 1.9, roadDist));
+  groundColor = mix(groundColor, interiorColor, smoothstep(R + 5.0, R + 7.2, roadDist));
 
   // Freeway lane paint: 4 lanes — raised markers stud the median (3D
   // instances), and each side splits with a white DASHED line at ± half the
@@ -52,12 +55,13 @@ void main() {
   float worldPx = max(fwidth(vWorldPos.x) + fwidth(vWorldPos.z), 1e-4);
   float seamOk = step(fwidth(vFreewayAlong) / worldPx, 4.0) *
                  step(fwidth(vDistanceToFreewayCenter) / worldPx, 4.0);
-  float laneLine = 1.0 - smoothstep(0.22, 0.4, abs(vDistanceToFreewayCenter - 7.0));
+  // Lane line at half the freeway half-width (REAL units, unlike R above).
+  float laneLine = 1.0 - smoothstep(0.22, 0.4, abs(vDistanceToFreewayCenter - FREEWAY_HALF_WIDTH * 0.5));
   float laneDash = step(mod(vFreewayAlong, 10.0), 5.0);
   groundColor = mix(groundColor, vec3(0.82, 0.82, 0.8), laneLine * laneDash * seamOk * 0.52);
 
   // Biome boundary: ring road around the biome edge
-  if (vDistanceToBiomeBoundaryCenter < 14.0) {
+  if (vDistanceToBiomeBoundaryCenter < BOUNDARY_WIDTH) {
     groundColor = texture2D(biometexture, adjustedUV).rgb;
   }
 

@@ -7,14 +7,13 @@
  */
 
 import { DomainConfig } from "../../utils/workers/vertexCompute";
-import { ActorDescriptor, SpawnPoint } from "./types";
+import { createWorkerClient } from "../../utils/workers/workerClient";
+import { ActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
 
-// ── Worker management ──
+// ── Worker management (plumbing from the shared worker-client base) ──
 
-let worker: Worker | null = null;
-let workerReady = false;
 /** Points for the chunks the worker actually finished, plus their keys — a
  *  time-budgeted request may complete only a prefix of what was asked for. */
 interface SpawnsResult {
@@ -22,62 +21,28 @@ interface SpawnsResult {
   done: string[];
 }
 
-const pendingRequests = new Map<number, (result: SpawnsResult) => void>();
-let nextRequestId = 0;
+/** Payload for the next boot — set by initSpawnWorker before ensure(). */
+let pendingInit: { config: DomainConfig; maxFootprint: number } | null = null;
 
-const handleMessage = (e: MessageEvent) => {
-  if (e.data.type === "SPAWNS_RESULT") {
-    const resolve = pendingRequests.get(e.data.id);
-    if (resolve) {
-      resolve({ points: e.data.points, done: e.data.done });
-      pendingRequests.delete(e.data.id);
-    }
-  }
-};
+const client = createWorkerClient({
+  create: () => new Worker(new URL("../../utils/workers/spawn.worker.ts", import.meta.url), { type: "module" }),
+  init: () => pendingInit!,
+  resultType: "SPAWNS_RESULT",
+});
 
 /**
  * Initialize the spawn worker with a dimension config.
- * Must be called before generateSpawnPoints.
+ * Must be called before generateSpawnPoints. Always boots a FRESH worker:
+ * ObjectPool remounts on world switch (and re-inits when the max footprint
+ * changes) — never leak the old one.
  */
-export const initSpawnWorker = (
-  config: DomainConfig,
-  maxFootprint: number
-): Promise<void> => {
-  worker?.terminate(); // ObjectPool remounts on world switch — never leak the old worker
-  worker = new Worker(
-    new URL("../../utils/workers/spawn.worker.ts", import.meta.url),
-    { type: "module" }
-  );
-
-  return new Promise((resolve) => {
-    worker!.onmessage = (e: MessageEvent) => {
-      if (e.data.type === "INIT_DONE") {
-        workerReady = true;
-        worker!.onmessage = handleMessage;
-        resolve();
-      }
-    };
-    worker!.postMessage({ type: "INIT", config, maxFootprint });
-  });
+export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Promise<void> => {
+  client.reset();
+  pendingInit = { config, maxFootprint };
+  return client.ensure();
 };
 
-/**
- * Serializable subset of ActorDescriptor (no React component).
- */
-export interface SerializedActorDescriptor {
-  id: string;
-  footprint: number;
-  density: number;
-  clustering: number;
-  renderDistance: number;
-  priority?: number;
-  biomeIds?: number[];
-  heightRange?: [number, number];
-  slopeRange?: [number, number];
-  roadDistanceRange?: [number, number];
-  spacingOverrides?: Record<string, number>;
-  flattenGround?: boolean;
-}
+export type { SerializedActorDescriptor };
 
 /**
  * Strip React component from descriptors for worker serialization.
@@ -130,10 +95,7 @@ const clientChunkCache = new Map<string, SpawnChunkBucket>();
  *  spawn points are world-config-dependent, and the next ObjectPool mount
  *  re-inits via initSpawnWorker with the new committed config. */
 export const resetSpawnWorker = () => {
-  worker?.terminate();
-  worker = null;
-  workerReady = false;
-  pendingRequests.clear();
+  client.reset();
   clientChunkCache.clear();
 };
 
@@ -181,21 +143,16 @@ export const generateSpawnPoints = async (
   chunkKeys: string[],
   descriptors: SerializedActorDescriptor[]
 ): Promise<SpawnChunkBucket[]> => {
-  if (!worker || !workerReady) return [];
+  if (!client.isReady()) return [];
 
   const missing = chunkKeys.filter((k) => !clientChunkCache.has(k));
 
   if (missing.length > 0) {
-    const id = nextRequestId++;
-    const result = await new Promise<SpawnsResult>((resolve) => {
-      pendingRequests.set(id, resolve);
-      worker!.postMessage({
-        type: "GENERATE_SPAWNS",
-        id,
-        chunkKeys: missing,
-        descriptors,
-        budgetMs: SPAWN_BUDGET_MS,
-      });
+    const result = await client.request<SpawnsResult>({
+      type: "GENERATE_SPAWNS",
+      chunkKeys: missing,
+      descriptors,
+      budgetMs: SPAWN_BUDGET_MS,
     });
     // Only chunks the worker FINISHED get cached — the rest stay unknown and
     // are re-requested (or dropped, if the player has moved on).
@@ -300,8 +257,8 @@ export const cleanupSpawnCache = (
   playerZ: number,
   cleanupRadius: number
 ): void => {
-  if (!worker) return;
-  worker.postMessage({ type: "CLEANUP", playerX, playerZ, cleanupRadius });
+  if (!client.exists()) return;
+  client.post({ type: "CLEANUP", playerX, playerZ, cleanupRadius });
 
   const cleanupRadiusSq = cleanupRadius * cleanupRadius;
   clientChunkCache.forEach((entry, key) => {
@@ -315,8 +272,7 @@ export const cleanupSpawnCache = (
  * Recreate the spatial hash with a new footprint.
  */
 export const updateSpawnFootprint = (maxFootprint: number): void => {
-  if (!worker) return;
-  worker.postMessage({ type: "UPDATE_FOOTPRINT", maxFootprint });
+  client.post({ type: "UPDATE_FOOTPRINT", maxFootprint });
 };
 
 export { SPAWN_CHUNK_SIZE };

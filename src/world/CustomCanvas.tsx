@@ -65,7 +65,15 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
       <color attach="background" args={[background]} />
       <SceneRender />
       <Overlay />
-      <Physics gravity={[0, -100, 0]} debug={physicsDebug}>
+      {/* interpolate={false}: r-t-r's default snapshots EVERY rigid body's
+          translation+rotation (two wasm calls + three allocations per body,
+          a fresh dictionary per step) before each physics step to lerp
+          visuals between steps. This scene has ZERO dynamic bodies — every
+          body is fixed (terrain, buildings, dressing) or kinematic and
+          driven by our own code (player camera, beeble group) — so the
+          snapshot buys nothing and scaled with the 500+ bodies in the city,
+          on exactly the long frames where the accumulator steps twice. */}
+      <Physics gravity={[0, -100, 0]} debug={physicsDebug} interpolate={false}>
         {children}
         <Player spawnPosition={playerSpawn} />
       </Physics>
@@ -75,15 +83,18 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
 
 /** The game canvas. The active world (<GlitchCityDomain/>, <HomeDomain/>) is
  *  passed as children by the route in index.tsx. */
+/** Framebuffer budget. R3F's defaults are dpr [1, 2] + MSAA + an alpha
+ *  buffer: on a 2× display that is FOUR times the fragments of a 1× buffer,
+ *  multisampled, for the terrain shader that covers the whole screen. The
+ *  art direction is quantized low-poly with a screen-space dither, so MSAA
+ *  and dpr 2 buy very little; alpha is never used (the page never shows
+ *  through). MAX_DPR is the one knob to raise if the picture reads soft. */
+const MAX_DPR = 1.5;
+const GL_PROPS = { antialias: false, alpha: false, stencil: false, depth: true, powerPreference: "high-performance" as const };
+
 export const CustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
-  const defaultCanvasProps = {
-    style: { background },
-  };
-
-  const mergedCanvasProps = { ...defaultCanvasProps };
-
   return (
-    <Canvas {...mergedCanvasProps}>
+    <Canvas style={{ background }} dpr={[1, MAX_DPR]} gl={GL_PROPS}>
       <GameContextProvider>
         <DayNightProvider>
           <PreCustomCanvas background={background} playerSpawn={playerSpawn}>

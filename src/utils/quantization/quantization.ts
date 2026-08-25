@@ -6,8 +6,10 @@ export namespace _quantization {
     uGridSize: { value: 0.0 } as THREE.IUniform<number>,
   };
 
-  /** GLSL function injected before main() in standard material vertex shaders. */
-  const QUANTIZE_GLSL = /* glsl */ `
+  /** Uniform declaration + `quantizeWorldPos`, injected before main() in
+   *  standard material vertex shaders — and interpolated into the custom
+   *  shaders (terrain, foliage) so the function exists exactly once. */
+  export const QUANTIZE_GLSL = /* glsl */ `
     uniform float uGridSize;
 
     vec3 quantizeWorldPos(vec3 worldPos) {
@@ -134,10 +136,5 @@ export namespace _quantization {
   /** Set the global grid size. 0 = quantization disabled. */
   export const setGridSize = (size: number): void => {
     uniforms.uGridSize.value = size;
-  };
-
-  /** Get the current grid size. */
-  export const getGridSize = (): number => {
-    return uniforms.uGridSize.value;
   };
 }

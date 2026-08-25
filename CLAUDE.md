@@ -100,7 +100,12 @@ src/
                        #   string keys)
     colliders/         # Physics collider components + collider.worker.ts (geometry →
                        #   collider transform; co-located with its client)
-    state/             # State machine, mouse events, triggers for interactive objects
+    state/             # State machine, mouse events, triggers for interactive objects.
+                       #   Both hooks take `externallyDriven: true` and expose a
+                       #   tick() the owning actor calls from its onFrame (one shared
+                       #   driver, no per-actor useFrame). useMouseEvents sets
+                       #   bb.__mouse_dirty when it raises a flag; the machine clears
+                       #   the one-shot set only on those frames
     actors/            # ACTOR class. Actor.tsx is THE BASE — everything every actor
       Actor.tsx        #   shares: useActorLifecycle (ONE shared frame driver for all
                        #   mounted actors — driveActorFrames, subscribed by ObjectPool,
@@ -116,6 +121,11 @@ src/
                        #   clone, colliders from the GLTF, animation LOD. Most actors
                        #   are just one of these; actors that own their geometry and
                        #   render shape (Building) use useActorLifecycle directly.
+                       #   Owners get their per-frame work via the `onFrame` PROP (the
+                       #   Beeble's physics + state machine + mouse raycast all run
+                       #   there) — never a useFrame in the owning component. A pool
+                       #   MISS builds the clone on the task queue (renders null until
+                       #   it lands), same peek-then-queue pattern as <Building>.
       modelClonePool.ts # Pool of prepared GLTF clones keyed by (model | quantization):
                        #   despawn/respawn churn reuses parked clones (materials already
                        #   through prepareActorMaterial, mixer bound, bounds measured)
@@ -152,7 +162,10 @@ src/
                        #   the one place dressing materials are patched),
                        #   instancedFromPoints / finalizeInstancedChunk (chunk assembly,
                        #   far-from-origin rebase, culling bounds, GPU warm-up) /
-                       #   setInstanceTransform, useChunkRegistry
+                       #   setInstanceTransform, useChunkRegistry, useDressingColliders
+                       #   (default DRESSING_COLLIDER_DISTANCE) + <DressingPartColliders>
+                       #   (one yaw-aligned fixed body per in-range point, a cuboid per
+                       #   DressingColliderPart — lamps/signals/poles all mount this)
                        #   (per-chunk side-state pruned on unmount). Feature components
                        #   contain ONLY their unique logic (points to fetch,
                        #   geometry/materials, optional animation); placement knobs are
@@ -249,6 +262,9 @@ src/
     CustomCanvas.tsx   # Three.js canvas + physics world setup + explicit SceneRender
     types.ts           # Region, Biome (data model), BiomeNoiseConfig, MaterialData,
                        #   TerrainParams, CityConfig
+    constants.ts       # Biome ids the SHARED pipeline branches on (CITY_BIOME_ID …);
+                       #   workers can't import biome folders, so each biome.tsx
+                       #   re-exports its id from here
     defaults.ts        # DEFAULT_TERRAIN_PARAMS (incl. cityConfig), DEFAULT_RIVER_TEXTURE
     components/        # The declarative hierarchy components
       Domain.tsx       # Registration store + commit → active domain; mounts global systems
@@ -337,9 +353,22 @@ src/
                        #   was itself a big synchronous hitch tens of seconds into play.
                        # Jittery low-poly sun (flat irregular disc) + crescent moon +
                        #   stars; follows the camera; drives the night blend
-    shaders/           # Shared terrain vertex shader (vertex.glsl, common.glsl)
+    shaders/           # Shared terrain vertex shader (vertex.glsl, common.glsl) +
+                       #   constants.ts (WORLD_WRAP, glslFloat). Raw .glsl can't import
+                       #   TS, so terrain/material.ts PREPENDS the single-source
+                       #   chunks (_quantization.QUANTIZE_GLSL, _curvature.CURVE_GLSL)
+                       #   and passes `defines` (WORLD_WRAP, ROAD_HALF_WIDTH,
+                       #   FREEWAY_HALF_WIDTH, BOUNDARY_WIDTH — from the active
+                       #   TerrainParams) that both shaders and every biome fragment
+                       #   use instead of retyped literals
     terrain/
-      TerrainRenderer.tsx # Chunk lifecycle, LOD quadtree, build loop, geometry pool
+      TerrainRenderer.tsx # Chunk lifecycle, LOD quadtree, build loop, geometry pool.
+                       #   Heightfield colliders are IMPERATIVE Rapier bodies owned by
+                       #   the chunk (created in BuildChunk, removed in destroyChunk) —
+                       #   NOT <RigidBody>s: r-t-r syncs every React-registered body
+                       #   every frame (fixed bodies never read as sleeping), and the
+                       #   old per-chunk components also re-rendered the whole list on
+                       #   every build. The component renders null
       lodConfig.ts     # LOD levels, chunk sizes, segment counts, render distances
       material.ts      # Combines all biome fragment shaders into the terrain material
       vertexData.ts    # Main-thread adapter over utils/workers/vertexCompute.ts (same
@@ -438,17 +467,29 @@ src/
   menus/               # Game menus/overlays: overlay/ (stats Overlay, DevOverlay,
                        #   LogsOverlay, overlayContainer)
   utils/
-    utils.ts           # getAllBiomes, getDistance2D/-Sq, framePhaseFromCoords (plain exports)
+    utils.ts           # getAllBiomes, getDistance2DSq, framePhaseFromCoords (plain exports)
     uploadOnFirstDraw.ts # Mount-time GPU warm-up (force one draw → buffers upload + program links)
     spikeTrace.ts      # Lag-spike attribution ring buffer (window.__spikeTrace)
     voronoi/           # Web worker Voronoi system (voronoi.ts queues, .worker.ts computes)
-    noise/_noise.ts    # Perlin/Simplex FBM wrapper (TerrainNoiseParams)
-    math/_math.ts      # seedRand, lerp, smoothstep, randRange
+    math/_math.ts      # MASTER_SEED + seedRand (the ONE deterministic roll — every
+                       #   worker and the voronoi worker import it), GLSL-semantics
+                       #   smoothstep, clamp, lerp. Worker-safe (no THREE). (The old
+                       #   noise/_noise.ts namespace was dead and is gone; the FBM
+                       #   lives in vertexCompute.ts, TerrainNoiseParams too)
     material/          # Texture loading, biome material composition
     task-queue/        # Async task queue
     quantization/      # Vertex quantization for material patching
     cursor/            # DOM cursor overlay
     workers/           # The global generation workers + their shared pipeline
+      workerClient.ts  # createWorkerClient — THE worker-client base: lazy boot, INIT
+                       #   handshake, id-correlated request/response, transfer lists,
+                       #   domain-switch reset(). Every client (terrain, spawn,
+                       #   foliage, dressing, collider) is just typed wrappers over it
+      densityPlacement.ts # THE density-grid placement: cell size/probability, seeded
+                       #   cell roll (rollDensityCell), passesPlacementFilters. The
+                       #   spawn worker, the flatten-pad engine and the dressing
+                       #   worker's DENSITY_POINTS all call it — they MUST agree to
+                       #   the bit (pads under buildings), so there is one copy
       vertexCompute.ts # Shared inlined vertex pipeline (noise, voronoi, city, biome
                        #   heights, flatten pads, city feature enumerators)
       buildDomainConfig.ts # Serializes regions into DomainConfig for workers
@@ -466,6 +507,9 @@ src/
       cityFeatures.test.ts # Smoke tests: determinism, chunk-split dedupe, validity
   vfx/                 # Global VFX logic
     frameCap.ts        # Main-render FPS cap (presented frames only; rAF loop unaffected)
+    dither.ts          # ditherGLSL(target) — the one screen-space hash dither line
+                       #   (terrain, sky, city-light aura). nightDimGLSL lives next to
+                       #   NIGHT_GROUND_DIM in lighting/dayNight.ts
     curvature.ts       # WORLD CURVATURE — the "walking on a globe" illusion. Past
                        #   uCurveStart units from the camera every vertex sinks by
                        #   (d - start)² / (2R) along WORLD down, measured on HORIZONTAL
@@ -517,8 +561,10 @@ Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density g
 - **Every object extends its class base** — the load-bearing rule of `objects/`. Descriptors/props extend `GameObjectAttributes`/`DensityPlacement` (`objects/types.ts`); an ACTOR is a `<GameObject>` or uses `useActorLifecycle` (`actors/Actor.tsx`); DRESSING uses `useDressingChunks`/`useDressingAssets` (`dressing/Dressing.tsx`); FOLIAGE is `createFoliage(defaults)` (`foliage/Foliage.tsx`). Actor variants spread a base descriptor (skyscraper); group components come from `createDefaultsGroup`. Shared behavior goes IN the base — if you are about to apply a world-wide effect inside one object's file, that object is bypassing its base.
 - **Scope-aware config components** — `<Terrain>`, `<Material>`, `<Skybox>` mean different things under `<Domain>`, `<Region>`, or `<Biome>` (they read `RegionContext`/`BiomeContext`). Registration components render `null`; visual components (e.g. `GrassField`) render normally.
 - **Registration effects use stringified deps** — inline object props (noise params, descriptors) are registered under `JSON.stringify` deps so parent re-renders don't re-commit the domain.
-- **Utility namespaces**: `_noise.terrain()`, `_math.seedRand()`, `_material.loadTextures()`, `voronoi.create()`
-- **Plain utility exports**: `getAllBiomes()`, `getDistance2D()` from `src/utils/utils.ts`
+- **Utility namespaces**: `_math.seedRand()` (also a plain `seedRand` export), `_material.loadTextures()`, `voronoi.create()`
+- **Worker clients extend `createWorkerClient`** (`utils/workers/workerClient.ts`) — never hand-roll a pending map / INIT handshake / terminate; a client file is only its typed request wrappers. Workers construct lazily (the collider and voronoi workers no longer boot at module import).
+- **Density placement has ONE implementation** (`utils/workers/densityPlacement.ts`); the spawn worker, flatten-pad engine and dressing worker call it — that is what keeps pads under buildings.
+- **Plain utility exports**: `getAllBiomes()`, `getDistance2DSq()` from `src/utils/utils.ts`
 - **Biome shaders**: fragment shaders branch on `vBiomeId` varying; vertex shader is shared
 - **Geometry pooling**: `acquireGeometry()`/`releaseGeometry()` recycle BufferGeometry per LOD level
 - **Time-budgeted terrain builds**: chunk builds run until a wall-clock deadline (`BUILD_BUDGET_MS` in `TerrainRenderer.tsx`, ≥1 chunk per pass) with nearest-first re-sorting against the current camera — a vertex-count budget was replaced because per-chunk cost varies >10× with LOD/terrain
@@ -552,7 +598,7 @@ Deterministic spawn points come from `spawn.worker.ts` (per-descriptor density g
 
 The combined fragment shader branch, voronoi biome lookup, and worker noise config are all derived from the registrations — no core files to touch.
 
-Note on duplicated biomes: registrations (terrain rules, materials, actors) for the same biome `id` are merged into one biome data object at commit, so duplicates must be kept in sync manually (a divergence would silently resolve last-registration-wins). *Visual* children (e.g. `GrassField`) are NOT merged — if two regions with the same duplicated biome are mounted at once, each duplicate renders its own grass; be mindful of that cost when mounting multiple regions that duplicate a biome.
+Note on duplicated biomes: registrations (terrain rules, materials, actors) for the same biome `id` are merged into one biome data object at commit, so duplicates must be kept in sync manually (a divergence would silently resolve last-registration-wins). For pure CONTENT (material.ts + shaders) the duplicate should RE-EXPORT the original rather than copy it — the city region's grass biome does exactly that (`export { getMaterial } from "../../../grass/biomes/grass/material"`); only `biome.tsx` (the component + its mounts) is genuinely per-folder. *Visual* children (e.g. `GrassField`) are NOT merged — if two regions with the same duplicated biome are mounted at once, each duplicate renders its own grass; be mindful of that cost when mounting multiple regions that duplicate a biome.
 
 ### New Region
 
@@ -631,6 +677,12 @@ The world is unbounded, so **the split between float64 and float32 is an archite
 
 ## Performance Notes
 
+- **Canvas/physics settings are deliberate** (`world/CustomCanvas.tsx`): `dpr` capped at 1.5 (`MAX_DPR`), `antialias: false`, `alpha: false` — R3F's defaults (dpr 2 + MSAA + alpha) quadrupled the fragment budget of the full-screen terrain shader for a quantized low-poly look. `<Physics interpolate={false}>`: the scene has no dynamic bodies, and r-t-r's interpolation snapshot walked EVERY body (500+ in the city) before every step.
+- **Terrain LOD range is bounded by the camera far plane** (`lodConfig.ts`: LOD4 6720u, LOD5 8400u vs `CAMERA_FAR` 7200) — chunks past the far plane were generated, pooled and kept without ever producing a pixel. `releaseGeometry` nulls the bounding sphere/box: a pooled geometry otherwise kept the FIRST chunk's cached sphere.
+- **Scene point lights follow the night blend** (`CityLights` writes `intensity × nightBlend` per frame) and the terrain shader's point-light loop is gated on `uNightBlend > 0.001` — by day six lights were shaded on every lit and terrain fragment for nothing.
+- **Building door leaves draw only within `DOOR_VISIBLE_DISTANCE`** (220u; ref write in onFrame) — one lit draw call per door out to 625u was hundreds of draws for a few pixels.
+- **The grass fragment shader samples each texture layer only where its weight is visible** and uses 1 fbm octave for the slope-threshold nudge (3 octaves = 12 `sin()` per fragment for a ±0.05 offset).
+
 - **Terrain build loop is TIME-budgeted** (`BUILD_BUDGET_MS` in `TerrainRenderer.tsx`, ~5ms, ≥1 chunk per pass) and the whole update pass EARLY-OUTS in steady state: the desired chunk set is recomputed only after ~8u of camera movement, and once queues are drained and the last built chunk is visible the per-frame pass is a single flag check. Chunk keys are cached on the `Chunk` object — never rebuild them from float math in a loop.
 - **Terrain finishing runs in the worker**: the local vertex grid (pure function of chunkSize/segments), the vertex normals (main-grid triangles only — skirt normals are edge copies), and the Rapier column-major collider heights are all computed in `terrain.worker.ts`; the main thread only writes buffers.
 - Voronoi worker uses O(n) nearest-entry scans instead of sorting. Grid arrays are never mutated by lookups.
@@ -643,7 +695,9 @@ The world is unbounded, so **the split between float64 and float32 is an archite
 - **Animation LOD** (`actors/GameObject.tsx`): mixers don't update while frustum-culled and run at half rate past 40% of render distance; skipped time accumulates (capped) so loops stay continuous. NOTE: this skips interpolant evaluation only — the renderer still runs `skeleton.update()` + a bone-texture upload for every VISIBLE skinned mesh; only frustum culling removes skinning cost.
 - **GLTF clones are POOLED per (model | quantization)** (`objects/actors/modelClonePool.ts`): despawn/respawn churn used to re-run the full clone pipeline per mount (scene clone, traversals, material clones + shader patches, skeleton rebind, bbox measure) and dispose it all again on unmount — a reused clone now costs a map lookup + opacity reset. Bounded per key; only evictions dispose (materials + skeleton bone textures; geometry is SHARED with the source GLTF, never disposed). Release is deferred one macrotask and cancellable so React 18 StrictMode dev remounts can't hand a still-mounted scene to another component. Pools survive domain switches (clones are domain-agnostic; no-override materials follow the live global quantization uniform — override values are baked, hence part of the key).
 - **Skeletons are shared across a clone's meshes** (`cloneModelWithAnimations` in `modelClonePool.ts`): all skinned meshes bound to one source skeleton share ONE cloned skeleton (beeble: 10 meshes, 1 skeleton) — a skeleton per mesh multiplied skinning + bone-texture uploads 10×. Bones indexed by name in one pass; materials deduped per source material; clip actions bind LAZILY on first command (beeble ships 10 junk clips) and persist on the pooled record.
-- **Beeble physics LOD** (`Beeble.tsx`): idle grounded beebles skip the character-controller shape cast entirely; beyond `PHYSICS_FULL_RATE_DIST` (80u) moving beebles resolve collisions every 3rd frame with accumulated dt (speed preserved).
+- **Beeble CPU LOD** (`Beeble.tsx`): idle grounded beebles skip the character-controller shape cast entirely; beyond `FULL_RATE_DIST` (80u) both the shape cast AND the state machine tick run every 3rd frame with accumulated dt (speed preserved; behaviors are dt-based). All of it runs in ONE `onFrame` handed to `<GameObject>` — the beeble used to own three `useFrame`s (physics + one inside each of useStateMachine/useMouseEvents), each recomputing the camera distance the actor base already had.
+- **Beeble "ascend" morph restores the pooled clone** (`stateMachine.ts`): the state swaps private cloned geometries onto the mesh nodes and its onEnter cleanup puts the shared GLTF geometry back + disposes the clones; without it every ascended beeble leaked its buffers and handed a sphere-morphed body to the next beeble reusing that pooled clone.
+- **The collider worker moves typed arrays with transfer lists** both ways (`objects/colliders`): positions/indices are private `Float32Array`/`Uint32Array` copies of the GLTF buffers (never the live ones — transferring those would detach them from the renderer), and `TrimeshCollider` passes the result straight to Rapier.
 - **Never attach R3F pointer handlers to spawned actors** — even no-ops register the object in R3F's interaction list, which raycasts it RECURSIVELY (CPU-skinned triangle tests included) on every pointermove at mouse-polling rate. All actor input goes through window listeners + the manual screen-center raycast in `useMouseEvents` (which angular-pre-tests before touching triangles).
 - **Throttled per-N-frame work is PHASE-OFFSET per instance** (hash of spawn coords/seed) — counters all starting at 0 made every object in a spawn batch do its "every 3rd frame" work on the SAME frames, preserving the spikes the throttle was meant to remove.
 - **GPU uploads are paid at MOUNT, not at first look** (`utils/uploadOnFirstDraw.ts`): three uploads a mesh's buffers/textures AND links its shader program on its first actual DRAW, so content mounted behind the player (a spawn radius is a circle; the player faces one way) deferred all of it to the frame the player first turned toward it — a fast 180° cashed in every deferred upload at once (the turn-around lag spike). The helper forces one off-frustum draw (vertex cost only), then restores culling. Applied to terrain chunks, building meshes, grass chunks, dressing chunks, and GLTF actors (paid once per pooled clone at CREATION — modelClonePool; the actor base additionally holds `group.visible` true for 3 warm-up frames — its own frustum culling would otherwise hide the group before the forced draw could happen; those late actor compiles were the last 50-90ms render-internal spikes). Apply it to any NEW mass content that can mount off-screen.
@@ -667,7 +721,7 @@ A player moving faster than generation used to end in single-digit FPS and a min
 - **Generation is TIME-budgeted, not count-limited** (`SPAWN_BUDGET_MS` for spawns, `BUILD_BUDGET_MS` for terrain). Per-chunk cost varies >10× with terrain (a dense city chunk runs the flatten engine over thousands of pad candidates, ~60ms; an empty grassland chunk is nearly free), so any fixed chunk count is both too long in the city and too short in open terrain. The worker returns the chunks it FINISHED (`done`); only those are cached, the rest are re-requested or dropped. `throughput = N / max(N × cost, cadence_floor)`, so budget beyond the floor (`MIN_FRAMES_BETWEEN_BATCHES`) is pure latency.
 - **Spawning's deference to terrain is time-boxed** (`MAX_FRAMES_DEFERRED_TO_TERRAIN`): a player outrunning terrain keeps LOD1/2 permanently pending, and an indefinitely starved pool never runs its cache eviction, then floods the frame it finally does. There is deliberately NO deference in the other direction — terrain and spawns run in separate workers, so pausing terrain while a spawn batch is in flight only idles the main thread.
 - **Terrain overlap queries go through `ChunkIndex`** (`TerrainRenderer.tsx`), a coarse grid bucketed at `LOD5_CHUNK_SIZE` (so any chunk spans ≤ 2×2 tiles). The swap/prune passes ask "does any chunk in set X overlap chunk C?" every frame; scanning the whole set is O(chunks × queue) and outrunning generation grows BOTH sides into the hundreds. `ProcessSwaps` must still run with an empty destroy queue — its pass 2 is what makes freshly built chunks visible at all.
-- **`TerrainCollider` is memoized on a STABLE descriptor** (`args` / `bodyPosition` built once in `GenerateColliders`). `<HeightfieldCollider>` spreads `args` into the dependency list owning the Rapier shape, so a fresh array or scale object per render removes and rebuilds the heightfield — unmemoized that was ~50 full rebuilds (13 of them 97×97) per chunk built, since every built chunk bumps `colliderVersion` and re-renders the whole list.
+- **Terrain heightfields are imperative Rapier bodies, not React** (`GenerateColliders` in `TerrainRenderer.tsx`): built once per chunk straight into the world and removed in `destroyChunk`. The earlier `<TerrainCollider>` component list needed careful memoization (an unmemoized `args` rebuilt every heightfield on every collider change — ~50 rebuilds per chunk built) and still put ~64 bodies through r-t-r's per-frame body sync plus a whole-list reconcile per build; none of that exists now. Never reintroduce per-chunk `<RigidBody>`s.
 - **Caches store their own coordinates.** The client spawn cache, the worker's chunk cache and the despawn ledger all carry world-space centers (and spatial-hash membership) on the entry, because eviction sweeps the whole cache every batch and parsing `"cx_cz"` back out of the key made the one operation keeping them bounded the most expensive thing about them.
 
 ## UI / Overlay Styling

@@ -14,6 +14,7 @@
  */
 
 import { DomainConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
+import { smoothstep } from "../math/_math";
 
 const GRID_STEP = 2; // world units between terrain samples
 const MAX_INSTANCES_PER_CHUNK = 16384;
@@ -34,10 +35,6 @@ interface FoliageChunkParams {
 let initialized = false;
 
 /** Fast deterministic PRNG — one seedrandom call per chunk, cheap draws per blade. */
-const smoothstepf = (e0: number, e1: number, x: number): number => {
-  const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1);
-  return t * t * (3 - 2 * t);
-};
 
 const mulberry32 = (a: number) => () => {
   a |= 0;
@@ -149,8 +146,8 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
       const slope = bilinear(slopes, x, z);
       const [minSlope, maxSlope] = params.slopeRange;
       const blend = Math.max(params.slopeBlend, 0.001);
-      let keep = 1 - smoothstepf(maxSlope - blend, maxSlope, slope);
-      if (minSlope > 0) keep *= smoothstepf(minSlope, minSlope + blend, slope);
+      let keep = 1 - smoothstep(maxSlope - blend, maxSlope, slope);
+      if (minSlope > 0) keep *= smoothstep(minSlope, minSlope + blend, slope);
       if (keep <= 0) continue;
       if (keep < 1) {
         if (rand() >= keep) continue;

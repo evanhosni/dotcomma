@@ -11,6 +11,8 @@ const BIOME_POLL_INTERVAL = 1; // seconds
 const GRAPH_WIDTH = 120;
 const GRAPH_HEIGHT = 30;
 const GRAPH_HISTORY = GRAPH_WIDTH; // one sample per pixel
+/** Frames between DOM/canvas redraws (sampling itself runs every frame). */
+const UI_REDRAW_INTERVAL = 4;
 
 // Low/high spikes are held indefinitely — the readout is the worst thing that
 // happened since the last reset, and BACKSPACE clears both back to "--".
@@ -97,6 +99,7 @@ const OverlayHUD = () => {
   const avgFrames = useRef(0);
   const avgTime = useRef(0);
   const wasActive = useRef(false);
+  const uiFrame = useRef(0);
 
   // Worst-case spikes over the same sampling window as the averages, held until
   // BACKSPACE clears them. FPS tracks the worst 0.5s window (a sustained dip);
@@ -260,6 +263,12 @@ const OverlayHUD = () => {
       avgTime.current += delta;
     }
     wasActive.current = isActive;
+
+    // DOM + canvas writes are throttled: the sampling above stays per-frame
+    // (spikes/min/max must not miss a frame), but 14 textContent writes and
+    // three 120-segment canvas strokes every frame were measurable in the very
+    // numbers this overlay reports. Graphs advance one column per redraw.
+    if (uiFrame.current++ % UI_REDRAW_INTERVAL !== 0) return;
 
     const a = avgSpans.current;
     if (a.length === 3) {

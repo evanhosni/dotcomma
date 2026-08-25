@@ -1,6 +1,7 @@
 import { Biome } from "../../../../../../components";
 
-export const WIRE_BIOME_ID = 4;
+import { WIRE_BIOME_ID } from "../../../../../../constants";
+export { WIRE_BIOME_ID };
 
 /** Home-page biome: perfectly flat — no biome-level <Terrain noise>, so its
  *  height contribution is 0 (HomeDomain also zeroes the world base/road

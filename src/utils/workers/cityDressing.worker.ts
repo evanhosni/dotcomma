@@ -31,9 +31,17 @@ import {
   getCityTrafficLightPoints,
   getCityVoronoiSites,
   initCompute,
-  seedRand,
   DomainConfig,
 } from "./vertexCompute";
+import {
+  DensityPointParams,
+  densityCellRange,
+  densityCellSize,
+  densityProbability,
+  passesPlacementFilters,
+  rollDensityCell,
+} from "./densityPlacement";
+import { CITY_BIOME_ID } from "../../world/constants";
 
 let initialized = false;
 
@@ -48,15 +56,6 @@ let initialized = false;
 // chains cut at the window edge can, rarely, leave a cross-border pair
 // slightly tighter than `footprint` — cosmetically irrelevant for dressing.
 
-interface DensityPointParams {
-  seedTag: string; // seed namespace — distinct from spawn-system descriptor ids
-  density: number; // instances per 1,000,000 sq units
-  footprint: number; // min spacing between accepted points
-  biomeIds?: number[];
-  roadDistanceRange?: [number, number];
-  heightRange?: [number, number];
-}
-
 const generateDensityPoints = (
   minX: number,
   minZ: number,
@@ -64,33 +63,22 @@ const generateDensityPoints = (
   maxZ: number,
   p: DensityPointParams
 ): { x: number; y: number; z: number }[] => {
-  const cellSize = Math.sqrt(1_000_000 / p.density);
+  const cellSize = densityCellSize(p.density);
   const pad = p.footprint + cellSize;
-  const gx0 = Math.floor((minX - pad) / cellSize);
-  const gx1 = Math.floor((maxX + pad) / cellSize);
-  const gz0 = Math.floor((minZ - pad) / cellSize);
-  const gz1 = Math.floor((maxZ + pad) / cellSize);
-  const probability = (p.density * cellSize * cellSize) / 1_000_000;
+  const [gx0, gx1] = densityCellRange(minX - pad, maxX + pad, cellSize);
+  const [gz0, gz1] = densityCellRange(minZ - pad, maxZ + pad, cellSize);
+  const probability = densityProbability(p.density, cellSize);
   const footprintSq = p.footprint * p.footprint;
 
   const accepted: { x: number; z: number; y: number }[] = [];
   for (let gx = gx0; gx <= gx1; gx++) {
     for (let gz = gz0; gz <= gz1; gz++) {
-      const seed = `${p.seedTag}_${gx}_${gz}`;
-      if (seedRand(seed) > probability) continue;
-      const x = (gx + seedRand(seed + "_x")) * cellSize;
-      const z = (gz + seedRand(seed + "_z")) * cellSize;
+      const roll = rollDensityCell(p.seedTag, gx, gz, cellSize, probability);
+      if (!roll) continue;
+      const { x, z } = roll;
 
       const vd = computeVertexData(x, z);
-      if (p.biomeIds && p.biomeIds.length > 0 && !p.biomeIds.includes(vd.biomeId)) continue;
-      if (
-        p.roadDistanceRange &&
-        (vd.distanceToRoadCenter < p.roadDistanceRange[0] ||
-          vd.distanceToRoadCenter > p.roadDistanceRange[1])
-      )
-        continue;
-      if (p.heightRange && (vd.height < p.heightRange[0] || vd.height > p.heightRange[1]))
-        continue;
+      if (!passesPlacementFilters(vd, p)) continue;
 
       // Greedy spacing in global (gx, gz) order — deterministic, no state.
       let blocked = false;
@@ -119,7 +107,7 @@ const generateDensityPoints = (
  *  main-thread chunk hook used to run). */
 const probeEmpty = (minX: number, minZ: number, maxX: number, maxZ: number): boolean => {
   const vd = computeVertexData((minX + maxX) / 2, (minZ + maxZ) / 2);
-  return vd.biomeId !== 1 && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
+  return vd.biomeId !== CITY_BIOME_ID && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
 };
 
 self.onmessage = (e: MessageEvent) => {

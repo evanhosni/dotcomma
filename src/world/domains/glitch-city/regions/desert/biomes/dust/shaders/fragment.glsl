@@ -20,9 +20,9 @@ void main() {
   // ── Biome boundary blending ──
   vec4 biomeColor;
 
-  if (vDistanceToBiomeBoundaryCenter < 14.0) {
+  if (vDistanceToBiomeBoundaryCenter < BOUNDARY_WIDTH) {
     vec4 baseColor = texture2D(biometexture, adjustedUV);
-    float blendFactor = smoothstep(12.0, 14.0, vDistanceToBiomeBoundaryCenter);
+    float blendFactor = smoothstep(BOUNDARY_WIDTH - 2.0, BOUNDARY_WIDTH, vDistanceToBiomeBoundaryCenter);
     biomeColor = mix(baseColor, terrainColor, blendFactor);
   } else {
     biomeColor = terrainColor;

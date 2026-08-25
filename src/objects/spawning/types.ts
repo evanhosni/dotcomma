@@ -50,6 +50,26 @@ export interface ActorProps {
   quantization?: number;
 }
 
+/** The serializable subset of ActorDescriptor sent to spawn.worker.ts (no
+ *  React component). Shared by the client (generateSpawnPoints.ts) and the
+ *  worker (type-only import) so the two can't drift. */
+export interface SerializedActorDescriptor
+  extends Pick<
+    ActorDescriptor,
+    | "id"
+    | "footprint"
+    | "density"
+    | "clustering"
+    | "renderDistance"
+    | "priority"
+    | "biomeIds"
+    | "heightRange"
+    | "slopeRange"
+    | "roadDistanceRange"
+    | "spacingOverrides"
+    | "flattenGround"
+  > {}
+
 export interface SpawnPoint {
   x: number;
   z: number;
