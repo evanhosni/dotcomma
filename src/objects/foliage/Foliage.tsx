@@ -24,7 +24,7 @@ import { FoliageProps } from "./types";
  *     InstancedMeshes assembled on the main thread from worker point lists,
  *     ~10²–10³ instances per 256u chunk (lamps, markers, signals, poles).
  *   - FOLIAGE  (this file): vegetation at yet another order of magnitude — up
- *     to ~16k instances per 32u chunk, so placement streams from the foliage
+ *     to ~32k instances per 64u chunk, so placement streams from the foliage
  *     worker as transferable Float32Arrays STRAIGHT into GPU instance
  *     attributes (never per-point JS objects), and all animation (billboarding,
  *     wind sway) runs in the vertex shader. Per-chunk bounding spheres keep
@@ -66,11 +66,12 @@ export const useFoliageRenderDistance = (own: number | undefined, featureDefault
 
 // ── Chunking ────────────────────────────────────────────────────────────────
 
-/** World units per foliage chunk (one instanced draw call each). 32 is a
+/** World units per foliage chunk (one instanced draw call each). 64 (was 32:
+ *  a 500u field is ~190 draws instead of ~770, all sharing one program) is a
  *  whole multiple of both quantization grids, so the chunk-relative lattice
  *  the shader works in IS the world lattice — see the rebase note in the
  *  vertex shader below. */
-const FOLIAGE_CHUNK_SIZE = 32;
+const FOLIAGE_CHUNK_SIZE = 64;
 const MAX_PENDING_CHUNKS = 4; // worker requests in flight at once
 const UPDATE_INTERVAL_FRAMES = 3;
 // Foliage starts filling in ahead of the object spawn system (ObjectPool gates
@@ -182,7 +183,7 @@ void main() {
 `;
 
 // Chunk coords pack into one exact float64 key (|cx|,|cz| < 2²⁵ ⇒ ±10⁹ world
-// units at 32u cells, far past world scale) so the 3-frame scans never build
+// units at 64u cells, far past world scale) so the 3-frame scans never build
 // a "${cx}_${cz}" string per cell in radius nor parse one back on eviction.
 const packChunkKey = (cx: number, cz: number): number => cx * 0x4000000 + cz; // 2^26
 
@@ -222,12 +223,12 @@ const CHUNK_HALF_DIAG = (FOLIAGE_CHUNK_SIZE * Math.SQRT2) / 2;
 // shared index/position/uv buffers (a VAO re-setup on the next draw, nothing
 // re-uploads); instance attributes, bounds and instanceCount are untouched,
 // and it adds NO per-frame work — it rides the sweep that already runs.
-// Hysteresis must exceed a chunk cell's diagonal (~45u): the settled early-out
+// Hysteresis must exceed a chunk cell's diagonal (~91u at 64u chunks): the settled early-out
 // below can defer a sweep by up to one cell of camera travel, and a smaller
 // band would let that staleness thrash the swap.
 // To A/B this LOD in isolation, set BLADE_DETAIL_DIST = Infinity (disables it).
 const BLADE_DETAIL_DIST = 100; // beyond this (chunk-nearest), use the low quad
-const BLADE_DETAIL_HYSTERESIS = 46; // swap back to full detail below DIST − this
+const BLADE_DETAIL_HYSTERESIS = 92; // swap back to full detail below DIST − this (> the ~91u chunk diagonal)
 
 // ── Shared resources (module-level, never disposed) ──
 
@@ -275,7 +276,7 @@ const disposeChunkGeometry = (geo: THREE.BufferGeometry): void => {
 };
 
 /**
- * A field of one plant type. Placement runs in the foliage worker per 32-unit
+ * A field of one plant type. Placement runs in the foliage worker per 64-unit
  * chunk (deterministic, filtered by biome/height/slope); each chunk is one
  * alpha-tested instanced draw call, billboarded and swayed entirely on the GPU.
  *
@@ -491,7 +492,7 @@ export const FoliageField: React.FC<FoliageProps> = ({
     // Early-out: settled (last pass found nothing to request), nothing in
     // flight, and the camera is still in the same cell — the sweep below can't
     // produce new work. (Eviction is deferred at most one cell of travel by
-    // this; the ×1.25 hysteresis dwarfs a 32u cell.)
+    // this; the ×1.25 hysteresis dwarfs a 64u cell.)
     if (
       settledRef.current &&
       pendingRef.current.size === 0 &&
