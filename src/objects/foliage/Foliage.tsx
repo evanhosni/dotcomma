@@ -74,7 +74,7 @@ export const useFoliageRenderDistance = (own: number | undefined, featureDefault
 const FOLIAGE_CHUNK_SIZE = 64;
 const MAX_PENDING_CHUNKS = 4; // worker requests in flight at once
 const UPDATE_INTERVAL_FRAMES = 3;
-// Foliage starts filling in ahead of the object spawn system (ObjectPool gates
+// Foliage starts filling in ahead of the object spawn system (ActorPool gates
 // on progress 0.5) so ground cover lands before objects pop in.
 const MIN_TERRAIN_PROGRESS = 0;
 

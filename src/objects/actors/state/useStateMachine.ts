@@ -1,7 +1,7 @@
 import { RootState, useFrame } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useGameContext } from "../../context/GameContext";
+import { useGameContext } from "../../../context/GameContext";
 import {
   AnimationControl,
   BehaviorContext,
@@ -14,7 +14,7 @@ import {
 const _playerDiff = new THREE.Vector3();
 
 // One-shot mouse flags written by useMouseEvents — the FIXED set of flag keys
-// from src/objects/state/triggers.ts. Cleared by resetting to false each
+// from src/objects/actors/state/triggers.ts. Cleared by resetting to false each
 // frame (truthiness-identical to the old delete, but `delete` forced the
 // blackboard into dictionary mode). `__mouse_hover_active` is deliberately
 // absent: it is level-triggered and persists across frames.

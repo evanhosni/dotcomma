@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { GLTF } from "three/examples/jsm/loaders/GLTFLoader";
-import { createWorkerClient } from "../../utils/workers/workerClient";
+import { createWorkerClient } from "../../../utils/workers/workerClient";
 import { COLLIDER_TYPE, ColliderWorkerMessage, WholeTrimeshWorkerMessage } from "./types";
 
 // Domain-agnostic (geometry → collider transform), so it is never reset on a

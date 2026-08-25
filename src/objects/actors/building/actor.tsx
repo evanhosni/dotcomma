@@ -1,4 +1,4 @@
-import { ActorDescriptor, ActorProps } from "../../spawning/types";
+import { ActorDescriptor, ActorProps } from "../spawning/types";
 import { createActor } from "../../../world/components";
 import { Building } from "./Building";
 

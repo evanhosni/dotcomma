@@ -3,11 +3,11 @@
  *
  * The actual spawn algorithm now runs in spawn.worker.ts.
  * This module manages the worker lifecycle and provides
- * the same public API surface to ObjectPool.
+ * the same public API surface to ActorPool.
  */
 
-import { DomainConfig } from "../../utils/workers/vertexCompute";
-import { createWorkerClient } from "../../utils/workers/workerClient";
+import { DomainConfig } from "../../../utils/workers/vertexCompute";
+import { createWorkerClient } from "../../../utils/workers/workerClient";
 import { ActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
@@ -33,7 +33,7 @@ const client = createWorkerClient({
 /**
  * Initialize the spawn worker with a dimension config.
  * Must be called before generateSpawnPoints. Always boots a FRESH worker:
- * ObjectPool remounts on world switch (and re-inits when the max footprint
+ * ActorPool remounts on world switch (and re-inits when the max footprint
  * changes) — never leak the old one.
  */
 export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Promise<void> => {
@@ -92,7 +92,7 @@ export interface SpawnChunkBucket {
 const clientChunkCache = new Map<string, SpawnChunkBucket>();
 
 /** Domain switch (resetDomainSystems): kill the worker and every cached point —
- *  spawn points are world-config-dependent, and the next ObjectPool mount
+ *  spawn points are world-config-dependent, and the next ActorPool mount
  *  re-inits via initSpawnWorker with the new committed config. */
 export const resetSpawnWorker = () => {
   client.reset();

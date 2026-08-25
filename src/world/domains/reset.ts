@@ -1,6 +1,6 @@
 import { resetDressingWorker } from "../../objects/dressing/dressingWorker";
 import { resetFoliageWorker } from "../../objects/foliage/foliageWorker";
-import { resetSpawnWorker } from "../../objects/spawning/generateSpawnPoints";
+import { resetSpawnWorker } from "../../objects/actors/spawning/spawnWorker";
 import { resetTerrainSystem } from "../terrain/TerrainRenderer";
 import { resetActiveDomain } from "./utils";
 

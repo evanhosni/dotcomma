@@ -1,11 +1,11 @@
-import { DensityPlacement, GameObjectAttributes } from "../types";
+import { DensityPlacement, GameObjectAttributes } from "../../types";
 
 /**
  * ACTOR types — the per-object spawn class of the game-object hierarchy
  * (see objects/types.ts for the class overview and the shared base).
  *
  * Actors (beebles, buildings, …) are objects with their own identity, state,
- * or interaction: each mounts as its own React component through ObjectPool's
+ * or interaction: each mounts as its own React component through ActorPool's
  * spawn lifecycle. Mass stateless scenery belongs to the other classes — see
  * objects/dressing/ (instanced chunks, no per-object components).
  */
@@ -35,7 +35,7 @@ export interface ActorDescriptor extends GameObjectAttributes, DensityPlacement 
   flattenSkirt?: number; // blend ring back to raw terrain; default footprint * 0.35
 }
 
-/** Props every spawned actor component receives from ObjectPool. */
+/** Props every spawned actor component receives from ActorPool. */
 export interface ActorProps {
   id: string;
   model?: string;
@@ -51,7 +51,7 @@ export interface ActorProps {
 }
 
 /** The serializable subset of ActorDescriptor sent to spawn.worker.ts (no
- *  React component). Shared by the client (generateSpawnPoints.ts) and the
+ *  React component). Shared by the client (spawnWorker.ts) and the
  *  worker (type-only import) so the two can't drift. */
 export interface SerializedActorDescriptor
   extends Pick<

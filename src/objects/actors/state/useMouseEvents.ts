@@ -1,7 +1,7 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../utils/cursor/cursor";
+import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { StateMachineHandle } from "./types";
 
 export interface MouseEventDistances {

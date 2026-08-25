@@ -1,5 +1,5 @@
 /**
- * City dressing placement worker.
+ * Dressing placement worker (city features + generic density points + height samples).
  *
  * Runs the deterministic city feature enumerations (road markers, traffic
  * lights, freeway-side points) OFF the main thread — the same shared vertex

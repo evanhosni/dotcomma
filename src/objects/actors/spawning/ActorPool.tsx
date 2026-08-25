@@ -1,10 +1,10 @@
 import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
-import { useGameContext } from "../../context/GameContext";
-import { traceEvent } from "../../utils/spikeTrace";
-import { getActiveRegions, getActiveDomainConfig } from "../../world/domains/utils";
-import { driveActorFrames } from "../actors/Actor";
+import { useGameContext } from "../../../context/GameContext";
+import { traceEvent } from "../../../utils/spikeTrace";
+import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/utils";
+import { driveActorFrames } from "../Actor";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -14,7 +14,7 @@ import {
   serializeDescriptors,
   SPAWN_CHUNK_SIZE,
   updateSpawnFootprint,
-} from "./generateSpawnPoints";
+} from "./spawnWorker";
 import { ActorDescriptor, ActorProps, SpawnPoint } from "./types";
 
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps — responsive to player movement
@@ -111,7 +111,7 @@ interface DespawnRecord {
 const objIdOf = (point: SpawnPoint): string =>
   `${point.x}_${point.z}_${point.descriptorId}`;
 
-export const ObjectPool = () => {
+export const ActorPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
 
   const objectsMapRef = useRef(new Map<string, MountedObject>());
@@ -401,7 +401,7 @@ export const ObjectPool = () => {
     sweepOutOfRange,
   ]);
 
-  // ONE frame subscriber drives EVERY mounted GameObject's per-frame work
+  // ONE frame subscriber drives EVERY mounted ModelActor's per-frame work
   // (fade, hard-kill, frustum visibility, collider gating, animation LOD) —
   // per-instance useFrames were that many R3F subscriber invocations plus
   // subscription churn per spawn batch. Lives here because <Domain> always

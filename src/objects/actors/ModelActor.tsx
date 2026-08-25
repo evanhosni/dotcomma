@@ -3,8 +3,8 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
-import { createColliders } from "../colliders/collider";
-import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "../colliders/Colliders";
+import { createColliders } from "./colliders/collider";
+import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import {
   acquireModelClone,
   acquirePooledModelClone,
@@ -12,7 +12,7 @@ import {
   reclaimModelClone,
   releaseModelClone,
 } from "./modelClonePool";
-import { AnimationControl } from "../state/types";
+import { AnimationControl } from "./state/types";
 import { GameObjectAttributes } from "../types";
 import { RootState } from "@react-three/fiber";
 import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
@@ -51,7 +51,7 @@ useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/"
  *  and the shared frame driver all come from useActorLifecycle; this component
  *  adds only what is GLTF-specific: the pooled model clone, its colliders, and
  *  the animation mixer + LOD. Base attribute types live in objects/types.ts. */
-export interface GameObjectProps extends GameObjectAttributes {
+export interface ModelActorProps extends GameObjectAttributes {
   model: string;
   coordinates: THREE.Vector3Tuple;
   id: string;
@@ -67,7 +67,7 @@ export interface GameObjectProps extends GameObjectAttributes {
   excludeColliderNames?: string[];
   /** Owner's per-frame work (physics step, state machine, mouse events),
    *  run inside the shared actor driver AFTER the animation LOD — the one
-   *  place an actor built on <GameObject> gets a frame callback. Never add a
+   *  place an actor built on <ModelActor> gets a frame callback. Never add a
    *  useFrame in the owning component instead. */
   onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
 }
@@ -79,7 +79,7 @@ interface ColliderState {
   trimeshColliders: any[];
 }
 
-export const GameObject = ({
+export const ModelActor = ({
   model,
   coordinates,
   id,
@@ -96,7 +96,7 @@ export const GameObject = ({
   excludeColliderNames,
   quantization,
   onFrame,
-}: GameObjectProps) => {
+}: ModelActorProps) => {
   const gltf = useGLTF(model);
 
   // Prepared clone from the pool — despawn/respawn churn reuses parked clones

@@ -39,7 +39,7 @@ const SceneRender = () => {
 
 // NOTE: a post-load scene-wide gl.compile pass ("PrecompileStreamedContent")
 // used to live here, firing at +3s/+12s after terrain_loaded. It was REMOVED:
-// per-mount warm draws (uploadOnFirstDraw + GameObject/DayNightCycle warm
+// per-mount warm draws (uploadOnFirstDraw + ModelActor/DayNightCycle warm
 // frames) now compile every program and upload every buffer at mount time,
 // staggered — while the scene-wide pass was itself a large SYNCHRONOUS hitch
 // tens of seconds into play (it read as "the first night cycle lag spike").

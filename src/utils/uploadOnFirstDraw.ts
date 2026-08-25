@@ -12,7 +12,7 @@
  * building meshes, grass chunks, dressing chunks, and GLTF actors — apply it
  * to any NEW mass content that can mount off-screen. (Objects whose own code
  * sets `visible = false` at mount must also keep themselves visible until the
- * forced draw has happened — see GameObject / DayNightCycle warm frames.)
+ * forced draw has happened — see ModelActor / DayNightCycle warm frames.)
  */
 
 /** Force ONE real draw of a mesh regardless of the camera frustum, then

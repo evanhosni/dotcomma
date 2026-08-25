@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { ActorProps } from "../../spawning/types";
+import { ActorProps } from "../spawning/types";
 
 /** Which exterior/interior wall a door lives on (+z = local south face, etc). */
 export type WallSide = "+z" | "-z" | "+x" | "-x";

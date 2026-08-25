@@ -15,7 +15,7 @@ import { createDefaultsGroup } from "../utils";
  * Dressing is mass, stateless, identical scenery (street lamps, road
  * markers, traffic lights, power lines): no per-object React
  * components, no per-object state. Placement is enumerated OFF-THREAD in
- * utils/workers/cityDressing.worker.ts (via dressingWorker.ts) and rendered
+ * utils/workers/dressing.worker.ts (via dressingWorker.ts) and rendered
  * as one InstancedMesh (or a few) per chunk. Objects with their own identity,
  * state, or interaction are ACTORS (objects/actors/); mass GPU vegetation at
  * thousands-per-chunk scale is FOLIAGE (objects/foliage/Foliage.tsx) — it

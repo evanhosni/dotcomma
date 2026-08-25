@@ -87,5 +87,5 @@ export interface Biome {
   /** Per-object spawn class registered by <Actor> components (see
    *  src/world/components/Actor.tsx). Instanced dressing is NOT part of the
    *  biome data model — dressing components render directly. */
-  actors?: import("../objects/spawning/types").ActorDescriptor[];
+  actors?: import("../objects/actors/spawning/types").ActorDescriptor[];
 }

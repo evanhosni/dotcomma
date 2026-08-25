@@ -4,7 +4,7 @@ import { prepareActorMaterial } from "./Actor";
 
 /**
  * Pool of prepared GLTF model clones, keyed by (model url | quantization
- * override). Used by <GameObject>.
+ * override). Used by <ModelActor>.
  *
  * Spawn churn (despawn behind the player, respawn ahead) used to re-run the
  * full clone pipeline on EVERY mount: scene clone, traversals, material
@@ -30,12 +30,12 @@ import { prepareActorMaterial } from "./Actor";
  *    and is never disposed here.
  */
 
-// Sized past ObjectPool's MAX_MOUNTS_PER_BATCH (20): a batch that despawns
+// Sized past ActorPool's MAX_MOUNTS_PER_BATCH (20): a batch that despawns
 // and respawns a wave of the same model should find every clone parked.
 const MAX_POOLED_PER_KEY = 24;
 /** Slack on the rest-pose bounds of skinned meshes, so an animated pose
  *  reaching past the bind pose isn't culled. Conservative is free here —
- *  GameObject does its own (tighter) distance/frustum test on top. */
+ *  ModelActor does its own (tighter) distance/frustum test on top. */
 const SKINNED_BOUNDS_PAD = 1.5;
 
 // ── Root-relative skinning (float32 far-from-origin fix) ───────────────────
@@ -151,7 +151,7 @@ export interface PooledModelClone {
   /** Deduped cloned skeletons (bone textures disposed on pool eviction). */
   skeletons: THREE.Skeleton[];
   mixer: THREE.AnimationMixer | null;
-  /** Lazily bound actions (see GameObject's getOrCreateAction). */
+  /** Lazily bound actions (see ModelActor's getOrCreateAction). */
   actions: Map<string, THREE.AnimationAction>;
   /** Unscaled bounding radius (max bbox dimension / 2), measured once in
    *  bind pose at creation. Per-instance sphere radius = this × max(scale). */
@@ -290,7 +290,7 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
         // shader programs link and its textures/buffers upload NOW (creation
         // is staggered by spawn batches) instead of inside gl.render the
         // frame the player first LOOKS at one — measured as 50-90ms
-        // render-internal spikes. GameObject's warm frames keep the group
+        // render-internal spikes. ModelActor's warm frames keep the group
         // visible long enough for that draw to actually happen.
         uploadOnFirstDraw(mesh);
       }

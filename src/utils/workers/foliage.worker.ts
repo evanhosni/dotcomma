@@ -58,7 +58,7 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
   const minX = chunkX * size;
   const minZ = chunkZ * size;
 
-  // ── Emptiness pre-probe (mirrors cityDressing.worker's probeEmpty) ──
+  // ── Emptiness pre-probe (mirrors dressing.worker's probeEmpty) ──
   // One computeVertexData at the chunk center: when the center is outside
   // every requested biome AND farther from the biome boundary than the
   // chunk's half-diagonal (size × 0.75 > size × √2/2), no point in the chunk

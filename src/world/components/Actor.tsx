@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useLayoutEffect, useMemo } from "react";
-import { ActorDescriptor } from "../../objects/spawning/types";
+import { ActorDescriptor } from "../../objects/actors/spawning/types";
 import { BiomeContext, useDomainStore } from "./context";
 
 const ActorsContext = createContext<Partial<ActorDescriptor> | null>(null);
@@ -25,7 +25,7 @@ export type ActorRegistrationProps = ActorDescriptor;
 /**
  * Registers an ACTOR descriptor from inside a <Biome> — the per-object spawn
  * class (beebles, buildings: objects with their own identity, state, or
- * interaction; each mounts as its own React component through ObjectPool).
+ * interaction; each mounts as its own React component through ActorPool).
  * Props are the full ActorDescriptor: `component`, `model`, `footprint`,
  * `density`, plus spawn restrictions (`biomeIds`, `heightRange`,
  * `slopeRange`, spacing, priority…). Defaults from an enclosing <Actors>
