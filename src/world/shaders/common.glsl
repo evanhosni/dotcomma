@@ -32,15 +32,16 @@ float valueNoise(vec2 p, float period) {
 float worldFbm(vec2 worldXZ, float scale, int octaves) {
   vec2 p = worldXZ * scale;
   float period = WORLD_WRAP * scale;
-  float value = 0.0;
-  float amplitude = 0.5;
-  for (int i = 0; i < 4; i++) {
-    if (i >= octaves) break;
-    value += amplitude * valueNoise(p, period);
-    p *= 2.0;
-    period *= 2.0;
-    amplitude *= 0.5;
-  }
+  // Up to 4 octaves as straight-line code, NOT a loop: with a constant
+  // `octaves` argument (the grass shader passes 1) the compiler inlines the
+  // call and a `for (i < 4) { if (i >= octaves) break; … }` loop provably
+  // runs once, which ANGLE reports on every compile as "X3557: loop only
+  // executes for 1 iteration(s), forcing loop to unroll". Same math; the
+  // dead octave branches constant-fold away.
+  float value = 0.5 * valueNoise(p, period);
+  if (octaves > 1) { p *= 2.0; period *= 2.0; value += 0.25 * valueNoise(p, period); }
+  if (octaves > 2) { p *= 2.0; period *= 2.0; value += 0.125 * valueNoise(p, period); }
+  if (octaves > 3) { p *= 2.0; period *= 2.0; value += 0.0625 * valueNoise(p, period); }
   return value;
 }
 
