@@ -8,7 +8,7 @@
 
 import { DomainConfig } from "../../../utils/workers/vertexCompute";
 import { createWorkerClient } from "../../../utils/workers/workerClient";
-import { ActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
+import { AnyActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
 
@@ -25,7 +25,7 @@ interface SpawnsResult {
 let pendingInit: { config: DomainConfig; maxFootprint: number } | null = null;
 
 const client = createWorkerClient({
-  create: () => new Worker(new URL("../../utils/workers/spawn.worker.ts", import.meta.url), { type: "module" }),
+  create: () => new Worker(new URL("../../../utils/workers/spawn.worker.ts", import.meta.url), { type: "module" }),
   init: () => pendingInit!,
   resultType: "SPAWNS_RESULT",
 });
@@ -48,7 +48,7 @@ export type { SerializedActorDescriptor };
  * Strip React component from descriptors for worker serialization.
  */
 export const serializeDescriptors = (
-  descriptors: ActorDescriptor[]
+  descriptors: AnyActorDescriptor[]
 ): SerializedActorDescriptor[] =>
   descriptors.map((d) => ({
     id: d.id,

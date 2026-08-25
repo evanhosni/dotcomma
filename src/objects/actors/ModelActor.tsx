@@ -13,7 +13,8 @@ import {
   releaseModelClone,
 } from "./modelClonePool";
 import { AnimationControl } from "./state/types";
-import { GameObjectAttributes } from "../types";
+import { ActorAttributes } from "../types";
+import { ActorProps } from "./spawning/types";
 import { RootState } from "@react-three/fiber";
 import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
 
@@ -51,20 +52,26 @@ useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/"
  *  and the shared frame driver all come from useActorLifecycle; this component
  *  adds only what is GLTF-specific: the pooled model clone, its colliders, and
  *  the animation mixer + LOD. Base attribute types live in objects/types.ts. */
-export interface ModelActorProps extends GameObjectAttributes {
+/** Attributes of GLTF-model actors — settable on the descriptor, forwarded to
+ *  every instance. */
+export interface ModelActorAttributes extends ActorAttributes {
+  /** GLTF path (also preloaded by the pool). */
   model: string;
-  coordinates: THREE.Vector3Tuple;
-  id: string;
+  /** Render scale, default [1,1,1]. */
   scale?: THREE.Vector3Tuple;
-  rotation?: THREE.Vector3Tuple;
-  positionRef: React.MutableRefObject<THREE.Vector3>;
-  despawnDistance?: number; // hard-kill distance; defaults to renderDistance * DESPAWN_BUFFER
-  frustumPadding?: number;
-  onDestroy: (id: string) => void;
-  animationControl?: AnimationControl;
+  /** Colliders never move (default true; movers like the beeble pass false). */
   isStatic?: boolean;
+  /** One trimesh over the whole model instead of per-node colliders. */
   wholeTrimesh?: boolean;
+  /** GLTF node names to skip when building colliders. */
   excludeColliderNames?: string[];
+}
+
+export interface ModelActorProps extends ActorProps<ModelActorAttributes> {
+  /** Live position for actors an OWNER moves (beeble physics). Absent = the
+   *  actor is static and positions itself at `coordinates`. */
+  positionRef?: React.MutableRefObject<THREE.Vector3>;
+  animationControl?: AnimationControl;
   /** Owner's per-frame work (physics step, state machine, mouse events),
    *  run inside the shared actor driver AFTER the animation LOD — the one
    *  place an actor built on <ModelActor> gets a frame callback. Never add a
@@ -85,7 +92,7 @@ export const ModelActor = ({
   id,
   scale = [1, 1, 1],
   rotation = [0, 0, 0],
-  positionRef,
+  positionRef: ownerPositionRef,
   renderDistance = DEFAULT_RENDER_DISTANCE,
   despawnDistance,
   frustumPadding,
@@ -97,6 +104,10 @@ export const ModelActor = ({
   quantization,
   onFrame,
 }: ModelActorProps) => {
+  // No owner moving us → static at the spawn point (own ref + own placement).
+  const staticPositionRef = useRef(new THREE.Vector3(...coordinates));
+  const positionRef = ownerPositionRef ?? staticPositionRef;
+  const selfPositioned = !ownerPositionRef;
   const gltf = useGLTF(model);
 
   // Prepared clone from the pool — despawn/respawn churn reuses parked clones
@@ -300,7 +311,7 @@ export const ModelActor = ({
 
   return (
     <Suspense fallback={null}>
-      <group ref={lifecycle.groupRef} visible={false}>
+      <group ref={lifecycle.groupRef} visible={false} position={selfPositioned ? coordinates : undefined}>
         <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
       {lifecycle.collidersActive && colliders && (

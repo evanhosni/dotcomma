@@ -5,6 +5,7 @@ import { useGameContext } from "../../../context/GameContext";
 import { traceEvent } from "../../../utils/spikeTrace";
 import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/utils";
 import { driveActorFrames } from "../Actor";
+import type { ModelActorAttributes } from "../ModelActor";
 import { collectDescriptors } from "./collectDescriptors";
 import {
   cleanupSpawnCache,
@@ -15,7 +16,7 @@ import {
   SPAWN_CHUNK_SIZE,
   updateSpawnFootprint,
 } from "./spawnWorker";
-import { ActorDescriptor, ActorProps, SpawnPoint } from "./types";
+import { AnyActorDescriptor, ActorProps, SPAWN_ONLY_KEYS, SpawnPoint } from "./types";
 
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps — responsive to player movement
 const RESPAWN_COOLDOWN_MS = 1000; // min age of a despawn ledger entry before it can be cleared
@@ -70,10 +71,10 @@ const MAX_FRAMES_DEFERRED_TO_TERRAIN = 90;
  * permanently despawned.
  */
 
-const getSpawnRadius = (desc: ActorDescriptor): number => desc.renderDistance + desc.footprint / 2;
-const getDespawnRadius = (desc: ActorDescriptor): number =>
+const getSpawnRadius = (desc: AnyActorDescriptor): number => desc.renderDistance + desc.footprint / 2;
+const getDespawnRadius = (desc: AnyActorDescriptor): number =>
   desc.despawnDistance ?? getSpawnRadius(desc) * DESPAWN_HYSTERESIS;
-const getImmediateRadius = (desc: ActorDescriptor): number =>
+const getImmediateRadius = (desc: AnyActorDescriptor): number =>
   desc.immediateRadius ?? getSpawnRadius(desc) * IMMEDIATE_RADIUS_FACTOR;
 
 /** Half-diagonal of a spawn chunk — a chunk whose CENTER is this much past
@@ -144,7 +145,7 @@ export const ActorPool = () => {
 
   // Build descriptor lookup map
   const descriptorMap = useMemo(() => {
-    const map = new Map<string, ActorDescriptor>();
+    const map = new Map<string, AnyActorDescriptor>();
     for (const d of descriptors) map.set(d.id, d);
     return map;
   }, [descriptors]);
@@ -187,8 +188,10 @@ export const ActorPool = () => {
   // Preload all GLTF models referenced by descriptors
   useEffect(() => {
     for (const desc of descriptors) {
-      if (desc.model) {
-        useGLTF.preload(desc.model);
+      // GLTF preload for model actors (the pool is member-agnostic otherwise).
+      const model = (desc as Partial<ModelActorAttributes>).model;
+      if (model) {
+        useGLTF.preload(model);
       }
     }
   }, [descriptors]);
@@ -270,7 +273,7 @@ export const ActorPool = () => {
       // all resolving "already mounted"), so it is pure arithmetic +
       // identity lookups — the string objId is only built for the bounded set
       // of points that actually mount below.
-      const candidates: { point: SpawnPoint; desc: ActorDescriptor; distSq: number }[] = [];
+      const candidates: { point: SpawnPoint; desc: AnyActorDescriptor; distSq: number }[] = [];
 
       // Per-bucket early-out: a chunk whose center is beyond every spawn
       // radius plus the chunk half-diagonal cannot contain a mountable point.
@@ -337,19 +340,22 @@ export const ActorPool = () => {
           continue;
         }
 
+        // Every descriptor attribute (class + member) is forwarded as props
+        // EXCEPT the spawn-only ones (SPAWN_ONLY_KEYS); the pool then sets the
+        // spawn point and ITS radii on top.
         const Component = desc.component;
+        const attributes: Record<string, unknown> = { ...desc };
+        delete attributes.component;
+        for (const key of SPAWN_ONLY_KEYS) delete attributes[key];
         const spawnRadius = getSpawnRadius(desc);
         const despawnRadius = getDespawnRadius(desc);
         const props: ActorProps = {
+          ...attributes,
           id: objId,
-          model: desc.model,
           coordinates: [point.x, point.height, point.z],
-          scale: desc.scale,
           renderDistance: spawnRadius,
           despawnDistance: despawnRadius,
           frustumPadding: desc.frustumPadding ?? 3,
-          cursorOverride: desc.cursorOverride,
-          quantization: desc.quantization,
           onDestroy: (id: string) => {
             // The mounted entry's stored point is authoritative — if a stale
             // onDestroy ever fired after a sweep + remount, deleting the

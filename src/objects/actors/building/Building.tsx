@@ -16,7 +16,7 @@ import {
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
-import { BuildingOptions, BuildingProps } from "./types";
+import { BuildingAttributes, BuildingProps } from "./types";
 
 // Beyond this camera distance all of the building's colliders are unmounted
 // (nothing physical happens to a building 100+ units away).
@@ -184,7 +184,7 @@ export const Building = ({
   windowCount,
   windowSize,
   maxLean,
-  heightRange,
+  shellHeightRange,
   stories,
   roomCount,
   doorCount,
@@ -210,7 +210,7 @@ export const Building = ({
   // re-renders (door clicks, gate flips) — without the memo every render
   // paid a JSON.stringify.
   const { opts: buildOptions, key: optionsKey } = useMemo(() => {
-    const opts: BuildingOptions = {
+    const opts: BuildingAttributes = {
       exteriorSize,
       numberOfSides,
       palette,
@@ -220,7 +220,7 @@ export const Building = ({
       windowCount,
       windowSize,
       maxLean,
-      heightRange,
+      shellHeightRange,
       stories,
       roomCount,
       doorCount,
@@ -241,7 +241,7 @@ export const Building = ({
     windowCount,
     windowSize,
     maxLean,
-    heightRange,
+    shellHeightRange,
     stories,
     roomCount,
     doorCount,

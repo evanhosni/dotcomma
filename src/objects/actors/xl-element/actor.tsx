@@ -1,10 +1,10 @@
 import { ActorDescriptor } from "../spawning/types";
 import { createActor } from "../../../world/components";
-import { XLElement } from "./XLElement";
+import { ModelActor, ModelActorAttributes } from "../ModelActor";
 
-export const XLElementDescriptor: ActorDescriptor = {
+export const XLElementDescriptor: ActorDescriptor<ModelActorAttributes> = {
   id: "xl-element",
-  component: XLElement,
+  component: ModelActor,
   model: "/models/apartment.glb",
   scale: [2, 2, 2],
   footprint: 60,

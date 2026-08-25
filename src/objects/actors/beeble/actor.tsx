@@ -1,8 +1,9 @@
 import { ActorDescriptor } from "../spawning/types";
 import { createActor } from "../../../world/components";
 import { Beeble } from "./Beeble";
+import { ModelActorAttributes } from "../ModelActor";
 
-export const BeebleDescriptor: ActorDescriptor = {
+export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
   id: "beeble",
   component: Beeble,
   model: "/models/beeble.glb",

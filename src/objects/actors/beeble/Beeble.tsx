@@ -2,7 +2,7 @@ import { RigidBody, CapsuleCollider, useRapier } from "@react-three/rapier";
 import { RootState } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { ModelActor } from "../ModelActor";
+import { ModelActor, ModelActorAttributes } from "../ModelActor";
 import { ActorFrameContext } from "../Actor";
 import { ActorProps } from "../spawning/types";
 import { useMouseEvents } from "../state/useMouseEvents";
@@ -45,7 +45,7 @@ const _nextTranslation = { x: 0, y: 0, z: 0 };
  *  <ModelActor onFrame>, i.e. inside the shared actor frame driver. It used to
  *  own three useFrame subscribers (physics + one inside each hook) on top of
  *  the driver, each recomputing the camera distance the base already had. */
-export const Beeble = (props: ActorProps) => {
+export const Beeble = (props: ActorProps<ModelActorAttributes>) => {
   const groupRef = useRef<THREE.Group>(null);
   const positionRef = useRef<THREE.Vector3>(new THREE.Vector3(...props.coordinates));
   const rigidBodyRef = useRef<RapierRigidBody>(null);
@@ -183,7 +183,6 @@ export const Beeble = (props: ActorProps) => {
           CPU-skinned triangle tests) per beeble on every pointermove. */}
       <group ref={groupRef as any}>
         <ModelActor
-          model="/models/beeble.glb"
           positionRef={positionRef}
           animationControl={sm.animationControl}
           {...props}

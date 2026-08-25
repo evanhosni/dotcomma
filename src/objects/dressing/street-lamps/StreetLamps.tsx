@@ -28,9 +28,9 @@ import {
   useDressingAssets,
   useDressingChunks,
   useDressingColliders,
-  useDressingRenderDistance,
+  useDressingDefault,
 } from "../Dressing";
-import { DensityPlacement, GameObjectAttributes } from "../../types";
+import { DressingAttributes } from "../../types";
 import { getDensityPoints } from "../dressingWorker";
 
 const COLLIDER_SCAN_INTERVAL_FRAMES = 10;
@@ -54,19 +54,10 @@ interface LampChunk {
   points: { x: number; y: number; z: number; yaw: number }[];
 }
 
-export interface StreetLampsProps extends GameObjectAttributes, DensityPlacement {
-  renderDistance?: number;
-  /** Lamps per 1,000,000 sq units of candidate area (the sidewalk band is
-   *  thin, so this is set high — footprint spacing is the real limiter). */
-  density?: number;
-  /** Min spacing between lamps along a sidewalk. */
-  footprint?: number;
-  /** Road-field band lamps may stand on (default: the sidewalk). */
-  roadDistanceRange?: [number, number];
-  /** Biomes lamps place in (default: the city — the only biome with the
-   *  road field the sidewalk band is measured against). */
-  biomeIds?: number[];
-}
+/** Street lamps take only the shared attributes: density placement
+ *  (density/footprint/roadDistanceRange/biomeIds) + renderDistance +
+ *  colliderDistance. Defaults are at the destructure below. */
+export interface StreetLampsProps extends DressingAttributes {}
 
 /**
  * DRESSING: instanced street lights — the ONLY lamp path (a per-object lamp
@@ -85,12 +76,19 @@ export interface StreetLampsProps extends GameObjectAttributes, DensityPlacement
  */
 export const StreetLamps = ({
   renderDistance,
+  colliderDistance,
+  // Lamps per 1,000,000 sq units of CANDIDATE area — the sidewalk band is
+  // thin, so this is high; footprint spacing is the real limiter.
   density = 4200,
+  // Min spacing between lamps along a sidewalk.
   footprint = 14,
+  // Road-field band lamps may stand on (default: the sidewalk).
   roadDistanceRange = [8.2, 11.8],
+  // Default: the city — the only biome with the road field lamps place by.
   biomeIds = DEFAULT_BIOME_IDS,
 }: StreetLampsProps) => {
-  const resolvedDistance = useDressingRenderDistance(renderDistance, 440);
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 440);
+  const resolvedColliderDistance = useDressingDefault("colliderDistance", colliderDistance, LAMP_COLLIDER_DISTANCE);
   const { camera } = useThree();
 
   const registry = useChunkRegistry<LampChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
@@ -147,7 +145,7 @@ export const StreetLamps = ({
   // in the base — traffic lights and power-line posts do exactly the same thing,
   // and this used to be ~55 lines duplicated here.
   const colliders = useDressingColliders(registry, {
-    distance: LAMP_COLLIDER_DISTANCE,
+    distance: resolvedColliderDistance,
     scanIntervalFrames: COLLIDER_SCAN_INTERVAL_FRAMES,
   });
 

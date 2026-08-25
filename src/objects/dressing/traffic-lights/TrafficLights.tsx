@@ -1,3 +1,4 @@
+import { DressingAttributes } from "../../types";
 import { useFrame, useThree } from "@react-three/fiber";
 import React from "react";
 import * as THREE from "three";
@@ -20,7 +21,8 @@ import {
   useDressingAssets,
   useDressingChunks,
   useDressingColliders,
-  useDressingRenderDistance,
+  DRESSING_COLLIDER_DISTANCE,
+  useDressingDefault,
   yawFromDir,
 } from "../Dressing";
 import { getTrafficLightPoints } from "../dressingWorker";
@@ -84,8 +86,7 @@ interface SignalChunk {
   nextSwitchIn: number;
 }
 
-export interface TrafficLightsProps {
-  renderDistance?: number;
+export interface TrafficLightsProps extends DressingAttributes {
   /** Seeded fraction of eligible intersections that get signals. */
   chance?: number;
 }
@@ -105,8 +106,8 @@ export interface TrafficLightsProps {
  * washes red/yellow/green and follows the switches (grid rewrites every few
  * frames; the glow intensity rides the global dusk/dawn ramp).
  */
-export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsProps) => {
-  const resolvedDistance = useDressingRenderDistance(renderDistance, 340);
+export const TrafficLights = ({ renderDistance, colliderDistance, chance = 0.45 }: TrafficLightsProps) => {
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
   const { camera } = useThree();
   const registry = useChunkRegistry<SignalChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
 
@@ -207,7 +208,9 @@ export const TrafficLights = ({ renderDistance, chance = 0.45 }: TrafficLightsPr
   });
 
   // Real pole colliders for the signals near the player (base hook).
-  const colliders = useDressingColliders(registry);
+  const colliders = useDressingColliders(registry, {
+    distance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
+  });
 
   useFrame((state, delta) => {
     // Shared lamp-grid driver (deduped per frame with the street lamps).

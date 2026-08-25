@@ -1,4 +1,5 @@
-import { DensityPlacement, GameObjectAttributes } from "../../types";
+import * as THREE from "three";
+import { ActorAttributes } from "../../types";
 
 /**
  * ACTOR types — the per-object spawn class of the game-object hierarchy
@@ -10,45 +11,57 @@ import { DensityPlacement, GameObjectAttributes } from "../../types";
  * objects/dressing/ (instanced chunks, no per-object components).
  */
 
-export interface ActorDescriptor extends GameObjectAttributes, DensityPlacement {
-  id: string; // unique key, e.g. "beeble"
-  component: React.FC<ActorProps>;
-  model?: string; // GLTF path for preloading
-  scale?: THREE.Vector3Tuple; // render scale, defaults to [1,1,1]
-  footprint: number; // (required here) radius in world units for spacing
-  density: number; // (required here) instances per 1,000,000 sq units
-  clustering: number; // 0 = uniform, 1 = heavily clustered
-  renderDistance: number; // (required here) spawn radius: camera distance at which the object mounts (and starts fading)
-  despawnDistance?: number; // hard unmount distance. Default: (renderDistance + footprint/2) * 1.2
-  immediateRadius?: number; // inner radius where despawned objects can't REspawn. Default: spawn radius * 0.5
-  colliderDistance?: number; // defaults to renderDistance / 3
-  frustumPadding?: number; // defaults to 3
-  priority?: number; // 0 = rarest (placed first), 100 = common. Default 50
-  spacingOverrides?: Record<string, number>; // custom min distance vs other descriptor ids
-  cursorOverride?: boolean; // true = always grow cursor on hover, false = never, undefined = auto-detect from triggers
-  /** The terrain flattens a PAD under every instance (buildings, houses — any
-   *  biome). Placement becomes fully DETERMINISTIC (stateless greedy spacing
-   *  instead of the spatial hash) so the height function can replicate it —
-   *  see the flatten-pad engine in utils/workers/vertexCompute.ts. */
-  flattenGround?: boolean;
-  flattenRadius?: number; // flat pad radius; default footprint * 0.45
-  flattenSkirt?: number; // blend ring back to raw terrain; default footprint * 0.35
-}
-
-/** Props every spawned actor component receives from ActorPool. */
-export interface ActorProps {
+/** A registered actor type: a member's attributes (ModelActorAttributes,
+ *  BuildingAttributes, … — each extends ActorAttributes) plus the fields the
+ *  spawn system cannot default. EVERY attribute is forwarded to each spawned
+ *  instance as props, so a member's knobs are set on its descriptor (and
+ *  overridable per mount) without a wrapper component. */
+export type ActorDescriptor<A extends ActorAttributes = ActorAttributes> = A & {
+  /** Unique key, e.g. "beeble". */
   id: string;
-  model?: string;
+  component: React.FC<ActorProps<A>>;
+  footprint: number;
+  density: number;
+  clustering: number;
+  /** Spawn radius: camera distance at which the object mounts (and starts fading). */
+  renderDistance: number;
+};
+
+/** Type-erased descriptor — what the registry, pool and worker handle. */
+export type AnyActorDescriptor = ActorDescriptor<any>;
+
+/** Descriptor attributes the SPAWN SYSTEM consumes and no component reads —
+ *  stripped before props reach the instance. ONE list drives both the
+ *  ActorProps type (Omit) and the pool's runtime strip, so they can't drift. */
+export const SPAWN_ONLY_KEYS = [
+  "density",
+  "footprint",
+  "clustering",
+  "priority",
+  "spacingOverrides",
+  "immediateRadius",
+  "biomeIds",
+  "heightRange",
+  "slopeRange",
+  "roadDistanceRange",
+  "flattenGround",
+  "flattenRadius",
+  "flattenSkirt",
+] as const;
+export type SpawnOnlyKey = (typeof SPAWN_ONLY_KEYS)[number];
+
+/** Props every spawned actor component receives from ActorPool: the
+ *  descriptor's attributes minus the spawn-only ones, plus the spawn point
+ *  and the pool's radii. */
+export type ActorProps<A extends ActorAttributes = ActorAttributes> = Omit<A, SpawnOnlyKey> & {
+  id: string;
   coordinates: THREE.Vector3Tuple;
-  scale?: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;
   renderDistance: number;
-  despawnDistance?: number; // self-despawn (hard kill) distance; components fall back to a renderDistance buffer
-  frustumPadding: number;
+  despawnDistance?: number;
+  frustumPadding?: number;
   onDestroy: (id: string) => void;
-  cursorOverride?: boolean;
-  quantization?: number;
-}
+};
 
 /** The serializable subset of ActorDescriptor sent to spawn.worker.ts (no
  *  React component). Shared by the client (spawnWorker.ts) and the
