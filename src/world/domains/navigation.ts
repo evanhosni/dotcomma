@@ -4,8 +4,8 @@ import { DomainId } from "./types";
 /**
  * Client-side domain switching + back-button interception.
  *
- * Domains all live on ONE page (index.tsx renders one <CustomCanvas> for the
- * active domain). URL paths are FAKE — pushState only, nothing ever navigates —
+ * Domains all live on ONE page and ONE persistent canvas (index.tsx swaps
+ * the active domain inside <CustomCanvas>). URL paths are FAKE — pushState only, nothing ever navigates —
  * which is what makes the back button interceptable: every history entry
  * behind the current one is a same-document entry, so a back gesture (toolbar
  * button, Alt+Left, mouse button 4, swipe) fires `popstate` without unloading
@@ -30,7 +30,7 @@ const pushDomainEntry = () =>
 
 export const getCurrentDomain = (): DomainId => currentDomain;
 
-/** index.tsx subscribes to remount the canvas; one listener is enough. */
+/** index.tsx subscribes to swap the mounted domain; one listener is enough. */
 export const onDomainChange = (fn: (domain: DomainId) => void): (() => void) => {
   domainListener = fn;
   return () => {
@@ -39,52 +39,14 @@ export const onDomainChange = (fn: (domain: DomainId) => void): (() => void) => 
 };
 
 /** Swap the active domain in place (CRT monitor click). Must be called from a
- *  user gesture so the pushed entry isn't back-button-skippable (and so the
- *  pointer relock below still has transient activation). */
+ *  user gesture so the pushed entry isn't back-button-skippable. The canvas
+ *  (the pointer-locked element) persists across the swap, so the lock is
+ *  simply kept — the old per-domain canvas needed a re-lock dance here. */
 export const switchDomain = (id: DomainId) => {
   if (id === currentDomain) return;
   currentDomain = id;
   pushDomainEntry();
-  // The canvas (the locked element) is about to unmount, which force-releases
-  // pointer lock — remember it was held so the incoming domain re-engages it,
-  // and CSS-hide the native cursor so it doesn't flash during the gap.
-  relockPending = !!document.pointerLockElement;
-  if (relockPending) setNativeCursorHidden(true);
   domainListener?.(id);
-};
-
-const setNativeCursorHidden = (hidden: boolean) => {
-  document.documentElement.style.cursor = hidden ? "none" : "";
-};
-
-let relockPending = false;
-
-/** Called by the incoming domain's Player on mount, passing drei's OWN
- *  `controls.lock` — that requests the lock on exactly the element the new
- *  controls are connected to, so three-stdlib's isLocked flips and mouse-look
- *  works. (A synthetic document click was tried first and REJECTED: it also
- *  reaches the OUTGOING canvas's still-attached controls handler, whose
- *  detached element makes requestPointerLock throw.) Retried briefly: the
- *  CRT click's transient activation (~5s) keeps the re-request legal. */
-export const relockPointerAfterSwitch = (lock: () => void) => {
-  if (!relockPending) return;
-  relockPending = false;
-  const deadline = performance.now() + 3000;
-  const tryLock = () => {
-    // Done: either the lock landed (cursor is captured anyway) or the
-    // activation window closed (give the user their cursor back).
-    if (document.pointerLockElement || performance.now() > deadline) {
-      setNativeCursorHidden(false);
-      return;
-    }
-    try {
-      lock();
-    } catch {
-      // Controls not connected yet — the retry below covers it.
-    }
-    setTimeout(tryLock, 100);
-  };
-  tryLock();
 };
 
 export const initDomainNavigation = () => {

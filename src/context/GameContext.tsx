@@ -17,6 +17,7 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
   const [chunks, setChunks] = useState<{ [key: string]: { position: number[]; chunk: Chunk } }>({});
   const [progress, setProgress] = useState(0);
   const [terrain_loaded, setTerrainLoaded] = useState(false);
+  const [playerSpawn, setPlayerSpawn] = useState<[number, number, number] | null>(null);
   const terrainHighLODPending = useRef(false);
 
   // Value object to be provided to consumers
@@ -28,6 +29,8 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
     setProgress,
     terrain_loaded,
     setTerrainLoaded,
+    playerSpawn,
+    setPlayerSpawn,
     terrainHighLODPending,
   };
 

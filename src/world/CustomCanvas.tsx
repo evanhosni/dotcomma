@@ -45,15 +45,10 @@ const SceneRender = () => {
 // tens of seconds into play (it read as "the first night cycle lag spike").
 // Do not reintroduce a whole-scene compile after content has streamed in.
 
-interface CustomCanvasProps extends React.PropsWithChildren {
-  /** Scene/canvas background color (home page overrides to black). */
-  background?: string;
-  /** Where the player's FEET spawn (ground-level position). Unset = the
-   *  default sky drop onto the terrain. Home page: [0, 0, 0]. */
-  playerSpawn?: [number, number, number];
-}
-
-const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
+/** Per-domain scene state (background color, player spawn) is NOT a canvas
+ *  prop: the canvas persists across domain switches, so <Domain background
+ *  playerSpawn> owns it (world/components/Domain.tsx). */
+const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { physicsDebug } = useDevMode();
 
   useEffect(() => {
@@ -62,7 +57,6 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
 
   return (
     <>
-      <color attach="background" args={[background]} />
       <SceneRender />
       <Overlay />
       {/* interpolate={false}: r-t-r's default snapshots EVERY rigid body's
@@ -75,14 +69,19 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
           on exactly the long frames where the accumulator steps twice. */}
       <Physics gravity={[0, -100, 0]} debug={physicsDebug} interpolate={false}>
         {children}
-        <Player spawnPosition={playerSpawn} />
+        <Player />
       </Physics>
     </>
   );
 };
 
-/** The game canvas. The active world (<GlitchCityDomain/>, <HomeDomain/>) is
- *  passed as children by the route in index.tsx. */
+/** THE game canvas — mounted ONCE for the life of the page. The active world
+ *  (<GlitchCityDomain/>, <HomeDomain/>) is swapped as children by index.tsx;
+ *  the GL context, compiled shader programs, physics world, Player, contexts
+ *  and overlays all survive a domain switch. (Remounting the canvas per domain
+ *  was the previous design: it force-lost the GL context — logged as
+ *  "THREE.WebGLRenderer: Context Lost." — recompiled every shader, and needed
+ *  a pointer-lock re-request hack because the locked element was destroyed.) */
 /** Framebuffer budget. R3F's defaults are dpr [1, 2] + MSAA + an alpha
  *  buffer: on a 2× display that is FOUR times the fragments of a 1× buffer,
  *  multisampled, for the terrain shader that covers the whole screen. The
@@ -92,14 +91,14 @@ const PreCustomCanvas = ({ background = "#555555", playerSpawn, children }: Cust
 const MAX_DPR = 1.5;
 const GL_PROPS = { antialias: false, alpha: false, stencil: false, depth: true, powerPreference: "high-performance" as const };
 
-export const CustomCanvas = ({ background = "#555555", playerSpawn, children }: CustomCanvasProps) => {
+export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
   return (
-    <Canvas style={{ background }} dpr={[1, MAX_DPR]} gl={GL_PROPS}>
+    // The CSS background never shows (alpha: false, the scene paints every
+    // pixel); black just avoids a gray flash before the first frame.
+    <Canvas style={{ background: "#000000" }} dpr={[1, MAX_DPR]} gl={GL_PROPS}>
       <GameContextProvider>
         <DayNightProvider>
-          <PreCustomCanvas background={background} playerSpawn={playerSpawn}>
-            {children}
-          </PreCustomCanvas>
+          <PreCustomCanvas>{children}</PreCustomCanvas>
         </DayNightProvider>
       </GameContextProvider>
     </Canvas>
