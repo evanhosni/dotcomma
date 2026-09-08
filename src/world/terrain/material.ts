@@ -72,8 +72,8 @@ export const getMaterial = async () => {
   material.uniforms.uCurveStart = _curvature.uniforms.uCurveStart;
   material.uniforms.uCurveK = _curvature.uniforms.uCurveK;
   // fwidth() in the city shader guards the freeway lane paint against
-  // dash-phase interpolation sweeps (GLSL1 needs the derivatives extension).
-  material.extensions.derivatives = true;
+  // dash-phase interpolation sweeps — a core GLSL ES 3.0 builtin under WebGL2
+  // (three ≥ r158 dropped `extensions.derivatives`; nothing to enable).
 
   return material;
 };
