@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
 export interface CityConfig {
