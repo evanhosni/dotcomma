@@ -352,6 +352,7 @@ export const ActorPool = () => {
         const props: ActorProps = {
           ...attributes,
           id: objId,
+          descriptorId: point.descriptorId,
           coordinates: [point.x, point.height, point.z],
           renderDistance: spawnRadius,
           despawnDistance: despawnRadius,

@@ -1,5 +1,5 @@
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
-import { Children, useEffect, useMemo, useRef, useState } from "react";
+import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { getNightIndex, getWindowLightsProgress } from "../../../lighting/dayNight";
 import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
@@ -173,6 +173,8 @@ const buildQueue = new TaskQueue();
  */
 export const Building = ({
   id,
+  descriptorId,
+  serverSynced,
   coordinates,
   seed,
   exteriorSize,
@@ -331,8 +333,13 @@ export const Building = ({
   // phase, and running inside the ONE shared frame driver all come from the
   // base. What's left below is what only a building does: its shared-uniform
   // write, the interior draw gate, and the doors.
-  const { groupRef, collidersActive, nearActive } = useActorLifecycle({
+  // Doors are SERVER-owned replicated state { doors: boolean[] }: a click
+  // sends "door:<i>" and the server toggles + broadcasts; every client
+  // (this one included) applies the state.
+  const { groupRef, collidersActive, nearActive, sync } = useActorLifecycle({
     id,
+    descriptorId,
+    serverSynced,
     coordinates,
     renderDistance,
     despawnDistance: despawnDistance ?? renderDistance * DESPAWN_BUFFER,
@@ -445,25 +452,46 @@ export const Building = ({
     // coordinates is a stable per-spawn tuple; the collider gate drives this
   }, [assets, collidersActive, world, rapier]);
 
-  // Click the hovered door to swing it open/closed
+  // Apply a door state from anywhere (a local click, or the server's state).
+  const setDoorOpen = useCallback((idx: number, open: boolean) => {
+    if (doorsOpenRef.current[idx] === open) return;
+    // Ref first (synchronous — the swing loop may run before the state
+    // lands), then wake the loop, then the state for the collider gate.
+    doorsOpenRef.current[idx] = open;
+    doorsMovingRef.current = true;
+    setDoorsOpen((prev) => {
+      const next = [...prev];
+      next[idx] = open;
+      return next;
+    });
+  }, []);
+
+  // Follow the server's door state (applied once on subscribe too, which
+  // covers arriving at a building whose doors are already open).
+  useEffect(() => {
+    if (!sync) return;
+    const apply = () => {
+      const doors = sync.state?.doors;
+      if (Array.isArray(doors)) doors.forEach((o, i) => setDoorOpen(i, !!o));
+    };
+    apply();
+    return sync.subscribe(apply);
+  }, [sync, setDoorOpen]);
+
+  // Click the hovered door: toggle locally right away (prediction) and tell
+  // the server; its state broadcast confirms for everyone. Unsynced
+  // (serverSynced={false}) it is simply a local toggle.
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
       const idx = hoverDoorRef.current;
       if (idx < 0) return;
-      // Ref first (synchronous — the swing loop may run before the state
-      // lands), then wake the loop, then the state for the collider gate.
-      doorsOpenRef.current[idx] = !doorsOpenRef.current[idx];
-      doorsMovingRef.current = true;
-      setDoorsOpen((open) => {
-        const next = [...open];
-        next[idx] = !next[idx];
-        return next;
-      });
+      setDoorOpen(idx, !doorsOpenRef.current[idx]);
+      sync?.interact(`door:${idx}`);
     };
     window.addEventListener("click", handleClick);
     return () => window.removeEventListener("click", handleClick);
-  }, []);
+  }, [sync, setDoorOpen]);
 
   // Make sure a hover-grown cursor never leaks past unmount
   useEffect(() => {

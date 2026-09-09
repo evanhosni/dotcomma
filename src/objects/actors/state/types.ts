@@ -1,4 +1,10 @@
-import * as THREE from "three";
+import type * as THREE from "three";
+import type { MutableRefObject } from "react";
+
+/** Animation loop modes as plain numbers (three's LoopOnce/LoopRepeat), so a
+ *  state machine config never needs Three at RUNTIME — it also runs in Node. */
+export const LOOP_ONCE = 2200;
+export const LOOP_REPEAT = 2201;
 
 // ─── Triggers ───
 
@@ -10,7 +16,7 @@ export interface TriggerDef {
 }
 
 export interface TriggerContext {
-  positionRef: React.MutableRefObject<THREE.Vector3>;
+  positionRef: MutableRefObject<THREE.Vector3>;
   playerPosition: THREE.Vector3;
   playerDistanceSq: number;
   delta: number;
@@ -24,7 +30,8 @@ export interface TriggerContext {
 export type BehaviorFn = (ctx: BehaviorContext) => void;
 
 export interface BehaviorContext extends TriggerContext {
-  groupRef: React.MutableRefObject<THREE.Group | null>;
+  /** The model group — null on the SERVER. Guard every scene access on it. */
+  groupRef: MutableRefObject<THREE.Group | null>;
 }
 
 export type StateEnterFn = (ctx: BehaviorContext) => void | (() => void);
@@ -33,6 +40,9 @@ export type StateEnterFn = (ctx: BehaviorContext) => void | (() => void);
 
 export interface AnimationCommand {
   clipName: string;
+  /** Seconds into the clip to start at (synced entities: server time − clipT0,
+   *  so every client plays the clip in phase). Wrapped for looping clips. */
+  startTime?: number;
   fadeDuration?: number;
   timeScale?: number;
   loop?: THREE.AnimationActionLoopStyles;

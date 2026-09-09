@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { World, type Outbox } from "../game/world.js";
-import { isDomainId, type ClientMessage, type MoveIntent, type ServerMessage } from "../protocol.js";
+import {
+  isDomainId,
+  type ClientMessage,
+  type EntityRegisterItem,
+  type MoveIntent,
+  type ServerMessage,
+} from "../protocol.js";
 
 /**
  * WebSocket transport. Owns the sockets and NOTHING about the game: it parses
@@ -19,7 +25,9 @@ import { isDomainId, type ClientMessage, type MoveIntent, type ServerMessage } f
 const HEARTBEAT_MS = 30_000;
 /** Dev-only: lets the client overwrite its persisted blob (plumbing tests). */
 const DEBUG_DATA_WRITES = process.env.DEBUG_DATA_WRITES === "1";
-const MAX_PAYLOAD_BYTES = 16 * 1024;
+const MAX_PAYLOAD_BYTES = 64 * 1024; // a registration batch of ~64 actors is ~6KB; headroom for state blobs
+const MAX_ENTITIES_PER_MESSAGE = 256;
+const MAX_ID_LENGTH = 128;
 
 interface Conn {
   ws: WebSocket;
@@ -29,6 +37,19 @@ interface Conn {
 }
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= MAX_ID_LENGTH;
+
+const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ENTITIES_PER_MESSAGE) return null;
+  const out: EntityRegisterItem[] = [];
+  for (const it of raw) {
+    if (typeof it !== "object" || it === null) return null;
+    const { id, kind, x, y, z } = it as Record<string, unknown>;
+    if (!isId(id) || !isId(kind) || !isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(z)) return null;
+    out.push({ id, kind, x, y, z });
+  }
+  return out;
+};
 
 const parseMove = (raw: Record<string, unknown>): MoveIntent | null => {
   const { x, y, z, vx, vy, vz, ry } = raw;
@@ -54,6 +75,17 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
       return isDomainId(raw.domain) ? { t: "domain", domain: raw.domain } : null;
     case "ping":
       return isFiniteNumber(raw.t0) ? { t: "ping", t0: raw.t0 } : null;
+    case "entity:register": {
+      const entities = parseRegisterItems(raw.entities);
+      return entities ? { t: "entity:register", entities } : null;
+    }
+    case "entity:unregister": {
+      const ids = raw.ids;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_ENTITIES_PER_MESSAGE || !ids.every(isId)) return null;
+      return { t: "entity:unregister", ids: ids as string[] };
+    }
+    case "entity:interact":
+      return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
     case "debug:setData": {
       if (!DEBUG_DATA_WRITES) return null;
       const d = raw.data;
@@ -139,6 +171,19 @@ export const attachWebSocketTransport = (server: http.Server) => {
         case "debug:setData":
           world.setPlayerData(conn.sessionId, msg.data);
           return;
+        case "entity:register": {
+          const s = world.get(conn.sessionId);
+          if (s) world.entities.register(conn.sessionId, s.domain, msg.entities);
+          return;
+        }
+        case "entity:unregister":
+          world.entities.unregister(conn.sessionId, msg.ids);
+          return;
+        case "entity:interact": {
+          const s = world.get(conn.sessionId);
+          if (s) world.entities.interact(conn.sessionId, msg.id, msg.action, world.entities.playersFor(s.domain));
+          return;
+        }
       }
     });
 

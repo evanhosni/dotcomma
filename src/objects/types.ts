@@ -103,6 +103,12 @@ export interface ActorAttributes extends GameObjectAttributes {
   frustumPadding?: number;
   /** true = always grow the cursor on hover, false = never, unset = from triggers. */
   cursorOverride?: boolean;
+  /** Multiplayer sync. Default TRUE: the actor BASE registers every instance
+   *  with the SERVER, which runs the actor's state machine (the same config
+   *  file, see state/runner.ts) as the ONE authority and publishes pose, clip
+   *  and state; every client is placed to match (net/entities). The component
+   *  never knows. `false` at a mount opts that mount out (purely local). */
+  serverSynced?: boolean;
   /** The terrain flattens a PAD under every instance (buildings, houses — any
    *  biome). Placement becomes fully DETERMINISTIC (stateless greedy spacing
    *  instead of the spatial hash) so the height function can replicate it —

@@ -1,58 +1,32 @@
 import { RootState, useFrame } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../../context/GameContext";
-import {
-  AnimationControl,
-  BehaviorContext,
-  StateDef,
-  StateMachineConfig,
-  StateMachineHandle,
-  TriggerDef,
-} from "./types";
+import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
+import { getRemotePlayers } from "../../../net/remotePlayerStore";
+import { StateMachineRunner } from "./runner";
+import { StateMachineConfig, StateMachineHandle } from "./types";
+
+/**
+ * React binding of the StateMachineRunner (runner.ts — read its contract).
+ *
+ * LOCAL actor (`serverSynced={false}`): the runner ticks here, authoritative,
+ * and the facing output (`__yaw`) is applied to the model. Velocity outputs
+ * are read by the owner's onFrame into ctx.move; animation by ModelActor.
+ *
+ * SYNCED actor (the default): the SERVER runs this machine. Here it only
+ * MIRRORS the server's state id — entering states exactly as the server did,
+ * so state-keyed visuals (head tracking, the sphere-inflate) happen — while
+ * every logic output is ignored in favor of the server's published pose and
+ * clip. The hook finds out which case it is from the sync handle the actor
+ * base hangs on the group (`group.userData.sync`); no component tells it.
+ *
+ * "The player" a machine reacts to is the NEAREST player — local or remote —
+ * matching what the server does with all players in the domain.
+ */
 
 const _playerDiff = new THREE.Vector3();
-
-// One-shot mouse flags written by useMouseEvents — the FIXED set of flag keys
-// from src/objects/actors/state/triggers.ts. Cleared by resetting to false each
-// frame (truthiness-identical to the old delete, but `delete` forced the
-// blackboard into dictionary mode). `__mouse_hover_active` is deliberately
-// absent: it is level-triggered and persists across frames.
-const MOUSE_ONE_SHOT_FLAGS = [
-  "__mouse_hover_enter",
-  "__mouse_hover_leave",
-  "__mouse_left_click",
-  "__mouse_right_click",
-  "__mouse_left_click_down",
-  "__mouse_right_click_down",
-  "__mouse_left_click_up",
-  "__mouse_right_click_up",
-  "__mouse_scroll",
-  "__mouse_scroll_up",
-  "__mouse_scroll_down",
-  "__mouse_double_click",
-  "__mouse_middle_click",
-] as const;
-
-// State/trigger lookup maps are pure functions of the (module-constant)
-// config — build them once per config, not once per actor instance.
-const configMapsCache = new WeakMap<
-  StateMachineConfig,
-  { stateMap: Map<string, StateDef>; triggerMap: Map<string, TriggerDef> }
->();
-
-const getConfigMaps = (config: StateMachineConfig) => {
-  let maps = configMapsCache.get(config);
-  if (!maps) {
-    const stateMap = new Map<string, StateDef>();
-    for (const s of config.states) stateMap.set(s.id, s);
-    const triggerMap = new Map<string, TriggerDef>();
-    for (const t of config.triggers) triggerMap.set(t.id, t);
-    maps = { stateMap, triggerMap };
-    configMapsCache.set(config, maps);
-  }
-  return maps;
-};
+const _nearestPlayer = new THREE.Vector3();
 
 export interface UseStateMachineOptions {
   /** The owner drives the machine itself by calling `handle.tick(state,
@@ -70,170 +44,74 @@ export function useStateMachine(
   options: UseStateMachineOptions = {},
 ): StateMachineHandle {
   const { playerPosition } = useGameContext();
-  const playerPositionRef = useRef(playerPosition);
-  playerPositionRef.current = playerPosition;
 
-  const { stateMap, triggerMap } = getConfigMaps(config);
+  // positionRef/groupRef are stable per instance; the config is module-constant.
+  const runner = useMemo(() => new StateMachineRunner(config, positionRef, groupRef), [config, positionRef, groupRef]);
+  useEffect(() => () => runner.dispose(), [runner]);
 
-  const currentStateIdRef = useRef(config.initialState);
-  const stateEnteredAtRef = useRef(0);
-  const exitCleanupRef = useRef<(() => void) | null>(null);
-  const blackboardRef = useRef<Record<string, any>>({});
-  const initialEnterDone = useRef(false);
+  const tick = useCallback(
+    (threeState: RootState, delta: number) => {
+      const elapsed = threeState.clock.elapsedTime;
+      const self = positionRef.current;
 
-  const animationControlRef = useRef<AnimationControl>({
-    pendingCommand: null,
-    dirty: false,
-  });
-
-  // ONE context object per instance, fields mutated per frame — allocating a
-  // fresh triggerCtx + spread behaviorCtx per actor per frame was measurable
-  // GC churn. BehaviorContext extends TriggerContext, so the same object is
-  // passed to triggers and behaviors alike (groupRef is set at creation).
-  const ctxRef = useRef<BehaviorContext | null>(null);
-  if (!ctxRef.current) {
-    ctxRef.current = {
-      positionRef,
-      playerPosition,
-      playerDistanceSq: 0,
-      delta: 0,
-      elapsed: 0,
-      stateElapsed: 0,
-      blackboard: blackboardRef.current,
-      groupRef,
-    };
-  }
-
-  const enterState = useCallback(
-    (stateId: string, elapsed: number, ctx: BehaviorContext) => {
-      if (exitCleanupRef.current) {
-        exitCleanupRef.current();
-        exitCleanupRef.current = null;
-      }
-
-      const state = stateMap.get(stateId);
-      if (!state) return;
-
-      currentStateIdRef.current = stateId;
-      stateEnteredAtRef.current = elapsed;
-
-      if (state.animation) {
-        animationControlRef.current.pendingCommand = state.animation;
-        animationControlRef.current.dirty = true;
-      }
-
-      if (state.onEnter) {
-        const cleanup = state.onEnter(ctx);
-        if (typeof cleanup === "function") {
-          exitCleanupRef.current = cleanup;
+      // Nearest player (2D): the local one, then every remote player we render.
+      let nearest: THREE.Vector3 = playerPosition;
+      _playerDiff.subVectors(nearest, self);
+      let distSq = _playerDiff.x * _playerDiff.x + _playerDiff.z * _playerDiff.z;
+      for (const p of getRemotePlayers().values()) {
+        const dx = p.x - self.x;
+        const dz = p.z - self.z;
+        const dSq = dx * dx + dz * dz;
+        if (dSq < distSq) {
+          distSq = dSq;
+          nearest = _nearestPlayer.set(p.x, p.y, p.z);
         }
       }
-    },
-    [stateMap]
-  );
 
-  const tick = useCallback((threeState: RootState, delta: number) => {
-    const elapsed = threeState.clock.elapsedTime;
-    const playerPosition = playerPositionRef.current;
-
-    _playerDiff.subVectors(playerPosition, positionRef.current);
-    const playerDistanceSq =
-      _playerDiff.x * _playerDiff.x + _playerDiff.z * _playerDiff.z;
-
-    // Mutate the per-instance context in place (see ctxRef above)
-    const behaviorCtx = ctxRef.current!;
-    behaviorCtx.playerPosition = playerPosition;
-    behaviorCtx.playerDistanceSq = playerDistanceSq;
-    behaviorCtx.delta = delta;
-    behaviorCtx.elapsed = elapsed;
-    behaviorCtx.stateElapsed = elapsed - stateEnteredAtRef.current;
-    const triggerCtx = behaviorCtx;
-
-    // Enter initial state on first frame
-    if (!initialEnterDone.current) {
-      initialEnterDone.current = true;
-      enterState(config.initialState, elapsed, behaviorCtx);
-    }
-
-    // Check for forced transition
-    const forcedTarget = blackboardRef.current.__forcedTransition;
-    if (forcedTarget) {
-      delete blackboardRef.current.__forcedTransition;
-      enterState(forcedTarget, elapsed, behaviorCtx);
-      const newState = stateMap.get(currentStateIdRef.current);
-      if (newState?.onUpdate) {
-        newState.onUpdate(behaviorCtx);
-      }
-      return;
-    }
-
-    const currentState = stateMap.get(currentStateIdRef.current);
-    if (!currentState) return;
-
-    // Evaluate transitions — first match wins
-    for (const transition of currentState.transitions) {
-      const trigger = triggerMap.get(transition.trigger);
-      if (!trigger) continue;
-
-      if (trigger.evaluate(triggerCtx)) {
-        if (transition.guard && !transition.guard(triggerCtx)) continue;
-
-        enterState(transition.target, elapsed, behaviorCtx);
-        const newState = stateMap.get(currentStateIdRef.current);
-        if (newState?.onUpdate) {
-          newState.onUpdate(behaviorCtx);
+      const sync = groupRef.current?.userData.sync as SyncHandle | undefined;
+      if (sync && sync.known) {
+        // The server owns this machine: follow its state for the visuals only.
+        // Its OUTPUTS come from the server too — inject them before the
+        // behavior runs, so visuals that read them (head tracking uses __yaw
+        // as the body angle) see the real values, not what the local mirrored
+        // machine happened to compute.
+        const r = sync.entity?.remote;
+        const bb = runner.blackboard;
+        if (r) {
+          if (r.ry !== undefined) bb.__yaw = r.ry;
+          if (r.vx !== undefined) bb.__vel_x = r.vx;
+          if (r.vz !== undefined) bb.__vel_z = r.vz;
+          if (r.vy !== undefined) bb.__vel_y = r.vy !== 0 ? r.vy : undefined;
         }
+        const sid = sync.stateId;
+        if (sid) runner.mirror(sid, elapsed, delta, nearest, distSq);
         return;
       }
-    }
 
-    // No transition — run current behavior
-    if (currentState.onUpdate) {
-      currentState.onUpdate(behaviorCtx);
-    }
-
-    // Clear one-shot mouse event flags — fixed key set reset to false (the
-    // old for...in + delete forced the blackboard into dictionary mode).
-    // Only when useMouseEvents actually raised one this frame (__mouse_dirty):
-    // events fire within a few units of the player, so for every other actor
-    // this was 13 dead property writes per frame.
-    const bb = blackboardRef.current;
-    if (bb.__mouse_dirty) {
-      bb.__mouse_dirty = false;
-      for (let i = 0; i < MOUSE_ONE_SHOT_FLAGS.length; i++) {
-        bb[MOUSE_ONE_SHOT_FLAGS[i]] = false;
-      }
-    }
-  }, [config.initialState, enterState, positionRef, stateMap, triggerMap]);
+      runner.tick(elapsed, delta, nearest, distSq);
+      // Facing is a machine OUTPUT; apply it to the model here (local only —
+      // synced actors get the server's yaw from the base).
+      const yaw = runner.blackboard.__yaw;
+      if (yaw !== undefined && groupRef.current) groupRef.current.rotation.y = yaw;
+    },
+    [runner, positionRef, groupRef, playerPosition],
+  );
 
   const externallyDriven = options.externallyDriven ?? false;
   useFrame((threeState, delta) => {
     if (!externallyDriven) tick(threeState, delta);
   });
 
-  useEffect(() => {
-    return () => {
-      if (exitCleanupRef.current) {
-        exitCleanupRef.current();
-        exitCleanupRef.current = null;
-      }
-    };
-  }, []);
-
-  const handle = useMemo<StateMachineHandle>(
+  return useMemo<StateMachineHandle>(
     () => ({
       get currentStateId() {
-        return currentStateIdRef.current;
+        return runner.currentStateId;
       },
-      forceTransition: (stateId: string) => {
-        blackboardRef.current.__forcedTransition = stateId;
-      },
-      blackboard: blackboardRef.current,
-      animationControl: animationControlRef.current,
+      forceTransition: (stateId: string) => runner.forceTransition(stateId),
+      blackboard: runner.blackboard,
+      animationControl: runner.animationControl,
       tick,
     }),
-    [tick]
+    [runner, tick],
   );
-
-  return handle;
 }

@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { assertSchemaCurrent, runMigrations } from "./migrations.js";
 
 /**
@@ -20,9 +19,11 @@ import { assertSchemaCurrent, runMigrations } from "./migrations.js";
  * exception is DB_AUTO_MIGRATE=1, meant for a brand-new volume's first boot.
  */
 
+/** DATABASE_PATH, else <cwd>/data/dotcomma.sqlite — the server is bundled
+ *  (esbuild), so module-relative paths would depend on the bundle layout.
+ *  Run from the repo root locally; Railway sets DATABASE_PATH. */
 export const resolveDatabasePath = (): string =>
-  process.env.DATABASE_PATH ??
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../data/dotcomma.sqlite");
+  process.env.DATABASE_PATH ?? path.resolve(process.cwd(), "data/dotcomma.sqlite");
 
 /** Open (creating if needed) with the required pragmas. No schema check —
  *  this is what the migration CLI uses, since its whole job is a stale schema. */

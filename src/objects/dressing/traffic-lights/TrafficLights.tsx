@@ -266,16 +266,31 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = 0.45 
         // range (not addUpdateRange per flip): the renderer only clears
         // updateRanges on upload, so a long-culled chunk would otherwise
         // accumulate an entry per flipping frame.
-        const ranges = attr.updateRanges;
-        if (ranges.length > 0) {
-          const r = ranges[0];
-          start = Math.min(start, r.start);
-          end = Math.max(end, r.start + r.count);
-          ranges.length = 1;
-          r.start = start;
-          r.count = end - start;
-        } else {
-          attr.addUpdateRange(start, end - start);
+        // RUNTIME three is pinned at r157 (package.json), whose BufferAttribute
+        // has only the single `updateRange` {offset, count}; `updateRanges` /
+        // addUpdateRange arrived in r159. @types/three is newer than the
+        // runtime, so the compiler can't catch this — branch on what exists.
+        const anyAttr = attr as any;
+        const ranges: { start: number; count: number }[] | undefined = anyAttr.updateRanges;
+        if (Array.isArray(ranges)) {
+          if (ranges.length > 0) {
+            const r = ranges[0];
+            start = Math.min(start, r.start);
+            end = Math.max(end, r.start + r.count);
+            ranges.length = 1;
+            r.start = start;
+            r.count = end - start;
+          } else {
+            anyAttr.addUpdateRange(start, end - start);
+          }
+        } else if (anyAttr.updateRange) {
+          // count !== -1 ⇒ an earlier range is still unconsumed — expand over it.
+          if (anyAttr.updateRange.count !== -1) {
+            start = Math.min(start, anyAttr.updateRange.offset);
+            end = Math.max(end, anyAttr.updateRange.offset + anyAttr.updateRange.count);
+          }
+          anyAttr.updateRange.offset = start;
+          anyAttr.updateRange.count = end - start;
         }
         attr.needsUpdate = true;
       }

@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import type * as THREE from "three";
 import {
   custom,
   onMouseDoubleClick,
@@ -17,7 +17,8 @@ import {
   playerOutsideRange,
   randomInterval,
 } from "../state/triggers";
-import { BehaviorContext, StateMachineConfig } from "../state/types";
+import { BehaviorContext, LOOP_ONCE, StateMachineConfig } from "../state/types";
+import { beginInflate, type Inflate } from "./inflate";
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
@@ -80,7 +81,7 @@ function updateHeadTracking(ctx: BehaviorContext): void {
   if (!bone) return;
 
   const playerAngle = angleToPlayer(ctx);
-  const bodyAngle = ctx.groupRef.current?.rotation.y ?? 0;
+  const bodyAngle = ctx.blackboard.__yaw ?? 0;
 
   let relAngle = playerAngle - bodyAngle;
   while (relAngle > Math.PI) relAngle -= Math.PI * 2;
@@ -139,6 +140,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__dir_target = angle;
         bb.__dir_timer = randomRange(1, 5);
         bb.__dir_elapsed = 0;
+        bb.__yaw = angle;
         resetHeadBone(ctx);
       },
       onUpdate: (ctx) => {
@@ -161,10 +163,8 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__vel_z = BEEBLE_SPEED * Math.cos(angle);
         bb.__vel_y = undefined;
 
-        // Rotate to face movement direction (model forward is +Y)
-        if (ctx.groupRef.current) {
-          ctx.groupRef.current.rotation.y = angle;
-        }
+        // Facing is an OUTPUT (the framework applies it to the model)
+        bb.__yaw = angle;
       },
       transitions: [
         { trigger: "player-visible", target: "alert" },
@@ -177,7 +177,7 @@ export const BEEBLE_SM: StateMachineConfig = {
       id: "idle-look",
       animation: {
         clipName: "stare at hands",
-        loop: THREE.LoopOnce,
+        loop: LOOP_ONCE,
         clampWhenFinished: true,
       },
       onEnter: (ctx) => {
@@ -200,7 +200,7 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clipName: "idle" },
       onEnter: (ctx) => {
         findHeadBone(ctx);
-        ctx.blackboard.__body_angle = ctx.groupRef.current?.rotation.y ?? 0;
+        ctx.blackboard.__body_angle = ctx.blackboard.__yaw ?? 0;
       },
       onUpdate: (ctx) => {
         ctx.blackboard.__vel_x = 0;
@@ -232,9 +232,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         const targetAngle = angleToPlayer(ctx);
         bb.__body_angle = lerpAngle(bb.__body_angle ?? 0, targetAngle, DIR_LERP_SPEED * ctx.delta);
 
-        if (ctx.groupRef.current) {
-          ctx.groupRef.current.rotation.y = bb.__body_angle;
-        }
+        bb.__yaw = bb.__body_angle;
       },
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
@@ -250,59 +248,15 @@ export const BEEBLE_SM: StateMachineConfig = {
       onEnter: (ctx) => {
         resetHeadBone(ctx);
         const bb = ctx.blackboard;
-        bb.__inflate_t = 0;
-        bb.__inflate_done = false;
-        bb.__inflate_meshes = [];
-
+        bb.__ascend_elapsed = 0;
         const group = ctx.groupRef.current;
         if (!group) return;
-
-        // The model's geometry is SHARED with the source GLTF (and the clone
-        // itself is POOLED — see modelClonePool). Every mesh gets a private
-        // clone to morph, and the cleanup below puts the shared geometry back
-        // and disposes the clones: without it every ascended beeble leaked
-        // its vertex buffers AND handed a sphere-morphed body to the next
-        // beeble that reused its pooled clone.
-        const swapped: { node: THREE.Mesh; original: THREE.BufferGeometry; cloned: THREE.BufferGeometry }[] = [];
-        group.traverse((node: any) => {
-          if (node.isMesh && node.geometry) {
-            const originalGeometry = node.geometry as THREE.BufferGeometry;
-            const cloned = originalGeometry.clone();
-            node.geometry = cloned;
-            swapped.push({ node, original: originalGeometry, cloned });
-
-            const posAttr = cloned.getAttribute("position");
-            if (!posAttr) return;
-
-            const original = new Float32Array(posAttr.array.length);
-            original.set(posAttr.array as Float32Array);
-
-            cloned.computeBoundingSphere();
-            const center = cloned.boundingSphere!.center;
-            const radius = cloned.boundingSphere!.radius;
-
-            const spherePositions = new Float32Array(original.length);
-            for (let i = 0; i < original.length; i += 3) {
-              const dx = original[i] - center.x;
-              const dy = original[i + 1] - center.y;
-              const dz = original[i + 2] - center.z;
-              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
-              spherePositions[i] = center.x + (dx / dist) * radius;
-              spherePositions[i + 1] = center.y + (dy / dist) * radius;
-              spherePositions[i + 2] = center.z + (dz / dist) * radius;
-            }
-
-            bb.__inflate_meshes.push({ posAttr, original, spherePositions });
-          }
-        });
-
+        // Sphere morph + scale-up, shared with the networked beeble (inflate.ts).
+        const inflate = beginInflate(group);
+        bb.__inflate = inflate;
         return () => {
-          for (const s of swapped) {
-            s.node.geometry = s.original;
-            s.cloned.dispose();
-          }
-          bb.__inflate_meshes = [];
-          group.scale.set(1, 1, 1);
+          inflate.dispose();
+          bb.__inflate = null;
         };
       },
       onUpdate: (ctx) => {
@@ -315,34 +269,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__vel_z = 0;
         bb.__vel_y = ASCEND_SPEED * easedRamp;
 
-        bb.__inflate_t = Math.min((bb.__inflate_t ?? 0) + ctx.delta * 0.5, 1);
-        const t = bb.__inflate_t;
-
-        // The morph saturates at t=1 — do ONE final write there and stop.
-        // Without the done flag this kept rewriting the whole vertex buffer
-        // (+ re-uploading it via needsUpdate) every frame, forever, for every
-        // ascended beeble.
-        if (!bb.__inflate_done) {
-          const meshes = bb.__inflate_meshes ?? [];
-          for (let m = 0; m < meshes.length; m++) {
-            const mesh = meshes[m];
-            const posAttr = mesh.posAttr;
-            const original = mesh.original;
-            const spherePositions = mesh.spherePositions;
-            const arr = posAttr.array as Float32Array;
-            for (let i = 0; i < arr.length; i++) {
-              arr[i] = original[i] + (spherePositions[i] - original[i]) * t;
-            }
-            posAttr.needsUpdate = true;
-          }
-          if (t >= 1) bb.__inflate_done = true;
-        }
-
-        // Balloon scale-up
-        if (ctx.groupRef.current) {
-          const s = 1 + t * 0.5;
-          ctx.groupRef.current.scale.set(s, s, s);
-        }
+        (bb.__inflate as Inflate | null)?.update(ctx.delta);
       },
       transitions: [],
     },

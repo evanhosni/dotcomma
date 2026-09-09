@@ -1,4 +1,5 @@
 import { useFrame, useThree } from "@react-three/fiber";
+import { getServerTime } from "../../net/connection";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { isMainRenderFrame } from "../../vfx/frameCap";
@@ -213,7 +214,6 @@ export const DayNightCycle = ({
     return () => cancelAnimationFrame(raf);
   }, [gl, scene, camera]);
 
-  const startRef = useRef(performance.now());
   const jitterTimer = useRef(0);
   // First frames force the night-only objects through a REAL draw: gl.compile
   // links their programs (effect above) but does NOT upload geometry buffers
@@ -226,8 +226,12 @@ export const DayNightCycle = ({
     if (!group) return;
 
     // ---- Cycle phase → night blend (0 = day, 1 = night) ----
+    // SHARED WORLD CLOCK: the cycle is a function of server time (the
+    // connection's offset-corrected estimate, ±~50ms), so every player sees
+    // the same time of day. Until the first init it runs off local time and
+    // snaps to the server's at connect.
     const cycleMs = dayDurationMs + transitionMs + nightDurationMs + transitionMs;
-    const t = (performance.now() - startRef.current) % cycleMs;
+    const t = getServerTime() % cycleMs;
     let blend: number;
     if (t < dayDurationMs) blend = 0;
     else if (t < dayDurationMs + transitionMs) blend = (t - dayDurationMs) / transitionMs;
