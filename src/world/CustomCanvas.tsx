@@ -5,6 +5,8 @@ import { useDevMode } from "../context/DevContext";
 import { GameContextProvider } from "../context/GameContext";
 import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
+import { LocalPlayerSync } from "../net/LocalPlayerSync";
+import { RemotePlayers } from "../net/RemotePlayers";
 import { DayNightProvider } from "../lighting/DayNightContext";
 import { initCursor } from "../utils/cursor/cursor";
 import { traceSpan } from "../utils/spikeTrace";
@@ -71,6 +73,10 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
         {children}
         <Player />
       </Physics>
+      {/* Multiplayer (persistent like the Player): the local intent publisher
+          and the remote capsules. No physics bodies, so outside <Physics>. */}
+      <LocalPlayerSync />
+      <RemotePlayers />
     </>
   );
 };

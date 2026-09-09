@@ -1,7 +1,6 @@
 {
   "name": "dotcomma",
   "version": "0.1.0",
-  "homepage": "https://dotcomma.io",
   "private": true,
   "dependencies": {
     "@react-three/drei": "^9.87.0",
@@ -15,15 +14,21 @@
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
     "seedrandom": "^3.0.5",
+    "three": "0.157.0",
     "typescript": "^4.9.5"
   },
   "scripts": {
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d build",
     "start": "craco start",
-    "build": "craco build",
+    "build": "craco build && cd server && npm ci && npm run build",
+    "build:client": "craco build",
     "test": "craco test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "dev:server": "cd server && npm run dev",
+    "start:server": "node server/dist/index.js",
+    "db:migrate": "node --env-file-if-exists=server/.env server/dist/cli/migrate.js",
+    "db:inspect": "node --env-file-if-exists=server/.env server/dist/cli/inspect.js",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:dry": "node scripts/deploy.mjs --dry-run"
   },
   "eslintConfig": {
     "extends": [
@@ -55,7 +60,9 @@
     "@types/node": "^16.18.54",
     "@types/react": "^18.2.23",
     "@types/react-dom": "^18.2.8",
-    "@types/seedrandom": "^3.0.6",
-    "gh-pages": "^6.1.1"
+    "@types/seedrandom": "^3.0.6"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
