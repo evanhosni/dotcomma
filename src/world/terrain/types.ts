@@ -1,3 +1,4 @@
+import * as THREE from "three";
 export interface TerrainProps {
   group: THREE.Group;
   chunks: { [key: string]: { position: number[]; chunk: Chunk } };

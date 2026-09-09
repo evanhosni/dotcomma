@@ -249,25 +249,34 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = 0.45 
       chunk.nextSwitchIn = minRemaining;
 
       if (maxInst >= 0 && chunk.lamps.instanceColor) {
-        // Partial GPU upload — three r157 has the single updateRange
-        // {offset, count} on BufferAttribute (addUpdateRange arrived in
-        // r159), measured in ARRAY ELEMENTS (floats, 3 per instance); the
-        // renderer resets count to -1 after the ranged bufferSubData. When
-        // several lights flipped this frame the range widens to span them
-        // all (the untouched colors in between re-upload unchanged, still
-        // far cheaper than the whole buffer).
+        // Partial GPU upload — BufferAttribute.updateRanges [{start, count}]
+        // (three ≥ r159; the old single `updateRange` was removed in r163 and
+        // writing it is a silent no-op = whole-buffer re-upload), measured in
+        // ARRAY ELEMENTS (floats, 3 per instance); the renderer clears the
+        // list after the ranged bufferSubData. When several lights flipped
+        // this frame the range widens to span them all (the untouched colors
+        // in between re-upload unchanged, still far cheaper than the whole
+        // buffer).
         const attr = chunk.lamps.instanceColor;
         let start = minInst * 3;
         let end = (maxInst + 1) * 3;
-        // count !== -1 ⇒ an earlier range is still unconsumed (the mesh is
-        // frustum-culled, so the renderer never got to it) — expand over it,
-        // or those colors would silently never reach the GPU.
-        if (attr.updateRange.count !== -1) {
-          start = Math.min(start, attr.updateRange.offset);
-          end = Math.max(end, attr.updateRange.offset + attr.updateRange.count);
+        // A pending range ⇒ an earlier update is still unconsumed (the mesh
+        // is frustum-culled, so the renderer never got to it) — expand over
+        // it, or those colors would silently never reach the GPU. Kept as ONE
+        // range (not addUpdateRange per flip): the renderer only clears
+        // updateRanges on upload, so a long-culled chunk would otherwise
+        // accumulate an entry per flipping frame.
+        const ranges = attr.updateRanges;
+        if (ranges.length > 0) {
+          const r = ranges[0];
+          start = Math.min(start, r.start);
+          end = Math.max(end, r.start + r.count);
+          ranges.length = 1;
+          r.start = start;
+          r.count = end - start;
+        } else {
+          attr.addUpdateRange(start, end - start);
         }
-        attr.updateRange.offset = start;
-        attr.updateRange.count = end - start;
         attr.needsUpdate = true;
       }
     });
