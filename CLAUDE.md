@@ -760,3 +760,43 @@ All overlays, menus, and HUD elements should follow the established style set by
 - Prefer editing existing files over creating new ones
 - Keep biome implementations self-contained; don't add cross-biome dependencies
 - Interfaces live in the nearest `types.ts` (world-level types in `src/world/types.ts`)
+
+## Multiplayer server, persistence, deploy (Sept 2026)
+
+One Railway service runs `server/` (Node 24, Express + `ws`, `node:sqlite`) and serves the CRA build from `build/`; SQLite lives on a Railway volume. Assets are still in `public/` (the R2 CDN pipeline — Phase 4 of the original plan — is DEFERRED until there are enough assets to warrant a bucket; `REACT_APP_CDN_URL` in `.env.example` is reserved for it). Runtime deps are exactly `express` + `ws`; no ORM, no socket library, no state library, no GitHub Actions — each was considered and rejected. Read `README.md` → "Server, database, deploy" for the ops runbook.
+
+```
+server/                    # OWN package.json (CRA's ModuleScopePlugin forbids importing across src/,
+  src/                     #   so the two sides share NOTHING at build time)
+    index.ts               # boot: open+check db → http server → ws transport → save sweep → SIGTERM flush
+    http.ts                # Express static over ../../build: immutable /static, no-cache index.html, catch-all
+    protocol.ts            # THE WIRE PROTOCOL (header comment) — CANONICAL copy
+    game/world.ts          # game state, transport-agnostic (talks to an Outbox; the ONLY abstraction —
+                           #   exists so Colyseus could replace ws later; do not widen it)
+    transport/ws.ts        # sockets, frame validation, 30s ping/pong reaper, Outbox impl
+    data/                  # ALL SQL lives here: db.ts (open, pragmas, schema guard), migrations.ts
+                           #   (append-only, PRAGMA user_version), players.ts (prepared once, named fns)
+    cli/                   # migrate.ts (--dry-run, auto .bak), inspect.ts
+src/net/                   # client side
+  protocol.ts              # DUPLICATE of server/src/protocol.ts — change both or neither
+  connection.ts            # THE singleton: getWebSocketUrl() (the one place), identity uuid,
+                           #   backoff reconnect, hello/init, domain relay, 15s app ping + watchdog,
+                           #   server clock offset (getServerTime), pagehide close, window.__net
+  remotePlayerStore.ts     # module state mutated per frame; React sees only a roster version
+  RemotePlayers.tsx        # capsules, ONE useFrame: extrapolate last intent + ease (never snap)
+  LocalPlayerSync.tsx      # sends INTENT CHANGES (velocity/yaw/stop/drift), never per-frame positions
+src/menus/overlay/NetOverlay.tsx  # status + "here N" HUD
+scripts/deploy.mjs         # npm run deploy: dirty/branch/behind guards, tag-or-bump, push (tested
+                           #   against a throwaway repo; --dry-run)
+railway.json / .node-version / .npmrc (include=dev — Railway must install devDeps for craco+tsc)
+```
+
+Rules that came out of building it:
+- **Two ids.** `identity` = client uuid in localStorage (persistence key, sent once in `hello`). `id` = server-assigned SESSION id (all presence messages). Two tabs share an identity but are two sessions — that is what makes local two-tab testing possible.
+- **Presence is scoped per DOMAIN (rooms), not filtered.** Domain switch = leave(old) + join(new) + fresh `init` to the mover. Phase 6 entity sync must inherit this scoping.
+- **Close the socket on `pagehide`.** MEASURED: Chrome leaves a navigated-away page's WebSocket open server-side; without the client closing it, the other tab saw a ghost until the heartbeat reaped it (≤60s) and re-entries inflated the count.
+- **Never per-frame React state for network.** Roster changes re-render; movement mutates refs.
+- **`move` carries velocity** so receivers extrapolate; a stop is v=0. Drift correction every 250ms only if >0.75u off.
+- **Write policy:** blob saved on disconnect IF dirty, else ≤ once/30s/player if dirty, never on a tick. Boot REFUSES a stale schema (`DB_AUTO_MIGRATE=1` only for an empty volume's first boot). Order for schema changes: `db:migrate` on the live db (railway ssh), then `deploy`.
+- **Windows can't deliver SIGTERM** to a child process — the shutdown flush is unit-tested via `World.saveAll()`, not by signal.
+- The old gh-pages deploy, `homepage`, and `predeploy` are gone; `CNAME` at the repo root is a leftover to delete once DNS points at Railway.

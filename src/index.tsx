@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { DevProvider } from "./context/DevContext";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
+import { NetOverlay } from "./menus/overlay/NetOverlay";
+import { startConnection } from "./net/connection";
 import { DayNightLights } from "./lighting/DayNightLights";
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
@@ -18,6 +20,9 @@ const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElem
 // component subscribes to below. URL paths are FAKE (pushState only) — see
 // world/domains/navigation.ts.
 initDomainNavigation();
+// Game server connection (native WebSocket, reconnects itself). Outlives
+// domains; domain switches are relayed to it by navigation.ts listeners.
+startConnection();
 
 /**
  * ONE page, ONE canvas, one domain at a time — no real routes. The CRT
@@ -49,6 +54,7 @@ const Dotcomma = () => {
     <DevProvider>
       <DevOverlay />
       <LogsOverlay />
+      <NetOverlay />
       <CustomCanvas>
         {domain === "glitch-city" && (
           <>

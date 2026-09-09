@@ -1,7 +1,6 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
+/server/node_modules
 /.pnp
 .pnp.js
 
@@ -10,14 +9,27 @@
 
 # production
 /build
+/server/dist
 
-# misc
-.DS_Store
+# env — .env.development is committed (dev-only, no secrets); everything else is local
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+/server/.env
 
+# game assets — uploaded to R2 by scripts/, never committed or deployed
+/assets
+
+# sqlite (local dev database; production lives on the Railway volume)
+/data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# misc
+.DS_Store
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

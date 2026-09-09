@@ -23,18 +23,19 @@ import { DomainId } from "./types";
 export const domainIdFromPath = (path: string): DomainId => (path.includes("glitch-city") ? "glitch-city" : "home");
 
 let currentDomain: DomainId = domainIdFromPath(window.location.pathname);
-let domainListener: ((domain: DomainId) => void) | null = null;
+const domainListeners = new Set<(domain: DomainId) => void>();
 
 const pushDomainEntry = () =>
   window.history.pushState({ dotcomma: true, domain: currentDomain }, "", DOMAIN_PATHS[currentDomain]);
 
 export const getCurrentDomain = (): DomainId => currentDomain;
 
-/** index.tsx subscribes to swap the mounted domain; one listener is enough. */
+/** index.tsx subscribes to swap the mounted domain; the net connection
+ *  subscribes to tell the server (presence is scoped per domain). */
 export const onDomainChange = (fn: (domain: DomainId) => void): (() => void) => {
-  domainListener = fn;
+  domainListeners.add(fn);
   return () => {
-    if (domainListener === fn) domainListener = null;
+    domainListeners.delete(fn);
   };
 };
 
@@ -46,7 +47,7 @@ export const switchDomain = (id: DomainId) => {
   if (id === currentDomain) return;
   currentDomain = id;
   pushDomainEntry();
-  domainListener?.(id);
+  domainListeners.forEach((fn) => fn(id));
 };
 
 export const initDomainNavigation = () => {

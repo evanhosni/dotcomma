@@ -9,6 +9,7 @@ import { useDevMode } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
 import { useInput } from "./useInput";
+import { getAssignedSpawnOffset } from "../net/connection";
 
 /** Default spawn: BODY-CENTER position high above the origin — the player
  *  free-falls onto the terrain once it loads. */
@@ -278,11 +279,17 @@ export const Player = () => {
 
     const pos = rb.translation();
 
-    // Hold player in place until terrain colliders are loaded
+    // Hold player in place until terrain colliders are loaded. The server's
+    // spawn OFFSET (so simultaneous joiners don't stack) is applied HERE, not
+    // through the RigidBody position prop — it can change on reconnect, and a
+    // prop change must never teleport a player who has already landed.
     if (!terrain_loaded && !noclip) {
-      rb.setTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] }, true);
+      const off = getAssignedSpawnOffset();
+      const sx = spawn[0] + (off?.x ?? 0);
+      const sz = spawn[2] + (off?.z ?? 0);
+      rb.setTranslation({ x: sx, y: spawn[1], z: sz }, true);
       verticalVelocity.current = 0;
-      _camTarget.set(spawn[0], spawn[1] + PLAYER_HEIGHT * 0.5, spawn[2]);
+      _camTarget.set(sx, spawn[1] + PLAYER_HEIGHT * 0.5, sz);
       camera.position.copy(_camTarget);
       cameraReady.current = false;
       return;
