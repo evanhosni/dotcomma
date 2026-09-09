@@ -152,6 +152,7 @@ let started = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let lastPongAt = 0;
+let helloSentAt = 0;
 let manuallyClosed = false;
 
 /** Send if the socket is open; silently drop otherwise (intent is re-sent
@@ -196,6 +197,7 @@ const open = () => {
   socket.onopen = () => {
     if (ws !== socket) return;
     lastPongAt = Date.now();
+    helloSentAt = Date.now();
     send({ t: "hello", identity: getIdentity(), domain: getCurrentDomain() });
     pingTimer = setInterval(() => {
       if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
@@ -229,6 +231,12 @@ const open = () => {
           attempts: 0,
         });
         lastPongAt = Date.now();
+        // First clock sample from the hello→init round trip, so the shared
+        // world clock (day/night, deterministic entities) is right from the
+        // first frame instead of after the first 15s ping; then ping at once
+        // for a tighter one.
+        if (helloSentAt) sampleClock(helloSentAt, msg.serverTime);
+        send({ t: "ping", t0: Date.now() });
         break;
       case "pong":
         lastPongAt = Date.now();

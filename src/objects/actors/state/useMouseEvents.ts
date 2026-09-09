@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { StateMachineHandle } from "./types";
+import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
 
 export interface MouseEventDistances {
   onMouseHoverEnter?: number;
@@ -102,6 +103,7 @@ export function useMouseEvents(
 
   const frameCountRef = useRef(options.framePhase ?? 0);
   const lastHoverRef = useRef(false);
+
   const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
 
   // Max distance at which any mouse event fires — nothing to do beyond this
@@ -242,6 +244,13 @@ export function useMouseEvents(
       if (e.button !== 0) return;
       if (dist() > d.leftClick) return;
       raise(bb, "__mouse_left_click");
+      // Multiplayer: the SERVER runs this actor's machine (the actor base
+      // hangs its sync handle on the group). Forward the click — the server
+      // raises the same flag there; the machine's own distance trigger
+      // decides. Left click only: it is the input the machines branch on;
+      // hover stays local (cosmetic).
+      const h = groupRef.current?.userData.sync as SyncHandle | undefined;
+      if (h && h.known) h.interact("mouse-left-click");
     };
 
     const handleContextMenu = () => {

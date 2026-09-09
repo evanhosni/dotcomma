@@ -1,4 +1,5 @@
 import { loadPlayer, savePlayerData, type PlayerData } from "../data/players.js";
+import { EntityManager, type PlayerView } from "./entities/manager.js";
 import type { DomainId, MoveIntent, PlayerSnapshot, ServerMessage } from "../protocol.js";
 
 /**
@@ -78,8 +79,27 @@ export class World {
   private readonly rooms = new Map<DomainId, Set<string>>();
   /** Monotonic join counter — drives color and spawn-slot assignment. */
   private joinCount = 0;
+  /** Synced entities (NPCs, doors) — see entities/manager.ts. */
+  readonly entities: EntityManager;
 
-  constructor(private readonly out: Outbox) {}
+  constructor(private readonly out: Outbox) {
+    this.entities = new EntityManager({
+      playersIn: (domain) => this.playerViews(domain),
+      sendMany: (ids, msg) => this.out.sendMany(ids, msg),
+    });
+  }
+
+  private *playerViews(domain: DomainId): Iterable<PlayerView> {
+    for (const id of this.room(domain)) {
+      const s = this.sessions.get(id);
+      if (s) yield { id: s.id, domain: s.domain, x: s.x, y: s.y, z: s.z, vx: s.vx, vz: s.vz, lastMoveAt: s.lastMoveAt };
+    }
+  }
+
+  /** The world tick (index.ts, TICK_HZ): the server-side actor simulation. */
+  tick(now = Date.now()): void {
+    this.entities.tick(now);
+  }
 
   private room(domain: DomainId): Set<string> {
     let r = this.rooms.get(domain);
@@ -156,6 +176,7 @@ export class World {
     const s = this.sessions.get(id);
     if (!s) return;
     this.sessions.delete(id);
+    this.entities.removeSession(id);
     this.leaveRoom(s);
     if (s.dataDirty) this.persist(s);
   }
@@ -228,6 +249,9 @@ export class World {
   changeDomain(id: string, domain: DomainId): void {
     const s = this.sessions.get(id);
     if (!s || s.domain === domain) return;
+    // Everything it was rendering belongs to the old domain; the client
+    // re-registers what it mounts in the new one.
+    this.entities.removeSession(id);
     this.leaveRoom(s);
     s.domain = domain;
     s.vx = s.vy = s.vz = 0;

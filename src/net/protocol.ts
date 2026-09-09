@@ -44,8 +44,28 @@
  *                                                 ALSO used, server-side only —
  *                                                 browsers cannot observe it)
  *
+ * ENTITY SYNC — SERVER AUTHORITY (see game/entities/manager.ts):
+ *   client  → entity:register   {entities:[{id, kind, x, y, z}]}
+ *                                                 "I am rendering these" (kind = actor
+ *                                                 descriptor id). The server creates the
+ *                                                 record on first sight and, for kinds it
+ *                                                 knows (kinds.ts), runs the actor's own
+ *                                                 state machine. Answered with the FULL
+ *                                                 current record as an entity:update.
+ *   client  → entity:unregister {ids}             unmounted; last one out forgets it
+ *   client  → entity:interact   {id, action}      an input: "mouse-left-click" (raised
+ *                                                 on the machine's blackboard), "door:<i>"
+ *                                                 (toggles replicated state). The SERVER
+ *                                                 decides — nothing is client-owned.
+ *   server  → entity:update     {id, x?,y?,z?, vx?,vy?,vz?, ry?, clip?, clipT0?, once?, sm?, state?}
+ *                                                 changed fields only, ≤10Hz, to the
+ *                                                 registrants. Animation is a clip name +
+ *                                                 the server time it started (never
+ *                                                 bones); sm = machine state id, mirrored
+ *                                                 by clients for state-keyed visuals.
+ *
  * Domains are the broadcast scope: nothing crosses a domain boundary except
- * the mover's own re-init. Phase 6's entity sync inherits this scoping.
+ * the mover's own re-init. Entity sync inherits this scoping.
  *
  * Coordinates are the player's capsule CENTER in world units; `ry` is yaw in
  * radians (three.js convention: rotation.y such that local +Z faces the view
@@ -114,7 +134,67 @@ export interface DebugSetDataMessage {
   data: PlayerData;
 }
 
-export type ClientMessage = HelloMessage | ClientMoveMessage | DomainMessage | PingMessage | DebugSetDataMessage;
+export interface EntityRegisterItem {
+  id: string;
+  /** Actor descriptor id — selects the server-side simulation (kinds.ts). */
+  kind: string;
+  /** Spawn origin (world). */
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Server-published fields — every one optional so updates carry only changes. */
+export interface EntityUpdateFields {
+  x?: number;
+  y?: number;
+  z?: number;
+  vx?: number;
+  vy?: number;
+  vz?: number;
+  /** Yaw, three.js rotation.y. */
+  ry?: number;
+  clip?: string;
+  /** Server time (ms) the clip started. */
+  clipT0?: number;
+  /** Clip plays once and holds its last frame. */
+  once?: boolean;
+  /** The server-side state machine's current state id (mirrored for visuals). */
+  sm?: string;
+  /** Small replicated state blob (component-defined, e.g. door flags). */
+  state?: Record<string, unknown>;
+}
+
+export interface EntityUpdateMessage extends EntityUpdateFields {
+  t: "entity:update";
+  id: string;
+}
+
+export interface EntityRegisterMessage {
+  t: "entity:register";
+  entities: EntityRegisterItem[];
+}
+
+export interface EntityUnregisterMessage {
+  t: "entity:unregister";
+  ids: string[];
+}
+
+export interface EntityInteractMessage {
+  t: "entity:interact";
+  id: string;
+  action: string;
+}
+
+export type ClientMessage =
+  | HelloMessage
+  | ClientMoveMessage
+  | DomainMessage
+  | PingMessage
+  | DebugSetDataMessage
+  | EntityRegisterMessage
+  | EntityUnregisterMessage
+  | EntityInteractMessage;
 
 // ── server → client ────────────────────────────────────────────────────────
 
@@ -153,4 +233,10 @@ export interface PongMessage {
   serverTime: number;
 }
 
-export type ServerMessage = InitMessage | JoinMessage | ServerMoveMessage | LeaveMessage | PongMessage;
+export type ServerMessage =
+  | InitMessage
+  | JoinMessage
+  | ServerMoveMessage
+  | LeaveMessage
+  | PongMessage
+  | EntityUpdateMessage;

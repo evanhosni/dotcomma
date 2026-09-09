@@ -5,6 +5,8 @@ import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { _quantization } from "../../utils/quantization/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
+import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
+import type { MoveIntent } from "./kinematicMover";
 
 /**
  * ACTOR — the base of the per-object class of the game-object hierarchy (see
@@ -24,6 +26,14 @@ import { _curvature } from "../../vfx/curvature";
  *     throttle, so several actors can't stack Rapier builds on one frame);
  *   - a second "near" gate for dynamic content (children, interiors);
  *   - matrix freezing for static actors;
+ *   - MULTIPLAYER SYNC (net/entities): every actor registers as a synced
+ *     entity (unless the mount sets serverSynced={false}) and the SERVER runs
+ *     its state machine — no client is authoritative, none is favored. The
+ *     base turns the server's updates into a per-frame target (velocity-
+ *     extrapolated) and places the group there (movers chase it instead),
+ *     eases yaw, and hangs the handle on the group so useStateMachine can
+ *     mirror the server's state for visuals and useMouseEvents can forward
+ *     clicks. Components never branch on any of it.
  *   - and prepareActorMaterial: ALL shared material logic in one call.
  *
  * There are two ways to build on it, and both are "extending Actor":
@@ -111,11 +121,24 @@ export const prepareActorMaterial = (
   _curvature.patchMaterial(material);
 };
 
+// ── Sync tuning ─────────────────────────────────────────────────────────────
+// Puppets ease toward the owner's (velocity-extrapolated) pose; only a first
+// placement or a far jump (respawn) snaps.
+const PUPPET_SMOOTH_RATE = 12; // 1/s
+const YAW_SMOOTH_RATE = 10;
+const PUPPET_TELEPORT_DIST = 40;
+const PUPPET_MAX_EXTRAPOLATION_S = 0.5;
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 export interface ActorLifecycleOptions {
   /** Spawn id — passed back to onDestroy. */
   id: string;
+  /** Actor descriptor id ("beeble") — the server picks the simulation by it. */
+  descriptorId?: string;
+  /** Default true. False = this instance is purely local (never registered). */
+  serverSynced?: boolean;
   /** Spawn position. Static actors need nothing else; movers pass positionRef. */
   coordinates: THREE.Vector3Tuple;
   /** Live position for actors that move (beebles). Falls back to coordinates. */
@@ -166,6 +189,11 @@ export interface ActorLifecycleOptions {
 export interface ActorFrameContext {
   /** 2D squared camera distance — the same one the gates used this frame. */
   distanceSq: number;
+  /** The sync handle, or null when serverSynced={false}. Components rarely
+   *  need it: their logic runs on every client and the base handles the rest. */
+  sync: SyncHandle | null;
+  /** Movers (ModelActor body "kinematic"): write this frame's desired velocity here. */
+  move?: MoveIntent;
   /** True on frames where the throttled gate checks ran. */
   checked: boolean;
   /** Result of this frame's frustum test (true when the test is disabled). */
@@ -184,6 +212,8 @@ export interface ActorLifecycle {
   distanceSqRef: React.MutableRefObject<number>;
   /** True once onDestroy has fired — feature code should stop acting. */
   destroyedRef: React.MutableRefObject<boolean>;
+  /** The sync handle (replicated state, interactions); null when unsynced. */
+  sync: SyncHandle | null;
   /** Re-arm this instance for a fresh life: fade back to invisible, warm-up
    *  window reopened, destroy flag cleared. Actors backed by a POOLED clone
    *  (ModelActor) call this on mount, since the clone's materials carry the
@@ -200,6 +230,8 @@ export interface ActorLifecycle {
  */
 export const useActorLifecycle = ({
   id,
+  descriptorId,
+  serverSynced = true,
   coordinates,
   positionRef,
   renderDistance = DEFAULT_RENDER_DISTANCE,
@@ -236,6 +268,15 @@ export const useActorLifecycle = ({
   // First evaluation always runs: the seeded phase would otherwise leave a
   // fresh mount ungated for up to checkInterval frames.
   const everCheckedRef = useRef(false);
+
+  // ---- Multiplayer sync (see net/entities) ----
+  // Registration and placement are the base's job; the SERVER simulates. The
+  // component's onFrame still runs (mouse raycasts, mirrored visuals), then
+  // the group is placed at the server's pose so anything local logic wrote
+  // to the transform is overridden.
+  const sync = useSyncedEntity(serverSynced ? id : null, descriptorId ?? "unknown", coordinates);
+  const puppetPos = useRef(new THREE.Vector3()).current;
+  const puppetStarted = useRef(false);
 
   // Per-life constants, derived once per RENDER (not per frame) — these run
   // inside the hottest loop in the project, for every mounted actor.
@@ -365,7 +406,68 @@ export const useActorLifecycle = ({
       }
     }
 
-    onFrame?.(state, delta, { distanceSq, checked, visible });
+    // ---- Server target for this frame (before the component's logic, so a
+    // mover can chase it) ----
+    const synced = !!sync && sync.known;
+    if (synced) {
+      const r = sync.entity!.remote!;
+      const t = sync.target;
+      if (r.x !== undefined && r.z !== undefined) {
+        const age = Math.min((performance.now() - r.at) / 1000, PUPPET_MAX_EXTRAPOLATION_S);
+        const vx = r.vx ?? 0;
+        const vy = r.vy ?? 0;
+        const vz = r.vz ?? 0;
+        const tx = r.x + vx * age;
+        const ty = (r.y ?? t.y) + vy * age;
+        const tz = r.z + vz * age;
+        if (sync.bodyManaged) {
+          // A mover chases the raw extrapolated pose itself (its own smoothing).
+          puppetPos.set(tx, ty, tz);
+          if (!puppetStarted.current) {
+            puppetStarted.current = true;
+            t.ry = r.ry ?? 0;
+          }
+        } else if (!puppetStarted.current) {
+          puppetPos.set(tx, ty, tz);
+          puppetStarted.current = true;
+          t.ry = r.ry ?? 0;
+        } else {
+          const dx = tx - puppetPos.x;
+          const dy = ty - puppetPos.y;
+          const dz = tz - puppetPos.z;
+          if (dx * dx + dy * dy + dz * dz > PUPPET_TELEPORT_DIST * PUPPET_TELEPORT_DIST) {
+            puppetPos.set(tx, ty, tz);
+          } else {
+            const k = 1 - Math.exp(-PUPPET_SMOOTH_RATE * Math.min(delta, 0.1));
+            puppetPos.x += dx * k;
+            puppetPos.y += dy * k;
+            puppetPos.z += dz * k;
+          }
+        }
+        if (r.ry !== undefined) t.ry += wrapAngle(r.ry - t.ry) * (1 - Math.exp(-YAW_SMOOTH_RATE * Math.min(delta, 0.1)));
+        t.x = puppetPos.x;
+        t.y = puppetPos.y;
+        t.z = puppetPos.z;
+        t.vx = vx;
+        t.vy = vy;
+        t.vz = vz;
+        t.valid = true;
+      }
+    } else {
+      puppetStarted.current = false;
+    }
+
+    onFrame?.(state, delta, { distanceSq, checked, visible, sync });
+
+    // ---- Apply the server's pose (after the component's logic ran) ----
+    if (sync && group) {
+      if (group.userData.sync !== sync) group.userData.sync = sync;
+      if (synced && sync.target.valid) {
+        const t = sync.target;
+        if (!sync.bodyManaged) group.position.set(t.x, t.y, t.z);
+        group.rotation.y = t.ry;
+      }
+    }
   };
 
   useEffect(() => {
@@ -383,5 +485,5 @@ export const useActorLifecycle = ({
     destroyedRef.current = false;
   }).current;
 
-  return { groupRef, collidersActive, nearActive, distanceSqRef, destroyedRef, resetLife };
+  return { groupRef, collidersActive, nearActive, distanceSqRef, destroyedRef, resetLife, sync };
 };

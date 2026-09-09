@@ -55,6 +55,9 @@ export type SpawnOnlyKey = (typeof SPAWN_ONLY_KEYS)[number];
  *  and the pool's radii. */
 export type ActorProps<A extends ActorAttributes = ActorAttributes> = Omit<A, SpawnOnlyKey> & {
   id: string;
+  /** The descriptor this instance came from ("beeble") — the actor base keys
+   *  its synced-entity definition on it. */
+  descriptorId: string;
   coordinates: THREE.Vector3Tuple;
   rotation?: THREE.Vector3Tuple;
   renderDistance: number;

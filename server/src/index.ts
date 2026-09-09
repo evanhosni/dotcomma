@@ -1,5 +1,6 @@
 import http from "node:http";
 import { closeDb, getDb, resolveDatabasePath } from "./data/db.js";
+import { TICK_MS } from "./game/entities/manager.js";
 import { SAVE_INTERVAL_MS } from "./game/world.js";
 import { createApp } from "./http.js";
 import { attachWebSocketTransport } from "./transport/ws.js";
@@ -25,6 +26,11 @@ const { wss, world } = attachWebSocketTransport(server);
 const saveSweep = setInterval(() => world.flushDirty(), SAVE_INTERVAL_MS / 3);
 saveSweep.unref();
 
+// The world tick: every synced actor's state machine runs HERE, at TICK_HZ.
+const worldTick = setInterval(() => world.tick(), TICK_MS);
+worldTick.unref();
+
+
 server.listen(PORT, HOST, () => {
   console.log(`[dotcomma] listening on http://${HOST}:${PORT}`);
 });
@@ -32,6 +38,7 @@ server.listen(PORT, HOST, () => {
 const shutdown = (signal: string) => {
   console.log(`[dotcomma] ${signal} — shutting down`);
   clearInterval(saveSweep);
+  clearInterval(worldTick);
   for (const ws of wss.clients) ws.close(1001, "server shutting down");
   const saved = world.saveAll();
   if (saved) console.log(`[db] saved ${saved} dirty player(s)`);
