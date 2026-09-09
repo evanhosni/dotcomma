@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { Biome, Region } from "../../world/types";
 
 export enum VORONOI_FUNCTION {

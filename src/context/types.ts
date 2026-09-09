@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import React from "react";
 import { Chunk } from "../world/terrain/types";
 

@@ -1,3 +1,4 @@
+import * as THREE from "three";
 export enum COLLIDER_TYPE {
   CAPSULE = "capsule",
   SPHERE = "sphere",
