@@ -6,6 +6,8 @@ import { _quantization } from "../../utils/quantization/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
 import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
+import { getServerTime } from "../../net/connection";
+import { advanceRenderClock, INTERP_DELAY_MS, pruneSnapshots, sampleSnapshots, type SampledPose } from "../../net/entities/interpolation";
 import type { MoveIntent } from "./kinematicMover";
 
 /**
@@ -124,11 +126,6 @@ export const prepareActorMaterial = (
 // ── Sync tuning ─────────────────────────────────────────────────────────────
 // Puppets ease toward the owner's (velocity-extrapolated) pose; only a first
 // placement or a far jump (respawn) snaps.
-const PUPPET_SMOOTH_RATE = 12; // 1/s
-const YAW_SMOOTH_RATE = 10;
-const PUPPET_TELEPORT_DIST = 40;
-const PUPPET_MAX_EXTRAPOLATION_S = 0.5;
-const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -275,8 +272,10 @@ export const useActorLifecycle = ({
   // the group is placed at the server's pose so anything local logic wrote
   // to the transform is overridden.
   const sync = useSyncedEntity(serverSynced ? id : null, descriptorId ?? "unknown", coordinates);
-  const puppetPos = useRef(new THREE.Vector3()).current;
-  const puppetStarted = useRef(false);
+  // Snapshot-interpolation state: this actor's render clock (server ms) and
+  // the sampled pose scratch.
+  const renderClockRef = useRef(NaN);
+  const sampled = useRef<SampledPose>({ x: 0, y: 0, z: 0, ry: 0, vx: 0, vy: 0, vz: 0 }).current;
 
   // Per-life constants, derived once per RENDER (not per frame) — these run
   // inside the hottest loop in the project, for every mounted actor.
@@ -406,55 +405,36 @@ export const useActorLifecycle = ({
       }
     }
 
-    // ---- Server target for this frame (before the component's logic, so a
-    // mover can chase it) ----
+    // ---- Server pose for this frame (before the component's logic, so a
+    // kinematic mover can park its collider on it) ----
+    // SNAPSHOT INTERPOLATION (net/entities/interpolation.ts): the entity is
+    // drawn as it was INTERP_DELAY_MS ago on the SERVER clock, interpolated
+    // between the two published snapshots bracketing that time. Message
+    // arrival time plays no part, so main-thread hitches and bunched packets
+    // cannot make it overshoot, slide or lurch; a stop is reached exactly
+    // where and when the server stopped. The per-actor render clock slews
+    // toward (server time − delay) so a re-estimated clock offset never steps
+    // the picture.
     const synced = !!sync && sync.known;
     if (synced) {
-      const r = sync.entity!.remote!;
       const t = sync.target;
-      if (r.x !== undefined && r.z !== undefined) {
-        const age = Math.min((performance.now() - r.at) / 1000, PUPPET_MAX_EXTRAPOLATION_S);
-        const vx = r.vx ?? 0;
-        const vy = r.vy ?? 0;
-        const vz = r.vz ?? 0;
-        const tx = r.x + vx * age;
-        const ty = (r.y ?? t.y) + vy * age;
-        const tz = r.z + vz * age;
-        if (sync.bodyManaged) {
-          // A mover chases the raw extrapolated pose itself (its own smoothing).
-          puppetPos.set(tx, ty, tz);
-          if (!puppetStarted.current) {
-            puppetStarted.current = true;
-            t.ry = r.ry ?? 0;
-          }
-        } else if (!puppetStarted.current) {
-          puppetPos.set(tx, ty, tz);
-          puppetStarted.current = true;
-          t.ry = r.ry ?? 0;
-        } else {
-          const dx = tx - puppetPos.x;
-          const dy = ty - puppetPos.y;
-          const dz = tz - puppetPos.z;
-          if (dx * dx + dy * dy + dz * dz > PUPPET_TELEPORT_DIST * PUPPET_TELEPORT_DIST) {
-            puppetPos.set(tx, ty, tz);
-          } else {
-            const k = 1 - Math.exp(-PUPPET_SMOOTH_RATE * Math.min(delta, 0.1));
-            puppetPos.x += dx * k;
-            puppetPos.y += dy * k;
-            puppetPos.z += dz * k;
-          }
-        }
-        if (r.ry !== undefined) t.ry += wrapAngle(r.ry - t.ry) * (1 - Math.exp(-YAW_SMOOTH_RATE * Math.min(delta, 0.1)));
-        t.x = puppetPos.x;
-        t.y = puppetPos.y;
-        t.z = puppetPos.z;
-        t.vx = vx;
-        t.vy = vy;
-        t.vz = vz;
+      const dtMs = Math.min(delta, 0.25) * 1000;
+      renderClockRef.current = advanceRenderClock(renderClockRef.current, dtMs, getServerTime() - INTERP_DELAY_MS);
+      const snaps = sync.entity!.snapshots;
+      pruneSnapshots(snaps, renderClockRef.current);
+      const status = sampleSnapshots(snaps, renderClockRef.current, sampled);
+      if (status !== "none") {
+        t.x = sampled.x;
+        t.y = sampled.y;
+        t.z = sampled.z;
+        t.ry = sampled.ry;
+        t.vx = sampled.vx;
+        t.vy = sampled.vy;
+        t.vz = sampled.vz;
         t.valid = true;
       }
     } else {
-      puppetStarted.current = false;
+      renderClockRef.current = NaN;
     }
 
     onFrame?.(state, delta, { distanceSq, checked, visible, sync });
@@ -464,7 +444,7 @@ export const useActorLifecycle = ({
       if (group.userData.sync !== sync) group.userData.sync = sync;
       if (synced && sync.target.valid) {
         const t = sync.target;
-        if (!sync.bodyManaged) group.position.set(t.x, t.y, t.z);
+        group.position.set(t.x, t.y, t.z);
         group.rotation.y = t.ry;
       }
     }

@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import { CuboidCollider, RigidBody } from "@react-three/rapier";
 import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { DRESSING_CHUNK_SIZE, type DressingColliderPart } from "./types";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
@@ -31,7 +32,7 @@ import { createDefaultsGroup } from "../utils";
  *   - useChunkRegistry      per-chunk side-state with unmount cleanup
  */
 
-export const DRESSING_CHUNK_SIZE = 256; // world units per chunk (one build call)
+export { DRESSING_CHUNK_SIZE } from "./types";
 const UPDATE_INTERVAL_FRAMES = 31;
 
 // ONE shared budgeted queue across all dressing features: the worker does the
@@ -115,8 +116,10 @@ export const useDressingAssets = <T extends Record<string, { dispose: () => void
 
 // ── Instancing helpers ──
 
-/** rotateY(θ) maps +X to (cosθ, 0, −sinθ) — the yaw aligning local +X with a direction. */
-export const yawFromDir = (dirX: number, dirZ: number): number => Math.atan2(-dirZ, dirX);
+// The collider-part type and the yaw helper live in ./types (Three-free) so
+// the SERVER can build the same collider boxes; re-exported for the features.
+export { yawFromDir } from "./types";
+export type { DressingColliderPart } from "./types";
 
 export interface InstancePlacement {
   x: number;
@@ -317,16 +320,6 @@ export interface ChunkWithPoints extends ChunkRegistryEntry {
  *  to be solid where the player can actually reach it. */
 export const DRESSING_COLLIDER_DISTANCE = 90;
 
-/** A solid box of a dressing piece in INSTANCE-LOCAL space (+X along the
- *  arm/crossarm, y up): the same numbers its geometry is built from, so the
- *  collider can never drift from the art. `x`/`y` are the box CENTER. */
-export interface DressingColliderPart {
-  w: number;
-  h: number;
-  d: number;
-  x: number;
-  y: number;
-}
 
 /**
  * Real colliders for the in-range pieces of a dressing feature: one fixed

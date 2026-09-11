@@ -1,42 +1,49 @@
 import type { DomainId, EntityUpdateFields, ServerMessage } from "../../protocol.js";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
+import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
+import { TICK_HZ, TICK_MS } from "../tick.js";
+import { createBuildingCollider } from "../physics/buildings.js";
+import { NpcBody, type Pose } from "../physics/npc.js";
+import { PlayerBodies } from "../physics/players.js";
+import { DEFAULT_WORK_BUDGET_MS, type PhysicsWorld } from "../physics/world.js";
 import { getKind } from "./kinds.js";
+import { fullUpdate, publishTick, type Published } from "./publish.js";
+
+export { TICK_HZ, TICK_MS };
 
 /**
  * ENTITY MANAGER — THE authority for every synced actor.
  *
- * The server runs each actor's state machine (the client's own config file,
- * see kinds.ts) at TICK_HZ with EVERY player in the domain as a candidate
- * "player" (nearest wins) — no client simulates, no client is favored. It
- * reads the machine's blackboard OUTPUTS (velocity, yaw, animation, state id),
- * integrates position in x/z (y is client-resolved: the server has no
- * terrain; `vy` is published for vertical motion such as ascending), and
- * publishes changed fields to the entity's registrants at ≤ TICK_HZ.
- *
  * ENTITIES EXIST BECAUSE CLIENTS REGISTER THEM: a client registers an
  * instance when it mounts it (position-based spawn ids are identical on every
  * client) and unregisters on unmount; the first registration creates the
- * record; zero registrants → forgotten (the machine stops). Interest = the
- * registrant set, per domain. A registrant is answered with the full current
- * record, so joining mid-interaction is covered.
+ * record; zero registrants → forgotten. Interest = the registrant set, per
+ * domain. A registrant is answered with the full current record.
  *
- * INPUT: clients forward clicks (`entity:interact "mouse-left-click"`); the
- * server raises the same blackboard flag the machine's mouse triggers read,
- * gated on the machine's own distance rule via the nearest player. Component-
- * defined actions ("door:2") toggle replicated `state` generically.
+ * Each tick, per entity with a state machine (kinds.ts — the client's own
+ * config files): the machine runs with the NEAREST player in the domain as
+ * "the player"; its velocity outputs drive an NpcBody on the server physics
+ * world (physics/npc.ts — terrain, buildings, poles, player capsules, the
+ * shared character resolver); the resolved pose and the machine's animation
+ * and state go out to the registrants as changed fields (publish.ts). No
+ * client simulates anything.
+ *
+ * INPUT: clients forward clicks (`entity:interact "mouse-left-click"`), raised
+ * on the machine's blackboard and gated by the machine's own distance trigger;
+ * "door:<i>" toggles replicated `state` generically.
+ *
+ * Only PHYSICS_DOMAIN has terrain on the server; a walker registered in
+ * another domain runs its machine but stays put.
  */
 
-export const TICK_HZ = 10;
-export const TICK_MS = 1000 / TICK_HZ;
 const MAX_PLAYER_EXTRAPOLATION_S = 0.5;
 /** Interaction reach: a click must come from a player this close (2D). */
 const INTERACT_REACH_SQ = 8 * 8;
-/** The server has no physics; the ONE contact it models is actor-vs-player,
- *  so an NPC that walks up to a player stops in front of them here exactly as
- *  its client-side body does (blocked by the player's capsule). Without it the
- *  server's copy walked THROUGH the player and ended up behind them — out of
- *  its own sight cone, so it never alerted. Radii: player 0.5 + beeble 0.5 + gap. */
-const PLAYER_BLOCK_DIST = 1.3;
+/** The one domain whose height function the physics world is initialized with. */
+export const PHYSICS_DOMAIN: DomainId = "glitch-city";
+const STATS_LOG_EVERY_TICKS = TICK_HZ * 10;
+const SLOW_TICK_WARN_MS = 50;
+const FAR = { x: 1e9, y: 0, z: 1e9 };
 
 export interface PlayerView {
   id: string;
@@ -54,41 +61,32 @@ export interface EntityHost {
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage): void;
 }
 
-export interface EntityRecord {
+export interface EntityRecord extends Published {
   id: string;
   kind: string;
   domain: DomainId;
   registrants: Set<string>;
-  // ── simulated fields (published when they change) ──
-  x: number;
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  ry: number;
-  clip: string | undefined;
-  clipT0: number;
-  once: boolean;
-  sm: string | undefined;
-  state: Record<string, unknown>;
-  // ── bookkeeping ──
   runner: StateMachineRunner | null;
+  /** The position the runner reads (kept equal to x/y/z). */
   position: { x: number; y: number; z: number };
-  dirty: EntityUpdateFields;
-  hasDirty: boolean;
+  /** Its body on the physics world (walker kinds in PHYSICS_DOMAIN). */
+  npc: NpcBody | null;
+  /** Its sealed hull (building kinds). */
+  hull: ProxyColliderHandle | null;
 }
 
-const nearestPlayer = (
-  e: EntityRecord,
-  players: PlayerView[],
-): { pos: { x: number; y: number; z: number }; distSq: number } => {
+export interface EntityManagerOptions {
+  /** Per-tick generation budget for the physics world (tests: Infinity). */
+  workBudgetMs?: number;
+  /** Physics/tick stats to the console every 10s while NPCs exist. */
+  log?: boolean;
+}
+
+const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: number; y: number; z: number }; distSq: number } => {
   let best: PlayerView | null = null;
   let bestSq = Infinity;
   for (const p of players) {
-    const dx = p.x - e.x;
-    const dz = p.z - e.z;
-    const dSq = dx * dx + dz * dz;
+    const dSq = (p.x - e.x) ** 2 + (p.z - e.z) ** 2;
     if (dSq < bestSq) {
       bestSq = dSq;
       best = p;
@@ -96,14 +94,28 @@ const nearestPlayer = (
   }
   return best ? { pos: best, distSq: bestSq } : { pos: FAR, distSq: Infinity };
 };
-const FAR = { x: 1e9, y: 0, z: 1e9 };
 
 export class EntityManager {
   private readonly entities = new Map<string, EntityRecord>();
   private readonly bySession = new Map<string, Set<string>>();
   private readonly startedAt = performance.now();
+  private readonly players: PlayerBodies | null;
+  private readonly workBudgetMs: number;
+  private readonly log: boolean;
+  private readonly pose: Pose = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+  private tickNo = 0;
+  private maxTickMs = 0;
+  private npcCount = 0;
 
-  constructor(private readonly host: EntityHost) {}
+  constructor(
+    private readonly host: EntityHost,
+    private readonly physics: PhysicsWorld | null = null,
+    opts: EntityManagerOptions = {},
+  ) {
+    this.players = physics ? new PlayerBodies(physics) : null;
+    this.workBudgetMs = opts.workBudgetMs ?? DEFAULT_WORK_BUDGET_MS;
+    this.log = opts.log ?? true;
+  }
 
   get size(): number {
     return this.entities.size;
@@ -113,56 +125,72 @@ export class EntityManager {
     return this.entities.get(id);
   }
 
-  private full(e: EntityRecord): EntityUpdateFields {
-    const f: EntityUpdateFields = { x: e.x, y: e.y, z: e.z, vx: e.vx, vy: e.vy, vz: e.vz, ry: e.ry };
-    if (e.clip) {
-      f.clip = e.clip;
-      f.clipT0 = e.clipT0;
-      f.once = e.once;
-    }
-    if (e.sm) f.sm = e.sm;
-    if (Object.keys(e.state).length) f.state = e.state;
-    return f;
-  }
+  // ── registry ─────────────────────────────────────────────────────────────
 
   register(sessionId: string, domain: DomainId, items: { id: string; kind: string; x: number; y: number; z: number }[]): void {
-    const to = [sessionId];
     for (const item of items) {
       let e = this.entities.get(item.id);
       if (e && e.domain !== domain) continue;
-      if (!e) {
-        const kind = getKind(item.kind);
-        const position = { x: item.x, y: item.y, z: item.z };
-        e = {
-          id: item.id,
-          kind: item.kind,
-          domain,
-          registrants: new Set(),
-          x: item.x,
-          y: item.y,
-          z: item.z,
-          vx: 0,
-          vy: 0,
-          vz: 0,
-          ry: 0,
-          clip: undefined,
-          clipT0: 0,
-          once: false,
-          sm: undefined,
-          state: {},
-          runner: kind?.sm ? new StateMachineRunner(kind.sm, { current: position }, { current: null }) : null,
-          position,
-          dirty: {},
-          hasDirty: false,
-        };
-        this.entities.set(item.id, e);
-      }
+      if (!e) e = this.create(item, domain);
       e.registrants.add(sessionId);
       let mine = this.bySession.get(sessionId);
       if (!mine) this.bySession.set(sessionId, (mine = new Set()));
       mine.add(item.id);
-      this.host.sendMany(to, { t: "entity:update", id: e.id, ...this.full(e) });
+      this.host.sendMany([sessionId], { t: "entity:update", id: e.id, ...fullUpdate(e, Date.now()) });
     }
+  }
+
+  private create(item: { id: string; kind: string; x: number; y: number; z: number }, domain: DomainId): EntityRecord {
+    const kind = getKind(item.kind);
+    const physical = this.physics !== null && domain === PHYSICS_DOMAIN;
+    const npc = kind?.body && physical ? new NpcBody(this.physics!, item.x, item.z, kind.body) : null;
+    if (npc) this.npcCount++;
+    // The server owns the ground: a body's y is the analytic surface, the
+    // client's registration y only a hint.
+    const position = { x: item.x, y: npc ? npc.y : item.y, z: item.z };
+    const e: EntityRecord = {
+      id: item.id,
+      kind: item.kind,
+      domain,
+      registrants: new Set(),
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      ry: 0,
+      clip: undefined,
+      clipT0: 0,
+      once: false,
+      sm: undefined,
+      state: {},
+      runner: kind?.sm ? new StateMachineRunner(kind.sm, { current: position }, { current: null }) : null,
+      position,
+      npc,
+      hull: null,
+    };
+    this.entities.set(e.id, e);
+    if (kind?.hull && physical) {
+      // Hulls build on the physics world's budgeted queue: a client entering
+      // the city registers hundreds of buildings at once.
+      const spec = kind.hull;
+      this.physics!.jobs.enqueue(`hull:${e.id}`, () => {
+        if (this.entities.get(e.id) === e && !e.hull) e.hull = createBuildingCollider(this.physics!, spec, e.x, e.y, e.z);
+        return true;
+      });
+    }
+    return e;
+  }
+
+  private dispose(e: EntityRecord): void {
+    e.runner?.dispose();
+    if (e.npc) {
+      e.npc.dispose();
+      this.npcCount--;
+    }
+    e.hull?.dispose();
+    this.entities.delete(e.id);
   }
 
   unregister(sessionId: string, ids: string[]): void {
@@ -172,19 +200,24 @@ export class EntityManager {
       const e = this.entities.get(id);
       if (!e) continue;
       e.registrants.delete(sessionId);
-      if (e.registrants.size === 0) {
-        e.runner?.dispose();
-        this.entities.delete(id);
-      }
+      if (e.registrants.size === 0) this.dispose(e);
     }
     if (mine && mine.size === 0) this.bySession.delete(sessionId);
   }
 
   removeSession(sessionId: string): void {
     const mine = this.bySession.get(sessionId);
-    if (!mine) return;
-    this.unregister(sessionId, [...mine]);
+    if (mine) this.unregister(sessionId, [...mine]);
   }
+
+  /** Forget every entity and player body (shutdown, tests). */
+  disposeAll(): void {
+    for (const e of [...this.entities.values()]) this.dispose(e);
+    this.bySession.clear();
+    this.players?.dispose();
+  }
+
+  // ── input ────────────────────────────────────────────────────────────────
 
   /** A client interacted. Mouse actions become blackboard flags for the
    *  machine (its own triggers decide, using the nearest player's distance);
@@ -193,11 +226,7 @@ export class EntityManager {
     const e = this.entities.get(id);
     if (!e || !e.registrants.has(sessionId)) return;
     const from = players.find((p) => p.id === sessionId);
-    if (from) {
-      const dx = from.x - e.x;
-      const dz = from.z - e.z;
-      if (dx * dx + dz * dz > INTERACT_REACH_SQ) return; // too far to touch it
-    }
+    if (from && (from.x - e.x) ** 2 + (from.z - e.z) ** 2 > INTERACT_REACH_SQ) return; // too far to touch it
     if (action === "mouse-left-click") {
       e.runner?.raise("__mouse_left_click");
       return;
@@ -208,112 +237,12 @@ export class EntityManager {
       const doors = Array.isArray(e.state.doors) ? [...(e.state.doors as boolean[])] : [];
       doors[idx] = !doors[idx];
       e.state = { ...e.state, doors };
-      e.dirty.state = e.state;
-      e.hasDirty = true;
-      this.flush(e);
+      this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, state: e.state });
     }
   }
 
-  // ── the tick ─────────────────────────────────────────────────────────────
-
-  tick(now = Date.now()): void {
-    const dt = TICK_MS / 1000;
-    const elapsed = (performance.now() - this.startedAt) / 1000;
-    const playersByDomain = new Map<DomainId, PlayerView[]>();
-    const playersOf = (domain: DomainId): PlayerView[] => {
-      let list = playersByDomain.get(domain);
-      if (!list) {
-        list = [];
-        for (const p of this.host.playersIn(domain)) {
-          const age = Math.min((now - p.lastMoveAt) / 1000, MAX_PLAYER_EXTRAPOLATION_S);
-          list.push({ ...p, x: p.x + p.vx * age, z: p.z + p.vz * age });
-        }
-        playersByDomain.set(domain, list);
-      }
-      return list;
-    };
-
-    for (const e of this.entities.values()) {
-      const r = e.runner;
-      if (!r) continue;
-      const { pos, distSq } = nearestPlayer(e, playersOf(e.domain));
-      // The runner reads its position through `position` — keep it current.
-      e.position.x = e.x;
-      e.position.y = e.y;
-      e.position.z = e.z;
-      r.tick(elapsed, dt, pos, distSq);
-
-      // ── outputs → simulated fields ──
-      const bb = r.blackboard;
-      const vx = bb.__vel_x ?? 0;
-      const vz = bb.__vel_z ?? 0;
-      const vy = bb.__vel_y ?? 0;
-      const ry = bb.__yaw ?? e.ry;
-      let nx = e.x + vx * dt;
-      let nz = e.z + vz * dt;
-      // Blocked by a player? Then don't take the step (slide is overkill here).
-      if ((vx !== 0 || vz !== 0) && distSq < 25) {
-        const dx = pos.x - nx;
-        const dz = pos.z - nz;
-        if (dx * dx + dz * dz < PLAYER_BLOCK_DIST * PLAYER_BLOCK_DIST) {
-          nx = e.x;
-          nz = e.z;
-        }
-      }
-      e.x = nx;
-      e.z = nz;
-      if (vy !== 0) e.y += vy * dt;
-
-      if (vx !== e.vx || vz !== e.vz || vy !== e.vy) {
-        e.vx = vx;
-        e.vz = vz;
-        e.vy = vy;
-        e.dirty.vx = vx;
-        e.dirty.vz = vz;
-        e.dirty.vy = vy;
-        e.dirty.x = e.x;
-        e.dirty.y = e.y;
-        e.dirty.z = e.z;
-        e.hasDirty = true;
-      } else if (vx !== 0 || vz !== 0 || vy !== 0) {
-        // Moving at a steady velocity: re-anchor position each tick so
-        // extrapolation on the client never drifts (cheap: it's the same
-        // record either way).
-        e.dirty.x = e.x;
-        e.dirty.y = e.y;
-        e.dirty.z = e.z;
-        e.hasDirty = true;
-      }
-      if (Math.abs(ry - e.ry) > 1e-3) {
-        e.ry = ry;
-        e.dirty.ry = ry;
-        e.hasDirty = true;
-      }
-      if (r.animationControl.dirty) {
-        r.animationControl.dirty = false;
-        const cmd = r.animationControl.pendingCommand;
-        if (cmd && cmd.clipName !== e.clip) {
-          e.clip = cmd.clipName;
-          e.clipT0 = now;
-          e.once = cmd.loop === 2200; // LOOP_ONCE
-          e.dirty.clip = e.clip;
-          e.dirty.clipT0 = e.clipT0;
-          e.dirty.once = e.once;
-          e.hasDirty = true;
-        }
-      }
-      if (r.currentStateId !== e.sm) {
-        e.sm = r.currentStateId;
-        e.dirty.sm = e.sm;
-        e.hasDirty = true;
-      }
-      if (e.hasDirty) this.flush(e);
-    }
-  }
-
-  /** Interactions need extrapolated players too — the transport passes them. */
-  playersFor(domain: DomainId): PlayerView[] {
-    const now = Date.now();
+  /** Players of a domain, extrapolated to now (the transport passes these to interact). */
+  playersFor(domain: DomainId, now = Date.now()): PlayerView[] {
     const list: PlayerView[] = [];
     for (const p of this.host.playersIn(domain)) {
       const age = Math.min((now - p.lastMoveAt) / 1000, MAX_PLAYER_EXTRAPOLATION_S);
@@ -322,10 +251,81 @@ export class EntityManager {
     return list;
   }
 
-  private flush(e: EntityRecord): void {
-    if (!e.hasDirty) return;
-    this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, ...e.dirty });
-    e.dirty = {};
-    e.hasDirty = false;
+  // ── the tick ─────────────────────────────────────────────────────────────
+
+  tick(now = Date.now()): void {
+    const tickStart = performance.now();
+    this.tickNo++;
+    const dt = TICK_MS / 1000;
+    const elapsed = (performance.now() - this.startedAt) / 1000;
+    const playersByDomain = new Map<DomainId, PlayerView[]>();
+    const playersOf = (domain: DomainId): PlayerView[] => {
+      let list = playersByDomain.get(domain);
+      if (!list) playersByDomain.set(domain, (list = this.playersFor(domain, now)));
+      return list;
+    };
+
+    const pw = this.physics;
+    const simulate = pw !== null && (this.npcCount > 0 || this.players!.size > 0);
+    if (pw) {
+      pw.work(this.workBudgetMs);
+      if (simulate) {
+        const domains = new Set<DomainId>();
+        for (const e of this.entities.values()) if (e.npc) domains.add(e.domain);
+        this.players!.sync([...domains].flatMap((d) => playersOf(d)));
+      }
+      // Chunks/hulls/capsules created above must be queryable BEFORE any body
+      // sweeps against them this tick (PhysicsWorld.ensureQueries).
+      pw.ensureQueries();
+    }
+
+    // Machines → intents → bodies.
+    for (const e of this.entities.values()) {
+      const r = e.runner;
+      if (!r) continue;
+      const { pos, distSq } = nearestPlayer(e, playersOf(e.domain));
+      e.position.x = e.x;
+      e.position.y = e.y;
+      e.position.z = e.z;
+      r.tick(elapsed, dt, pos, distSq);
+      if (e.npc) {
+        const bb = r.blackboard;
+        const vy = bb.__vel_y;
+        e.npc.step(dt, bb.__vel_x ?? 0, bb.__vel_z ?? 0, vy !== undefined && vy !== 0 ? vy : null);
+      }
+    }
+
+    if (simulate) pw!.step();
+
+    // Resolved poses → published fields.
+    for (const e of this.entities.values()) {
+      if (!e.runner) continue;
+      const pose = e.npc ? e.npc.pose(dt, this.pose) : null;
+      const fields = publishTick(e, pose, e.runner, now);
+      if (fields) this.send(e, fields);
+    }
+
+    const tickMs = performance.now() - tickStart;
+    if (tickMs > this.maxTickMs) this.maxTickMs = tickMs;
+    if (this.log && pw) {
+      if (tickMs > SLOW_TICK_WARN_MS) console.warn(`[physics] slow tick ${tickMs.toFixed(1)}ms — ${this.statsLine()}`);
+      if (this.tickNo % STATS_LOG_EVERY_TICKS === 0 && (this.npcCount > 0 || pw.jobs.length > 0)) {
+        console.log(`[physics] ${this.statsLine()}`);
+        this.maxTickMs = 0;
+      }
+    }
+  }
+
+  private send(e: EntityRecord, fields: EntityUpdateFields): void {
+    this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, ...fields });
+  }
+
+  statsLine(): string {
+    const s = this.physics!.stats();
+    return (
+      `npcs ${this.npcCount} players ${this.players!.size} | tick max ${this.maxTickMs.toFixed(1)}ms ` +
+      `step ${s.stepMs.toFixed(2)}/${s.maxStepMs.toFixed(2)}ms work ${s.workMs.toFixed(1)}/${s.maxWorkMs.toFixed(1)}ms (slowest job step ${s.maxJobStepMs.toFixed(0)}ms) | ` +
+      `colliders ${s.colliders} bodies ${s.bodies} terrain ${s.terrain.built}+${s.terrain.pending} dressing ${s.dressing.built}+${s.dressing.pending} queue ${s.queued}`
+    );
   }
 }

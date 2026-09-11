@@ -1,6 +1,7 @@
 import http from "node:http";
 import { closeDb, getDb, resolveDatabasePath } from "./data/db.js";
-import { TICK_MS } from "./game/entities/manager.js";
+import { TICK_MS } from "./game/tick.js";
+import { PhysicsWorld } from "./game/physics/world.js";
 import { SAVE_INTERVAL_MS } from "./game/world.js";
 import { createApp } from "./http.js";
 import { attachWebSocketTransport } from "./transport/ws.js";
@@ -18,8 +19,14 @@ const HOST = "0.0.0.0";
 getDb();
 console.log(`[db] ${resolveDatabasePath()}`);
 
+// The server physics world (headless Rapier + the glitch-city height
+// function): every synced NPC's body lives here. WASM init is async, so it is
+// ready BEFORE the transport accepts a single registration.
+const physics = await PhysicsWorld.create();
+console.log("[physics] rapier ready");
+
 const server = http.createServer(createApp());
-const { wss, world } = attachWebSocketTransport(server);
+const { wss, world } = attachWebSocketTransport(server, physics);
 
 // Periodic save sweep: a coarse timer, deliberately NOT a game tick. Each
 // player is written at most once per SAVE_INTERVAL_MS and only if dirty.

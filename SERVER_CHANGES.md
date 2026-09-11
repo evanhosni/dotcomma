@@ -243,8 +243,11 @@ networking. Three designs were built; the third is what runs.
   `kinematicMover.tsx` own the body (declared on the descriptor: `body:
   "fixed" | "kinematic" | "none"`, `collider`, `movement: "ground" | "free"`
   — the beeble's capsule/gravity/slopes were ported out of Beeble into here)
-  and CHASE the target with feedforward + a 0.5u stop deadzone, snapping on
-  first sight or gaps > 6u; ModelActor plays the server's clip in phase;
+  and — since server physics — only PARK the capsule at the base's pose; the
+  base draws the entity by SNAPSHOT INTERPOLATION of the server-stamped track
+  200ms behind the server clock (`net/entities/interpolation.ts`; nothing is
+  predicted, chased or resolved locally); ModelActor starts the server's clip
+  on that same delayed clock;
   `useStateMachine` MIRRORS the server's state id with the server's outputs
   injected, so state-keyed visuals (head tracking, sphere-inflate) run;
   `useMouseEvents` forwards left clicks. `Beeble.tsx` is ~65 lines: machine +
@@ -253,7 +256,9 @@ networking. Three designs were built; the third is what runs.
 - Day/night cycle runs off `getServerTime()` so all players share the time of day.
 
 **Wire additions**: `entity:register`, `entity:unregister`,
-`entity:interact` (client→server); `entity:update` (server→clients).
+`entity:interact` (client→server); `entity:update` (server→clients) — every
+positional update carries `st`, the server time of its tick (snapshot
+interpolation).
 
 **Verified**: `server/test/entities.test.ts` runs the real beeble machine on
 the server (wanders and publishes; alerted by a SECOND player; forwarded click
@@ -263,9 +268,25 @@ blackboard held random local values), walking backwards (body chased across a
 gap from spawn), never alerting (server walked through the player), the
 16KB frame cap.
 
-**Known limits**: no buildings on the server, so a beeble whose server path
-enters a building lags until it clears; `body: "dynamic"` (pushables) not
-implemented; machine state is lost when the last viewer leaves.
+**Server physics (Sept 2026)**: the server runs headless Rapier
+(`server/src/game/physics/`: `world.ts` + `chunks.ts` job queue / refcounted
+chunk stores, `terrain.ts`, `obstacles.ts`, `buildings.ts`, `walker.ts`,
+`npc.ts`, `players.ts`; the client's own `@dimforge/rapier3d-compat` bundled
+from the root install — no server-side dependency) — the client's exact LOD1
+terrain heightfields, building hulls, lamp/signal/pole cuboids and player
+capsules — and moves every walker through THE shared character resolver
+`src/physics/characterMovement.ts` (extracted verbatim from Player.tsx, which
+calls it too). `entities/manager.ts` orchestrates the tick; `entities/publish.ts`
+diffs what registrants last saw. Published x, y AND z are authoritative; the
+client draws the published track by snapshot interpolation 200ms behind the
+server clock (`net/entities/interpolation.ts`) and predicts nothing. Found on
+the way: the client's `<Physics>` fixed 1/60 step made every per-frame-driven
+kinematic body move at 60/fps of its speed above 60fps (now `timeStep="vary"`).
+See CLAUDE.md "Server physics" for the module map and the measured gotchas.
+
+**Known limits**: `body: "dynamic"` (pushables) not implemented; machine state
+is lost when the last viewer leaves; only glitch-city has terrain on the server
+(a walker registered in another domain runs its machine but stays put).
 
 ---
 
@@ -414,7 +435,10 @@ npm install && (cd server && npm install)
 npm run build                     # client → build/, server → server/dist/
 (cd server && npm run db:migrate) # creates ./data/dotcomma.sqlite (schema 1)
 npm run start:server              # http://localhost:8080 (built client + ws)
-npm start                         # CRA dev server :3000 …
+npm run dev                       # BOTH: server (tsx watch :8080) + client (craco :3000), prefixed output,
+                                  #   Ctrl+C stops both; first run creates+migrates server/data/dotcomma.sqlite
+                                  #   (scripts/dev.mjs; --no-open / --server-only / --client-only)
+npm start                         # or separately: CRA dev server :3000 …
 npm run dev:server                # … + tsx watch on :8080 (.env.development points the client at it)
 (cd server && npm test)           # entity manager + real beeble machine
 npm run deploy:dry / npm run deploy
@@ -433,7 +457,7 @@ sessions sharing one identity — the standard local multiplayer test.
 
 1. Registrar transfer to Cloudflare, then delete `_domainconnect`, re-enable DNSSEC (§7).
 2. Assets/CDN pipeline when the model count justifies it (§9).
-3. Server-side building avoidance for NPCs if wall lag shows in play (§5).
+3. ~~Server-side building avoidance for NPCs~~ — done: server physics (§5).
 4. Player movement validation in `World.move` when PvP needs to be strict (§4).
 5. `body: "dynamic"` for pushable objects (§5).
 6. The real persistence schema: one migration + typed accessors (§3).

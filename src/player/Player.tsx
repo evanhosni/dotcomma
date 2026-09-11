@@ -1,4 +1,3 @@
-import type Rapier from "@dimforge/rapier3d-compat";
 import { PointerLockControls } from "@react-three/drei";
 import type { PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 import { useFrame, useThree } from "@react-three/fiber";
@@ -10,6 +9,14 @@ import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
 import { useInput } from "./useInput";
 import { getAssignedSpawnOffset } from "../net/connection";
+import {
+  createCharacter,
+  createStepResult,
+  disposeCharacter,
+  resetCharacterMotion,
+  stepCharacter,
+  type Character,
+} from "../physics/characterMovement";
 
 /** Default spawn: BODY-CENTER position high above the origin — the player
  *  free-falls onto the terrain once it loads. */
@@ -34,57 +41,11 @@ const STUCK_RECHECK_BACKOFF = 45; // frames
 // Normal mode speeds
 const WALK_SPEED = 15;
 const SPRINT_SPEED = 45;
-const JUMP_IMPULSE = 40;
-// Gap the controller keeps from surfaces. 0.02 was thin enough that fast
-// glancing contact on steep slopes could numerically penetrate the terrain
-// trimesh — and a sweep that STARTS inside a triangle passes through it
-// (the fall-through-the-map bug). 0.08 keeps the capsule reliably outside.
-const CC_OFFSET = 0.08;
-const SNAP_TO_GROUND = 0.3;
-
-// ---- Slopes ----
-// Two INDEPENDENT responses, both driven by the ground-normal raycast:
-//   SLOWDOWN (SOFT_START..SOFT_END): the UPHILL component of input scales
-//     smoothly from 1 → 0 (walking along the contour or downhill stays full
-//     speed). The band is deliberately WIDE so it creeps in gradually.
-//   SLIDE (> SLIDE_ANGLE): unclimbable — the player slides down the slope's
-//     fall line, accelerating with gravity's tangential component; momentum
-//     bleeds off quickly on walkable ground. No jumping mid-slide. The Rapier
-//     controller's own climb limit sits here too (hard wall + deflection).
-//
-// SLIDE_ANGLE is set from a MEASURED slope distribution of the real terrain
-// (sampled at LOD1 collider resolution, 4.375u, across grassland — the
-// steepest biome). Natural terrain tops out at ~47°:
-//     median 25.6° | p90 35.3° | p99 42.6° | max 46.9°
-//     >35°: 10.7% of area | >40°: 3.6% | >45°: 0.17% | >50°: NONE
-// Capsule-solid steep spots (whole footprint steep, not a one-triangle
-// sliver) are what the player can actually stand on: 257 in a 600×600 patch
-// at 40°, but only 15 at 45° and 5 at 50°. So 55° was UNREACHABLE — nothing
-// in the world is that steep except flatten-pad skirts, which is why sliding
-// stopped happening entirely. 40° is the value where genuine steep faces
-// exist without being everywhere. Re-measure before changing this if the
-// terrain noise changes.
-const SLOPE_SOFT_START = 25 * (Math.PI / 180);
-const SLOPE_SOFT_END = 45 * (Math.PI / 180);
-const SLOPE_SLIDE_ANGLE = 40 * (Math.PI / 180);
-// Both responses require PERSISTENCE — this many seconds of steep ground
-// before they engage. Flatten-pad edges and heightfield slivers are tiny
-// steep faces the probe clips for a frame or two; reacting instantly to those
-// made walking anywhere feel like sliding. The timers LEAK rather than reset
-// (decay at DECAY× fill rate, saturating at 2× the delay) so genuinely steep
-// but bumpy ground still engages, a lone sliver never does, and an engaged
-// slide doesn't stutter off on one flat triangle.
-const SLOPE_ENGAGE_DELAY = 0.1;
-const SLIDE_ENGAGE_DELAY = 0.15;
-const SLOPE_TIMER_DECAY = 2;
-const SLIDE_MAX_SPEED = 30;
-const SLIDE_STOP_DECEL = 60; // how fast leftover slide momentum dies on walkable ground
-// Near ANY ground, gravity must not wind up to terminal velocity. Two
-// separate bugs share this cause: a huge downward component fed into a
-// glancing steep contact punches through the trimesh, and on gentle ground it
-// gets deflected sideways into permanent drift. The slide vector provides the
-// downhill motion; this just keeps the capsule pressed to the surface.
-const SLIDE_FALL_CLAMP = -20;
+// EVERYTHING about how the capsule moves — contact offset, slope bands and
+// the fall-line slide, gravity, jump impulse, substepping, the ground probe —
+// lives in physics/characterMovement.ts, the ONE resolver shared with the
+// server's NPCs. Tune it there; this file only reads input and owns the
+// terrain backstop, stuck escape, respawn and camera.
 
 // Devmode speeds
 const DEV_SPEED = 60;
@@ -97,29 +58,9 @@ const PLAYER_HEIGHT = 2;
 const PLAYER_RADIUS = 0.5;
 const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
-// Ground-normal probe: cast long, then accept the hit adaptively by SLOPE —
-// the vertical distance from the capsule center to the surface grows as
-// 1/cos(angle) on inclines (the capsule rests against them sideways). A
-// fixed feet-length reach was used before and REJECTED: beyond ~55° the ray
-// stopped reaching the ground, so the steep-slope slide never engaged and
-// jumping stayed possible exactly on the slopes that should forbid it.
-const GROUND_RAY_LENGTH = 5;
-const GROUND_RAY_SLACK = SNAP_TO_GROUND + 0.4;
-
 // Camera
 const CAMERA_FAR = 7200;
 const CAMERA_LERP = 0.3;
-
-// Gravity (manually integrated for kinematic character controller)
-const GRAVITY = -100;
-const TERMINAL_VELOCITY = -150;
-const MAX_MOVEMENT_PER_FRAME = 8;
-// The KCC solve is SUBSTEPPED so no single swept solve moves farther than
-// ~the capsule radius: one long glancing sweep along a steep slope is the
-// other half of the tunneling bug (corrections apply too late, penetration
-// accumulates). 16 substeps covers MAX_MOVEMENT_PER_FRAME.
-const MAX_SUBSTEP_DISTANCE = 0.5;
-const MAX_SUBSTEPS = 16;
 
 // Reusable vectors (avoid per-frame allocations)
 const _direction = new THREE.Vector3();
@@ -127,22 +68,6 @@ const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
-const _uphill = new THREE.Vector3();
-// Persists across frames: the last slide direction keeps pushing while the
-// leftover momentum decays after reaching walkable ground.
-const _slideDir = new THREE.Vector3();
-// Reused Rapier-facing scratch (Rapier copies the values into wasm on call,
-// so the same objects are safe to mutate every frame — the substep loop
-// otherwise allocated up to 17 literals per frame)
-const _desiredMove = { x: 0, y: 0, z: 0 };
-const _stepMove = { x: 0, y: 0, z: 0 };
-const _transScratch = { x: 0, y: 0, z: 0 };
-const _notSensor = (c: Rapier.Collider) => !c.isSensor();
-
-const smooth01 = (t: number): number => {
-  const x = Math.min(Math.max(t, 0), 1);
-  return x * x * (3 - 2 * x);
-};
 
 /**
  * True collider-surface height at (x, z) IF the capsule bottom is genuinely
@@ -176,12 +101,6 @@ const resolveEmbeddedSurface = async (
   return padded.height;
 };
 
-/** Leaky persistence timer: fills while the condition holds, decays faster
- *  when it doesn't, and saturates at 2× the engage delay so an engaged
- *  response has hysteresis on the way out. */
-const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
-  Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
-
 /** The first-person controller. Mounted ONCE by CustomCanvas and persists
  *  across domain switches; the active domain publishes its spawn through
  *  GameContext (<Domain playerSpawn>), and the outgoing domain resets
@@ -194,16 +113,13 @@ export const Player = () => {
   const { noclip } = useDevMode();
 
   const rigidBodyRef = useRef<RapierRigidBody | null>(null);
-  const verticalVelocity = useRef(0);
-  const slideSpeed = useRef(0);
   const cameraReady = useRef(false);
   const respawning = useRef(false);
-  const controllerRef = useRef<Rapier.KinematicCharacterController | null>(null);
-  const groundRayRef = useRef<Rapier.Ray | null>(null);
+  // The shared character (controller + probe ray + motion state) — see
+  // physics/characterMovement.ts.
+  const characterRef = useRef<Character | null>(null);
+  const stepResult = useRef(createStepResult()).current;
   const groundCheckFrame = useRef(0);
-  // Seconds of CONTINUOUS steep ground under the probe (see the engage delays).
-  const softSlopeTime = useRef(0);
-  const steepSlopeTime = useRef(0);
   const stuckFrames = useRef(0);
   const unsticking = useRef(false);
 
@@ -221,27 +137,13 @@ export const Player = () => {
   );
 
   useEffect(() => {
-    const controller = world.createCharacterController(CC_OFFSET);
-    // The hard wall lives at SLIDE_ANGLE — everything below it is climbable
-    // but speed-shaped in the frame loop, and beyond it the controller both
-    // blocks climbing and deflects gravity down the slope. (The slowdown
-    // curve runs to SOFT_END, past the wall — so uphill speed is already down
-    // to ~16% when the slide takes over, with no dead zone between them.)
-    controller.setMaxSlopeClimbAngle(SLOPE_SLIDE_ANGLE + 0.01);
-    controller.setMinSlopeSlideAngle(SLOPE_SLIDE_ANGLE);
-    // Push the capsule OUT along contact normals noticeably harder than the
-    // default (1e-4): shallow penetrations on steep glancing contacts must
-    // recover instead of accumulating until a sweep starts inside the trimesh.
-    controller.setNormalNudgeFactor(0.02);
-    controller.enableSnapToGround(SNAP_TO_GROUND);
-    controller.enableAutostep(0.5, 0.2, true);
-    controller.setApplyImpulsesToDynamicBodies(true);
-    controllerRef.current = controller;
+    const character = createCharacter(rapier, world, { height: PLAYER_HEIGHT, radius: PLAYER_RADIUS });
+    characterRef.current = character;
     return () => {
-      world.removeCharacterController(controller);
-      controllerRef.current = null;
+      disposeCharacter(world, character);
+      characterRef.current = null;
     };
-  }, [world]);
+  }, [world, rapier]);
 
   // Set camera far plane once
   useEffect(() => {
@@ -256,8 +158,8 @@ export const Player = () => {
 
   useFrame((_, delta) => {
     const rb = rigidBodyRef.current;
-    const controller = controllerRef.current;
-    if (!rb || !controller) return;
+    const character = characterRef.current;
+    if (!rb || !character) return;
 
     const { forward, backward, left, right, sprint, jump, control } = inputRef.current;
 
@@ -288,7 +190,7 @@ export const Player = () => {
       const sx = spawn[0] + (off?.x ?? 0);
       const sz = spawn[2] + (off?.z ?? 0);
       rb.setTranslation({ x: sx, y: spawn[1], z: sz }, true);
-      verticalVelocity.current = 0;
+      character.state.vy = 0;
       _camTarget.set(sx, spawn[1] + PLAYER_HEIGHT * 0.5, sz);
       camera.position.copy(_camTarget);
       cameraReady.current = false;
@@ -310,208 +212,22 @@ export const Player = () => {
 
       rb.setTranslation({ x: pos.x + _moveVec.x * dt, y: pos.y + vy * dt, z: pos.z + _moveVec.z * dt }, true);
     } else {
-      // --- NORMAL MODE (Character Controller) ---
+      // --- NORMAL MODE (the shared character resolver) ---
       const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
-      const grounded = controller.computedGrounded();
       const collider = rb.collider(0);
-
-      // ---- Ground slope probe (capsule center straight down) ----
-      // Runs EVERY frame, not just when computedGrounded() says so — Rapier's
-      // grounded flag flickers false on too-steep surfaces, which is exactly
-      // where the slope logic matters most.
-      let nearGround = false;
-      let groundSupported = false;
-      let groundAngle = 0;
-      let nX = 0;
-      let nY = 1;
-      let nZ = 0;
       if (collider) {
-        if (!groundRayRef.current) {
-          groundRayRef.current = new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
-        }
-        const ray = groundRayRef.current;
-        ray.origin.x = pos.x;
-        ray.origin.y = pos.y;
-        ray.origin.z = pos.z;
-        const hit = world.castRayAndGetNormal(
-          ray,
-          GROUND_RAY_LENGTH,
-          false,
-          undefined,
-          undefined,
-          collider,
+        const r = stepCharacter(
+          world,
+          character,
           rb,
-          _notSensor
+          collider,
+          pos.x,
+          pos.y,
+          pos.z,
+          { dirX: _moveVec.x, dirZ: _moveVec.z, speed, jump },
+          dt,
+          stepResult
         );
-        if (hit) {
-          // Trimesh normals can face either way — orient upward.
-          const flip = hit.normal.y < 0 ? -1 : 1;
-          const hnX = hit.normal.x * flip;
-          const hnY = hit.normal.y * flip;
-          const hnZ = hit.normal.z * flip;
-          // Slope-adaptive acceptance: on an incline the surface sits
-          // 1/cos(angle) farther below the center, so the allowed distance
-          // scales with the hit's own normal (flat ground: feet + snap, same
-          // as the old fixed reach; ~76°+ counts as wall, not ground).
-          const allowed = PLAYER_HEIGHT / 2 / Math.max(hnY, 0.25) + GROUND_RAY_SLACK;
-          if (hit.timeOfImpact <= allowed) {
-            nearGround = true;
-            nX = hnX;
-            nY = hnY;
-            nZ = hnZ;
-            groundAngle = Math.acos(Math.min(Math.max(nY, -1), 1));
-          }
-          // Tighter test: the surface is within snapping reach, i.e. the
-          // controller is genuinely standing on it rather than merely near it.
-          groundSupported = hit.timeOfImpact <= PLAYER_HEIGHT / 2 / Math.max(hnY, 0.25) + SNAP_TO_GROUND + 0.1;
-        }
-      }
-
-      // Slope responses only engage after the ground has been steep for a
-      // sustained moment — a single frame clipping a pad edge or a heightfield
-      // sliver must not trigger them.
-      softSlopeTime.current = bumpSlopeTimer(
-        softSlopeTime.current,
-        nearGround && groundAngle > SLOPE_SOFT_START,
-        dt,
-        SLOPE_ENGAGE_DELAY
-      );
-      steepSlopeTime.current = bumpSlopeTimer(
-        steepSlopeTime.current,
-        nearGround && groundAngle > SLOPE_SLIDE_ANGLE,
-        dt,
-        SLIDE_ENGAGE_DELAY
-      );
-
-      const onSlideSlope = steepSlopeTime.current >= SLIDE_ENGAGE_DELAY;
-      // Gravity/jump support: computedGrounded() alone FLICKERS false on
-      // heightfield terrain, and every flickered frame integrated gravity
-      // without reset — winding toward terminal velocity, which the controller
-      // then deflected along even a 2–3° slope into permanent horizontal drift
-      // (the "always sliding no matter how flat" bug) while snap-to-ground kept
-      // the capsule glued down. The raycast is re-evaluated every frame, so it
-      // can't accumulate that way. Do NOT gate support on the flag alone.
-      const walkableSupport = groundSupported && groundAngle <= SLOPE_SLIDE_ANGLE;
-
-      // ---- Input, shaped by slope ----
-      if (_moveVec.lengthSq() > 0) {
-        _moveVec.normalize();
-        // In the soft band, only the UPHILL component of the input slows —
-        // full speed along the contour and downhill.
-        if (nearGround && groundAngle > SLOPE_SOFT_START && softSlopeTime.current >= SLOPE_ENGAGE_DELAY) {
-          const hLen = Math.hypot(nX, nZ);
-          if (hLen > 1e-5) {
-            _uphill.set(-nX / hLen, 0, -nZ / hLen);
-            const uphillFactor = Math.max(0, _moveVec.dot(_uphill));
-            const climb = 1 - smooth01((groundAngle - SLOPE_SOFT_START) / (SLOPE_SOFT_END - SLOPE_SOFT_START));
-            _moveVec.multiplyScalar(speed * (1 - uphillFactor * (1 - climb)));
-          } else {
-            _moveVec.multiplyScalar(speed);
-          }
-        } else {
-          _moveVec.multiplyScalar(speed);
-        }
-      }
-
-      // ---- Slide on unclimbable slopes ----
-      if (onSlideSlope) {
-        // Fall line: gravity projected onto the slope plane.
-        _slideDir.set(nY * nX, nY * nY - 1, nY * nZ).normalize();
-        slideSpeed.current = Math.min(
-          SLIDE_MAX_SPEED,
-          slideSpeed.current + -GRAVITY * Math.sin(groundAngle) * dt
-        );
-      } else {
-        // Leftover momentum carries in the last slide direction and bleeds
-        // off quickly once the ground is walkable again.
-        slideSpeed.current = Math.max(0, slideSpeed.current - SLIDE_STOP_DECEL * dt);
-      }
-
-      // Gravity integration (capped at terminal velocity)
-      if ((grounded || walkableSupport) && verticalVelocity.current <= 0) {
-        verticalVelocity.current = 0;
-      } else {
-        verticalVelocity.current = Math.max(verticalVelocity.current + GRAVITY * dt, TERMINAL_VELOCITY);
-      }
-      // Near ANY ground, cap the fall speed. Without this, gravity winds
-      // toward terminal velocity while the capsule scrapes the surface at a
-      // glancing angle — the huge downward sweep both punches the player
-      // through the terrain trimesh and gets deflected into sideways drift.
-      if (nearGround && verticalVelocity.current < SLIDE_FALL_CLAMP) {
-        verticalVelocity.current = SLIDE_FALL_CLAMP;
-      }
-
-      // Jump — not while sliding on an unclimbable slope. Uses the ray-based
-      // support too, so a flickered grounded flag can't eat a jump input.
-      if (jump && (grounded || walkableSupport) && !onSlideSlope && verticalVelocity.current <= 0) {
-        verticalVelocity.current = JUMP_IMPULSE;
-      }
-
-      // Compute desired movement, clamped so the swept capsule query stays reliable
-      const desiredMovement = _desiredMove;
-      desiredMovement.x = (_moveVec.x + _slideDir.x * slideSpeed.current) * dt;
-      desiredMovement.y = verticalVelocity.current * dt + _slideDir.y * slideSpeed.current * dt;
-      desiredMovement.z = (_moveVec.z + _slideDir.z * slideSpeed.current) * dt;
-      const movementDistSq =
-        desiredMovement.x * desiredMovement.x +
-        desiredMovement.y * desiredMovement.y +
-        desiredMovement.z * desiredMovement.z;
-      if (movementDistSq > MAX_MOVEMENT_PER_FRAME * MAX_MOVEMENT_PER_FRAME) {
-        const scale = MAX_MOVEMENT_PER_FRAME / Math.sqrt(movementDistSq);
-        desiredMovement.x *= scale;
-        desiredMovement.y *= scale;
-        desiredMovement.z *= scale;
-      }
-
-      // Let the character controller compute collision-corrected movement.
-      // SUBSTEPPED: each swept solve covers at most ~a capsule radius. One
-      // long sweep along a glancing steep contact lets penetration build up
-      // before the correction lands — and a sweep that starts inside the
-      // trimesh falls straight through. Between substeps the body teleports
-      // to the corrected spot (invisible — physics steps after this
-      // callback); at the end it's restored and moved kinematically so
-      // dynamic-body interactions see proper velocities.
-      if (collider) {
-        const dist = Math.sqrt(
-          desiredMovement.x * desiredMovement.x +
-            desiredMovement.y * desiredMovement.y +
-            desiredMovement.z * desiredMovement.z
-        );
-        const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dist / MAX_SUBSTEP_DISTANCE)));
-        const stepMove = _stepMove;
-        stepMove.x = desiredMovement.x / steps;
-        stepMove.y = desiredMovement.y / steps;
-        stepMove.z = desiredMovement.z / steps;
-        let fx = pos.x;
-        let fy = pos.y;
-        let fz = pos.z;
-        for (let i = 0; i < steps; i++) {
-          controller.computeColliderMovement(collider, stepMove, undefined, undefined, _notSensor);
-          const corrected = controller.computedMovement();
-          fx += corrected.x;
-          fy += corrected.y;
-          fz += corrected.z;
-          if (steps > 1 && i < steps - 1) {
-            // Colliders only follow their body at the physics step — propagate
-            // explicitly so the next substep's sweep starts from this spot.
-            _transScratch.x = fx;
-            _transScratch.y = fy;
-            _transScratch.z = fz;
-            rb.setTranslation(_transScratch, false);
-            world.propagateModifiedBodyPositionsToColliders();
-          }
-        }
-        if (steps > 1) {
-          _transScratch.x = pos.x;
-          _transScratch.y = pos.y;
-          _transScratch.z = pos.z;
-          rb.setTranslation(_transScratch, false);
-          world.propagateModifiedBodyPositionsToColliders();
-        }
-        _transScratch.x = fx;
-        _transScratch.y = fy;
-        _transScratch.z = fz;
-        rb.setNextKinematicTranslation(_transScratch);
 
         // ---- Stuck detection (wedged-in-the-ground escape) ----
         // A capsule SLIGHTLY embedded in the terrain (below the backstop's
@@ -521,9 +237,9 @@ export const Player = () => {
         // horizontal movement. Confirmed against the analytic height (so
         // pushing against a building wall — legitimately blocked — never
         // triggers), the fix is lifting exactly to the surface.
-        const wantSq = desiredMovement.x * desiredMovement.x + desiredMovement.z * desiredMovement.z;
-        const gotX = fx - pos.x;
-        const gotZ = fz - pos.z;
+        const wantSq = r.desiredX * r.desiredX + r.desiredZ * r.desiredZ;
+        const gotX = r.x - pos.x;
+        const gotZ = r.z - pos.z;
         const gotSq = gotX * gotX + gotZ * gotZ;
         if (wantSq > 1e-6 && gotSq < wantSq * 0.0025) {
           stuckFrames.current++;
@@ -537,9 +253,9 @@ export const Player = () => {
           !respawning.current
         ) {
           unsticking.current = true;
-          const sx = fx;
-          const sz = fz;
-          resolveEmbeddedSurface(sx, sz, fy - PLAYER_HEIGHT / 2, STUCK_EMBED_MIN).then((surface) => {
+          const sx = r.x;
+          const sz = r.z;
+          resolveEmbeddedSurface(sx, sz, r.y - PLAYER_HEIGHT / 2, STUCK_EMBED_MIN).then((surface) => {
             unsticking.current = false;
             const body = rigidBodyRef.current;
             if (!body) return;
@@ -547,8 +263,7 @@ export const Player = () => {
             if (Math.abs(cur.x - sx) > 3 || Math.abs(cur.z - sz) > 3) return; // stale
             if (surface !== null && cur.y - PLAYER_HEIGHT / 2 < surface - STUCK_EMBED_MIN) {
               body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
-              verticalVelocity.current = 0;
-              slideSpeed.current = 0;
+              resetCharacterMotion(character.state);
               stuckFrames.current = 0;
             } else {
               // Not embedded — blocked by a wall or similar. Back off before
@@ -588,8 +303,7 @@ export const Player = () => {
           if (Math.abs(cur.x - cx) > 3 || Math.abs(cur.z - cz) > 3) return;
           if (cur.y - PLAYER_HEIGHT / 2 >= surface - EMBED_TOLERANCE) return; // recovered meanwhile
           body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + 0.1, z: cur.z }, true);
-          verticalVelocity.current = 0;
-          slideSpeed.current = 0;
+          resetCharacterMotion(character.state);
         });
       }
     }
@@ -597,12 +311,12 @@ export const Player = () => {
     // Safety net: if player falls through terrain, respawn at ground height + 10
     if (finalPos.y < FALL_RESET_Y && !respawning.current) {
       respawning.current = true;
-      verticalVelocity.current = 0;
+      character.state.vy = 0;
       getVertexData(finalPos.x, finalPos.z).then((vd) => {
         if (rigidBodyRef.current) {
           rigidBodyRef.current.setTranslation({ x: finalPos.x, y: vd.height + 10, z: finalPos.z }, true);
         }
-        verticalVelocity.current = 0;
+        character.state.vy = 0;
         respawning.current = false;
       });
     }
