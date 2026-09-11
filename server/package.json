@@ -9,12 +9,13 @@
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
-    "build": "esbuild src/index.ts src/cli/migrate.ts src/cli/inspect.ts --bundle --platform=node --target=node24 --format=esm --packages=external --outdir=dist --outbase=src --sourcemap --log-level=warning",
+    "build": "esbuild src/index.ts src/cli/migrate.ts src/cli/inspect.ts src/cli/physicsDemo.ts --bundle --platform=node --target=node24 --format=esm --external:express --external:ws --external:three --external:react --outdir=dist --outbase=src --sourcemap --log-level=warning",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json",
     "db:migrate": "tsx --env-file-if-exists=.env src/cli/migrate.ts",
     "db:inspect": "tsx --env-file-if-exists=.env src/cli/inspect.ts",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "physics:demo": "tsx src/cli/physicsDemo.ts"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -69,7 +69,19 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
           driven by our own code (player camera, beeble group) — so the
           snapshot buys nothing and scaled with the 500+ bodies in the city,
           on exactly the long frames where the accumulator steps twice. */}
-      <Physics gravity={[0, -100, 0]} debug={physicsDebug} interpolate={false}>
+      {/* timeStep="vary": ONE physics step per rendered frame, with the frame's
+          delta. Every kinematic body here (Player, NPC movers) is driven per
+          FRAME — read translation(), add this frame's movement, set the next
+          kinematic translation — but r-t-r's default is a FIXED 1/60 step on an
+          accumulator: above 60fps the world steps only every 2nd–3rd frame, the
+          frames in between all compute from the same unchanged translation()
+          and the LAST one wins, so bodies moved at 60/fps of their intended
+          speed (~40–60% at this project's 96–145fps). Invisible while the
+          client was the only simulator; with the server walking NPCs at their
+          true speed the client body fell behind, slid on after every stop, and
+          snapped forward to catch up. There are no dynamic bodies, so a
+          variable step has no stability cost. */}
+      <Physics gravity={[0, -100, 0]} debug={physicsDebug} interpolate={false} timeStep="vary">
         {children}
         <Player />
       </Physics>

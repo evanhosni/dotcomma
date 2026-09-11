@@ -1,5 +1,6 @@
 import { loadPlayer, savePlayerData, type PlayerData } from "../data/players.js";
 import { EntityManager, type PlayerView } from "./entities/manager.js";
+import type { PhysicsWorld } from "./physics/world.js";
 import type { DomainId, MoveIntent, PlayerSnapshot, ServerMessage } from "../protocol.js";
 
 /**
@@ -82,11 +83,14 @@ export class World {
   /** Synced entities (NPCs, doors) — see entities/manager.ts. */
   readonly entities: EntityManager;
 
-  constructor(private readonly out: Outbox) {
-    this.entities = new EntityManager({
-      playersIn: (domain) => this.playerViews(domain),
-      sendMany: (ids, msg) => this.out.sendMany(ids, msg),
-    });
+  constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
+    this.entities = new EntityManager(
+      {
+        playersIn: (domain) => this.playerViews(domain),
+        sendMany: (ids, msg) => this.out.sendMany(ids, msg),
+      },
+      physics,
+    );
   }
 
   private *playerViews(domain: DomainId): Iterable<PlayerView> {

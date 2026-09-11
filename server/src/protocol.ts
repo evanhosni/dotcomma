@@ -146,6 +146,10 @@ export interface EntityRegisterItem {
 
 /** Server-published fields — every one optional so updates carry only changes. */
 export interface EntityUpdateFields {
+  /** Server time (ms) of the tick this pose was published — present whenever
+   *  x/y/z are. Clients interpolate the published track on this clock
+   *  (snapshot interpolation), never on message arrival time. */
+  st?: number;
   x?: number;
   y?: number;
   z?: number;

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { World, type Outbox } from "../game/world.js";
+import type { PhysicsWorld } from "../game/physics/world.js";
 import {
   isDomainId,
   type ClientMessage,
@@ -118,11 +119,11 @@ class SocketOutbox implements Outbox {
   }
 }
 
-export const attachWebSocketTransport = (server: http.Server) => {
+export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWorld) => {
   const wss = new WebSocketServer({ server, maxPayload: MAX_PAYLOAD_BYTES });
   const bySession = new Map<string, Conn>();
   const all = new Set<Conn>(); // every open socket, hello'd or not — for the heartbeat sweep
-  const world = new World(new SocketOutbox(bySession));
+  const world = new World(new SocketOutbox(bySession), physics);
 
   wss.on("connection", (ws) => {
     const conn: Conn = { ws, sessionId: null, isAlive: true };

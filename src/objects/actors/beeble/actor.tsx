@@ -2,6 +2,7 @@ import { ActorDescriptor } from "../spawning/types";
 import { createActor } from "../../../world/components";
 import { Beeble } from "./Beeble";
 import { ModelActorAttributes } from "../ModelActor";
+import { BEEBLE_COLLIDER } from "./spec";
 
 export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
   id: "beeble",
@@ -10,7 +11,7 @@ export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
   // A walker: ModelActor owns the capsule, gravity and slopes; the state
   // machine only supplies a velocity (see kinematicMover.tsx).
   body: "kinematic",
-  collider: { shape: "capsule", radius: 0.5, height: 2.4 },
+  collider: BEEBLE_COLLIDER, // spec.ts — shared with the server (kinds.ts)
   movement: "ground",
   isStatic: false,
   footprint: 5,

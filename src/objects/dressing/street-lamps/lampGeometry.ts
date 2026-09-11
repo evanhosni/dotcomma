@@ -12,22 +12,11 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
  * one material for the whole lamp instead of two of each.
  */
 
-export const LAMP_POLE_HEIGHT = 10.8;
-export const LAMP_ARM_X = 1.25; // lamp head offset along the arm
-export const LAMP_COLLIDER_DISTANCE = 60;
-
-/** The lamp's parts as boxes, in POST-LOCAL space (+X along the arm), shared by
- *  the geometry below and by the colliders StreetLamps mounts — one source, so
- *  changing the art can't leave a collider behind in the old shape. */
-export const LAMP_PARTS = {
-  pole: { w: 0.22, h: LAMP_POLE_HEIGHT, d: 0.22, x: 0, y: LAMP_POLE_HEIGHT / 2 },
-  arm: { w: 1.5, h: 0.18, d: 0.18, x: 0.65, y: LAMP_POLE_HEIGHT - 0.1 },
-  head: { w: 0.85, h: 0.3, d: 0.45, x: LAMP_ARM_X, y: LAMP_POLE_HEIGHT - 0.35 },
-};
-
-/** Deterministic yaw from a lamp's position, so a lamp faces the same way on
- *  every load (and every chunk rebuild). */
-export const lampYaw = (x: number, z: number): number => Math.abs(x * 7.13 + z * 3.71) % 6.283;
+// The numbers (part boxes, yaw, collider parts, placement) live in lampSpec.ts
+// — Three-free, shared with the server's colliders; re-exported here so the
+// feature's imports keep one entry point.
+import { LAMP_PARTS } from "./lampSpec";
+export { LAMP_POLE_HEIGHT, LAMP_ARM_X, LAMP_COLLIDER_DISTANCE, LAMP_PARTS, lampYaw } from "./lampSpec";
 
 let lampPostGeometry: THREE.BufferGeometry | null = null;
 
