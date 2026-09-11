@@ -2,6 +2,7 @@ import { createActor } from "../../../world/components";
 import { ActorDescriptor } from "../spawning/types";
 import { BuildingDescriptor } from "./actor";
 import { BuildingAttributes } from "./types";
+import { SKYSCRAPER_ATTRS } from "./variants";
 
 /** Skyscraper: extends BuildingDescriptor — only what differs from a normal
  *  building. Max floors under a much taller shell (the mass above the top
@@ -20,11 +21,8 @@ export const SkyscraperDescriptor: ActorDescriptor<BuildingAttributes> = {
   roadDistanceRange: [28, 99999],
   // flattenGround inherited from BuildingDescriptor — skyscrapers get their
   // own (larger, footprint-derived) pad via the flattenRadius default.
-  stories: 6,
-  roomCount: [3, 4, 5, 6],
-  shellHeightRange: [70, 115],
-  maxLean: 0.04,
-  windowLightChance: 0.8,
+  // The plan-shaping knobs live in variants.ts (shared with the server's hull).
+  ...SKYSCRAPER_ATTRS,
 };
 
 export const SkyscraperActor = createActor(SkyscraperDescriptor);

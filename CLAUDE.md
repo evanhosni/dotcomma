@@ -16,7 +16,8 @@ An exploration-based procedurally-generated 3D game built on React Three Fiber. 
 
 ## Commands
 
-- `npm start` — dev server (craco)
+- `npm run dev` — server + client together (`scripts/dev.mjs`: tsx watch on :8080 + craco on :3000, prefixed output, Ctrl+C stops both; first run creates + migrates the local SQLite)
+- `npm start` — client dev server only (craco); `npm run dev:server` — game server only
 - `npm run build` — production build
 - `npm test` — jest tests (package.json sets `transformIgnorePatterns` so ESM deps — delaunator, robust-predicates, noise-ts — transform; run headless with `$env:CI="true"; npm test -- --watchAll=false`)
 - `npx tsc --noEmit` — type check
@@ -163,6 +164,11 @@ src/
                        #   (The old render-to-texture portal system this replaced has
                        #   been REMOVED from the codebase entirely.)
     dressing/          # DRESSING class (instanced stateless scenery). Dressing.tsx is
+      types.ts         #   Three-free: DressingColliderPart, yawFromDir, DRESSING_CHUNK_SIZE —
+                       #   what the SERVER imports to build the same colliders. Each feature
+                       #   with colliders has a Three-free `*Spec.ts` (lampSpec / signalSpec /
+                       #   poleSpec: part boxes, collider parts, placement defaults) that its
+                       #   component AND server/physics/obstacles.ts read
       Dressing.tsx     #   the base: <Dressing> group (via createDefaultsGroup),
                        #   useDressingChunks (camera-following 256u chunk lifecycle:
                        #   ONE shared budgeted TaskQueue, 1.3× removal hysteresis,
@@ -410,8 +416,28 @@ src/
                        #   distance (a pool of real lights was tried and scrapped:
                        #   nearest-N lights visibly ignite on approach). Plus the
                        #   material patcher (patchStandardMaterialLampGlow)
+  physics/
+    characterMovement.ts # THE character movement resolver — the ONE piece of code that
+                       #   moves a kinematic capsule over terrain, shared by the local
+                       #   Player and (through the server's esbuild bundle) every synced
+                       #   NPC on the server. Three-free, React-free, Rapier types only —
+                       #   the runner.ts contract. Owns: controller tuning (offset 0.08,
+                       #   40° climb/slide wall, nudge 0.02, snap 0.3, autostep), the
+                       #   slope-adaptive ground probe, leaky slope timers, the 25–45°
+                       #   uphill slowdown, the fall-line slide, gravity with RAY-GATED
+                       #   support (hit within snap reach AND ≤ 40° — never Rapier's
+                       #   computedGrounded alone, which flickers false on heightfields
+                       #   AND holds true on steep faces), jump, the substepped KCC
+                       #   solve. Callers read input and hand in a direction + speed;
+                       #   the module sets the body's next kinematic translation.
+                       #   Extracted verbatim from Player.tsx (Phase 2 of the server
+                       #   physics work) — tune movement HERE, nowhere else
   player/
-    Player.tsx         # First-person controller + physics. SLOPES are three
+    Player.tsx         # First-person controller. Input, hold-at-spawn, noclip, the
+                       #   analytic terrain BACKSTOP + STUCK ESCAPE (async height
+                       #   lookups), respawn, camera; ALL movement resolution is
+                       #   physics/characterMovement.ts. The notes below describe that
+                       #   shared module's behavior. SLOPES are three
                        #   bands, not a hard stop: ≤25° full speed; 25–45° the
                        #   UPHILL input component scales smoothly to 0 (contour/
                        #   downhill unaffected); >40° (SLOPE_SLIDE_ANGLE, also the
@@ -494,6 +520,9 @@ src/
                        #   handshake, id-correlated request/response, transfer lists,
                        #   domain-switch reset(). Every client (terrain, spawn,
                        #   foliage, dressing, collider) is just typed wrappers over it
+      densityPoints.ts # generateDensityPoints — the STATELESS per-chunk density placement
+                       #   (street lamps); was inline in dressing.worker.ts, extracted so the
+                       #   server's obstacle colliders place lamps identically
       densityPlacement.ts # THE density-grid placement: cell size/probability, seeded
                        #   cell roll (rollDensityCell), passesPlacementFilters. The
                        #   spawn worker, the flatten-pad engine and the dressing
@@ -689,6 +718,7 @@ The world is unbounded, so **the split between float64 and float32 is an archite
 
 ## Performance Notes
 
+- **Physics steps ONCE PER FRAME** (`<Physics timeStep="vary">` in `world/CustomCanvas.tsx`): every kinematic body is driven per frame from `translation()`, and r-t-r's default fixed 1/60 accumulator made them move at 60/fps of their speed above 60fps (~40–60% at this project's 96–145fps; the LAST `setNextKinematicTranslation` before a step wins). Invisible until the server walked NPCs at true speed — the client body then lagged, slid on after every stop, and snapped forward to catch up (found Sept 2026, after Phase 3 of the server physics work). CONSEQUENCE: the player's speeds/gravity/jump were tuned UNDER that bug, so they now act at their true values at any framerate — retune `WALK_SPEED`/`SPRINT_SPEED` (Player.tsx) and `GRAVITY`/`JUMP_IMPULSE` (physics/characterMovement.ts — shared with the server) if the feel is off. Never go back to a fixed step without driving kinematic bodies from the fixed step.
 - **Canvas/physics settings are deliberate** (`world/CustomCanvas.tsx`): `dpr` capped at 1.5 (`MAX_DPR`), `antialias: false`, `alpha: false` — R3F's defaults (dpr 2 + MSAA + alpha) quadrupled the fragment budget of the full-screen terrain shader for a quantized low-poly look. `<Physics interpolate={false}>`: the scene has no dynamic bodies, and r-t-r's interpolation snapshot walked EVERY body (500+ in the city) before every step.
 - **Terrain LOD range is bounded by the camera far plane** (`lodConfig.ts`: LOD4 6720u, LOD5 8400u vs `CAMERA_FAR` 7200) — chunks past the far plane were generated, pooled and kept without ever producing a pixel. `releaseGeometry` nulls the bounding sphere/box: a pooled geometry otherwise kept the FIRST chunk's cached sphere.
 - **Scene point lights follow the night blend** (`CityLights` writes `intensity × nightBlend` per frame) and the terrain shader's point-light loop is gated on `uNightBlend > 0.001` — by day six lights were shaded on every lit and terrain fragment for nothing.
@@ -763,7 +793,7 @@ All overlays, menus, and HUD elements should follow the established style set by
 
 ## Multiplayer server, persistence, deploy (Sept 2026)
 
-One Railway service runs `server/` (Node 24, Express + `ws`, `node:sqlite`) and serves the CRA build from `build/`; SQLite lives on a Railway volume. Assets are still in `public/` (the R2 CDN pipeline — Phase 4 of the original plan — is DEFERRED until there are enough assets to warrant a bucket; `REACT_APP_CDN_URL` in `.env.example` is reserved for it). Runtime deps are exactly `express` + `ws`; no ORM, no socket library, no state library, no GitHub Actions — each was considered and rejected. Read `README.md` → "Server, database, deploy" for the ops runbook.
+One Railway service runs `server/` (Node 24, Express + `ws`, `node:sqlite`) and serves the CRA build from `build/`; SQLite lives on a Railway volume. Assets are still in `public/` (the R2 CDN pipeline — Phase 4 of the original plan — is DEFERRED until there are enough assets to warrant a bucket; `REACT_APP_CDN_URL` in `.env.example` is reserved for it). Runtime deps are exactly `express` + `ws`; everything the server shares with the client — Rapier (`@dimforge/rapier3d-compat`, via `@react-three/rapier`), delaunator, noise-ts, seedrandom — is BUNDLED into the server build from the ROOT install, never a second server-side copy. No ORM, no socket library, no state library, no GitHub Actions — each was considered and rejected. Read `README.md` → "Server, database, deploy" for the ops runbook.
 
 ```
 server/                    # OWN package.json (CRA's ModuleScopePlugin forbids importing across src/,
@@ -803,13 +833,16 @@ Rules that came out of building it:
 
 ## Entity sync (Phase 6, Sept 2026) — the SERVER runs every actor's state machine
 
+> **Read `NPC_TRACKING.md` first** — the plain-language write-up of how NPCs sync across clients and how to program a new NPC's movement/states (the beeble as the template). This section is the dense reference.
+
 Built on the Phase 2 transport, no new runtime dependencies (esbuild joins the server's DEV deps: the server is now BUNDLED because it imports the client's state-machine files from `src/`). Server: `server/src/game/entities/manager.ts` (the simulation + relay), `kinds.ts` (descriptor id → StateMachineConfig). Shared: `src/objects/actors/state/runner.ts` (Three-free machine core), `state/types.ts` (LOOP_ONCE/LOOP_REPEAT, type-only three). Client: `src/net/entities/` (entityStore, useSyncedEntity, chase), the actor base (`Actor.tsx`), `ModelActor.tsx` + `kinematicMover.tsx`, `state/useStateMachine.ts`, one hook in `state/useMouseEvents.ts`. Tests: `server/test/entities.test.ts` (`npm test` in server/ — runs the real beeble machine on the server).
 
-**Authority: the server, always. No client owns anything, so no player is favored (PvP-fair).** Each registered actor's state machine — THE SAME CONFIG FILE the client has (`beeble/stateMachine.ts`), written once — runs on the server at 10Hz with the NEAREST player in the domain as "the player"; the server integrates x/z from the machine's velocity outputs and publishes changed fields (pos, velocity, yaw, clip+clipT0+once, state id `sm`, replicated `state`) to the registrants. Every client is placed to match: the base builds a velocity-extrapolated target; the kinematic mover CHASES it (feedforward + stop deadzone) so terrain/slopes/collisions stay local; ModelActor plays the clip in phase; `useStateMachine` MIRRORS the server's state id so state-keyed visuals (head tracking, sphere-inflate) run where there is a scene. Clicks are forwarded (`useMouseEvents`) and raised on the server machine's blackboard, gated by the machine's own distance trigger. `serverSynced={false}` opts an instance out (purely local, same code path).
+**Authority: the server, always. No client owns anything, so no player is favored (PvP-fair).** Each registered actor's state machine — THE SAME CONFIG FILE the client has (`beeble/stateMachine.ts`), written once — runs on the server at 10Hz with the NEAREST player in the domain as "the player"; the server integrates x/z from the machine's velocity outputs and publishes changed fields (pos, velocity, yaw, clip+clipT0+once, state id `sm`, replicated `state`) to the registrants. Every client is placed to match by SNAPSHOT INTERPOLATION (`src/net/entities/interpolation.ts`, pure + unit-tested): every positional update carries the tick's SERVER time `st`; the client keeps the last snapshots per entity and draws it as it was INTERP_DELAY_MS (200ms = 2 ticks) ago on the SERVER clock, interpolating between the two bracketing snapshots — message ARRIVAL time plays no part, so main-thread hitches and bunched packets cannot overshoot, slide or lurch, and a stop lands exactly where/when the server stopped. Rules: past the newest snapshot extrapolate ≤ 250ms then HOLD; a segment much longer than the publish interval is an IDLE GAP = hold at the old pose until one interval before the new one (MEASURED: lerping across the gap hopped ~0.5u the frame the first moving snapshot arrived); consecutive snapshots > 40u apart = a relocation (restart/respawn), no lerp; a per-actor render clock SLEWS (±10%) toward server-time−delay so a re-estimated clock offset never steps the picture. Clip switches (`clipT0`, server time) are applied on the SAME delayed clock, so the idle clip starts exactly as the interpolated body reaches the stop. This REPLACED (a) the chase/feedforward/0.5u deadzone/6u snap/local-y mover layer and then (b) arrival-time extrapolation eased toward — both produced catch-up hops and slides under real browser load that a headless probe could never reproduce (headless = no hitches). The kinematic mover only PARKS the capsule at the sampled pose so the local player collides with the NPC. `body: "kinematic"` keeps its local gravity/KCC integration ONLY for `serverSynced={false}` actors. NOTE when verifying ANY of this: dotcomma.io runs the last DEPLOYED release — an uncommitted working tree is only ever visible at localhost:3000 (`npm run dev`); a teleport report from production was once misattributed to local changes. ModelActor plays the clip in phase; `useStateMachine` MIRRORS the server's state id so state-keyed visuals (head tracking, sphere-inflate) run where there is a scene. Clicks are forwarded (`useMouseEvents`) and raised on the server machine's blackboard, gated by the machine's own distance trigger. `serverSynced={false}` opts an instance out (purely local, same code path).
 
 **THE authoring contract (runner.ts header):** a StateMachineConfig writes OUTPUTS to its blackboard — `__vel_x/_z` (+ `__vel_y`, undefined = gravity), `__yaw`, animation via `state.animation` — and never the scene for those; anything scene-bound (bones, geometry) must guard on `ctx.groupRef.current` (null on the server); no Three at RUNTIME in a config (`import type`; loop modes from types.ts). Adding a synced NPC = its state machine + one line in `kinds.ts`. The body is DECLARED on the descriptor (`body: "fixed" | "kinematic" | "none"`, `collider`, `movement: "ground" | "free"`); ModelActor owns the physics (ported from the beeble). `dynamic` (pushables) is NOT implemented. Beeble.tsx is ~65 lines: machine + mouse hook + `ctx.move` from the blackboard.
 
 - Entities exist because clients register them (position-based ids); first registration creates the record and starts the machine; zero registrants = disposed. Interest = registrants, per domain; a registration is answered with the full record (late joiners covered).
 - The server has NO terrain: y is client-resolved; `vy` is the vertical the server may drive (ascending). A body blocked by a wall lags the server's path until it clears (tolerated). Random is fine (single authority). Machine state on the server is lost when the last viewer leaves (fresh machine next time).
 - Replicated `state` is server-owned and toggled via interact actions (`door:<i>` is generic); doors' state lives only while someone is near (nothing persists it).
+- **Server physics (Sept 2026)** — `server/src/game/physics/`, headless `@dimforge/rapier3d-compat` (THE CLIENT'S copy: the server declares no Rapier dependency, esbuild bundles the root install's package — one package/version/WASM/class-identity set by construction, asserted in `server/test/physics.test.ts`; boots with `await init()`, no Node flags). MODULES, each one thing: `world.ts` PhysicsWorld — the Rapier world, `step()` timing, `ensureQueries()`, capsules, and two `ChunkStore`s on one `JobQueue`; `chunks.ts` JobQueue (budgeted `work(ms)`, each job's `step(deadline)` returns done) + ChunkStore<T> (REFCOUNTED keyed resources built by queued jobs: `request/release/isReady`; nothing is built for the whole world) + `chunkIndicesNear`; `terrain.ts` the LOD1 heightfield sampled EXACTLY like terrain.worker.ts (fround'd local grid, z-flip, column-major, body at the chunk center — bit-identical ground to the player's), row by row for incremental builds; `obstacles.ts` street lamps / traffic signals / utility poles as the client's exact cuboid colliders per 256u dressing chunk (from the Three-free spec files `street-lamps/lampSpec.ts`, `traffic-lights/signalSpec.ts`, `power-lines/poleSpec.ts` + `dressing/types.ts`, placed by the same enumerators — `utils/workers/densityPoints.ts`, `getCityTrafficLightPoints`, `getCityFreewaySidePoints`); `buildings.ts` a building's SEALED convex hull — the client's `buildProxyHullVertices` over the client's `generateBuildingPlan`, seeded `${round(x)}_${round(z)}` like Building.tsx, shaped by `building/variants.ts`, cached per seed; `walker.ts` a kinematic capsule driven by THE shared resolver `src/physics/characterMovement.ts` (`step(dt, vx, vz, vy)`, `placeFeet`); `npc.ts` NpcBody = Walker + the chunks it HOLDS (its own + the neighbor within 12u of an edge, terrain AND dressing, re-evaluated after 4u of travel; a body whose holds aren't built yet simply waits) + the player's stuck escape and 2u analytic backstop; `step()` before the world step with the machine's velocities, `pose()` after it returns feet-y position + ACTUAL quantized velocity; `players.ts` PlayerBodies — a capsule per player in a domain with NPCs, following the reported center position, reconciled per tick; `domainConfig.ts` the glitch-city DomainConfig HAND-ASSEMBLED from the JSX (region/biome order = voronoi order; keep in sync). `entities/manager.ts` is the registry + tick orchestration: work → players.sync → ensureQueries → machines + `npc.step` → ONE `world.step()` → `npc.pose` → `publish.ts` (`publishTick` diffs pose/yaw/clip/state against what registrants last saw; any positional change goes out as a complete server-time-stamped SNAPSHOT `{st,x,y,z,vx,vy,vz,ry}`); hulls queue on the same JobQueue (a city entry registers hundreds of buildings). `kinds.ts`: `beeble` = `BEEBLE_SM` + `beeble/spec.ts` capsule; `building`/`skyscraper`/`grass-building` = hull. Every 10s `[physics] …` logs npcs/players, tick max, step/work ms, slowest job step, collider/body/chunk counts; a tick > 50ms warns. Tooling: `npm run physics:demo` (`cli/physicsDemo.ts` + `cli/terrainScan.ts`) drops a capsule, climbs a 17° slope, slides off a 44° one. MEASURED gotchas: (1) Rapier's slope wall alone does NOT stop a 44° climb on heightfields — `computedGrounded()` holds true on steep faces, gravity resets, the capsule creeps up ~2.6u/s; the resolver's ray-gated support (hit within snap reach AND ≤ 40°) is what makes it slide; (2) colliders created since the last `step()` are invisible to queries until `updateSceneQueries()` — a beeble fell 1u through a just-built heightfield and sat wedged (`ensureQueries()` runs after generation every tick); (3) BUILD: the bundle externalizes only express/ws (+ three/react so a leak fails at boot) and BUNDLES rapier/delaunator/noise-ts/seedrandom from the root install — as externals Node's CJS interop made `import Noise from "noise-ts"` the exports object and the built server died at boot (tsx dev hid it).
 - History: server-behaviors-file (rejected: behavior written twice) → client ownership (rejected: first registrant hosted → unfair) → THIS. `@types/three` (0.170) is newer than runtime three (0.157): the compiler can't catch r159+ API use (TrafficLights branches on `updateRange` vs `updateRanges`). Day/night runs off the shared server clock.

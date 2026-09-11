@@ -18,6 +18,7 @@ import { ActorProps } from "./spawning/types";
 import { RootState } from "@react-three/fiber";
 import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
 import { getServerTime } from "../../net/connection";
+import { INTERP_DELAY_MS } from "../../net/entities/interpolation";
 import { useKinematicMover, type ColliderSpec, type MoveIntent } from "./kinematicMover";
 
 export { MAX_COLLIDER_RENDER_DISTANCE };
@@ -70,7 +71,7 @@ export interface ModelActorAttributes extends ActorAttributes {
   /** How this model exists in the physics world (kinematicMover.tsx):
    *  "fixed" (default) — colliders from the GLTF, never moves;
    *  "kinematic" — a body ModelActor moves from the owner's ctx.move intent
-   *  (and parks at the replicated pose on puppets);
+   *  (synced: parked at the server's pose — the server simulates it);
    *  "none" — no colliders at all. */
   body?: "none" | "fixed" | "kinematic";
   /** Kinematic body shape (default capsule r0.5 h2). */
@@ -248,13 +249,23 @@ export const ModelActor = ({
       let control: AnimationControl | undefined = animationControl;
       if (puppet) {
         if (animationControl) animationControl.dirty = false; // consume, never apply
+        // The clip switches on the same DELAYED server clock the pose is
+        // drawn on (snapshot interpolation), so a beeble's idle clip starts
+        // exactly as its interpolated body reaches the spot the server
+        // stopped it — not INTERP_DELAY_MS earlier.
         const r = ctx.sync!.entity?.remote;
-        if (r && r.clip && (r.clip !== syncClipRef.current || (r.clipT0 ?? 0) !== syncClipT0Ref.current)) {
+        const renderTime = getServerTime() - INTERP_DELAY_MS;
+        if (
+          r &&
+          r.clip &&
+          (r.clip !== syncClipRef.current || (r.clipT0 ?? 0) !== syncClipT0Ref.current) &&
+          (!r.clipT0 || renderTime >= r.clipT0)
+        ) {
           syncClipRef.current = r.clip;
           syncClipT0Ref.current = r.clipT0 ?? 0;
           syncAnimRef.current.pendingCommand = {
             clipName: r.clip,
-            startTime: r.clipT0 ? Math.max(0, (getServerTime() - r.clipT0) / 1000) : 0,
+            startTime: r.clipT0 ? Math.max(0, (renderTime - r.clipT0) / 1000) : 0,
             loop: r.once ? THREE.LoopOnce : THREE.LoopRepeat,
             clampWhenFinished: !!r.once,
           };
@@ -313,7 +324,8 @@ export const ModelActor = ({
   });
 
   // The kinematic body (body: "kinematic"): owner intent → movement, puppet →
-  // parked at the replicated pose. Renders nothing when not kinematic.
+  // parked at the server's pose (the base places the model). Renders nothing
+  // when not kinematic.
   const mover = useKinematicMover({
     enabled: isKinematic,
     collider,
@@ -322,8 +334,6 @@ export const ModelActor = ({
     positionRef,
     groupRef: lifecycle.groupRef,
   });
-  // A mover owns the body: the base must not write the group's position.
-  if (lifecycle.sync) lifecycle.sync.bodyManaged = isKinematic;
 
   // Ownership + per-life reset. Creation-time work (material patching, GPU
   // warm draw, bounds measure) happened in the pool; here we only reset the

@@ -4,12 +4,12 @@ import {
   getLampPostGeometry,
   LAMP_ARM_X,
   LAMP_COLLIDER_DISTANCE,
-  LAMP_PARTS,
   LAMP_POLE_HEIGHT,
   LAMP_POST_MATERIAL,
   lampYaw,
   patchLampMask,
 } from "./lampGeometry";
+import { LAMP_COLLIDER_PARTS, LAMP_PLACEMENT } from "./lampSpec";
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
 import {
   activeLampHeads,
@@ -19,9 +19,7 @@ import {
   markLampGridDirty,
   unregisterLampHeads,
 } from "../../../lighting/lampGlow";
-import { CITY_BIOME_ID } from "../../../world/constants";
 import {
-  DressingColliderPart,
   DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
@@ -34,16 +32,6 @@ import { DressingAttributes } from "../../types";
 import { getDensityPoints } from "../dressingWorker";
 
 const COLLIDER_SCAN_INTERVAL_FRAMES = 10;
-const DEFAULT_BIOME_IDS = [CITY_BIOME_ID];
-
-/** Pole (slightly proud of the 0.22u post so its corner can't be clipped),
- *  arm and head — box sizes from LAMP_PARTS, the same numbers the geometry
- *  is built from. */
-const LAMP_COLLIDER_PARTS: DressingColliderPart[] = [
-  { w: 0.24, h: LAMP_POLE_HEIGHT, d: 0.24, x: 0, y: LAMP_POLE_HEIGHT / 2 },
-  LAMP_PARTS.arm,
-  LAMP_PARTS.head,
-];
 
 interface LampChunk {
   group: THREE.Group;
@@ -77,15 +65,11 @@ export interface StreetLampsProps extends DressingAttributes {}
 export const StreetLamps = ({
   renderDistance,
   colliderDistance,
-  // Lamps per 1,000,000 sq units of CANDIDATE area — the sidewalk band is
-  // thin, so this is high; footprint spacing is the real limiter.
-  density = 4200,
-  // Min spacing between lamps along a sidewalk.
-  footprint = 14,
-  // Road-field band lamps may stand on (default: the sidewalk).
-  roadDistanceRange = [8.2, 11.8],
-  // Default: the city — the only biome with the road field lamps place by.
-  biomeIds = DEFAULT_BIOME_IDS,
+  // Defaults from lampSpec.ts (shared with the server's colliders).
+  density = LAMP_PLACEMENT.density,
+  footprint = LAMP_PLACEMENT.footprint,
+  roadDistanceRange = LAMP_PLACEMENT.roadDistanceRange,
+  biomeIds = LAMP_PLACEMENT.biomeIds,
 }: StreetLampsProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 440);
   const resolvedColliderDistance = useDressingDefault("colliderDistance", colliderDistance, LAMP_COLLIDER_DISTANCE);
@@ -105,7 +89,7 @@ export const StreetLamps = ({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
       const points = await getDensityPoints(bounds.minX, bounds.minZ, bounds.maxX, bounds.maxZ, {
-        seedTag: "street-lamp-i",
+        seedTag: LAMP_PLACEMENT.seedTag,
         density,
         footprint,
         biomeIds,

@@ -19,6 +19,7 @@
   },
   "scripts": {
     "start": "craco start",
+    "dev": "node scripts/dev.mjs",
     "build": "craco build && cd server && npm ci && npm run build",
     "build:client": "craco build",
     "test": "craco test",

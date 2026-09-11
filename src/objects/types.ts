@@ -46,7 +46,7 @@
  * base already does will silently miss the next one.
  */
 
-import * as THREE from "three";
+import type * as THREE from "three";
 
 // ── EVERY class ──────────────────────────────────────────────────────────────
 

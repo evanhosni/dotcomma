@@ -14,7 +14,6 @@ import {
   unregisterLampHeads,
 } from "../../../lighting/lampGlow";
 import {
-  DressingColliderPart,
   DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
@@ -27,27 +26,9 @@ import {
 } from "../Dressing";
 import { getTrafficLightPoints } from "../dressingWorker";
 
-const POLE_HEIGHT = 7.6;
-// Collider half-width: a touch proud of the 0.2u pole so you cannot clip its
-// corner, and it swallows the 0.5u base (0.4u tall — steppable, not worth a
-// second shape).
-const POLE_HALF_WIDTH = 0.14;
-const ARM_LENGTH = 3.2; // toward the intersection — hangs the head over the curb
+import { ARM_LENGTH, POLE_HEIGHT, SIGNAL_COLLIDER_PARTS, SIGNAL_DEFAULT_CHANCE, SIGNAL_PARTS } from "./signalSpec";
+
 const LAMP_OFFSET = ARM_LENGTH + 0.26; // lamps proud of the head's front face
-/** Mast arm + signal head as boxes, in POLE-LOCAL space (+X toward the
- *  intersection), shared by the geometry and by their colliders — one source, so
- *  changing the art can't leave a collider behind in the old shape. */
-const SIGNAL_PARTS = {
-  arm: { w: ARM_LENGTH, h: 0.15, d: 0.15, x: ARM_LENGTH / 2, y: POLE_HEIGHT - 0.15 },
-  head: { w: 0.45, h: 2.0, d: 0.75, x: ARM_LENGTH, y: POLE_HEIGHT - 1.25 },
-};
-/** Pole, mast arm and signal head, all solid. The LAMPS get nothing — they
- *  sit on the head's face and are already inside its box. */
-const SIGNAL_COLLIDER_PARTS: DressingColliderPart[] = [
-  { w: POLE_HALF_WIDTH * 2, h: POLE_HEIGHT, d: POLE_HALF_WIDTH * 2, x: 0, y: POLE_HEIGHT / 2 },
-  SIGNAL_PARTS.arm,
-  SIGNAL_PARTS.head,
-];
 
 // Lamp order per light: instances 3i / 3i+1 / 3i+2 = red / yellow / green
 // (top to bottom on the head). state: 0 = green, 1 = yellow, 2 = red.
@@ -106,7 +87,7 @@ export interface TrafficLightsProps extends DressingAttributes {
  * washes red/yellow/green and follows the switches (grid rewrites every few
  * frames; the glow intensity rides the global dusk/dawn ramp).
  */
-export const TrafficLights = ({ renderDistance, colliderDistance, chance = 0.45 }: TrafficLightsProps) => {
+export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNAL_DEFAULT_CHANCE }: TrafficLightsProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
   const { camera } = useThree();
   const registry = useChunkRegistry<SignalChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
