@@ -1,8 +1,9 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { prepareActorMaterial } from "../objects/actors/Actor";
-import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./remotePlayerStore";
+import { prepareActorMaterial } from "../../objects/actors/Actor";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
+import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
 /**
  * Renders every remote player in our domain as a capsule in their assigned
@@ -18,9 +19,9 @@ import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./remoteP
  * TELEPORT_DISTANCE away (a respawn — easing across the map would look worse).
  */
 
-// The local player's capsule is height 2, radius 0.5 (Player.tsx) — match it.
-const CAPSULE_RADIUS = 0.5;
-const CAPSULE_LENGTH = 1.0; // cylinder section = height − 2·radius
+// The local player's capsule (player/spec.ts) — drawn at the same size.
+const CAPSULE_RADIUS = PLAYER_RADIUS;
+const CAPSULE_LENGTH = PLAYER_HEIGHT - 2 * PLAYER_RADIUS; // cylinder section
 
 const MAX_EXTRAPOLATION_S = 0.5;
 const SMOOTH_RATE = 12; // 1/s — ~63% of the gap closed every 83ms

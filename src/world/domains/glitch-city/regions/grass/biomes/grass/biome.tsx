@@ -3,29 +3,18 @@ import { Foliage } from "../../../../../../../objects/foliage/Foliage";
 import { GrassField } from "../../../../../../../objects/foliage/grass/GrassField";
 import { Actors, Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
+import { GRASS_BIOME } from "./spec";
 
 import { GRASS_BIOME_ID } from "../../../../../../constants";
 export { GRASS_BIOME_ID };
 
 /** Grassland biome: rolling noise terrain covered in swaying billboard grass.
- *  Shares biome id 3 with the city region's CityGrassBiome — registrations for
- *  the same id are merged, so keep the two in sync if you change
- *  terrain/material settings. */
+ *  Shares biome id 3 with the city region's CityGrassBiome, which re-exports
+ *  this folder's spec.ts (flags + noise) and material — only the mounts may
+ *  differ per region. */
 export const GrassBiome = () => (
-  <Biome name="grass" id={GRASS_BIOME_ID} joinable blendable>
-    <Terrain
-      noise={{
-        params: {
-          type: "perlin",
-          octaves: 3,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 100,
-          scale: 100,
-        },
-      }}
-    />
+  <Biome spec={GRASS_BIOME}>
+    <Terrain noise={GRASS_BIOME.noise} />
     <Material getMaterial={getMaterial} />
     <Actors>
       {/* Sparse country buildings — flattenGround pads level the rolling

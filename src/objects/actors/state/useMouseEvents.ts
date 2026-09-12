@@ -1,9 +1,23 @@
-import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
-import { StateMachineHandle } from "./types";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
+import { mouseActionOf, type MouseFlag } from "./runner";
+import type { StateMachineHandle } from "./useStateMachine";
+
+/**
+ * MOUSE EVENTS for a state-machine actor: a throttled screen-center raycast
+ * against the model's skinned meshes raises one-shot flags on the machine's
+ * blackboard (hover enter/leave, clicks, scroll) that the mouse TRIGGERS in
+ * triggers.ts read. Owned by ModelActor for every actor with a state machine;
+ * `sm === null` (no machine) makes the hook inert.
+ *
+ * MULTIPLAYER: the SERVER runs a synced actor's machine, so EVERY input raised
+ * here is also forwarded (`entity:interact "mouse-<flag>"`, runner.ts
+ * mouseActionOf) — the server raises the same flag there and the machine's own
+ * triggers decide. Inputs cross the wire, never triggers. The cursor grow stays
+ * a local effect. The owner passes the current sync handle into `tick`.
+ */
 
 export interface MouseEventDistances {
   onMouseHoverEnter?: number;
@@ -28,23 +42,22 @@ export interface UseMouseEventsOptions {
    *  value (hash of spawn coords) so batch-mounted actors don't all raycast
    *  on the same frame. */
   framePhase?: number;
-  /** The owner calls the returned `tick(camera, distanceSq)` from its actor
-   *  `onFrame` instead of this hook subscribing its own useFrame (see
-   *  useStateMachine's option of the same name). `distanceSq` is the actor
-   *  base's 2D squared camera distance — a lower bound on the 3D one, so it
-   *  gates the raycast for free. */
-  externallyDriven?: boolean;
 }
 
 export interface MouseEventsHandle {
-  tick: (camera: THREE.Camera, distanceSq?: number) => void;
+  /** Call from the owner's actor `onFrame`. `distanceSq` is the actor base's
+   *  2D squared camera distance — a lower bound on the 3D one, so it gates
+   *  the raycast for free; `sync` is the actor's sync handle (null = local). */
+  tick: (camera: THREE.Camera, distanceSq: number, sync: SyncHandle | null) => void;
 }
 
-/** Raise a one-shot mouse flag on a blackboard. The dirty bit lets the state
- *  machine clear the one-shot set only on frames where something was raised. */
-const raise = (bb: Record<string, any>, flag: string): void => {
+/** Raise a one-shot mouse flag on a blackboard (the dirty bit lets the state
+ *  machine clear the one-shot set only on frames where something was raised)
+ *  and forward the same INPUT to the server when this actor is synced. */
+const raise = (bb: Record<string, any>, flag: MouseFlag, sync: SyncHandle | null): void => {
   bb[flag] = true;
   bb.__mouse_dirty = true;
+  if (sync && sync.known) sync.interact(mouseActionOf(flag));
 };
 
 const DEFAULT_DISTANCE = 5;
@@ -74,14 +87,16 @@ const _tC = new THREE.Vector3();
 const _hitPt = new THREE.Vector3();
 
 export function useMouseEvents(
-  sm: StateMachineHandle,
+  sm: StateMachineHandle | null,
   groupRef: React.MutableRefObject<THREE.Group | null>,
   options: UseMouseEventsOptions = {},
 ): MouseEventsHandle {
-  const bb = sm.blackboard;
+  const bb = sm?.blackboard ?? null;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
   const hitDistRef = useRef(Infinity);
+  /** The sync handle as of the last tick — the DOM click handler forwards through it. */
+  const syncRef = useRef<SyncHandle | null>(null);
 
   const d = useMemo(
     () => ({
@@ -118,7 +133,9 @@ export function useMouseEvents(
   );
 
   // Raycast from screen center, throttled to every 3 frames
-  const tick = (camera: THREE.Camera, distanceSq2D = 0): void => {
+  const tick = (camera: THREE.Camera, distanceSq2D: number, sync: SyncHandle | null): void => {
+    syncRef.current = sync;
+    if (!bb) return;
     frameCountRef.current++;
 
     // Only raycast every 3 frames; reuse last result on skip frames
@@ -215,12 +232,12 @@ export function useMouseEvents(
 
     if (isHovering && !activeHoverRef.current) {
       activeHoverRef.current = true;
-      raise(bb, "__mouse_hover_enter");
+      raise(bb, "__mouse_hover_enter", sync);
       bb.__mouse_hover_active = true;
       if (growCursor) showCursor();
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
-      raise(bb, "__mouse_hover_leave");
+      raise(bb, "__mouse_hover_leave", sync);
       // Write false instead of delete — deleting keys forces the blackboard
       // into dictionary mode; truthiness semantics are identical
       bb.__mouse_hover_active = false;
@@ -230,70 +247,60 @@ export function useMouseEvents(
   const tickRef = useRef(tick);
   tickRef.current = tick;
 
-  const externallyDriven = options.externallyDriven ?? false;
-  useFrame(({ camera }) => {
-    if (!externallyDriven) tickRef.current(camera);
-  });
-
   // DOM event listeners — use our manual raycast hit distance instead of
   // R3F's internal intersectObject (which has the same SkinnedMesh bug).
   useEffect(() => {
+    if (!bb) return;
     const dist = () => hitDistRef.current;
+    const input = (flag: MouseFlag) => raise(bb, flag, syncRef.current);
 
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
       if (dist() > d.leftClick) return;
-      raise(bb, "__mouse_left_click");
-      // Multiplayer: the SERVER runs this actor's machine (the actor base
-      // hangs its sync handle on the group). Forward the click — the server
-      // raises the same flag there; the machine's own distance trigger
-      // decides. Left click only: it is the input the machines branch on;
-      // hover stays local (cosmetic).
-      const h = groupRef.current?.userData.sync as SyncHandle | undefined;
-      if (h && h.known) h.interact("mouse-left-click");
+      input("__mouse_left_click");
     };
 
     const handleContextMenu = () => {
       if (dist() > d.rightClick) return;
-      raise(bb, "__mouse_right_click");
+      input("__mouse_right_click");
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > d.leftClickDown) return;
-        raise(bb, "__mouse_left_click_down");
+        input("__mouse_left_click_down");
       } else if (e.button === 1) {
         if (dist() > d.middleClick) return;
-        raise(bb, "__mouse_middle_click");
+        input("__mouse_middle_click");
       } else if (e.button === 2) {
         if (dist() > d.rightClickDown) return;
-        raise(bb, "__mouse_right_click_down");
+        input("__mouse_right_click_down");
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > d.leftClickUp) return;
-        raise(bb, "__mouse_left_click_up");
+        input("__mouse_left_click_up");
       } else if (e.button === 2) {
         if (dist() > d.rightClickUp) return;
-        raise(bb, "__mouse_right_click");
-        raise(bb, "__mouse_right_click_up");
+        input("__mouse_right_click");
+        input("__mouse_right_click_up");
       }
     };
 
     const handleDblClick = () => {
       if (dist() > d.doubleClick) return;
-      raise(bb, "__mouse_double_click");
+      input("__mouse_double_click");
     };
 
     const handleWheel = (e: WheelEvent) => {
       if (dist() > d.scroll) return;
-      raise(bb, "__mouse_scroll");
+      input("__mouse_scroll");
       if (e.deltaY < 0 && dist() <= d.scrollUp) {
-        raise(bb, "__mouse_scroll_up");
+        input("__mouse_scroll_up");
       } else if (e.deltaY > 0 && dist() <= d.scrollDown) {
-        raise(bb, "__mouse_scroll_down");
+        input("__mouse_scroll_down");
       }
     };
 
@@ -319,5 +326,5 @@ export function useMouseEvents(
   // pointer handlers registered every actor in R3F's interaction list,
   // triggering a recursive raycast (full CPU-skinned triangle tests) per
   // actor on every pointermove. The handle only exposes the frame tick.
-  return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq) => tickRef.current(camera, distanceSq) }), []);
+  return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq, sync) => tickRef.current(camera, distanceSq, sync) }), []);
 }

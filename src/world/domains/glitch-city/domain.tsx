@@ -2,6 +2,7 @@ import React from "react";
 import { PostProcessing } from "../../../vfx/PostProcessing";
 import { Domain, Material, Skybox, Terrain } from "../../components";
 import { DayNightCycle } from "../../sky/DayNightCycle";
+import { GLITCH_CITY_SEED } from "./config";
 import { CityRegion, DesertRegion } from "./regions";
 
 /**
@@ -14,12 +15,15 @@ import { CityRegion, DesertRegion } from "./regions";
  * actors, dressing, foliage, and always-mounted visuals.
  *
  * To add a region: create it under this domain's regions/ folder and mount
- * it here (JSX order = voronoi order).
+ * it here (JSX order = voronoi order) — and list it in config.ts, the shared
+ * description the SERVER runs on (the commit warns in dev when they differ).
  */
 export const GlitchCityDomain = React.memo(() => (
   <Domain>
-    {/* Global terrain rules — omitted props use DEFAULT_TERRAIN_PARAMS */}
-    <Terrain seed="123" />
+    {/* Global terrain rules — omitted props use DEFAULT_TERRAIN_PARAMS. The
+        seed (and everything else the server needs) is mirrored by config.ts,
+        the shared Three-free description the server simulates on. */}
+    <Terrain seed={GLITCH_CITY_SEED} />
     {/* Texture blended between regions (rivers) */}
     <Material riverTexture="blue_mud.jpg" />
     {/* Default DAY sky — regions/biomes can mount their own <Skybox> to

@@ -1,6 +1,7 @@
-import type { EntityUpdateFields } from "../../protocol.js";
+import type { EntityUpdateFields } from "../../../../src/net/protocol";
+import type { AnimationState } from "../../../../src/objects/actors/state/animation";
 import type { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
-import type { Pose } from "../physics/npc.js";
+import type { Pose } from "../physics/npcBody.js";
 
 /**
  * PUBLISHING — turns one tick's results into the fields that changed.
@@ -13,7 +14,9 @@ import type { Pose } from "../physics/npc.js";
  * Any positional change (position, velocity or yaw) goes out as a complete
  * SNAPSHOT stamped with the tick's server time (`st`): the client's snapshot
  * interpolation (src/net/entities/interpolation.ts) plays those back on the
- * server clock, so a snapshot must always be self-contained.
+ * server clock, so a snapshot must always be self-contained. The animation
+ * channel's state goes out whole whenever it changed (its clocks are server
+ * time too — the runner is ticked with `now`).
  */
 
 export interface Published {
@@ -25,22 +28,32 @@ export interface Published {
   vy: number;
   vz: number;
   ry: number;
-  clip: string | undefined;
-  clipT0: number;
-  once: boolean;
+  /** The animation channel's state as last published (null = never). */
+  anim: AnimationState | null;
+  /** The channel version that state came from. */
+  animVersion: number;
   sm: string | undefined;
   state: Record<string, unknown>;
 }
 
-const LOOP_ONCE = 2200; // THREE.LoopOnce (state/types.ts) — no Three at runtime here
+export const createPublished = (x: number, y: number, z: number): Published => ({
+  x,
+  y,
+  z,
+  vx: 0,
+  vy: 0,
+  vz: 0,
+  ry: 0,
+  anim: null,
+  animVersion: 0,
+  sm: undefined,
+  state: {},
+});
 
+/** Everything a new registrant needs, as one update. */
 export const fullUpdate = (p: Published, now: number): EntityUpdateFields => {
   const f: EntityUpdateFields = { st: now, x: p.x, y: p.y, z: p.z, vx: p.vx, vy: p.vy, vz: p.vz, ry: p.ry };
-  if (p.clip) {
-    f.clip = p.clip;
-    f.clipT0 = p.clipT0;
-    f.once = p.once;
-  }
+  if (p.anim) f.anim = { ...p.anim };
   if (p.sm) f.sm = p.sm;
   if (Object.keys(p.state).length) f.state = p.state;
   return f;
@@ -62,7 +75,7 @@ export const publishTick = (p: Published, pose: Pose | null, runner: StateMachin
   const f: EntityUpdateFields = {};
   let changed = false;
 
-  const ry = runner.blackboard.__yaw ?? p.ry;
+  const ry = runner.motion.yaw;
   const moved =
     pose !== null &&
     (pose.x !== p.x || pose.y !== p.y || pose.z !== p.z || pose.vx !== p.vx || pose.vy !== p.vy || pose.vz !== p.vz);
@@ -80,19 +93,12 @@ export const publishTick = (p: Published, pose: Pose | null, runner: StateMachin
     changed = true;
   }
 
-  const anim = runner.animationControl;
-  if (anim.dirty) {
-    anim.dirty = false;
-    const cmd = anim.pendingCommand;
-    if (cmd && cmd.clipName !== p.clip) {
-      p.clip = cmd.clipName;
-      p.clipT0 = now;
-      p.once = cmd.loop === LOOP_ONCE;
-      f.clip = p.clip;
-      f.clipT0 = p.clipT0;
-      f.once = p.once;
-      changed = true;
-    }
+  const anim = runner.animation;
+  if (anim.version !== p.animVersion) {
+    p.animVersion = anim.version;
+    p.anim = { ...anim.state };
+    f.anim = { ...p.anim };
+    changed = true;
   }
 
   if (runner.currentStateId !== p.sm) {

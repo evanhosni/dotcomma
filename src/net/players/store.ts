@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type * as THREE from "three";
-import { onServerMessage } from "./connection";
-import type { PlayerSnapshot } from "./protocol";
+import { onServerMessage } from "../connection";
+import type { PlayerSnapshot } from "../protocol";
 
 /**
  * Remote-player STORE — the other sessions in our domain, as last reported by

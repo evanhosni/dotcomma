@@ -1,18 +1,18 @@
-import { ActorDescriptor } from "../spawning/types";
-import { createActor } from "../../../world/components";
-import { Beeble } from "./Beeble";
-import { ModelActorAttributes } from "../ModelActor";
-import { BEEBLE_COLLIDER } from "./spec";
+import { createActor, describeActor } from "../../../world/components";
+import { ModelActor, ModelActorAttributes } from "../ModelActor";
+import { BEEBLE_SPEC } from "./spec";
 
-export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
-  id: "beeble",
-  component: Beeble,
+/**
+ * The beeble NPC. Its behavior (stateMachine.ts) and body (spec.ts) come from
+ * the spec — the same object the server simulates; everything here is the
+ * client's half: the model and how it spawns. No component of its own:
+ * ModelActor wires the state machine, the mouse events, the capsule and the
+ * animation for every actor whose spec has a `stateMachine`.
+ */
+export const BeebleDescriptor = describeActor<ModelActorAttributes>(BEEBLE_SPEC, {
+  component: ModelActor,
   model: "/models/beeble.glb",
-  // A walker: ModelActor owns the capsule, gravity and slopes; the state
-  // machine only supplies a velocity (see kinematicMover.tsx).
-  body: "kinematic",
-  collider: BEEBLE_COLLIDER, // spec.ts — shared with the server (kinds.ts)
-  movement: "ground",
+  scale: [1.2, 1.2, 1.2],
   isStatic: false,
   footprint: 5,
   density: 200,
@@ -20,6 +20,6 @@ export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
   renderDistance: 200,
   frustumPadding: 3,
   priority: 80,
-};
+});
 
 export const BeebleActor = createActor(BeebleDescriptor);

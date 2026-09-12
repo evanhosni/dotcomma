@@ -6,8 +6,7 @@ import { DRESSING_CHUNK_SIZE, yawFromDir, type DressingColliderPart } from "../.
 import { LAMP_COLLIDER_PARTS, LAMP_PLACEMENT, lampYaw } from "../../../../src/objects/dressing/street-lamps/lampSpec";
 import { SIGNAL_COLLIDER_PARTS, SIGNAL_DEFAULT_CHANCE } from "../../../../src/objects/dressing/traffic-lights/signalSpec";
 import { POLE_COLLIDER_PARTS, POLE_PLACEMENT } from "../../../../src/objects/dressing/power-lines/poleSpec";
-import { GLITCH_CITY_DOMAIN_CONFIG } from "./domainConfig.js";
-import type { PhysicsWorld } from "./world.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /**
  * DRESSING OBSTACLES on the server — street lamps, traffic signals, utility
@@ -50,8 +49,9 @@ const probeEmpty = (minX: number, minZ: number, maxX: number, maxZ: number): boo
   return vd.biomeId !== CITY_BIOME_ID && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
 };
 
-/** Every dressing collider body in the chunk at dressing-grid index (gx, gz). */
-export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {
+/** Every dressing collider body in the chunk at dressing-grid index (gx, gz);
+ *  `freewayWidth` from the physics domain's config (pole lateral offset). */
+export const enumerateObstacles = (gx: number, gz: number, freewayWidth: number): ObstaclePoint[] => {
   const cs = DRESSING_CHUNK_SIZE;
   const minX = gx * cs;
   const minZ = gz * cs;
@@ -65,7 +65,7 @@ export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {
   for (const p of getCityTrafficLightPoints(minX, minZ, maxX, maxZ, SERVER_DRESSING.signals.chance)) {
     out.push({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ), parts: SIGNAL_COLLIDER_PARTS });
   }
-  const lateral = GLITCH_CITY_DOMAIN_CONFIG.cityConfig.freewayWidth + SERVER_DRESSING.poles.lateralMargin;
+  const lateral = freewayWidth + SERVER_DRESSING.poles.lateralMargin;
   for (const p of getCityFreewaySidePoints(minX, minZ, maxX, maxZ, SERVER_DRESSING.poles.spacing, lateral, SERVER_DRESSING.poles.junctionClear, false)) {
     if (p.side !== SERVER_DRESSING.poles.side) continue;
     out.push({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ), parts: POLE_COLLIDER_PARTS });

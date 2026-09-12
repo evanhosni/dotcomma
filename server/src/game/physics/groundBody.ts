@@ -1,19 +1,16 @@
 import { computeVertexData } from "../../../../src/utils/workers/vertexCompute";
 import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
 import { chunkIndicesNear } from "./chunks.js";
+import { quantizeVelocity, SPAWN_CLEARANCE, type NpcBody, type Pose } from "./npcBody.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 import { TERRAIN_CHUNK_SIZE } from "./terrain.js";
 import { Walker, type CapsuleShape } from "./walker.js";
-import type { PhysicsWorld } from "./world.js";
 
 /**
- * NPC BODY — everything physical about one simulated actor: its Walker (the
- * capsule on the shared resolver), the terrain + dressing chunks it HOLDS so
- * the ground and obstacles around it exist, and the two fix-ups the player
- * also has (stuck escape, analytic terrain backstop).
- *
- * Per tick the manager calls `step` with the machine's velocity outputs
- * BEFORE the world step and `pose` AFTER it; `pose` returns the resolved
- * position (feet y) and the ACTUAL velocity — what gets published.
+ * GROUND BODY — a walking NPC: its Walker (the capsule on the shared
+ * resolver), the terrain + dressing chunks it HOLDS so the ground and
+ * obstacles around it exist, and the two fix-ups the player also has (stuck
+ * escape, analytic terrain backstop).
  *
  * A body whose held chunks aren't built yet simply doesn't move (its chunks
  * build row by row on the world's budget); nothing stalls the tick.
@@ -23,8 +20,6 @@ import type { PhysicsWorld } from "./world.js";
 const HOLD_MARGIN = 12;
 /** Re-evaluate holds after the body moved this far from the last check. */
 const HOLD_RECHECK_DIST = 4;
-/** Clearance a placed body gets above the analytic ground. */
-const SPAWN_CLEARANCE = 0.05;
 /** Analytic terrain backstop: cadence (ticks) and how far under counts. */
 const BACKSTOP_INTERVAL = 10;
 const BACKSTOP_TOLERANCE = 2;
@@ -34,23 +29,10 @@ const BACKSTOP_TOLERANCE = 2;
 const STUCK_TICKS_TRIGGER = 3;
 const STUCK_EMBED_MIN = 0.1;
 const STUCK_RECHECK_BACKOFF = 20;
-/** Published velocities are rounded so float noise doesn't re-publish every tick. */
-const VEL_QUANTUM = 0.01;
-const quantize = (v: number): number => Math.round(v / VEL_QUANTUM) * VEL_QUANTUM;
-
-export interface Pose {
-  x: number;
-  /** Feet. */
-  y: number;
-  z: number;
-  vx: number;
-  vy: number;
-  vz: number;
-}
 
 let phaseCounter = 0;
 
-export class NpcBody {
+export class GroundBody implements NpcBody {
   readonly walker: Walker;
   /** Every chunk this body holds is built — it may move. */
   ready = false;
@@ -73,7 +55,6 @@ export class NpcBody {
     this.prev.z = z;
   }
 
-  /** Feet position right now. */
   get x(): number {
     return this.prev.x;
   }
@@ -123,9 +104,9 @@ export class NpcBody {
     out.x = q.x;
     out.y = w.feetY();
     out.z = q.z;
-    out.vx = quantize((out.x - this.prev.x) / dt);
-    out.vy = quantize((out.y - this.prev.y) / dt);
-    out.vz = quantize((out.z - this.prev.z) / dt);
+    out.vx = quantizeVelocity((out.x - this.prev.x) / dt);
+    out.vy = quantizeVelocity((out.y - this.prev.y) / dt);
+    out.vz = quantizeVelocity((out.z - this.prev.z) / dt);
     this.prev.x = out.x;
     this.prev.y = out.y;
     this.prev.z = out.z;

@@ -12,7 +12,8 @@ import { getDb } from "./db.js";
  * When the real schema arrives, columns with real names get added by
  * migration and this blob shrinks (or stays as the "everything else" bag).
  */
-export type PlayerData = Record<string, unknown>;
+import type { PlayerData } from "../../../src/net/protocol";
+export type { PlayerData };
 
 /** The row as SQLite returns it. Cast exactly ONCE per query, right here.
  *  (A type alias, not an interface: aliases get an implicit index signature,

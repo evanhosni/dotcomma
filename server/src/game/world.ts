@@ -1,25 +1,20 @@
-import { loadPlayer, savePlayerData, type PlayerData } from "../data/players.js";
+import type { DomainId, MoveIntent, PlayerData, PlayerSnapshot, ServerMessage } from "../../../src/net/protocol";
 import { EntityManager, type PlayerView } from "./entities/manager.js";
-import type { PhysicsWorld } from "./physics/world.js";
-import type { DomainId, MoveIntent, PlayerSnapshot, ServerMessage } from "../protocol.js";
+import { PlayerPersistence } from "./persistence.js";
+import type { PhysicsWorld } from "./physics/physicsWorld.js";
 
 /**
- * THE GAME STATE — transport-agnostic. Nothing in here knows about sockets:
- * the transport (transport/ws.ts) calls these methods and hands in an
+ * THE GAME WORLD — sessions, rooms, and the two systems hanging off them
+ * (entities, persistence). Transport-agnostic: nothing in here knows about
+ * sockets. The transport (transport/ws.ts) calls these methods and hands in an
  * `Outbox` that delivers the resulting messages to session ids. This boundary
  * exists for ONE reason — so the transport could be swapped (e.g. for
  * Colyseus) without touching game logic — so it is kept exactly this thin.
  *
  * Sessions are EPHEMERAL presence: they live and die with the connection.
- * Persisted player data is a separate concern keyed by `identity`: loaded
- * once at connect (row created if missing), carried on the session as an
- * opaque blob, and written back under the WRITE POLICY below.
- *
- * WRITE POLICY — never on the tick:
- *   - on disconnect, if the blob changed since the last save;
- *   - otherwise at most once per SAVE_INTERVAL_MS per player, and only if it
- *     changed (flushDirty, driven by a coarse timer in index.ts).
- * Two sessions on one identity (two tabs) share a row: last write wins.
+ * Persisted player data is a separate concern keyed by `identity`
+ * (persistence.ts): attached at connect, patched by the client through
+ * `data:patch`, written back under the write policy there.
  *
  * Domains are ROOMS. A session is in exactly one; every broadcast is scoped
  * to a room. Moving between domains is a leave + a join, never a filter.
@@ -31,10 +26,6 @@ export interface Session extends PlayerSnapshot {
   domain: DomainId;
   /** Server time of the last accepted move (for future authority/anti-teleport). */
   lastMoveAt: number;
-  /** Persisted blob (opaque). Mutate via setPlayerData/updatePlayerData so it is marked dirty. */
-  data: PlayerData;
-  dataDirty: boolean;
-  dataSavedAt: number;
 }
 
 /** What the World needs from a transport: deliver to one, or to many. */
@@ -44,8 +35,6 @@ export interface Outbox {
 }
 
 const GOLDEN_ANGLE_DEG = 137.508;
-/** Minimum gap between periodic saves of one player's blob. */
-export const SAVE_INTERVAL_MS = 30_000;
 const SPAWN_RING_RADIUS = 3;
 
 /** hsl → "#rrggbb" so clients receive a plain CSS color. */
@@ -82,6 +71,8 @@ export class World {
   private joinCount = 0;
   /** Synced entities (NPCs, doors) — see entities/manager.ts. */
   readonly entities: EntityManager;
+  /** Persisted player blobs, by identity — see persistence.ts. */
+  readonly persistence = new PlayerPersistence();
 
   constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
     this.entities = new EntityManager(
@@ -132,7 +123,7 @@ export class World {
       domain: s.domain,
       players: this.roster(s.domain, s.id),
       serverTime: Date.now(),
-      data: s.data,
+      data: this.persistence.get(s.identity)?.data ?? {},
     });
     this.out.sendMany(room, { t: "join", player: snapshotOf(s) }, s.id);
   }
@@ -152,7 +143,7 @@ export class World {
 
   addSession(id: string, identity: string, domain: DomainId): Session {
     const spawn = this.nextSpawn();
-    const record = loadPlayer(identity); // creates the row on first ever connect
+    this.persistence.attach(identity);
     const s: Session = {
       id,
       identity,
@@ -166,9 +157,6 @@ export class World {
       vz: 0,
       ry: 0,
       lastMoveAt: Date.now(),
-      data: record.data,
-      dataDirty: false,
-      dataSavedAt: Date.now(),
     };
     this.joinCount++;
     this.sessions.set(id, s);
@@ -182,56 +170,44 @@ export class World {
     this.sessions.delete(id);
     this.entities.removeSession(id);
     this.leaveRoom(s);
-    if (s.dataDirty) this.persist(s);
+    this.persistence.detach(s.identity);
   }
 
-  // ── persistence ──────────────────────────────────────────────────────────
+  // ── player data ──────────────────────────────────────────────────────────
 
-  private persist(s: Session): void {
-    savePlayerData(s.identity, s.data);
-    s.dataDirty = false;
-    s.dataSavedAt = Date.now();
-  }
-
-  /** Replace a player's blob wholesale (marks dirty; saved per the write policy). */
-  setPlayerData(id: string, data: PlayerData): void {
+  /** A client's `data:patch`: merge into its identity's blob (validated by
+   *  persistence) and echo the result to EVERY session of that identity. */
+  patchPlayerData(id: string, patch: unknown): void {
     const s = this.sessions.get(id);
     if (!s) return;
-    s.data = data;
-    s.dataDirty = true;
+    const merged = this.persistence.patch(s.identity, patch);
+    if (!merged) return;
+    this.broadcastPlayerData(s.identity, merged);
   }
 
-  /** Shallow-merge into a player's blob (marks dirty). */
-  updatePlayerData(id: string, patch: PlayerData): void {
-    const s = this.sessions.get(id);
-    if (!s) return;
-    s.data = { ...s.data, ...patch };
-    s.dataDirty = true;
+  /** Server-side game logic replacing a blob (progress written by the world). */
+  setPlayerData(identity: string, data: PlayerData): void {
+    this.persistence.set(identity, data);
+    this.broadcastPlayerData(identity, data);
+  }
+
+  private broadcastPlayerData(identity: string, data: PlayerData): void {
+    for (const other of this.sessions.values()) {
+      if (other.identity === identity) this.out.send(other.id, { t: "data", data });
+    }
   }
 
   /** Periodic save sweep — call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
-    let n = 0;
-    for (const s of this.sessions.values()) {
-      if (s.dataDirty && now - s.dataSavedAt >= SAVE_INTERVAL_MS) {
-        this.persist(s);
-        n++;
-      }
-    }
-    return n;
+    return this.persistence.flushDirty(now);
   }
 
   /** Shutdown: save everything that changed, regardless of interval. */
   saveAll(): number {
-    let n = 0;
-    for (const s of this.sessions.values()) {
-      if (s.dataDirty) {
-        this.persist(s);
-        n++;
-      }
-    }
-    return n;
+    return this.persistence.saveAll();
   }
+
+  // ── movement / rooms ─────────────────────────────────────────────────────
 
   /** NOT authoritative (yet): the client's intent is accepted and relayed.
    *  Authority slots in here — validate against lastMoveAt/speed, then relay

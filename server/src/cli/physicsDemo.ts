@@ -1,7 +1,6 @@
-import { initCompute, computeVertexData } from "../../../src/utils/workers/vertexCompute";
+import { computeVertexData } from "../../../src/utils/workers/vertexCompute";
 import { GRASS_BIOME_ID } from "../../../src/world/constants";
-import { GLITCH_CITY_DOMAIN_CONFIG } from "../game/physics/domainConfig.js";
-import { PhysicsWorld, PHYSICS_DT } from "../game/physics/world.js";
+import { PhysicsWorld, PHYSICS_DT } from "../game/physics/physicsWorld.js";
 import { Walker } from "../game/physics/walker.js";
 import { deg, findBiomePatch, findSlopeSpot, slopeAt, type SlopeSample } from "./terrainScan.js";
 
@@ -54,8 +53,7 @@ const walk = (w: Walker, pw: PhysicsWorld, spot: SlopeSample, seconds: number, l
 };
 
 const main = async () => {
-  initCompute(GLITCH_CITY_DOMAIN_CONFIG);
-  const pw = await PhysicsWorld.create();
+  const pw = await PhysicsWorld.create(); // initializes the physics domain's height function
   console.log(`Rapier ready. dt = ${PHYSICS_DT}s (entity tick)`);
 
   let t0 = performance.now();

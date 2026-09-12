@@ -1,21 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import { World, type Outbox } from "../game/world.js";
-import type { PhysicsWorld } from "../game/physics/world.js";
 import {
   isDomainId,
+  PLAYER_DATA_MAX_BYTES,
   type ClientMessage,
   type EntityRegisterItem,
   type MoveIntent,
   type ServerMessage,
-} from "../protocol.js";
+} from "../../../src/net/protocol";
+import type { PhysicsWorld } from "../game/physics/physicsWorld.js";
+import { World, type Outbox } from "../game/world.js";
 
 /**
  * WebSocket transport. Owns the sockets and NOTHING about the game: it parses
  * frames, validates their shape, forwards them to the World, and implements
  * the World's Outbox over its socket map. The wire protocol itself is
- * documented in ../protocol.ts.
+ * documented in src/net/protocol.ts (the one shared copy).
  *
  * HEARTBEAT (not optional): a socket whose peer vanished — laptop lid closed,
  * wifi dropped — often never fires `close`. Every HEARTBEAT_MS each socket is
@@ -24,8 +25,6 @@ import {
  */
 
 const HEARTBEAT_MS = 30_000;
-/** Dev-only: lets the client overwrite its persisted blob (plumbing tests). */
-const DEBUG_DATA_WRITES = process.env.DEBUG_DATA_WRITES === "1";
 const MAX_PAYLOAD_BYTES = 64 * 1024; // a registration batch of ~64 actors is ~6KB; headroom for state blobs
 const MAX_ENTITIES_PER_MESSAGE = 256;
 const MAX_ID_LENGTH = 128;
@@ -39,6 +38,7 @@ interface Conn {
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= MAX_ID_LENGTH;
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ENTITIES_PER_MESSAGE) return null;
@@ -76,6 +76,12 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
       return isDomainId(raw.domain) ? { t: "domain", domain: raw.domain } : null;
     case "ping":
       return isFiniteNumber(raw.t0) ? { t: "ping", t0: raw.t0 } : null;
+    case "data:patch": {
+      // Shape only; the size of the MERGED blob is persistence's call.
+      const patch = raw.patch;
+      if (!isPlainObject(patch) || JSON.stringify(patch).length > PLAYER_DATA_MAX_BYTES) return null;
+      return { t: "data:patch", patch };
+    }
     case "entity:register": {
       const entities = parseRegisterItems(raw.entities);
       return entities ? { t: "entity:register", entities } : null;
@@ -87,12 +93,6 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
     }
     case "entity:interact":
       return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
-    case "debug:setData": {
-      if (!DEBUG_DATA_WRITES) return null;
-      const d = raw.data;
-      if (typeof d !== "object" || d === null || Array.isArray(d)) return null;
-      return { t: "debug:setData", data: d as Record<string, unknown> };
-    }
     default:
       return null;
   }
@@ -169,8 +169,8 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
             ws.send(JSON.stringify({ t: "pong", t0: msg.t0, serverTime: Date.now() } satisfies ServerMessage));
           }
           return;
-        case "debug:setData":
-          world.setPlayerData(conn.sessionId, msg.data);
+        case "data:patch":
+          world.patchPlayerData(conn.sessionId, msg.patch);
           return;
         case "entity:register": {
           const s = world.get(conn.sessionId);

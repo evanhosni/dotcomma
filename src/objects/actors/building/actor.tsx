@@ -1,30 +1,22 @@
-import { ActorDescriptor } from "../spawning/types";
-import { BuildingAttributes } from "./types";
-import { createActor } from "../../../world/components";
+import { createActor, describeActor } from "../../../world/components";
 import { Building } from "./Building";
+import { BUILDING_PLACEMENT, BUILDING_SPEC } from "./spec";
+import { BuildingAttributes } from "./types";
 
-export const BuildingDescriptor: ActorDescriptor<BuildingAttributes> = {
-  id: "building",
+/**
+ * The procedural building. Shape comes from the spec's hull attributes (the
+ * server builds its sealed collider from the same plan); placement from
+ * BUILDING_PLACEMENT (shared with the server's domain config, which
+ * replicates the flatten pads under every building).
+ */
+export const BuildingDescriptor = describeActor<BuildingAttributes>(BUILDING_SPEC, {
   component: Building,
-  footprint: 30,
-  // Buildings only place inside block interiors (off roads/sidewalks/ramps),
-  // so density is set high to keep blocks packed — footprint spacing is the
-  // real limiter, and the flatten engine's iterated spacing rounds convert
-  // the oversupply into greedy-level packing. (Halving to 1900 was tried for
-  // flatten-tile cost and REVERTED: combined with single-round spacing it
-  // visibly thinned the city.)
-  density: 3800,
-  clustering: 0,
   renderDistance: 625,
   frustumPadding: 3.25,
-  priority: 55,
-  roadDistanceRange: [23, 99999],
-  // Terrain flattens a pad under every building (the city rides the regional
-  // base noise — without the pad, sloped block interiors clip through floors).
-  flattenGround: true,
-};
+  ...BUILDING_PLACEMENT,
+});
 
-/** Variants (skyscraper/apartment/office/…) wrap <Building> with their own
- *  options, then EXTEND this descriptor: spread BuildingDescriptor, override
- *  id/component + whatever differs — see skyscraper.tsx. */
+/** Variants (skyscraper/apartment/office/…) EXTEND this descriptor: spread
+ *  BuildingDescriptor into describeActor with their own spec and whatever
+ *  differs — see skyscraper.tsx. */
 export const BuildingActor = createActor(BuildingDescriptor);

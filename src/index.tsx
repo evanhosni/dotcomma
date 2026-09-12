@@ -5,6 +5,7 @@ import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { NetOverlay } from "./menus/overlay/NetOverlay";
 import { startConnection } from "./net/connection";
+import "./net/playerData"; // subscribes to the connection (persisted player data)
 import { DayNightLights } from "./lighting/DayNightLights";
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";

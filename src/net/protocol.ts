@@ -1,15 +1,17 @@
+import type { AnimationState } from "../objects/actors/state/animation";
+
 /**
  * WIRE PROTOCOL — JSON text frames, one message per frame, discriminated on `t`.
  *
- * DUPLICATED deliberately from server/src/protocol.ts (CRA's
- * ModuleScopePlugin forbids importing across the src/ boundary and a shared
- * workspace package was judged more machinery than this file is worth).
- * Change both or change neither. The client is the COPY; the server file is canonical.
+ * THE ONE COPY. The server imports this file straight from src/ (it is bundled
+ * with esbuild and already imports the state machines, the height pipeline and
+ * the actor catalog the same way); CRA only forbids the CLIENT importing
+ * across src/, which never happens here. Three-free, React-free — keep it so.
  *
  * IDS. Two different ids, do not conflate them:
  *   - `identity`  — the anonymous uuid the CLIENT generates once and keeps in
- *                   localStorage. It names the PERSISTED player (Phase 3's
- *                   players.id). Sent once, in `hello`, never broadcast.
+ *                   localStorage. It names the PERSISTED player (players.id).
+ *                   Sent once, in `hello`, never broadcast.
  *   - `id`        — the SESSION id the SERVER assigns per connection. It names
  *                   a presence in the world: every join/move/leave carries it.
  *                   Two tabs of one browser share an identity but are two
@@ -35,41 +37,51 @@
  *                                                 and a fresh `init` to the mover
  *   server  → leave   {id}                        to the others in that domain
  *   client  → ping    {t0}                        app-level liveness + clock sync
- *   client  → debug:setData {data}               DEV ONLY (server env
- *                                                 DEBUG_DATA_WRITES=1, else ignored):
- *                                                 replace your persisted blob — exists
- *                                                 to exercise the persistence plumbing
- *                                                 before there is game logic to do it
  *   server  → pong    {t0, serverTime}            (protocol-level ws ping/pong is
  *                                                 ALSO used, server-side only —
  *                                                 browsers cannot observe it)
  *
- * ENTITY SYNC — SERVER AUTHORITY (see game/entities/manager.ts):
+ * PLAYER DATA (persistence, see server/src/game/persistence.ts):
+ *   client  → data:patch {patch}                  shallow-merge into YOUR persisted
+ *                                                 blob (settings, progress). The
+ *                                                 server validates size, merges,
+ *                                                 marks dirty (saved per its write
+ *                                                 policy) and answers…
+ *   server  → data      {data}                    …the merged blob, to EVERY session
+ *                                                 of that identity (a second tab
+ *                                                 stays in sync).
+ *
+ * ENTITY SYNC — SERVER AUTHORITY (see server/src/game/entities/manager.ts):
  *   client  → entity:register   {entities:[{id, kind, x, y, z}]}
  *                                                 "I am rendering these" (kind = actor
  *                                                 descriptor id). The server creates the
- *                                                 record on first sight and, for kinds it
- *                                                 knows (kinds.ts), runs the actor's own
- *                                                 state machine. Answered with the FULL
- *                                                 current record as an entity:update.
+ *                                                 record on first sight and, for kinds in
+ *                                                 the actor catalog, runs the actor's own
+ *                                                 state machine and moves its body.
+ *                                                 Answered with the FULL current record
+ *                                                 as an entity:update.
  *   client  → entity:unregister {ids}             unmounted; last one out forgets it
- *   client  → entity:interact   {id, action}      an input: "mouse-left-click" (raised
- *                                                 on the machine's blackboard), "door:<i>"
- *                                                 (toggles replicated state). The SERVER
- *                                                 decides — nothing is client-owned.
- *   server  → entity:update     {id, x?,y?,z?, vx?,vy?,vz?, ry?, clip?, clipT0?, once?, sm?, state?}
+ *   client  → entity:interact   {id, action}      an INPUT: any mouse input the client's
+ *                                                 raycast detected ("mouse-left-click",
+ *                                                 "mouse-hover-enter", "mouse-scroll-up", …
+ *                                                 — raised as the matching flag on the
+ *                                                 machine's blackboard), or "door:<i>"
+ *                                                 (toggles replicated state). Inputs cross
+ *                                                 the wire, never triggers: the SERVER's
+ *                                                 machine decides — nothing is client-owned.
+ *   server  → entity:update     {id, st?, x?,y?,z?, vx?,vy?,vz?, ry?, anim?, sm?, state?}
  *                                                 changed fields only, ≤10Hz, to the
- *                                                 registrants. Animation is a clip name +
- *                                                 the server time it started (never
- *                                                 bones); sm = machine state id, mirrored
- *                                                 by clients for state-keyed visuals.
+ *                                                 registrants. `anim` is the whole
+ *                                                 animation-channel state (never bones);
+ *                                                 sm = machine state id, mirrored by
+ *                                                 clients for state-keyed visuals.
  *
  * Domains are the broadcast scope: nothing crosses a domain boundary except
  * the mover's own re-init. Entity sync inherits this scoping.
  *
- * Coordinates are the player's capsule CENTER in world units; `ry` is yaw in
- * radians (three.js convention: rotation.y such that local +Z faces the view
- * direction). Colors are CSS hex strings.
+ * Coordinates are the player's capsule CENTER in world units (entities: FEET);
+ * `ry` is yaw in radians (three.js convention: rotation.y such that local +Z
+ * faces the view direction). Colors are CSS hex strings.
  */
 
 export type DomainId = "home" | "glitch-city";
@@ -101,6 +113,19 @@ export interface MoveIntent {
   ry: number;
 }
 
+// ── player data ────────────────────────────────────────────────────────────
+
+/**
+ * The persisted per-player blob. Its SHAPE is still open — settings and
+ * progress will land here as named keys once they exist (add them to this
+ * type; the plumbing on both sides is shape-agnostic). Until then treat it as
+ * an opaque object: nothing may assume a key inside it.
+ */
+export type PlayerData = Record<string, unknown>;
+
+/** Serialized size cap for one player's blob — a patch that would exceed it is rejected. */
+export const PLAYER_DATA_MAX_BYTES = 64 * 1024;
+
 // ── client → server ────────────────────────────────────────────────────────
 
 export interface HelloMessage {
@@ -124,54 +149,20 @@ export interface PingMessage {
   t0: number;
 }
 
-/** The persisted per-player blob. Shape deliberately UNDEFINED for now —
- *  treat as opaque; nothing may assume a key inside it. */
-export type PlayerData = Record<string, unknown>;
-
-/** Dev-only plumbing test hook (see header). */
-export interface DebugSetDataMessage {
-  t: "debug:setData";
-  data: PlayerData;
+/** Shallow-merge `patch` into the sender's persisted blob. */
+export interface DataPatchMessage {
+  t: "data:patch";
+  patch: PlayerData;
 }
 
 export interface EntityRegisterItem {
   id: string;
-  /** Actor descriptor id — selects the server-side simulation (kinds.ts). */
+  /** Actor descriptor id — selects the server-side simulation (actor catalog). */
   kind: string;
   /** Spawn origin (world). */
   x: number;
   y: number;
   z: number;
-}
-
-/** Server-published fields — every one optional so updates carry only changes. */
-export interface EntityUpdateFields {
-  /** Server time (ms) of the tick this pose was published — present whenever
-   *  x/y/z are. Clients interpolate the published track on this clock
-   *  (snapshot interpolation), never on message arrival time. */
-  st?: number;
-  x?: number;
-  y?: number;
-  z?: number;
-  vx?: number;
-  vy?: number;
-  vz?: number;
-  /** Yaw, three.js rotation.y. */
-  ry?: number;
-  clip?: string;
-  /** Server time (ms) the clip started. */
-  clipT0?: number;
-  /** Clip plays once and holds its last frame. */
-  once?: boolean;
-  /** The server-side state machine's current state id (mirrored for visuals). */
-  sm?: string;
-  /** Small replicated state blob (component-defined, e.g. door flags). */
-  state?: Record<string, unknown>;
-}
-
-export interface EntityUpdateMessage extends EntityUpdateFields {
-  t: "entity:update";
-  id: string;
 }
 
 export interface EntityRegisterMessage {
@@ -195,7 +186,7 @@ export type ClientMessage =
   | ClientMoveMessage
   | DomainMessage
   | PingMessage
-  | DebugSetDataMessage
+  | DataPatchMessage
   | EntityRegisterMessage
   | EntityUnregisterMessage
   | EntityInteractMessage;
@@ -212,7 +203,7 @@ export interface InitMessage {
   domain: DomainId;
   players: PlayerSnapshot[];
   serverTime: number;
-  /** YOUR persisted data (opaque; see PlayerData). */
+  /** YOUR persisted data (see PlayerData). */
   data: PlayerData;
 }
 
@@ -237,10 +228,46 @@ export interface PongMessage {
   serverTime: number;
 }
 
+/** The sender's (merged) persisted blob after a data:patch. */
+export interface DataMessage {
+  t: "data";
+  data: PlayerData;
+}
+
+/** Server-published entity fields — every one optional so updates carry only changes. */
+export interface EntityUpdateFields {
+  /** Server time (ms) of the tick this pose was published — present whenever
+   *  x/y/z are. Clients interpolate the published track on this clock
+   *  (snapshot interpolation), never on message arrival time. */
+  st?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+  vx?: number;
+  vy?: number;
+  vz?: number;
+  /** Yaw, three.js rotation.y. */
+  ry?: number;
+  /** The animation channel's whole state (clip, loop, speed, paused, clocks
+   *  in SERVER time) — self-contained, so a client can compute the exact clip
+   *  time on its delayed render clock. */
+  anim?: AnimationState;
+  /** The server-side state machine's current state id (mirrored for visuals). */
+  sm?: string;
+  /** Small replicated state blob (component-defined, e.g. door flags). */
+  state?: Record<string, unknown>;
+}
+
+export interface EntityUpdateMessage extends EntityUpdateFields {
+  t: "entity:update";
+  id: string;
+}
+
 export type ServerMessage =
   | InitMessage
   | JoinMessage
   | ServerMoveMessage
   | LeaveMessage
   | PongMessage
+  | DataMessage
   | EntityUpdateMessage;

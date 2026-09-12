@@ -47,7 +47,7 @@ const dressingQueue = new TaskQueue();
  *  nor group sets one). */
 /** The DressingAttributes a <Dressing> group can default for its children —
  *  the ones every feature resolves through useDressingDefault. */
-export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance">;
+export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
 
 /**
  * Groups a biome's dressing features, mirroring <Actors>/<Foliage>: props set
@@ -59,7 +59,7 @@ export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "coll
  *     <RoadMarkers />
  *   </Dressing>
  */
-const DressingGroup = createDefaultsGroup<DressingDefaults>();
+const DressingGroup = createDefaultsGroup<DressingDefaults>("dressing");
 export const Dressing = DressingGroup.Group;
 
 /** Resolve a group-defaultable attribute: own prop > <Dressing> group > feature default. */

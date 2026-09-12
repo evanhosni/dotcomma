@@ -1,17 +1,15 @@
 import type * as RAPIER from "@dimforge/rapier3d-compat";
-import type { PhysicsWorld } from "./world.js";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../../../src/player/spec";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /**
  * PLAYER BODIES — a kinematic capsule per player in a domain with NPCs,
  * following the position the player's client reports (center y), so NPCs
- * collide with players on the server exactly as they do on the client.
- * Reconciled every tick from the roster: bodies of players no longer listed
- * are removed.
+ * collide with players on the server exactly as they do on the client. The
+ * capsule is the player's own (src/player/spec.ts — Player.tsx mounts the
+ * same one). Reconciled every tick from the roster: bodies of players no
+ * longer listed are removed.
  */
-
-/** Player.tsx PLAYER_RADIUS / PLAYER_HEIGHT (its published y is the body CENTER). */
-const PLAYER_RADIUS = 0.5;
-const PLAYER_HEIGHT = 2;
 
 export interface PlayerPose {
   id: string;
