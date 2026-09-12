@@ -1,4 +1,5 @@
 import type * as THREE from "three";
+import { angleDiffAbs, lerpAngle } from "../state/motion";
 import {
   custom,
   onMouseDoubleClick,
@@ -17,8 +18,19 @@ import {
   playerOutsideRange,
   randomInterval,
 } from "../state/triggers";
-import { BehaviorContext, LOOP_ONCE, StateMachineConfig } from "../state/types";
+import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
 import { beginInflate, type Inflate } from "./inflate";
+
+/**
+ * THE BEEBLE'S BEHAVIOR — the template for every NPC. Wanders, notices a
+ * player in its sight cone, turns to face them, ascends when clicked.
+ *
+ * Movement and facing go through `ctx.motion`, animation through the state's
+ * `animation` shorthand (or `ctx.animation`); the framework applies both on
+ * the server and on every client. Only the head bone and the sphere-inflate
+ * touch the scene, and both guard on `ctx.groupRef.current` (null on the
+ * server). See ../state/runner.ts for the contract.
+ */
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
@@ -33,33 +45,9 @@ const TURN_DONE_THRESHOLD = Math.PI / 9; // 20° — stop turning, head tracking
 
 // ─── Helpers ───
 
-function lerpAngle(a: number, b: number, t: number): number {
-  let diff = b - a;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return a + diff * Math.min(t, 1);
-}
-
-function angleDiffAbs(a: number, b: number): number {
-  let diff = b - a;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return Math.abs(diff);
-}
-
-function angleToPlayer(ctx: { positionRef: { current: THREE.Vector3 }; playerPosition: THREE.Vector3 }): number {
-  const dx = ctx.playerPosition.x - ctx.positionRef.current.x;
-  const dz = ctx.playerPosition.z - ctx.positionRef.current.z;
-  return Math.atan2(dx, dz);
-}
-
-function randomAngle(): number {
-  return Math.random() * Math.PI * 2;
-}
-
-function randomRange(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
+const randomAngle = (): number => Math.random() * Math.PI * 2;
+const randomRange = (min: number, max: number): number => min + Math.random() * (max - min);
+const angleToPlayer = (ctx: TriggerContext): number => ctx.motion.angleTo(ctx.playerPosition.x, ctx.playerPosition.z);
 
 function findHeadBone(ctx: BehaviorContext): void {
   if (ctx.blackboard.__head_bone) return;
@@ -76,20 +64,26 @@ function resetHeadBone(ctx: BehaviorContext): void {
   if (bone) bone.rotation.y = 0;
 }
 
+/** Turn the head toward the player, relative to the body's facing (a scene
+ *  effect — the bone only exists on the client). */
 function updateHeadTracking(ctx: BehaviorContext): void {
   const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
   if (!bone) return;
-
-  const playerAngle = angleToPlayer(ctx);
-  const bodyAngle = ctx.blackboard.__yaw ?? 0;
-
-  let relAngle = playerAngle - bodyAngle;
+  let relAngle = angleToPlayer(ctx) - ctx.motion.yaw;
   while (relAngle > Math.PI) relAngle -= Math.PI * 2;
   while (relAngle < -Math.PI) relAngle += Math.PI * 2;
-
   relAngle = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, relAngle));
-
   bone.rotation.y = lerpAngle(bone.rotation.y, relAngle, HEAD_LERP_SPEED * ctx.delta);
+}
+
+/** PER-PLAYER effect, the example: the click that will inflate this beeble for
+ *  EVERYONE (the `ascending` state everyone's mirror enters) also logs — but
+ *  only on the screen of the player who clicked. On a client mirror
+ *  `ctx.input` carries this player's own inputs; the groupRef guard keeps the
+ *  server (which sees every player's clicks) out of it. Lives in the states
+ *  the click LANDS in (alert / alert-turning), not the one it leads to. */
+function logLocalClick(ctx: BehaviorContext): void {
+  if (ctx.groupRef.current && ctx.input.leftClick) console.log("you clicked me");
 }
 
 // ─── State Machine ───
@@ -98,22 +92,14 @@ export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",
   triggers: [
     custom("player-visible", (ctx) => {
-      const sightSq = SIGHT_RANGE * SIGHT_RANGE;
-      if (ctx.playerDistanceSq > sightSq) return false;
-      const bodyAngle = ctx.blackboard.__dir_angle ?? 0;
-      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) <= SIGHT_ANGLE;
+      if (ctx.playerDistanceSq > SIGHT_RANGE * SIGHT_RANGE) return false;
+      return angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= SIGHT_ANGLE;
     }),
     playerOutsideRange(LOSE_RANGE),
     randomInterval("idle-look", 20, 60),
     randomInterval("idle-look-end", 3, 10),
-    custom("alert-need-turn", (ctx) => {
-      const bodyAngle = ctx.blackboard.__body_angle ?? 0;
-      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) > TURN_THRESHOLD;
-    }),
-    custom("alert-done-turn", (ctx) => {
-      const bodyAngle = ctx.blackboard.__body_angle ?? 0;
-      return angleDiffAbs(bodyAngle, angleToPlayer(ctx)) <= TURN_DONE_THRESHOLD;
-    }),
+    custom("alert-need-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) > TURN_THRESHOLD),
+    custom("alert-done-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= TURN_DONE_THRESHOLD),
     onMouseLeftClick(),
     onMouseHoverEnter(),
     onMouseHoverLeave(),
@@ -132,7 +118,7 @@ export const BEEBLE_SM: StateMachineConfig = {
     // ─── Idle: Walking ───
     {
       id: "idle-walk",
-      animation: { clipName: "walk" },
+      animation: { clip: "walk" },
       onEnter: (ctx) => {
         const bb = ctx.blackboard;
         const angle = randomAngle();
@@ -140,31 +126,23 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__dir_target = angle;
         bb.__dir_timer = randomRange(1, 5);
         bb.__dir_elapsed = 0;
-        bb.__yaw = angle;
+        ctx.motion.face(angle);
         resetHeadBone(ctx);
       },
       onUpdate: (ctx) => {
         const bb = ctx.blackboard;
 
-        // Direction change timer
+        // Pick a new heading every few seconds…
         bb.__dir_elapsed += ctx.delta;
         if (bb.__dir_elapsed >= bb.__dir_timer) {
           bb.__dir_target = randomAngle();
           bb.__dir_timer = randomRange(1, 5);
           bb.__dir_elapsed = 0;
         }
-
-        // Smooth lerp toward target direction
+        // …and ease toward it.
         bb.__dir_angle = lerpAngle(bb.__dir_angle, bb.__dir_target, DIR_LERP_SPEED * ctx.delta);
 
-        // Write velocity for physics body (Beeble.tsx applies it)
-        const angle = bb.__dir_angle;
-        bb.__vel_x = BEEBLE_SPEED * Math.sin(angle);
-        bb.__vel_z = BEEBLE_SPEED * Math.cos(angle);
-        bb.__vel_y = undefined;
-
-        // Facing is an OUTPUT (the framework applies it to the model)
-        bb.__yaw = angle;
+        ctx.motion.heading(bb.__dir_angle, BEEBLE_SPEED).fly(null).face(bb.__dir_angle);
       },
       transitions: [
         { trigger: "player-visible", target: "alert" },
@@ -175,18 +153,10 @@ export const BEEBLE_SM: StateMachineConfig = {
     // ─── Idle: Looking at Hands ───
     {
       id: "idle-look",
-      animation: {
-        clipName: "stare at hands",
-        loop: LOOP_ONCE,
-        clampWhenFinished: true,
-      },
+      animation: { clip: "stare at hands", loop: "once" },
       onEnter: (ctx) => {
+        ctx.motion.stop();
         resetHeadBone(ctx);
-      },
-      onUpdate: (ctx) => {
-        ctx.blackboard.__vel_x = 0;
-        ctx.blackboard.__vel_z = 0;
-        ctx.blackboard.__vel_y = undefined;
       },
       transitions: [
         { trigger: "player-visible", target: "alert" },
@@ -197,16 +167,14 @@ export const BEEBLE_SM: StateMachineConfig = {
     // ─── Alert: Standing ───
     {
       id: "alert",
-      animation: { clipName: "idle" },
+      animation: { clip: "idle" },
       onEnter: (ctx) => {
+        ctx.motion.stop();
         findHeadBone(ctx);
-        ctx.blackboard.__body_angle = ctx.blackboard.__yaw ?? 0;
       },
       onUpdate: (ctx) => {
-        ctx.blackboard.__vel_x = 0;
-        ctx.blackboard.__vel_z = 0;
-        ctx.blackboard.__vel_y = undefined;
         updateHeadTracking(ctx);
+        logLocalClick(ctx);
       },
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
@@ -218,21 +186,14 @@ export const BEEBLE_SM: StateMachineConfig = {
     // ─── Alert: Turning toward player ───
     {
       id: "alert-turning",
-      animation: { clipName: "walk" },
+      animation: { clip: "walk" },
       onEnter: (ctx) => {
+        ctx.motion.stop();
         resetHeadBone(ctx);
       },
       onUpdate: (ctx) => {
-        const bb = ctx.blackboard;
-        bb.__vel_x = 0;
-        bb.__vel_z = 0;
-        bb.__vel_y = undefined;
-
-        // Smoothly rotate body toward player
-        const targetAngle = angleToPlayer(ctx);
-        bb.__body_angle = lerpAngle(bb.__body_angle ?? 0, targetAngle, DIR_LERP_SPEED * ctx.delta);
-
-        bb.__yaw = bb.__body_angle;
+        ctx.motion.turnToward(ctx.playerPosition.x, ctx.playerPosition.z, DIR_LERP_SPEED * ctx.delta);
+        logLocalClick(ctx);
       },
       transitions: [
         { trigger: "mouse-left-click", target: "ascending" },
@@ -244,32 +205,24 @@ export const BEEBLE_SM: StateMachineConfig = {
     // ─── Ascending ───
     {
       id: "ascending",
-      animation: { clipName: "ascend" },
+      animation: { clip: "ascend" },
       onEnter: (ctx) => {
         resetHeadBone(ctx);
-        const bb = ctx.blackboard;
-        bb.__ascend_elapsed = 0;
+        ctx.motion.move(0, 0);
         const group = ctx.groupRef.current;
         if (!group) return;
-        // Sphere morph + scale-up, shared with the networked beeble (inflate.ts).
+        // Sphere morph + scale-up — a scene effect, so client only (inflate.ts).
         const inflate = beginInflate(group);
-        bb.__inflate = inflate;
+        ctx.blackboard.__inflate = inflate;
         return () => {
           inflate.dispose();
-          bb.__inflate = null;
+          ctx.blackboard.__inflate = null;
         };
       },
       onUpdate: (ctx) => {
-        const bb = ctx.blackboard;
-        bb.__ascend_elapsed = (bb.__ascend_elapsed ?? 0) + ctx.delta;
-        const ramp = Math.min(bb.__ascend_elapsed / 1, 1); // ease in over 1s
-        const easedRamp = ramp * ramp; // quadratic ease-in
-
-        bb.__vel_x = 0;
-        bb.__vel_z = 0;
-        bb.__vel_y = ASCEND_SPEED * easedRamp;
-
-        (bb.__inflate as Inflate | null)?.update(ctx.delta);
+        const ramp = Math.min(ctx.stateElapsed / 1, 1); // ease in over 1s
+        ctx.motion.fly(ASCEND_SPEED * ramp * ramp);
+        (ctx.blackboard.__inflate as Inflate | null)?.update(ctx.delta);
       },
       transitions: [],
     },

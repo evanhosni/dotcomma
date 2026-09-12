@@ -1,15 +1,17 @@
 import { getAllBiomes } from "../utils";
-import { TerrainParams } from "../../world/types";
-import { Region } from "../../world/types";
-import { FlattenDescriptor, SerializedRegion, DomainConfig } from "./vertexCompute";
+import { Region, TerrainParams } from "../../world/types";
+import { assembleDomainConfig, toFlattenDescriptor } from "../../world/domains/domainConfig";
+import { DomainConfig, FlattenDescriptor, SerializedRegion } from "./vertexCompute";
 
 /**
- * Builds a serializable DomainConfig from regions + global terrain params.
- * This config is sent to terrain/spawn/grass workers to initialize the
- * inlined vertex computation pipeline.
+ * Builds a serializable DomainConfig from the JSX-registered regions + global
+ * terrain params — what <Domain> commits and sends to the terrain/spawn/
+ * grass/dressing workers to initialize the inlined vertex pipeline.
  *
  * Global params come from the world-level <Terrain> component; per-biome
- * noise comes from each biome-level <Terrain noise={...}> registration.
+ * noise comes from each biome-level <Terrain noise={...}> registration. The
+ * assembly itself is shared with the domains' Three-free configs
+ * (world/domains/domainConfig.ts) so the server runs on the same object.
  */
 export function buildDomainConfig(regions: Region[], params: TerrainParams): DomainConfig {
   const serializedRegions: SerializedRegion[] = regions.map((r) => ({
@@ -36,34 +38,9 @@ export function buildDomainConfig(regions: Region[], params: TerrainParams): Dom
   for (const biome of getAllBiomes(regions)) {
     for (const d of biome.actors ?? []) {
       if (!d.flattenGround) continue;
-      flattenById.set(d.id, {
-        id: d.id,
-        density: d.density,
-        clustering: d.clustering,
-        footprint: d.footprint,
-        priority: d.priority ?? 50,
-        biomeIds: d.biomeIds,
-        heightRange: d.heightRange,
-        roadDistanceRange: d.roadDistanceRange,
-        radius: d.flattenRadius ?? d.footprint * 0.45,
-        skirt: d.flattenSkirt ?? d.footprint * 0.35,
-      });
+      flattenById.set(d.id, toFlattenDescriptor(d));
     }
   }
-  const flattenDescriptors = Array.from(flattenById.values());
 
-  return {
-    flattenDescriptors,
-    seed: params.seed,
-    regions: serializedRegions,
-    gridSize: params.gridSize,
-    regionGridSize: params.regionGridSize,
-    boundaryWidth: params.boundaryWidth,
-    riverWidth: params.riverWidth,
-    defaultBlendWidth: params.defaultBlendWidth,
-    roadNoiseParams: params.roadNoise,
-    baseNoiseParams: params.baseNoise,
-    biomeNoiseConfigs,
-    cityConfig: params.cityConfig,
-  };
+  return assembleDomainConfig(serializedRegions, biomeNoiseConfigs, Array.from(flattenById.values()), params);
 }

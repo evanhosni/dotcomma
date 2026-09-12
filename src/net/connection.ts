@@ -1,14 +1,15 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
-import type { ClientMessage, DomainId, PlayerData, ServerMessage } from "./protocol";
+import type { ClientMessage, DomainId, ServerMessage } from "./protocol";
 
 /**
  * THE game connection — one module-level singleton over the browser's native
  * WebSocket. Owns: URL resolution, the anonymous identity, connect + exponential
  * backoff reconnect, the hello/init handshake, the domain-change relay, an
  * app-level ping (liveness watchdog + server clock offset), and fan-out of
- * inbound messages to subscribers. It knows nothing about players or meshes —
- * remotePlayerStore.ts subscribes to it.
+ * inbound messages to subscribers. It knows nothing about players, entities or
+ * meshes — players/store.ts, entities/entityStore.ts and playerData.ts
+ * subscribe to it.
  *
  * React reads it through useSyncExternalStore hooks (UI-cadence only: status,
  * self id). Per-frame consumers read the module-level getters directly.
@@ -66,8 +67,6 @@ interface ConnectionState {
   color: string | null;
   /** Server-assigned spawn offset from the domain spawn (latest init). */
   spawnOffset: { x: number; z: number } | null;
-  /** OUR persisted blob as of the last init (opaque — shape TBD). */
-  data: PlayerData | null;
   /** Consecutive failed connection attempts (drives backoff). */
   attempts: number;
 }
@@ -77,7 +76,6 @@ let state: ConnectionState = {
   selfId: null,
   color: null,
   spawnOffset: null,
-  data: null,
   attempts: 0,
 };
 const stateListeners = new Set<() => void>();
@@ -227,7 +225,6 @@ const open = () => {
           selfId: msg.id,
           color: msg.color,
           spawnOffset: msg.spawn,
-          data: msg.data,
           attempts: 0,
         });
         lastPongAt = Date.now();
@@ -263,15 +260,6 @@ const open = () => {
   };
 };
 
-/** DEV ONLY — replace our persisted blob (server must run with
- *  DEBUG_DATA_WRITES=1, otherwise it ignores this). Exists to verify the
- *  persistence plumbing from the console before there is game logic. */
-export const debugSetData = (data: PlayerData): boolean => {
-  const ok = send({ t: "debug:setData", data });
-  if (ok) setState({ data });
-  return ok;
-};
-
 /** Boot the connection. Idempotent; called once from index.tsx. */
 export const startConnection = () => {
   if (started) return;
@@ -279,12 +267,11 @@ export const startConnection = () => {
   manuallyClosed = false;
   open();
 
-  // Console access: __net.state, __net.setData({...}), __net.serverTime()
+  // Console access: __net.state, __net.serverTime() (player data: __playerData)
   (window as unknown as { __net: unknown }).__net = {
     get state() {
       return state;
     },
-    setData: debugSetData,
     serverTime: getServerTime,
     url: getWebSocketUrl,
     identity: getIdentity,

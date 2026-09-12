@@ -8,7 +8,7 @@ import {
   type CharacterInput,
   type CharacterStepResult,
 } from "../../../../src/physics/characterMovement";
-import type { PhysicsWorld } from "./world.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /**
  * WALKER — a kinematic capsule driven by THE shared character resolver

@@ -1,4 +1,9 @@
-import type { AnimationControl, BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
+import { AnimationChannel } from "./animation";
+import { Input } from "./input";
+import { Motion, type Vec3Like } from "./motion";
+import type { BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
+
+export type { Vec3Like };
 
 /**
  * STATE MACHINE RUNNER — the Three-free core of an actor's behavior.
@@ -7,35 +12,29 @@ import type { AnimationControl, BehaviorContext, StateDef, StateMachineConfig, T
  * beeble/stateMachine.ts) executes in TWO places:
  *   - on the SERVER (server/src/game/entities/manager.ts), which is the ONE
  *     authority for every synced actor: it ticks transitions and behaviors,
- *     reads the machine's OUTPUTS from the blackboard and publishes them;
+ *     reads the machine's OUTPUTS (`motion`, `animation`) and publishes them;
  *   - on the CLIENT (useStateMachine.ts): for `serverSynced={false}` actors it
  *     ticks exactly like the server; for synced actors it MIRRORS the server's
  *     state id (entering states as the server does) so that state-keyed
  *     VISUALS — head tracking, the sphere-inflate — run where there is a scene,
- *     while every logic output is ignored in favor of the server's.
+ *     while every output is ignored in favor of the server's.
  *
  * THE CONTRACT for a StateMachineConfig, which is what makes this possible:
- *   - behaviors write their OUTPUTS to the blackboard — velocity `__vel_x/_z`
- *     (`__vel_y` for vertical, undefined = gravity), facing `__yaw`, and
- *     animation through `state.animation` — and never touch the scene for
- *     those. The framework applies them (kinematic mover, base, ModelActor).
+ *   - behaviors express movement through `ctx.motion` (move / heading /
+ *     toward / fly / stop / face / turnToward …) and animation through
+ *     `ctx.animation` (play / pause / resume / stop / setSpeed) or the state's
+ *     `animation` shorthand — and never touch the scene for those. The
+ *     framework applies them (kinematic mover, actor base, ModelActor).
  *   - anything that needs the scene (bones, geometry, materials) must guard on
  *     `ctx.groupRef.current` being present: it is null on the server.
  *   - no Three.js at RUNTIME in a config file (types only, via `import type`);
- *     Node has no scene. Loop modes come from LOOP_ONCE / LOOP_REPEAT in types.ts.
+ *     Node has no scene.
  *   - `Math.random` is fine: the server is the single source of truth.
  */
 
-/** Anything with x/y/z — THREE.Vector3 on the client, a plain object on the server. */
-export interface Vec3Like {
-  x: number;
-  y: number;
-  z: number;
-}
-
 // One-shot mouse flags written by useMouseEvents (client) or raised by the
-// server from a forwarded click. Cleared each frame something was raised.
-const MOUSE_ONE_SHOT_FLAGS = [
+// server from a forwarded input. Cleared each tick something was raised.
+export const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_hover_enter",
   "__mouse_hover_leave",
   "__mouse_left_click",
@@ -50,6 +49,16 @@ const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_double_click",
   "__mouse_middle_click",
 ] as const;
+export type MouseFlag = (typeof MOUSE_ONE_SHOT_FLAGS)[number];
+
+/** The wire ACTION name of a mouse flag: `__mouse_hover_enter` → `mouse-hover-enter`.
+ *  Every mouse INPUT the client's raycast detects is forwarded to the server
+ *  under this name (useMouseEvents) and raised there (`raiseMouseAction`) —
+ *  inputs cross the wire, never triggers: the server's machine evaluates its
+ *  own triggers against its own flags. */
+export const mouseActionOf = (flag: MouseFlag): string => flag.slice(2).replace(/_/g, "-");
+const FLAG_BY_ACTION = new Map<string, MouseFlag>(MOUSE_ONE_SHOT_FLAGS.map((f) => [mouseActionOf(f), f]));
+export const mouseFlagOf = (action: string): MouseFlag | undefined => FLAG_BY_ACTION.get(action);
 
 // State/trigger lookup maps are pure functions of the (module-constant)
 // config — build them once per config, not once per instance.
@@ -72,7 +81,9 @@ const getConfigMaps = (config: StateMachineConfig) => {
 
 export class StateMachineRunner {
   readonly blackboard: Record<string, any> = {};
-  readonly animationControl: AnimationControl = { pendingCommand: null, dirty: false };
+  readonly motion: Motion;
+  readonly animation = new AnimationChannel();
+  readonly input = new Input(this.blackboard);
   private readonly stateMap: Map<string, StateDef>;
   private readonly triggerMap: Map<string, TriggerDef>;
   private stateId: string;
@@ -91,6 +102,7 @@ export class StateMachineRunner {
     this.stateMap = maps.stateMap;
     this.triggerMap = maps.triggerMap;
     this.stateId = config.initialState;
+    this.motion = new Motion(positionRef);
     this.ctx = {
       positionRef: positionRef as BehaviorContext["positionRef"],
       playerPosition: positionRef.current as BehaviorContext["playerPosition"],
@@ -99,6 +111,9 @@ export class StateMachineRunner {
       elapsed: 0,
       stateElapsed: 0,
       blackboard: this.blackboard,
+      motion: this.motion,
+      animation: this.animation,
+      input: this.input,
       groupRef: groupRef as BehaviorContext["groupRef"],
     };
   }
@@ -121,8 +136,8 @@ export class StateMachineRunner {
     this.stateId = stateId;
     this.stateEnteredAt = elapsed;
     if (state.animation) {
-      this.animationControl.pendingCommand = state.animation;
-      this.animationControl.dirty = true;
+      const { clip, ...spec } = state.animation;
+      this.animation.play(clip, spec);
     }
     if (state.onEnter) {
       const cleanup = state.onEnter(this.ctx);
@@ -130,18 +145,23 @@ export class StateMachineRunner {
     }
   }
 
-  private prepare(elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+  private prepare(elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
     const c = this.ctx;
     c.playerPosition = playerPosition as BehaviorContext["playerPosition"];
     c.playerDistanceSq = playerDistanceSq;
     c.delta = delta;
     c.elapsed = elapsed;
     c.stateElapsed = elapsed - this.stateEnteredAt;
+    this.animation.setClock(clockMs);
   }
 
-  /** AUTHORITATIVE step: transitions, then the current behavior. */
-  tick(elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
-    this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
+  /**
+   * AUTHORITATIVE step: transitions, then the current behavior.
+   * `elapsed`/`delta` in seconds; `clockMs` is the animation clock (server
+   * time on the server, the local frame clock on a local actor).
+   */
+  tick(elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+    this.prepare(elapsed, delta, clockMs, playerPosition, playerDistanceSq);
     const bb = this.blackboard;
 
     if (!this.entered) {
@@ -178,16 +198,13 @@ export class StateMachineRunner {
 
   /** FOLLOWER step (synced client): adopt the server's state id — running
    *  onEnter/cleanup exactly as the server did — and run the behavior for its
-   *  visual side effects. Logic outputs written meanwhile are ignored by the
-   *  framework in favor of the server's. */
-  mirror(stateId: string, elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
-    this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
+   *  visual side effects. Outputs written meanwhile are ignored by the
+   *  framework in favor of the server's (the caller injects those first). */
+  mirror(stateId: string, elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+    this.prepare(elapsed, delta, clockMs, playerPosition, playerDistanceSq);
     if (!this.entered || this.stateId !== stateId) {
       this.entered = true;
       this.enterState(stateId, elapsed);
-      // A mirrored client never plays local animation commands.
-      this.animationControl.pendingCommand = null;
-      this.animationControl.dirty = false;
     }
     this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);
     this.clearMouseFlags();
@@ -200,10 +217,21 @@ export class StateMachineRunner {
     for (let i = 0; i < MOUSE_ONE_SHOT_FLAGS.length; i++) bb[MOUSE_ONE_SHOT_FLAGS[i]] = false;
   }
 
-  /** Raise a one-shot flag (a forwarded click on the server). */
+  /** Raise a one-shot flag (the client's raycast, or a forwarded input on the server). */
   raise(flag: string): void {
     this.blackboard[flag] = true;
     this.blackboard.__mouse_dirty = true;
+  }
+
+  /** Raise the flag a forwarded mouse ACTION names; false if it isn't one.
+   *  Hover also keeps the level `__mouse_hover_active` in step. */
+  raiseMouseAction(action: string): boolean {
+    const flag = mouseFlagOf(action);
+    if (!flag) return false;
+    this.raise(flag);
+    if (flag === "__mouse_hover_enter") this.blackboard.__mouse_hover_active = true;
+    else if (flag === "__mouse_hover_leave") this.blackboard.__mouse_hover_active = false;
+    return true;
   }
 
   dispose(): void {

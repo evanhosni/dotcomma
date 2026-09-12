@@ -66,6 +66,8 @@ export function always(id: string = "always"): TriggerDef {
 
 // ─── Mouse Triggers ───
 
+/** Mouse triggers read the one-shot flags forwarded inputs raise (see input.ts
+ *  for who an input belongs to on each side). */
 function mouseTrigger(id: string, flagKey: string, defaultDistance: number) {
   return (distance: number = defaultDistance): TriggerDef => {
     const distanceSq = distance * distance;

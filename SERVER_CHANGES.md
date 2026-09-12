@@ -1,4 +1,4 @@
-# SERVER.md — the multiplayer server project, by service
+# SERVER_CHANGES.md — the multiplayer server project, by service
 
 A record of everything that turned dotcomma from a GitHub-Pages static site
 into a hosted multiplayer game (built 2026-09-08 / 09): the code, the hosting,
@@ -10,7 +10,8 @@ this file is organized by SERVICE so each system can be read on its own.
 Contents: 1 Overview · 2 Game server · 3 Database · 4 Multiplayer: players ·
 5 Multiplayer: entities (NPCs, doors) · 6 Hosting (Railway) · 7 Domain & DNS
 (Cloudflare, Squarespace, GitHub) · 8 Releases & deploy · 9 Assets/CDN
-(deferred) · 10 Local development · 11 Open items
+(deferred) · 10 Local development · 11 Open items · 12 Organization refactor
+(Sept 2026) — read §12 for what moved; earlier sections keep their history.
 
 ---
 
@@ -30,9 +31,10 @@ Contents: 1 Overview · 2 Game server · 3 Database · 4 Multiplayer: players ·
 Runtime dependencies added: exactly `express` and `ws`. Dev: `typescript`,
 `tsx`, `esbuild`, `@types/{node,express,ws}`. Removed: `gh-pages`. Declared:
 `three@0.157.0` (was only a transitive dependency). Build system unchanged:
-CRA 5 + craco, client at the repo root, React 18. Shared types are DUPLICATED
-between `server/src/protocol.ts` (canonical) and `src/net/protocol.ts` because
-CRA's ModuleScopePlugin forbids importing across `src/`.
+CRA 5 + craco, client at the repo root, React 18. The wire protocol has ONE
+copy, `src/net/protocol.ts`, imported by the server through its esbuild bundle
+(§12; it was duplicated until then — CRA only forbids the CLIENT importing
+across `src/`).
 
 Starting point: CRA + gh-pages, `homepage: "https://dotcomma.io"`, `CNAME`
 file, DNS at Squarespace (four GitHub `A` records + `www`), no server, no
@@ -54,10 +56,11 @@ origin (no CORS). It deliberately does NOT serve assets (see §9).
   `Cache-Control: public, max-age=31536000, immutable` (CRA hashes those),
   `index.html` gets `no-cache`, catch-all GET → `index.html` so the fake
   domain paths (`/`, `/glitch-city`) boot correctly.
-- `src/protocol.ts` — the wire protocol (header comment is the spec).
-- `src/game/world.ts` — rooms per domain, sessions, persistence write policy,
-  the `Outbox` interface (the ONE abstraction, kept thin so Colyseus could
-  replace `ws`).
+- `src/game/world.ts` — rooms per domain, sessions, the `Outbox` interface
+  (the ONE abstraction, kept thin so Colyseus could replace `ws`);
+  `src/game/persistence.ts` — the player-data records and write policy (§12).
+  The wire protocol is `src/net/protocol.ts` at the repo root (header comment
+  is the spec).
 - `src/transport/ws.ts` — sockets, frame validation, heartbeat.
 - `src/game/entities/` — see §5. `src/data/` — see §3. `src/cli/` — see §3.
 
@@ -70,7 +73,7 @@ extensionless imports. `tsc -p tsconfig.json` is typecheck-only
 runtime `three` import. Start: `node server/dist/index.js`.
 
 **Config (env)**: `PORT`, `DATABASE_PATH`, `DB_AUTO_MIGRATE` (first boot
-only), `DEBUG_DATA_WRITES` (dev only). Locally read from `server/.env` via
+only). (`DEBUG_DATA_WRITES` is gone — §12.) Locally read from `server/.env` via
 Node's `--env-file-if-exists`; Railway injects them. `.env.example` at the
 repo root documents every variable and which file it lives in.
 
@@ -138,8 +141,8 @@ stale second tab can't clobber the first.
 - Railway: `DATABASE_PATH=/data/dotcomma.sqlite`; `DB_AUTO_MIGRATE=1` was set
   for the first deploy only (log showed `auto-migrated ... from schema 0 to 1`)
   and then removed. Enable volume backups in the Railway dashboard.
-- Dev hook: with `DEBUG_DATA_WRITES=1` on the server, `__net.setData({...})`
-  in the browser console overwrites your blob (exercises the plumbing).
+- Dev hook: `__playerData.update({...})` in the browser console patches your
+  blob through the real `data:patch` path (§12); `__playerData.data` reads it.
 
 **Verified**: 25 checks — refusal on stale schema, first-boot migration, row
 on first connect, no write before disconnect, saved on disconnect, survives
@@ -178,7 +181,7 @@ reaper** terminates sockets whose peer vanished (laptop sleep, wifi).
   **`pagehide` closes the socket** (Chrome left navigated-away sockets open,
   measured with headless Chrome — ghosts lived until the reaper); `pageshow`
   reconnects from bfcache; `window.__net`.
-- `remotePlayerStore.ts` — per-frame refs; React only sees a roster version.
+- `players/store.ts` (was `remotePlayerStore.ts`) — per-frame refs; React only sees a roster version.
 - `RemotePlayers.tsx` — `CapsuleGeometry` (three r157 has it) per remote
   player in their color + a visor for facing; ONE useFrame; extrapolate last
   intent + ease, snap only on first appearance or a 40u teleport; materials
@@ -445,11 +448,11 @@ npm run deploy:dry / npm run deploy
 npm run db:inspect [-- --id X]    # compiled CLI (build first); or from source inside server/
 ```
 
-Env files: `server/.env` (PORT, DATABASE_PATH, DB_AUTO_MIGRATE,
-DEBUG_DATA_WRITES), `.env` / `.env.development` (REACT_APP_*). Browser
-console: `__net.state`, `__net.serverTime()`, `__net.setData({...})` (needs
-`DEBUG_DATA_WRITES=1`), `__entities.list()`. Two tabs of one browser are two
-sessions sharing one identity — the standard local multiplayer test.
+Env files: `server/.env` (PORT, DATABASE_PATH, DB_AUTO_MIGRATE),
+`.env` / `.env.development` (REACT_APP_*). Browser console: `__net.state`,
+`__net.serverTime()`, `__playerData.data` / `__playerData.update({...})`,
+`__entities.list()`. Two tabs of one browser are two sessions sharing one
+identity — the standard local multiplayer test.
 
 ---
 
@@ -464,3 +467,71 @@ sessions sharing one identity — the standard local multiplayer test.
 7. Align `@types/three` with runtime three 0.157 (§8).
 8. Confirm Railway auto deploy fires on the next push; Eject from the upstream repo if not (§6).
 9. Enable Railway volume backups if not already on (§6).
+10. Server-side authority for PROGRESS data: today the client patches its whole blob (§12) — when progress keys exist, `validatePatch` must refuse them and the world write them.
+
+---
+
+## 12. Organization refactor (Sept 2026) — adding an NPC without touching the server
+
+A pass over everything §4–§5 added, for structure only — behavior verified
+unchanged (22 server tests, 33 client tests, both typechecks, a built server
+boots). The goal: an actor is a state machine + a spec, and `serverSynced`
+(default true on actors) does the rest.
+
+**What moved / was renamed**
+- `server/src/protocol.ts` DELETED — `src/net/protocol.ts` is the one copy; the
+  server imports it from `src/` like everything else it already imported.
+- `server/src/game/entities/kinds.ts` DELETED — replaced by the ACTOR CATALOG
+  `src/objects/actors/catalog.ts` (client-side, Three-free), which lists every
+  `<actor>/spec.ts`. `describeActor` throws in dev when a spec'd descriptor
+  isn't listed; `server/test/catalog.test.ts` scans the folders headlessly.
+- `server/src/game/physics/world.ts` → `physicsWorld.ts`; `players.ts` →
+  `playerBodies.ts`; `npc.ts` → `npcBody.ts` (interface + factory) +
+  `groundBody.ts` (the walker) + NEW `freeBody.ts` (`movement: "free"`: velocity
+  integrated, no gravity/ground/holds — the server previously ignored
+  `movement` and ran every kinematic kind as a walker).
+- `server/src/game/physics/domainConfig.ts` DELETED — the hand-transcribed
+  DomainConfig is now `src/world/domains/glitch-city/config.ts`, assembled from
+  the same `spec.ts` files the JSX mounts (`<Biome spec>`, `<Terrain noise>`,
+  region `spec.ts`, `building/spec.ts` placements). `world/domains/configs.ts`
+  maps DomainId → config; the `<Domain>` commit compares its own config to it
+  in dev and console.errors the differing keys.
+- `server/src/game/persistence.ts` NEW — `PlayerPersistence`, keyed by
+  IDENTITY (two tabs = one record): attach/detach, `validatePatch` (size cap),
+  the write policy, `saveAll`. `World` shrank to sessions + rooms.
+- Client: `src/net/players/{store,RemotePlayers,LocalPlayerSync}`, NEW
+  `src/net/playerData.ts` (`getPlayerData/usePlayerData/updatePlayerData`),
+  NEW `src/net/entities/posePlayback.ts` (the per-actor render clock + sampler,
+  out of the actor base), NEW `src/player/spec.ts` (the player capsule, shared
+  with RemotePlayers and the server), NEW `src/objects/actors/{spec,catalog,
+  animationPlayer}.ts`, NEW `state/{motion,animation}.ts`.
+  `beeble/Beeble.tsx` and `building/variants.ts` DELETED (→ ModelActor owns the
+  wiring; `building/spec.ts` holds the attrs + placements).
+
+**What changed shape**
+- Behavior contract: `ctx.motion.*` (move/heading/toward/fly/stop/face/
+  turnToward) and `ctx.animation.*` (play/pause/resume/stop/setSpeed) replace
+  the `__vel_x/_z/_y`, `__yaw` blackboard keys and the `AnimationControl`
+  command object; `state.animation` is `{ clip, loop?: "repeat"|"once", speed? }`.
+  `LOOP_ONCE/LOOP_REPEAT` numerics are gone.
+- Wire: `entity:update` carries `anim` (the whole AnimationState with
+  server-time clocks) instead of `clip/clipT0/once`. `debug:setData` and
+  `DEBUG_DATA_WRITES` are gone; `data:patch` (client → server, shallow merge,
+  `PLAYER_DATA_MAX_BYTES`) and `data` (server → every session of the identity)
+  are the persistence channel.
+- Server simulation time is tick-based (`elapsed += dt`) so `stateElapsed`
+  agrees with `delta` in tests and in play (it followed wall-clock before).
+- `serverSynced` lives on `GameObjectAttributes` (every class); actors default
+  true, dressing/foliage default false and warn once if set (stateless
+  deterministic scenery — nothing to publish).
+- `ModelActor` owns `useStateMachine` + `useMouseEvents` + the mover + the
+  animation for every actor whose spec has a `stateMachine`; both hooks take
+  the sync handle per tick instead of reading `group.userData.sync`.
+- EVERY mouse input is forwarded (`entity:interact "mouse-<flag>"`), not just
+  the left click; the server maps any of them to its flag
+  (`runner.raiseMouseAction`). Inputs cross the wire, never triggers.
+
+**Held off (deliberately)**: typed `PlayerData` keys (the JSON shape is not
+known — `protocol.ts` has the placeholder type, `validatePatch` the hook);
+dressing/foliage sync (nothing to sync); a second physics domain (the server
+still initializes ONE, `PHYSICS_DOMAIN`).

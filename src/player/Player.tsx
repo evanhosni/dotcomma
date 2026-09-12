@@ -9,6 +9,7 @@ import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
 import { useInput } from "./useInput";
 import { getAssignedSpawnOffset } from "../net/connection";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
 import {
   createCharacter,
   createStepResult,
@@ -53,9 +54,7 @@ const DEV_SPRINT_SPEED = 300;
 const DEV_VERTICAL_SPEED = 60;
 const DEV_VERTICAL_SPRINT_SPEED = 300;
 
-// Player dimensions
-const PLAYER_HEIGHT = 2;
-const PLAYER_RADIUS = 0.5;
+// Player dimensions: player/spec.ts (shared with RemotePlayers and the server)
 const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
 // Camera

@@ -1,9 +1,10 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
-import { initCompute } from "../../../../src/utils/workers/vertexCompute";
+import type { DomainId } from "../../../../src/net/protocol";
 import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
+import { initCompute, type DomainConfig } from "../../../../src/utils/workers/vertexCompute";
+import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import { TICK_MS } from "../tick.js";
 import { ChunkStore, JobQueue } from "./chunks.js";
-import { GLITCH_CITY_DOMAIN_CONFIG } from "./domainConfig.js";
 import { createObstacleBodies, enumerateObstacles } from "./obstacles.js";
 import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_ROWS, TERRAIN_SEGMENTS } from "./terrain.js";
 
@@ -15,12 +16,17 @@ import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_RO
  * it: TERRAIN heightfields (420u, the client's exact LOD1 recipe, sampled
  * row by row across ticks) and DRESSING obstacles (256u: lamp posts, signal
  * and utility poles as the client's cuboids). Whoever needs a chunk holds it
- * (physics/npc.ts); nothing is built for the whole world.
+ * (physics/groundBody.ts); nothing is built for the whole world.
  *
- * ONE height configuration: the glitch-city DomainConfig is initialized here
- * (the only domain with terrain-walking NPCs today).
+ * ONE height configuration: the physics domain's DomainConfig — the SAME
+ * object the client's <Domain> commit is checked against
+ * (src/world/domains/configs.ts) — initializes the shared vertex pipeline
+ * here. Only PHYSICS_DOMAIN has terrain on the server; a walker registered in
+ * another domain runs its machine but stays put.
  */
 
+/** The one domain whose height function the physics world is initialized with. */
+export const PHYSICS_DOMAIN: DomainId = "glitch-city";
 export const PHYSICS_DT = TICK_MS / 1000;
 /** Matches the player's manually integrated gravity (Player.tsx GRAVITY);
  *  kinematic bodies ignore world gravity — it is here for any future dynamic body. */
@@ -34,6 +40,8 @@ export const initRapier = (): Promise<void> => (rapierReady ??= RAPIER.init());
 
 export class PhysicsWorld {
   readonly world: RAPIER.World;
+  /** The domain config the height function and obstacle enumerators run on. */
+  readonly config: DomainConfig;
   readonly jobs = new JobQueue();
   readonly terrain: ChunkStore<RAPIER.RigidBody>;
   readonly dressing: ChunkStore<RAPIER.RigidBody[]>;
@@ -45,8 +53,9 @@ export class PhysicsWorld {
   /** Colliders were created/removed since the last step or query update. */
   private queriesDirty = false;
 
-  private constructor(world: RAPIER.World) {
+  private constructor(world: RAPIER.World, config: DomainConfig) {
     this.world = world;
+    this.config = config;
     this.terrain = new ChunkStore(
       this.jobs,
       "terrain",
@@ -63,20 +72,23 @@ export class PhysicsWorld {
       },
       (body) => this.removeBody(body),
     );
+    const freewayWidth = config.cityConfig.freewayWidth;
     this.dressing = new ChunkStore(
       this.jobs,
       "dressing",
-      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz)),
+      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz, freewayWidth)),
       (bodies) => bodies.forEach((b) => this.removeBody(b)),
     );
   }
 
-  static async create(): Promise<PhysicsWorld> {
+  static async create(domain: DomainId = PHYSICS_DOMAIN): Promise<PhysicsWorld> {
+    const config = DOMAIN_CONFIGS[domain];
+    if (!config) throw new Error(`no shared domain config for "${domain}" (src/world/domains/configs.ts)`);
     await initRapier();
-    initCompute(GLITCH_CITY_DOMAIN_CONFIG);
+    initCompute(config);
     const world = new RAPIER.World({ x: 0, y: GRAVITY, z: 0 });
     world.timestep = PHYSICS_DT;
-    return new PhysicsWorld(world);
+    return new PhysicsWorld(world, config);
   }
 
   /** Run queued generation for up to `budgetMs` (tests pass Infinity). */

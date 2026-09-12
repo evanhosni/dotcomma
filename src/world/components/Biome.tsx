@@ -1,10 +1,15 @@
 import React, { useContext, useLayoutEffect, useMemo } from "react";
+import type { BiomeSpec } from "../types";
 import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
 export interface BiomeProps extends React.PropsWithChildren {
-  name: string;
+  /** The biome as data (`<biome>/spec.ts` — flags + noise, shared with the
+   *  server's domain config). Supplies name/id/flags; pass `noise` to the
+   *  biome's <Terrain>. Explicit props below override it. */
+  spec?: BiomeSpec;
+  name?: string;
   /** Unique biome id — used by voronoi assignment and the vBiomeId shader varying. */
-  id: number;
+  id?: number;
   joinable?: boolean;
   blendable?: boolean;
   blendWidth?: number;
@@ -15,10 +20,19 @@ export interface BiomeProps extends React.PropsWithChildren {
  * (<Terrain>, <Material>, <Actor>, <Skybox>) plus always-mounted visual
  * components (e.g. <GrassField>) that gate their own placement by biome.
  */
-export const Biome = ({ name, id, joinable = true, blendable = true, blendWidth, children }: BiomeProps) => {
+export const Biome = ({
+  spec,
+  name = spec?.name,
+  id = spec?.id,
+  joinable = spec?.joinable ?? true,
+  blendable = spec?.blendable ?? true,
+  blendWidth = spec?.blendWidth,
+  children,
+}: BiomeProps) => {
   const store = useDomainStore("Biome");
   const region = useContext(RegionContext);
   if (!region) throw new Error("<Biome> must be mounted inside <Region>");
+  if (name === undefined || id === undefined) throw new Error("<Biome> needs a `spec` or `name` + `id`");
   const regionId = region.regionId;
 
   useLayoutEffect(() => {

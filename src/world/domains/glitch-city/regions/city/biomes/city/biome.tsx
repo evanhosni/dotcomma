@@ -9,6 +9,7 @@ import { TrafficLights } from "../../../../../../../objects/dressing/traffic-lig
 import { CityLights } from "./CityLights";
 import { Actors, Biome, Material } from "../../../../../../components";
 import { getMaterial } from "./material";
+import { CITY_BIOME } from "./spec";
 
 import { CITY_BIOME_ID } from "../../../../../../constants";
 export { CITY_BIOME_ID };
@@ -27,7 +28,7 @@ export { CITY_BIOME_ID };
  *  - DRESSING: mass stateless scenery (lamps, markers, signals, power
  *    lines) — instanced chunks, placement enumerated off-thread. */
 export const CityBiome = () => (
-  <Biome name="city" id={CITY_BIOME_ID} joinable blendable={false} blendWidth={3}>
+  <Biome spec={CITY_BIOME}>
     <Material getMaterial={getMaterial} />
 
     <Actors>

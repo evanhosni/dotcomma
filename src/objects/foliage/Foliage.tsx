@@ -9,7 +9,7 @@ import { _curvature } from "../../vfx/curvature";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
-import { createDefaultsGroup } from "../utils";
+import { createDefaultsGroup, warnUnsupportedSync } from "../utils";
 import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./foliageWorker";
 
 /**
@@ -54,7 +54,7 @@ export type FoliageDefaults = Pick<FoliageAttributes, "renderDistance">;
  *     <GrassField color="#6a9c45" />
  *   </Foliage>
  */
-const FoliageGroup = createDefaultsGroup<FoliageDefaults>();
+const FoliageGroup = createDefaultsGroup<FoliageDefaults>("foliage");
 export const Foliage = FoliageGroup.Group;
 
 /** Resolve a feature's renderDistance: own prop > <Foliage> group > default. */
@@ -298,8 +298,10 @@ export const FoliageField: React.FC<FoliageAttributes> = ({
   renderDistance: renderDistanceProp,
   seed = "foliage",
   quantization,
+  serverSynced,
 }) => {
   const renderDistance = useFoliageRenderDistance(renderDistanceProp, 500);
+  warnUnsupportedSync("foliage", serverSynced);
   const groupRef = useRef<THREE.Group>(null);
   const chunksRef = useRef(new Map<number, FoliageChunk>());
   const pendingRef = useRef(new Set<number>());

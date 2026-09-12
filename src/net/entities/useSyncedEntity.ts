@@ -12,8 +12,8 @@ import { getEntity, interactEntity, registerEntity, subscribeEntity, unregisterE
  *     and places the group there. Nothing is predicted or resolved locally;
  *   - ModelActor's kinematic mover parks the capsule at `target` (player
  *     collision only);
- *   - ModelActor plays the server's clip in phase; useStateMachine MIRRORS the
- *     server's state id so state-keyed visuals run;
+ *   - ModelActor plays the server's animation channel in phase; its state
+ *     machine MIRRORS the server's state id so state-keyed visuals run;
  *   - inputs go to the server with interact() (useMouseEvents forwards clicks;
  *     components send their own actions, e.g. "door:2") and come back as
  *     replicated `state` or as the machine's reaction.
@@ -46,7 +46,7 @@ export interface SyncHandle {
   readonly stateId: string | undefined;
   /** Send an input to the server. */
   interact(action: string): void;
-  /** UI-cadence: state / clip / machine-state changes. */
+  /** UI-cadence: state / animation / machine-state changes. */
   subscribe(fn: (e: ClientEntity) => void): () => void;
 }
 

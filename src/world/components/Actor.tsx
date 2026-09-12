@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useLayoutEffect, useMemo } from "react";
-import { ActorAttributes } from "../../objects/types";
+import { getActorSpec } from "../../objects/actors/catalog";
+import { specsAgree, type ActorSpec } from "../../objects/actors/spec";
 import { ActorDescriptor, AnyActorDescriptor } from "../../objects/actors/spawning/types";
+import { ActorAttributes } from "../../objects/types";
 import { BiomeContext, useDomainStore } from "./context";
 
 const ActorsContext = createContext<Partial<AnyActorDescriptor> | null>(null);
@@ -72,6 +74,54 @@ export const Actor = (props: ActorRegistrationProps) => {
   return null;
 };
 
+// ── Defining actors ─────────────────────────────────────────────────────────
+
+/** Descriptor → the spec it was described from (a side table, never a prop). */
+const DESCRIPTOR_SPECS = new WeakMap<object, ActorSpec>();
+
+/** A spec'd actor must be in the catalog under its id, with the same
+ *  simulation — otherwise the server never runs it. Loud in dev. */
+const assertCataloged = (spec: ActorSpec, id: string): void => {
+  const listed = getActorSpec(id);
+  const problem = !listed
+    ? `actor "${id}" has a spec but no entry in src/objects/actors/catalog.ts — the server can't simulate it. Add \`[${id}]: <its spec>\` there.`
+    : !specsAgree(listed, spec)
+      ? `actor "${id}": the catalog's spec differs from the one its descriptor was built from — the client and the server would simulate different things.`
+      : null;
+  if (!problem) return;
+  if (process.env.NODE_ENV === "development") throw new Error(problem);
+  console.error(problem);
+};
+
+/**
+ * Build an actor DESCRIPTOR from its SPEC (objects/actors/spec.ts — the
+ * Three-free half the server also reads) plus everything the client adds:
+ * the component, the model, spawn density/footprint/radius, render tuning.
+ *
+ *   export const BeebleDescriptor = describeActor<ModelActorAttributes>(BEEBLE_SPEC, {
+ *     component: ModelActor, model: "/models/beeble.glb", footprint: 5, density: 200, …
+ *   });
+ *
+ * The spec's fields WIN over `attrs` (a building's hull attributes shape the
+ * client's plan exactly as they shape the server's hull), and the spec must
+ * be listed in the catalog under its id (checked here, at module load).
+ * Actors the server needs nothing for skip this and write a plain object.
+ */
+export const describeActor = <A extends ActorAttributes>(
+  spec: ActorSpec,
+  attrs: Omit<ActorDescriptor<A>, "id">,
+): ActorDescriptor<A> => {
+  assertCataloged(spec, spec.id);
+  const descriptor: Record<string, unknown> = { ...attrs, ...(spec.hull ?? {}) };
+  if (spec.stateMachine !== undefined) descriptor.stateMachine = spec.stateMachine;
+  if (spec.body !== undefined) descriptor.body = spec.body;
+  if (spec.collider !== undefined) descriptor.collider = spec.collider;
+  if (spec.movement !== undefined) descriptor.movement = spec.movement;
+  descriptor.id = spec.id;
+  DESCRIPTOR_SPECS.set(descriptor, spec);
+  return descriptor as unknown as ActorDescriptor<A>;
+};
+
 /**
  * One-liner for actor definitions: builds the standard wrapper component that
  * registers `descriptor` with per-mount overrides.
@@ -79,8 +129,15 @@ export const Actor = (props: ActorRegistrationProps) => {
  *   export const BeebleActor = createActor(BeebleDescriptor);
  *   …
  *   <BeebleActor biomeIds={[CITY_BIOME_ID]} density={150} />
+ *
+ * A mount that overrides `id` (the grass biomes' `<BuildingActor
+ * id="grass-building">` — descriptors dedupe by id) is checked against the
+ * catalog under the NEW id: the server keys its simulation on the wire kind.
  */
 export const createActor =
   <A extends ActorAttributes>(descriptor: ActorDescriptor<A>) =>
-  (overrides: Partial<ActorDescriptor<A>>): JSX.Element =>
-    <Actor {...descriptor} {...overrides} />;
+  (overrides: Partial<ActorDescriptor<A>>): JSX.Element => {
+    const spec = DESCRIPTOR_SPECS.get(descriptor);
+    if (spec && overrides.id && overrides.id !== descriptor.id) assertCataloged(spec, overrides.id);
+    return <Actor {...descriptor} {...overrides} />;
+  };

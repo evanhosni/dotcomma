@@ -1,8 +1,8 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { useGameContext } from "../context/GameContext";
-import { onServerMessage, send } from "./connection";
+import { useGameContext } from "../../context/GameContext";
+import { onServerMessage, send } from "../connection";
 
 /**
  * Publishes the LOCAL player's movement as INTENT CHANGES, never per-frame

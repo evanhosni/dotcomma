@@ -1,8 +1,8 @@
 import http from "node:http";
 import { closeDb, getDb, resolveDatabasePath } from "./data/db.js";
 import { TICK_MS } from "./game/tick.js";
-import { PhysicsWorld } from "./game/physics/world.js";
-import { SAVE_INTERVAL_MS } from "./game/world.js";
+import { PhysicsWorld } from "./game/physics/physicsWorld.js";
+import { SAVE_INTERVAL_MS } from "./game/persistence.js";
 import { createApp } from "./http.js";
 import { attachWebSocketTransport } from "./transport/ws.js";
 

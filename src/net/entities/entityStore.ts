@@ -7,7 +7,7 @@ import { pushSnapshot, type Snapshot } from "./interpolation";
  * SERVER's last published fields for it (merged). The server is the only
  * authority; this client, like every other, is a puppet. Plain module state
  * read by the actor base every frame; React-facing code subscribes per id for
- * the UI-cadence events (replicated state, clip, machine state id).
+ * the UI-cadence events (replicated state, animation, machine state id).
  *
  * Registration is batched: a spawn commit mounts many actors at once, so
  * register/unregister calls are collected and sent as one message on the
@@ -15,10 +15,8 @@ import { pushSnapshot, type Snapshot } from "./interpolation";
  * whole live set is re-registered — the server forgot us.
  */
 
-export interface RemoteFields extends EntityUpdateFields {
-  /** performance.now() when x/y/z last arrived (extrapolation base). */
-  at: number;
-}
+/** The server's fields for one entity, merged across updates. */
+export type RemoteFields = EntityUpdateFields;
 
 export interface ClientEntity {
   id: string;
@@ -125,7 +123,7 @@ const onMessage = (msg: ServerMessage) => {
       const e = entities.get(msg.id);
       if (!e) break;
       const { t: _t, id: _id, ...fields } = msg;
-      const next: RemoteFields = { ...(e.remote ?? { at: 0 }), ...fields };
+      const next: RemoteFields = { ...(e.remote ?? {}), ...fields };
       if (fields.x !== undefined || fields.z !== undefined || fields.y !== undefined) {
         // Diagnostic: the SERVER's own track jumped. Consecutive updates of a
         // walker are ≤ ~0.5u apart (5u/s at 10Hz); anything larger is a
@@ -138,7 +136,6 @@ const onMessage = (msg: ServerMessage) => {
             console.warn(`[sync] server moved ${e.id} by ${jump.toFixed(1)}u in one update (${r.x.toFixed(1)},${r.z.toFixed(1)} → ${fields.x.toFixed(1)},${fields.z.toFixed(1)})`);
           }
         }
-        next.at = performance.now();
         // Snapshot for interpolation: the tick's server time with the MERGED
         // pose (an update may carry only the changed axes).
         pushSnapshot(e.snapshots, {
@@ -154,7 +151,7 @@ const onMessage = (msg: ServerMessage) => {
       }
       e.remote = next;
       // Transforms are consumed by the frame loop; only UI-relevant fields notify.
-      if (fields.state !== undefined || fields.clip !== undefined || fields.sm !== undefined) notify(e);
+      if (fields.state !== undefined || fields.anim !== undefined || fields.sm !== undefined) notify(e);
       break;
     }
   }
@@ -172,7 +169,7 @@ onServerMessage(onMessage);
       id: e.id,
       kind: e.kind,
       sm: e.remote?.sm,
-      clip: e.remote?.clip,
+      clip: e.remote?.anim?.clip,
       x: e.remote?.x,
       z: e.remote?.z,
     })),

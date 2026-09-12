@@ -63,6 +63,17 @@ export interface GameObjectAttributes {
    *  (set by <PostProcessing quantization>). Dressing is never quantized
    *  (instanced positions are rebased — see Dressing.tsx) and ignores it. */
   quantization?: number;
+  /** MULTIPLAYER SYNC. ACTORS default TRUE: the actor base registers every
+   *  instance with the SERVER, which runs the actor's state machine (the same
+   *  config file — see actors/state/runner.ts) as the ONE authority and
+   *  publishes pose, animation and state; every client is placed to match
+   *  (net/entities). The component never knows. `false` at a mount opts that
+   *  mount out (purely local — same code path, run here).
+   *  DRESSING and FOLIAGE default FALSE and have no sync implementation yet:
+   *  both classes are stateless, deterministic scenery — every client already
+   *  computes identical instances — so there is nothing to publish. Setting
+   *  it true there logs a one-time warning. */
+  serverSynced?: boolean;
 
   // Placement filters — evaluated against the shared vertex pipeline
   // (utils/workers/vertexCompute.ts) by every class's worker.
@@ -103,12 +114,6 @@ export interface ActorAttributes extends GameObjectAttributes {
   frustumPadding?: number;
   /** true = always grow the cursor on hover, false = never, unset = from triggers. */
   cursorOverride?: boolean;
-  /** Multiplayer sync. Default TRUE: the actor BASE registers every instance
-   *  with the SERVER, which runs the actor's state machine (the same config
-   *  file, see state/runner.ts) as the ONE authority and publishes pose, clip
-   *  and state; every client is placed to match (net/entities). The component
-   *  never knows. `false` at a mount opts that mount out (purely local). */
-  serverSynced?: boolean;
   /** The terrain flattens a PAD under every instance (buildings, houses — any
    *  biome). Placement becomes fully DETERMINISTIC (stateless greedy spacing
    *  instead of the spatial hash) so the height function can replicate it —
@@ -125,7 +130,8 @@ export interface ActorAttributes extends GameObjectAttributes {
 /** Attributes only dressing has. There are none class-wide today: every
  *  dressing feature's remaining knobs (marker spacing, signal chance, pole
  *  lateral offset) belong to that feature's placement enumerator, so they live
- *  on the feature's own props. Kept as the class's extension point. */
+ *  on the feature's own props. Kept as the class's extension point.
+ *  (`serverSynced` is inherited and defaults to false — see the base.) */
 export interface DressingAttributes extends GameObjectAttributes {}
 
 // ── FOLIAGE ──────────────────────────────────────────────────────────────────

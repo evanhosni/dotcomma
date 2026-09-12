@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import type * as THREE from "three";
 import { TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
 export interface CityConfig {
@@ -67,6 +67,19 @@ export interface BiomeNoiseConfig {
   absNeg?: boolean;
   scale?: number;
   offset?: number;
+}
+
+/** A biome as plain DATA — what a biome folder's `spec.ts` exports: the
+ *  registration flags and the height definition, with no React/Three. Read by
+ *  `<Biome spec>` / `<Terrain noise>` in the JSX and by the domain's shared
+ *  config (world/domains/<domain>/config.ts) the server simulates on. */
+export interface BiomeSpec {
+  id: number;
+  name: string;
+  joinable: boolean;
+  blendable: boolean;
+  blendWidth?: number;
+  noise?: BiomeNoiseConfig;
 }
 
 export interface Region {

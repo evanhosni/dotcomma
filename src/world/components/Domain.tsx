@@ -5,9 +5,12 @@ import { useGameContext } from "../../context/GameContext";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
 import { buildDomainConfig } from "../../utils/workers/buildDomainConfig";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND, DEFAULT_TERRAIN_PARAMS } from "../defaults";
+import { DOMAIN_CONFIGS } from "../domains/configs";
+import { getCurrentDomain } from "../domains/navigation";
 import { setActiveDomain } from "../domains/utils";
 import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import { Biome, Region, TerrainParams } from "../types";
+import type { DomainConfig } from "../../utils/workers/vertexCompute";
 import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
 import { SkyboxSystem } from "../sky/Skybox";
 
@@ -163,10 +166,35 @@ const commitDomain = (store: DomainStore) => {
     });
   }
 
+  const config = buildDomainConfig(regions, params);
+  verifySharedConfig(config);
   setActiveDomain({
     regions,
     params,
-    config: buildDomainConfig(regions, params),
+    config,
     riverTexture: store.domainMaterial?.riverTexture ?? DEFAULT_RIVER_TEXTURE,
   });
+};
+
+/**
+ * DEV GUARD: the SERVER simulates on the domain's SHARED config
+ * (world/domains/configs.ts — assembled from the biome/region spec files),
+ * not on this JSX commit. The two are built by the same assembler, so when the
+ * JSX and the specs agree they are byte-identical; when someone mounts a new
+ * region/biome/flatten actor in JSX without listing it in the domain's
+ * config.ts, this is the message that says so — instead of NPCs standing on
+ * different ground than the player.
+ */
+const verifySharedConfig = (config: DomainConfig): void => {
+  if (process.env.NODE_ENV === "production") return;
+  const shared = DOMAIN_CONFIGS[getCurrentDomain()];
+  if (!shared) return;
+  if (JSON.stringify(config) === JSON.stringify(shared)) return;
+  const keys = (Object.keys(config) as (keyof DomainConfig)[]).filter(
+    (k) => JSON.stringify(config[k]) !== JSON.stringify(shared[k]),
+  );
+  console.error(
+    `[domain] the JSX commit and the shared config (world/domains/${getCurrentDomain()}/config.ts — what the SERVER simulates on) ` +
+      `differ in: ${keys.join(", ")}. Update the domain's config.ts (or the biome/region spec it reads) so the server's terrain matches the client's.`,
+  );
 };

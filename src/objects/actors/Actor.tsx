@@ -5,10 +5,10 @@ import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { _quantization } from "../../utils/quantization/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
+import { PosePlayback } from "../../net/entities/posePlayback";
 import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
-import { getServerTime } from "../../net/connection";
-import { advanceRenderClock, INTERP_DELAY_MS, pruneSnapshots, sampleSnapshots, type SampledPose } from "../../net/entities/interpolation";
-import type { MoveIntent } from "./kinematicMover";
+import type { MotionOutput } from "./state/motion";
+import type { StateMachineHandle } from "./state/useStateMachine";
 
 /**
  * ACTOR — the base of the per-object class of the game-object hierarchy (see
@@ -31,11 +31,11 @@ import type { MoveIntent } from "./kinematicMover";
  *   - MULTIPLAYER SYNC (net/entities): every actor registers as a synced
  *     entity (unless the mount sets serverSynced={false}) and the SERVER runs
  *     its state machine — no client is authoritative, none is favored. The
- *     base turns the server's updates into a per-frame target (velocity-
- *     extrapolated) and places the group there (movers chase it instead),
- *     eases yaw, and hangs the handle on the group so useStateMachine can
- *     mirror the server's state for visuals and useMouseEvents can forward
- *     clicks. Components never branch on any of it.
+ *     base samples the server's published track by snapshot interpolation
+ *     (net/entities/posePlayback.ts) into a per-frame target, places the
+ *     group there, and hands the sync handle to the component's onFrame so
+ *     ModelActor can mirror the server's state/clip and forward clicks.
+ *     Components never branch on any of it.
  *   - and prepareActorMaterial: ALL shared material logic in one call.
  *
  * There are two ways to build on it, and both are "extending Actor":
@@ -123,10 +123,6 @@ export const prepareActorMaterial = (
   _curvature.patchMaterial(material);
 };
 
-// ── Sync tuning ─────────────────────────────────────────────────────────────
-// Puppets ease toward the owner's (velocity-extrapolated) pose; only a first
-// placement or a far jump (respawn) snaps.
-
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
 export interface ActorLifecycleOptions {
@@ -189,8 +185,15 @@ export interface ActorFrameContext {
   /** The sync handle, or null when serverSynced={false}. Components rarely
    *  need it: their logic runs on every client and the base handles the rest. */
   sync: SyncHandle | null;
-  /** Movers (ModelActor body "kinematic"): write this frame's desired velocity here. */
-  move?: MoveIntent;
+  /** The delayed server time this frame is drawn at (snapshot interpolation);
+   *  NaN while unsynced. Anything keyed to the server clock (clip switches)
+   *  applies against this, not against raw server time. */
+  syncRenderTime: number;
+  /** ModelActor: the state machine driving this actor (null without one). */
+  machine?: StateMachineHandle | null;
+  /** ModelActor: the motion output the kinematic mover resolves this frame —
+   *  the machine's, or a scratch output a custom owner writes. */
+  motion?: MotionOutput;
   /** True on frames where the throttled gate checks ran. */
   checked: boolean;
   /** Result of this frame's frustum test (true when the test is disabled). */
@@ -272,10 +275,8 @@ export const useActorLifecycle = ({
   // the group is placed at the server's pose so anything local logic wrote
   // to the transform is overridden.
   const sync = useSyncedEntity(serverSynced ? id : null, descriptorId ?? "unknown", coordinates);
-  // Snapshot-interpolation state: this actor's render clock (server ms) and
-  // the sampled pose scratch.
-  const renderClockRef = useRef(NaN);
-  const sampled = useRef<SampledPose>({ x: 0, y: 0, z: 0, ry: 0, vx: 0, vy: 0, vz: 0 }).current;
+  // Snapshot-interpolation playback (render clock + sampler) for this actor.
+  const playback = useRef(new PosePlayback()).current;
 
   // Per-life constants, derived once per RENDER (not per frame) — these run
   // inside the hottest loop in the project, for every mounted actor.
@@ -412,41 +413,18 @@ export const useActorLifecycle = ({
     // between the two published snapshots bracketing that time. Message
     // arrival time plays no part, so main-thread hitches and bunched packets
     // cannot make it overshoot, slide or lurch; a stop is reached exactly
-    // where and when the server stopped. The per-actor render clock slews
-    // toward (server time − delay) so a re-estimated clock offset never steps
-    // the picture.
+    // where and when the server stopped.
     const synced = !!sync && sync.known;
-    if (synced) {
-      const t = sync.target;
-      const dtMs = Math.min(delta, 0.25) * 1000;
-      renderClockRef.current = advanceRenderClock(renderClockRef.current, dtMs, getServerTime() - INTERP_DELAY_MS);
-      const snaps = sync.entity!.snapshots;
-      pruneSnapshots(snaps, renderClockRef.current);
-      const status = sampleSnapshots(snaps, renderClockRef.current, sampled);
-      if (status !== "none") {
-        t.x = sampled.x;
-        t.y = sampled.y;
-        t.z = sampled.z;
-        t.ry = sampled.ry;
-        t.vx = sampled.vx;
-        t.vy = sampled.vy;
-        t.vz = sampled.vz;
-        t.valid = true;
-      }
-    } else {
-      renderClockRef.current = NaN;
-    }
+    if (synced) playback.sample(sync.entity!, delta, sync.target);
+    else playback.reset();
 
-    onFrame?.(state, delta, { distanceSq, checked, visible, sync });
+    onFrame?.(state, delta, { distanceSq, checked, visible, sync, syncRenderTime: playback.renderTime });
 
     // ---- Apply the server's pose (after the component's logic ran) ----
-    if (sync && group) {
-      if (group.userData.sync !== sync) group.userData.sync = sync;
-      if (synced && sync.target.valid) {
-        const t = sync.target;
-        group.position.set(t.x, t.y, t.z);
-        group.rotation.y = t.ry;
-      }
+    if (synced && group && sync.target.valid) {
+      const t = sync.target;
+      group.position.set(t.x, t.y, t.z);
+      group.rotation.y = t.ry;
     }
   };
 

@@ -10,46 +10,32 @@ import {
   type CharacterInput,
 } from "../../physics/characterMovement";
 import type { ActorFrameContext } from "./Actor";
+import { DEFAULT_COLLIDER, type ColliderSpec, type MovementKind } from "./spec";
+import type { MotionOutput } from "./state/motion";
 
 /**
- * KINEMATIC MOVER — the body of a model actor that moves under its own logic
- * (`body: "kinematic"` on ModelActorAttributes). Owned by ModelActor so that
- * no actor component writes physics.
+ * KINEMATIC MOVER — the body of a model actor that moves (`body: "kinematic"`
+ * on its spec). Owned by ModelActor so that no actor component writes physics.
  *
  * SYNCED actor (the default): the SERVER simulates it and the actor base
  * draws it from the published track (snapshot interpolation). This hook only
  * PARKS the capsule at that pose so the local player collides with the NPC.
  *
- * LOCAL actor (`serverSynced={false}`): the owner's logic writes a velocity
- * into `ctx.move` each frame; `movement: "ground"` resolves it through THE
+ * LOCAL actor (`serverSynced={false}`): the state machine's `ctx.motion`
+ * output is resolved here each frame — `movement: "ground"` through THE
  * shared character resolver (physics/characterMovement.ts — the player's and
  * the server's movement code, so a local walker moves exactly like a synced
- * one would); `movement: "free"` integrates it as a 3-axis velocity (flyers).
+ * one would); `movement: "free"` integrates it as a 3-axis velocity (flyers,
+ * swimmers), exactly as the server's free body does.
  */
 
-export interface CapsuleColliderSpec {
-  shape: "capsule";
-  radius: number;
-  /** Total height (feet to top). */
-  height: number;
-}
-export type ColliderSpec = CapsuleColliderSpec;
-
-/** What an owner's logic writes each frame. vy === null → gravity applies. */
-export interface MoveIntent {
-  vx: number;
-  vy: number | null;
-  vz: number;
-}
-
-const DEFAULT_SPEC: CapsuleColliderSpec = { shape: "capsule", radius: 0.5, height: 2 };
 const _next = { x: 0, y: 0, z: 0 };
 const _input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null };
 
 export interface KinematicMoverOptions {
   enabled: boolean;
   collider?: ColliderSpec;
-  movement: "ground" | "free";
+  movement: MovementKind;
   coordinates: THREE.Vector3Tuple;
   /** Body CENTER position, written every frame (the state machine reads it). */
   positionRef: React.MutableRefObject<THREE.Vector3>;
@@ -59,15 +45,15 @@ export interface KinematicMoverOptions {
 }
 
 export interface KinematicMover {
-  /** Integrate the local intent, or (synced) park the body at the server's pose. */
-  step(delta: number, ctx: ActorFrameContext, move: MoveIntent, puppet: boolean): void;
+  /** Resolve the local motion output, or (puppet) park the body at the server's pose. */
+  step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, puppet: boolean): void;
   /** The <RigidBody> to render (null when disabled). */
   element: JSX.Element | null;
 }
 
 export const useKinematicMover = ({
   enabled,
-  collider = DEFAULT_SPEC,
+  collider = DEFAULT_COLLIDER,
   movement,
   coordinates,
   positionRef,
@@ -89,7 +75,7 @@ export const useKinematicMover = ({
     };
   }, [world, rapier, enabled, movement, collider.height, collider.radius]);
 
-  const step = (delta: number, ctx: ActorFrameContext, move: MoveIntent, puppet: boolean): void => {
+  const step = (delta: number, ctx: ActorFrameContext, motion: MotionOutput, puppet: boolean): void => {
     const rb = rigidBodyRef.current;
     if (!enabled || !rb) return;
 
@@ -107,18 +93,18 @@ export const useKinematicMover = ({
     const dt = Math.min(delta, 0.1);
     const pos = rb.translation();
     if (movement === "free") {
-      _next.x = pos.x + move.vx * dt;
-      _next.y = pos.y + (move.vy ?? 0) * dt;
-      _next.z = pos.z + move.vz * dt;
+      _next.x = pos.x + motion.vx * dt;
+      _next.y = pos.y + (motion.vy ?? 0) * dt;
+      _next.z = pos.z + motion.vz * dt;
       rb.setNextKinematicTranslation(_next);
     } else {
       const character = characterRef.current;
       const shape = rb.collider(0);
       if (!character || !shape) return;
-      _input.dirX = move.vx;
-      _input.dirZ = move.vz;
-      _input.speed = Math.hypot(move.vx, move.vz);
-      _input.vyOverride = move.vy;
+      _input.dirX = motion.vx;
+      _input.dirZ = motion.vz;
+      _input.speed = Math.hypot(motion.vx, motion.vz);
+      _input.vyOverride = motion.vy;
       stepCharacter(world, character, rb, shape, pos.x, pos.y, pos.z, _input, dt, result);
     }
     // The body moves at the physics step; `pos` is still current — place the
