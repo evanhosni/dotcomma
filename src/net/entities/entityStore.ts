@@ -9,10 +9,8 @@ import { pushSnapshot, type Snapshot } from "./interpolation";
  * next macrotask (a spawn commit mounts many actors at once).
  */
 
-export interface RemoteFields extends EntityUpdateFields {
-  /** performance.now() when x/y/z last arrived. */
-  receivedAt: number;
-}
+/** The server's fields for one entity, merged across updates. */
+export type RemoteFields = EntityUpdateFields;
 
 export interface ClientEntity {
   id: string;
@@ -110,7 +108,7 @@ const onMessage = (msg: ServerMessage) => {
       const e = entities.get(msg.id);
       if (!e) break;
       const { t: _t, id: _id, ...fields } = msg;
-      const next: RemoteFields = { ...(e.remote ?? { receivedAt: 0 }), ...fields };
+      const next: RemoteFields = { ...(e.remote ?? {}), ...fields };
       if (fields.x !== undefined || fields.z !== undefined || fields.y !== undefined) {
         const r = e.remote;
         if (r && r.x !== undefined && r.z !== undefined && fields.x !== undefined && fields.z !== undefined) {
@@ -119,7 +117,6 @@ const onMessage = (msg: ServerMessage) => {
             console.warn(`[sync] server moved ${e.id} by ${jump.toFixed(1)}u in one update (${r.x.toFixed(1)},${r.z.toFixed(1)} → ${fields.x.toFixed(1)},${fields.z.toFixed(1)})`);
           }
         }
-        next.receivedAt = performance.now();
         // The MERGED pose: an update may carry only the changed axes.
         pushSnapshot(e.snapshots, {
           st: next.st ?? (e.snapshots[e.snapshots.length - 1]?.st ?? 0) + 100,
@@ -133,7 +130,7 @@ const onMessage = (msg: ServerMessage) => {
         });
       }
       e.remote = next;
-      if (fields.state !== undefined || fields.clip !== undefined || fields.sm !== undefined) notify(e);
+      if (fields.state !== undefined || fields.anim !== undefined || fields.sm !== undefined) notify(e);
       break;
     }
   }
@@ -150,7 +147,7 @@ onServerMessage(onMessage);
       id: e.id,
       kind: e.kind,
       sm: e.remote?.sm,
-      clip: e.remote?.clip,
+      clip: e.remote?.anim?.clip,
       x: e.remote?.x,
       z: e.remote?.z,
     })),

@@ -9,6 +9,6 @@ export { Material } from "./Material";
 export type { MaterialConfigProps } from "./Material";
 export { Skybox, SkyboxSystem, SKYBOX_DEFAULTS } from "../sky/Skybox";
 export type { SkyboxProps } from "../sky/Skybox";
-export { Actor, Actors, createActor } from "./Actor";
+export { Actor, Actors, createActor, describeActor } from "./Actor";
 export type { ActorRegistrationProps, ActorsProps } from "./Actor";
 export { BiomeContext, RegionContext, DomainDataContext } from "./context";

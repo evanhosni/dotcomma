@@ -1,16 +1,12 @@
-import { ActorDescriptor } from "../spawning/types";
-import { createActor } from "../../../world/components";
-import { Beeble } from "./Beeble";
-import { ModelActorAttributes } from "../ModelActor";
-import { BEEBLE_COLLIDER } from "./spec";
+import { createActor, describeActor } from "../../../world/components";
+import { ModelActor, ModelActorAttributes } from "../ModelActor";
+import { BEEBLE_SPEC } from "./spec";
 
-export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
-  id: "beeble",
-  component: Beeble,
+/** Behavior and body come from the spec (the server simulates the same object); this is the client's half. */
+export const BeebleDescriptor = describeActor<ModelActorAttributes>(BEEBLE_SPEC, {
+  component: ModelActor,
   model: "/models/beeble.glb",
-  body: "kinematic",
-  collider: BEEBLE_COLLIDER, // shared with the server (kinds.ts)
-  movement: "ground",
+  scale: [1.2, 1.2, 1.2],
   collidersNeverMove: false,
   footprint: 5,
   density: 200,
@@ -18,6 +14,6 @@ export const BeebleDescriptor: ActorDescriptor<ModelActorAttributes> = {
   renderDistance: 200,
   frustumPadding: 3,
   priority: 80,
-};
+});
 
 export const BeebleActor = createActor(BeebleDescriptor);

@@ -2,27 +2,23 @@ import * as RAPIER from "@dimforge/rapier3d-compat";
 import { generateBuildingPlan } from "../../../../src/objects/actors/building/generatePlan";
 import { buildProxyHullVertices, createProxyCollider, type ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
 import type { BuildingAttributes } from "../../../../src/objects/actors/building/types";
-import type { PhysicsWorld } from "./world.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /**
- * The client's far-range proxy hull (building/proxyCollider.ts) from the
- * client's plan, so the server keeps an NPC out of exactly the wall every
- * client draws. Convex = sealed: NPCs never enter buildings.
+ * The client's own sealed silhouette hull (building/proxyCollider.ts) over the client's
+ * own plan, so an NPC the server keeps out of a wall is kept out of the wall every
+ * client draws. Convex = no door: NPCs never enter buildings. The plan costs ~1ms per
+ * seed and is cached per seed|attributes.
  */
 
-export interface BuildingKindSpec {
-  attrs: BuildingAttributes;
-}
-
-/** The plan generator costs ~1ms per seed. */
 const hullCache = new Map<string, Float32Array>();
 const MAX_HULL_CACHE = 4096;
 
-/** Must match Building.tsx's default seed rule. */
+/** Building.tsx's seed rule (no descriptor sets an explicit seed). */
 export const buildingSeed = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
-export const hullVerticesFor = (seed: string, spec: BuildingKindSpec): Float32Array => {
-  const key = `${seed}|${JSON.stringify(spec.attrs)}`;
+export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => {
+  const key = `${seed}|${JSON.stringify(attrs)}`;
   let v = hullCache.get(key);
   if (!v) {
     if (hullCache.size >= MAX_HULL_CACHE) {
@@ -32,20 +28,21 @@ export const hullVerticesFor = (seed: string, spec: BuildingKindSpec): Float32Ar
         hullCache.delete(k);
       }
     }
-    v = buildProxyHullVertices(generateBuildingPlan(seed, spec.attrs));
+    v = buildProxyHullVertices(generateBuildingPlan(seed, attrs));
     hullCache.set(key, v);
   }
   return v;
 };
 
+/** `attrs` = the actor spec's `hull` (plan-shaping attributes); y = ground height. */
 export const createBuildingCollider = (
   pw: PhysicsWorld,
-  spec: BuildingKindSpec,
+  attrs: BuildingAttributes,
   x: number,
   y: number,
   z: number,
 ): ProxyColliderHandle => {
-  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], hullVerticesFor(buildingSeed(x, z), spec));
+  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], hullVerticesFor(buildingSeed(x, z), attrs));
   pw.markQueriesDirty();
   return handle;
 };

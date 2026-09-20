@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
-import type { ClientMessage, DomainId, PlayerData, ServerMessage } from "./protocol";
+import type { ClientMessage, DomainId, ServerMessage } from "./protocol";
 
 /**
- * THE game connection singleton. Knows nothing about players or meshes —
- * remotePlayerStore.ts subscribes to it. React reads status through
- * useSyncExternalStore; per-frame consumers read the module getters directly.
+ * THE game connection singleton. Knows nothing about players, entities or meshes —
+ * players/store.ts, entities/entityStore.ts and playerData.ts subscribe to it. React
+ * reads status through useSyncExternalStore; per-frame consumers read the getters.
  */
 
 /** REACT_APP_WS_URL is inlined at build time by CRA — a production override means a rebuild. */
@@ -50,7 +50,6 @@ interface ConnectionState {
   selfId: string | null;
   color: string | null;
   spawnOffset: { x: number; z: number } | null;
-  data: PlayerData | null;
   /** Consecutive failed connection attempts (drives backoff). */
   attempts: number;
 }
@@ -60,7 +59,6 @@ let state: ConnectionState = {
   selfId: null,
   color: null,
   spawnOffset: null,
-  data: null,
   attempts: 0,
 };
 const stateListeners = new Set<() => void>();
@@ -200,7 +198,6 @@ const open = () => {
           selfId: msg.id,
           color: msg.color,
           spawnOffset: msg.spawn,
-          data: msg.data,
           attempts: 0,
         });
         lastPongAt = Date.now();
@@ -234,13 +231,6 @@ const open = () => {
   };
 };
 
-/** DEV ONLY: the server ignores it unless DEBUG_DATA_WRITES=1. */
-export const debugSetData = (data: PlayerData): boolean => {
-  const ok = send({ t: "debug:setData", data });
-  if (ok) setState({ data });
-  return ok;
-};
-
 export const startConnection = () => {
   if (started) return;
   started = true;
@@ -251,7 +241,6 @@ export const startConnection = () => {
     get state() {
       return state;
     },
-    setData: debugSetData,
     serverTime: getServerTime,
     url: getWebSocketUrl,
     identity: getIdentity,

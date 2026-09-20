@@ -1,20 +1,21 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { prepareActorMaterial } from "../objects/actors/Actor";
-import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./remotePlayerStore";
+import { prepareActorMaterial } from "../../objects/actors/Actor";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
+import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
 /**
- * ONE useFrame drives every remote capsule (React state only on join/leave):
- *   target  = lastPos + lastVel · min(age, MAX_EXTRAPOLATION)
- *   display += (target − display) · (1 − e^(−SMOOTH_RATE·dt))
- * Never snap, except the first frame and a TELEPORT_DISTANCE jump (a respawn).
+ * Remote players as capsules, ALL driven from ONE useFrame that mutates Object3Ds;
+ * React only sees the roster. Per frame: target = last intent extrapolated (age
+ * capped), display eases toward it frame-rate-independently. Snaps only on the
+ * first frame and on a TELEPORT_DISTANCE jump (respawn).
  */
 
-// The local player's capsule (Player.tsx): height 2, radius 0.5.
-const CAPSULE_RADIUS = 0.5;
-const CAPSULE_LENGTH = 1.0; // cylinder section = height − 2·radius
+const CAPSULE_RADIUS = PLAYER_RADIUS;
+const CAPSULE_LENGTH = PLAYER_HEIGHT - 2 * PLAYER_RADIUS;
 
+/** Bounds the damage of a lost/late correction. */
 const MAX_EXTRAPOLATION_S = 0.5;
 const SMOOTH_RATE = 12; // 1/s — ~63% of the gap closed every 83ms
 const TELEPORT_DISTANCE = 40;
@@ -50,7 +51,6 @@ const RemoteCapsule = ({ player }: { player: RemotePlayer }) => {
   return (
     <group ref={groupRef} position={[player.x, player.y, player.z]} rotation={[0, player.displayYaw, 0]}>
       <mesh geometry={capsuleGeometry} material={material} />
-      {/* eye-line "visor" on the local +Z face so facing direction reads */}
       <mesh geometry={visorGeometry} material={visorMaterial} position={[0, 0.55, CAPSULE_RADIUS - 0.02]} />
     </group>
   );

@@ -1,44 +1,36 @@
+import type { AnimationState } from "../objects/actors/state/animation";
+
 /**
- * WIRE PROTOCOL — JSON text frames, one message per frame, discriminated on `t`.
+ * WIRE PROTOCOL — JSON text frames discriminated on `t`. The one copy: the server
+ * bundles this file from src/. Three-free, React-free — keep it so.
  *
- * DUPLICATED in server/src/protocol.ts (CRA's ModuleScopePlugin forbids importing
- * across src/). Change both or neither; the server file is canonical.
+ * TWO IDS: `identity` = the client's localStorage uuid, names the PERSISTED player,
+ * sent once in `hello`, never broadcast. `id` = the SESSION id the server assigns per
+ * connection, carried by every presence message. Two tabs share an identity but are
+ * two sessions.
  *
- * IDS — two, never conflated:
- *   `identity`  client-generated uuid kept in localStorage; names the PERSISTED
- *               player. Sent once in `hello`, never broadcast.
- *   `id`        server-assigned SESSION id; names a presence, carried by every
- *               join/move/leave. Two tabs share an identity but are two sessions.
- *
- * FLOW.
- *   client  → hello   {identity, domain}          first message, exactly once
- *   server  → init    {id, color, spawn, domain, players[], serverTime, data}
- *                                                 your session, the domain roster, your
- *                                                 persisted blob. Re-sent after `domain`.
- *   server  → join    {player}                    to the others in the domain
- *   both    → move    {id?, x,y,z, vx,vy,vz, ry}  an INTENT CHANGE (velocity/facing change,
- *                                                 stop with v = 0, drift correction) — never
- *                                                 a per-frame position. Client → server
- *                                                 omits `id`.
- *   client  → domain  {domain}                    leave(old) + join(new) + fresh `init`
- *   server  → leave   {id}
- *   client  → ping    {t0}                        liveness + clock sync (ws-level ping/pong
- *   server  → pong    {t0, serverTime}            is ALSO used, server-side only)
- *   client  → debug:setData {data}                DEV ONLY (server DEBUG_DATA_WRITES=1)
- *
- * ENTITY SYNC — server authority (see game/entities/manager.ts):
- *   client  → entity:register   {entities:[{id, kind, x, y, z}]}
- *                                                 "I am rendering these" (kind = actor
- *                                                 descriptor id). Answered with the FULL
- *                                                 record as an entity:update.
- *   client  → entity:unregister {ids}             last one out forgets it
- *   client  → entity:interact   {id, action}      "mouse-left-click" (raised on the machine's
- *                                                 blackboard) or "door:<i>" (toggles state)
- *   server  → entity:update     {id, st?, x?,y?,z?, vx?,vy?,vz?, ry?, clip?, clipT0?, once?, sm?, state?}
+ *   client → hello   {identity, domain}           exactly once, first
+ *   server → init    {id, color, spawn, domain, players[], serverTime, data}
+ *                                                 also re-sent after a `domain` switch
+ *   server → join    {player}                     to the rest of the domain
+ *   both   → move    {id?, x,y,z, vx,vy,vz, ry}   an INTENT CHANGE (velocity/facing/stop/
+ *                                                 drift), never per-frame; client omits `id`
+ *   client → domain  {domain}                     leave old room + join new + fresh init
+ *   server → leave   {id}
+ *   client → ping    {t0} / server → pong {t0, serverTime}   liveness + clock sync
+ *   client → data:patch {patch}                   shallow-merge into the persisted blob
+ *   server → data      {data}                     the merged blob, to every session of
+ *                                                 that identity
+ *   client → entity:register   {entities:[{id, kind, x, y, z}]}   "I render these";
+ *                                                 answered with the full record
+ *   client → entity:unregister {ids}              last one out forgets the entity
+ *   client → entity:interact   {id, action}       an INPUT ("mouse-<flag>" raised on the
+ *                                                 server machine's blackboard, or "door:<i>")
+ *   server → entity:update     {id, st?, x?,y?,z?, vx?,vy?,vz?, ry?, anim?, sm?, state?}
  *                                                 changed fields only, ≤10Hz, to registrants
  *
  * Domains are the broadcast scope; nothing crosses one except the mover's re-init.
- * Coordinates: player capsule CENTER, world units; `ry` = yaw (three.js rotation.y).
+ * Coordinates: players = capsule CENTER, entities = FEET; `ry` = three.js rotation.y.
  */
 
 export type DomainId = "home" | "glitch-city";
@@ -46,6 +38,7 @@ export const DOMAIN_IDS: readonly DomainId[] = ["home", "glitch-city"];
 export const isDomainId = (v: unknown): v is DomainId =>
   typeof v === "string" && (DOMAIN_IDS as readonly string[]).includes(v);
 
+/** Presence of one session as every client sees it. */
 export interface PlayerSnapshot {
   id: string;
   color: string;
@@ -58,6 +51,7 @@ export interface PlayerSnapshot {
   ry: number;
 }
 
+/** The movement payload shared by both directions of `move`. */
 export interface MoveIntent {
   x: number;
   y: number;
@@ -67,6 +61,13 @@ export interface MoveIntent {
   vz: number;
   ry: number;
 }
+
+/** The persisted per-player blob. Shape still open: add named keys here as they
+ *  exist; until then nothing may assume a key inside it. */
+export type PlayerData = Record<string, unknown>;
+
+/** Serialized cap on one blob; a patch that would exceed it is rejected on both sides. */
+export const PLAYER_DATA_MAX_BYTES = 64 * 1024;
 
 // ── client → server ────────────────────────────────────────────────────────
 
@@ -91,49 +92,18 @@ export interface PingMessage {
   t0: number;
 }
 
-/** Opaque: shape deliberately undefined, nothing may assume a key inside it. */
-export type PlayerData = Record<string, unknown>;
-
-export interface DebugSetDataMessage {
-  t: "debug:setData";
-  data: PlayerData;
+export interface DataPatchMessage {
+  t: "data:patch";
+  patch: PlayerData;
 }
 
 export interface EntityRegisterItem {
   id: string;
-  /** Actor descriptor id — selects the server-side simulation (kinds.ts). */
+  /** Actor descriptor id — selects the server-side simulation (actor catalog). */
   kind: string;
   x: number;
   y: number;
   z: number;
-}
-
-/** Every field optional so an update carries only what changed. */
-export interface EntityUpdateFields {
-  /** Server time (ms) of the publishing tick; present whenever x/y/z are. Clients
-   *  interpolate on this clock, never on arrival time. */
-  st?: number;
-  x?: number;
-  y?: number;
-  z?: number;
-  vx?: number;
-  vy?: number;
-  vz?: number;
-  ry?: number;
-  clip?: string;
-  /** Server time (ms) the clip started. */
-  clipT0?: number;
-  /** Clip plays once and holds its last frame. */
-  once?: boolean;
-  /** Server-side state machine's current state id. */
-  sm?: string;
-  /** Replicated state blob (component-defined, e.g. door flags). */
-  state?: Record<string, unknown>;
-}
-
-export interface EntityUpdateMessage extends EntityUpdateFields {
-  t: "entity:update";
-  id: string;
 }
 
 export interface EntityRegisterMessage {
@@ -157,7 +127,7 @@ export type ClientMessage =
   | ClientMoveMessage
   | DomainMessage
   | PingMessage
-  | DebugSetDataMessage
+  | DataPatchMessage
   | EntityRegisterMessage
   | EntityUnregisterMessage
   | EntityInteractMessage;
@@ -168,7 +138,7 @@ export interface InitMessage {
   t: "init";
   id: string;
   color: string;
-  /** Offset (x/z) from the domain's spawn point so simultaneous joiners don't stack. */
+  /** Spawn OFFSET from the domain's spawn point so simultaneous joiners don't stack; the client owns height. */
   spawn: { x: number; z: number };
   domain: DomainId;
   players: PlayerSnapshot[];
@@ -197,10 +167,42 @@ export interface PongMessage {
   serverTime: number;
 }
 
+export interface DataMessage {
+  t: "data";
+  data: PlayerData;
+}
+
+/** Every field optional: an update carries only what changed. */
+export interface EntityUpdateFields {
+  /** Server time (ms) of the publishing tick, present whenever x/y/z are — clients
+   *  interpolate on this clock, never on arrival time. */
+  st?: number;
+  x?: number;
+  y?: number;
+  z?: number;
+  vx?: number;
+  vy?: number;
+  vz?: number;
+  ry?: number;
+  /** Whole animation-channel state with SERVER-time clocks, so a client can compute
+   *  the exact clip time on its delayed render clock. */
+  anim?: AnimationState;
+  /** Server machine's state id (mirrored for state-keyed visuals). */
+  sm?: string;
+  /** Component-defined replicated blob (e.g. door flags). */
+  state?: Record<string, unknown>;
+}
+
+export interface EntityUpdateMessage extends EntityUpdateFields {
+  t: "entity:update";
+  id: string;
+}
+
 export type ServerMessage =
   | InitMessage
   | JoinMessage
   | ServerMoveMessage
   | LeaveMessage
   | PongMessage
+  | DataMessage
   | EntityUpdateMessage;

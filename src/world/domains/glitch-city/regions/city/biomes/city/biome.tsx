@@ -9,13 +9,14 @@ import { TrafficLights } from "../../../../../../../objects/dressing/traffic-lig
 import { CityLights } from "./CityLights";
 import { Actors, Biome, Material } from "../../../../../../components";
 import { getMaterial } from "./material";
+import { CITY_BIOME } from "./spec";
 
 import { CITY_BIOME_ID } from "../../../../../../constants";
 export { CITY_BIOME_ID };
 
 /** No `noise`: city heights are the city branch of vertexCompute.ts (see CLAUDE.md). */
 export const CityBiome = () => (
-  <Biome name="city" id={CITY_BIOME_ID} joinable blendable={false} blendWidth={3}>
+  <Biome spec={CITY_BIOME}>
     <Material getMaterial={getMaterial} />
 
     <Actors>

@@ -5,23 +5,23 @@ import { useGameContext } from "../../context/GameContext";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
 import { buildDomainConfig } from "../../utils/workers/buildDomainConfig";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND, DEFAULT_TERRAIN_PARAMS } from "../defaults";
+import { DOMAIN_CONFIGS } from "../domains/configs";
+import { getCurrentDomain } from "../domains/navigation";
 import { setActiveDomain } from "../domains/utils";
 import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import { Biome, Region, TerrainParams } from "../types";
+import type { DomainConfig } from "../../utils/workers/vertexCompute";
 import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
 import { SkyboxSystem } from "../sky/Skybox";
 
-/** Root of the declarative DOMAIN → REGION → BIOME tree: children register into
- *  the store during their layout effects, this component commits the assembled
- *  Region[]/DomainConfig to the active-domain accessors, then mounts the global
- *  systems. Workers init once from the first commit (see CLAUDE.md). */
+/** Root of the DOMAIN → REGION → BIOME tree: children register during layout
+ *  effects, this commits the Region[]/DomainConfig and mounts the global systems. */
 interface DomainProps extends React.PropsWithChildren {
-  /** false = the domain mounts its own static ground and must set
-   *  terrainLoaded/progress itself (the Player is gated on them). */
+  /** false = the domain mounts its own ground and sets terrainLoaded/progress itself. */
   terrain?: boolean;
-  /** Per-domain because the canvas persists across domain switches. */
+  /** Per-domain because the canvas persists across switches. */
   background?: string;
-  /** FEET position. Unset = the default sky drop onto the terrain. */
+  /** FEET position. Unset = the default sky drop. */
   playerSpawn?: [number, number, number];
 }
 
@@ -84,7 +84,7 @@ const commitDomain = (store: DomainStore) => {
     ...(store.domainTerrain ?? {}),
   };
 
-  // A biome mounted under several regions becomes ONE shared object (getAllBiomes dedupes by identity).
+  // A biome under several regions is ONE shared object (getAllBiomes dedupes by identity).
   const biomeById = new Map<number, Biome>();
   const ensureBiome = (record: BiomeRecord): Biome => {
     let data = biomeById.get(record.id);
@@ -135,10 +135,28 @@ const commitDomain = (store: DomainStore) => {
     });
   }
 
+  const config = buildDomainConfig(regions, params);
+  verifySharedConfig(config);
   setActiveDomain({
     regions,
     params,
-    config: buildDomainConfig(regions, params),
+    config,
     riverTexture: store.domainMaterial?.riverTexture ?? DEFAULT_RIVER_TEXTURE,
   });
+};
+
+/** DEV GUARD: the SERVER simulates on the domain's shared config.ts, not on this
+ *  JSX commit; same assembler ⇒ byte-identical unless a mount is missing there. */
+const verifySharedConfig = (config: DomainConfig): void => {
+  if (process.env.NODE_ENV === "production") return;
+  const shared = DOMAIN_CONFIGS[getCurrentDomain()];
+  if (!shared) return;
+  if (JSON.stringify(config) === JSON.stringify(shared)) return;
+  const keys = (Object.keys(config) as (keyof DomainConfig)[]).filter(
+    (k) => JSON.stringify(config[k]) !== JSON.stringify(shared[k]),
+  );
+  console.error(
+    `[domain] the JSX commit and the shared config (world/domains/${getCurrentDomain()}/config.ts — what the SERVER simulates on) ` +
+      `differ in: ${keys.join(", ")}. Update the domain's config.ts (or the biome/region spec it reads) so the server's terrain matches the client's.`,
+  );
 };

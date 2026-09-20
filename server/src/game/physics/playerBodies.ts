@@ -1,11 +1,10 @@
 import type * as RAPIER from "@dimforge/rapier3d-compat";
-import type { PhysicsWorld } from "./world.js";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../../../src/player/spec";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
-/** A kinematic capsule per player, following the client-reported CENTER position, so NPCs collide with players. */
-
-/** Player.tsx PLAYER_RADIUS / PLAYER_HEIGHT. */
-const PLAYER_RADIUS = 0.5;
-const PLAYER_HEIGHT = 2;
+/** A kinematic capsule (the player's own, src/player/spec.ts) per player in a domain
+ *  with NPCs, following the reported center position so NPCs collide with players
+ *  here as they do on the client. Reconciled from the roster every tick. */
 
 export interface PlayerPose {
   id: string;
@@ -24,7 +23,6 @@ export class PlayerBodies {
     return this.bodies.size;
   }
 
-  /** Drops everyone not listed. */
   sync(players: Iterable<PlayerPose>): void {
     this.generation++;
     for (const p of players) {

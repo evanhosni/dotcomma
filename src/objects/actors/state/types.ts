@@ -1,9 +1,10 @@
 import type * as THREE from "three";
 import type { MutableRefObject } from "react";
+import type { AnimationChannel, AnimationSpec } from "./animation";
+import type { Input } from "./input";
+import type { Motion } from "./motion";
 
-/** three's LoopOnce/LoopRepeat as plain numbers — a config must not need Three at runtime (it runs in Node). */
-export const LOOP_ONCE = 2200;
-export const LOOP_REPEAT = 2201;
+// A config is plain data + functions with NO Three.js at runtime — it runs on the server as-is.
 
 export type TriggerFn = (ctx: TriggerContext) => boolean;
 
@@ -13,38 +14,34 @@ export interface TriggerDef {
 }
 
 export interface TriggerContext {
+  /** Body CENTER for movers. */
   positionRef: MutableRefObject<THREE.Vector3>;
+  /** The NEAREST player — no client is special. */
   playerPosition: THREE.Vector3;
   playerDistanceSq: number;
+  /** Seconds. */
   delta: number;
+  /** Seconds since the machine started. */
   elapsed: number;
+  /** Seconds since the current state was entered. */
   stateElapsed: number;
+  /** Per-instance memory between ticks. */
   blackboard: Record<string, any>;
+  motion: Motion;
+  animation: AnimationChannel;
+  /** On the server: any player's input; on a client mirror: only THIS player's. */
+  input: Input;
 }
 
 export type BehaviorFn = (ctx: BehaviorContext) => void;
 
 export interface BehaviorContext extends TriggerContext {
-  /** null on the SERVER — guard every scene access on it. */
+  /** Null on the SERVER — guard every scene access on it. */
   groupRef: MutableRefObject<THREE.Group | null>;
 }
 
+/** May return a cleanup, run when the state is left (or the machine disposed). */
 export type StateEnterFn = (ctx: BehaviorContext) => void | (() => void);
-
-export interface AnimationCommand {
-  clipName: string;
-  /** Seconds into the clip; wrapped for looping clips. */
-  startTime?: number;
-  fadeDuration?: number;
-  timeScale?: number;
-  loop?: THREE.AnimationActionLoopStyles;
-  clampWhenFinished?: boolean;
-}
-
-export interface AnimationControl {
-  pendingCommand: AnimationCommand | null;
-  dirty: boolean;
-}
 
 export interface TransitionDef {
   trigger: string;
@@ -54,7 +51,8 @@ export interface TransitionDef {
 
 export interface StateDef {
   id: string;
-  animation?: AnimationCommand;
+  /** Shorthand for `ctx.animation.play(...)` on enter. */
+  animation?: AnimationSpec;
   onEnter?: StateEnterFn;
   onUpdate?: BehaviorFn;
   transitions: TransitionDef[];
@@ -64,12 +62,4 @@ export interface StateMachineConfig {
   initialState: string;
   states: StateDef[];
   triggers: TriggerDef[];
-}
-
-export interface StateMachineHandle {
-  readonly currentStateId: string;
-  forceTransition: (stateId: string) => void;
-  blackboard: Record<string, any>;
-  animationControl: AnimationControl;
-  tick: (state: import("@react-three/fiber").RootState, delta: number) => void;
 }

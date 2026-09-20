@@ -1,38 +1,39 @@
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import { World, type Outbox } from "../game/world.js";
-import type { PhysicsWorld } from "../game/physics/world.js";
 import {
   isDomainId,
+  PLAYER_DATA_MAX_BYTES,
   type ClientMessage,
   type EntityRegisterItem,
   type MoveIntent,
   type ServerMessage,
-} from "../protocol.js";
+} from "../../../src/net/protocol";
+import type { PhysicsWorld } from "../game/physics/physicsWorld.js";
+import { World, type Outbox } from "../game/world.js";
 
 /**
- * Sockets and NOTHING about the game: validates frame shape, forwards to the
- * World, implements its Outbox. Protocol in ../protocol.ts.
+ * Owns the sockets and nothing about the game: validates frame shapes, forwards to the
+ * World, implements its Outbox. HEARTBEAT is not optional: a vanished peer (lid closed,
+ * wifi dropped) often never fires `close`; a socket that hasn't ponged by the next sweep
+ * is terminated, which DOES fire `close` and removes the ghost.
  */
 
-/** A vanished peer (lid closed, wifi dropped) often never fires `close`; a
- *  socket that hasn't ponged by the next sweep is terminated, which does. */
 const HEARTBEAT_MS = 30_000;
-const DEBUG_DATA_WRITES = process.env.DEBUG_DATA_WRITES === "1";
-const MAX_PAYLOAD_BYTES = 64 * 1024; // a registration batch of ~64 actors is ~6KB; headroom for state blobs
+const MAX_PAYLOAD_BYTES = 64 * 1024; // a 64-actor registration batch is ~6KB; headroom for state blobs
 const MAX_ENTITIES_PER_MESSAGE = 256;
 const MAX_ID_LENGTH = 128;
 
 interface Conn {
   ws: WebSocket;
-  /** null until `hello` has been accepted. */
+  /** null until `hello` is accepted. */
   sessionId: string | null;
   isAlive: boolean;
 }
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= MAX_ID_LENGTH;
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ENTITIES_PER_MESSAGE) return null;
@@ -70,6 +71,11 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
       return isDomainId(raw.domain) ? { t: "domain", domain: raw.domain } : null;
     case "ping":
       return isFiniteNumber(raw.t0) ? { t: "ping", t0: raw.t0 } : null;
+    case "data:patch": {
+      const patch = raw.patch;
+      if (!isPlainObject(patch) || JSON.stringify(patch).length > PLAYER_DATA_MAX_BYTES) return null;
+      return { t: "data:patch", patch };
+    }
     case "entity:register": {
       const entities = parseRegisterItems(raw.entities);
       return entities ? { t: "entity:register", entities } : null;
@@ -81,12 +87,6 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
     }
     case "entity:interact":
       return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
-    case "debug:setData": {
-      if (!DEBUG_DATA_WRITES) return null;
-      const d = raw.data;
-      if (typeof d !== "object" || d === null || Array.isArray(d)) return null;
-      return { t: "debug:setData", data: d as Record<string, unknown> };
-    }
     default:
       return null;
   }
@@ -101,6 +101,7 @@ class SocketOutbox implements Outbox {
   }
 
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage, exceptSessionId?: string): void {
+    // Serialize once per broadcast, not once per recipient.
     let payload: string | null = null;
     for (const id of sessionIds) {
       if (id === exceptSessionId) continue;
@@ -115,7 +116,7 @@ class SocketOutbox implements Outbox {
 export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWorld) => {
   const wss = new WebSocketServer({ server, maxPayload: MAX_PAYLOAD_BYTES });
   const bySession = new Map<string, Conn>();
-  const all = new Set<Conn>(); // hello'd or not — the heartbeat sweep
+  const all = new Set<Conn>(); // hello'd or not — for the heartbeat sweep
   const world = new World(new SocketOutbox(bySession), physics);
 
   wss.on("connection", (ws) => {
@@ -149,7 +150,7 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
 
       switch (msg.t) {
         case "hello":
-          return;
+          return; // duplicate hello → ignore
         case "move":
           world.move(conn.sessionId, msg);
           return;
@@ -161,8 +162,8 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
             ws.send(JSON.stringify({ t: "pong", t0: msg.t0, serverTime: Date.now() } satisfies ServerMessage));
           }
           return;
-        case "debug:setData":
-          world.setPlayerData(conn.sessionId, msg.data);
+        case "data:patch":
+          world.patchPlayerData(conn.sessionId, msg.patch);
           return;
         case "entity:register": {
           const s = world.get(conn.sessionId);

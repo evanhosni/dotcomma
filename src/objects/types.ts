@@ -19,6 +19,10 @@ export interface GameObjectAttributes {
   colliderDistance?: number;
   /** Unset = the global grid from <PostProcessing quantization>. Dressing is never quantized (instances are rebased). */
   quantization?: number;
+  /** Actors default TRUE: the server runs the actor's state machine as the one authority and every client
+   *  is placed to match (CLAUDE.md → Entity sync). Dressing/foliage default FALSE and have no sync (they are
+   *  deterministic scenery); true there logs a one-time warning. */
+  serverSynced?: boolean;
 
   /** Unset = every biome. */
   biomeIds?: number[];
@@ -49,8 +53,6 @@ export interface ActorAttributes extends GameObjectAttributes {
   frustumPadding?: number;
   /** true = always grow the cursor on hover, false = never, unset = from triggers. */
   cursorOverride?: boolean;
-  /** Default true: the server runs this actor's state machine as the one authority (CLAUDE.md → Entity sync). */
-  serverSynced?: boolean;
   /** The terrain flattens a pad under every instance; placement becomes deterministic (vertexCompute.ts flatten engine). */
   flattenGround?: boolean;
   /** Default footprint * 0.45. */

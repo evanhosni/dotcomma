@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
+import type { ServerMessage } from "../../src/net/protocol";
+import { ACTOR_SPECS } from "../../src/objects/actors/catalog";
+import type { ActorSpec } from "../../src/objects/actors/spec";
+import type { StateMachineConfig } from "../../src/objects/actors/state/types";
 import { computeVertexData } from "../../src/utils/workers/vertexCompute";
-import { EntityManager, TICK_MS, type PlayerView } from "../src/game/entities/manager.js";
-import { PhysicsWorld } from "../src/game/physics/world.js";
-import type { ServerMessage } from "../src/protocol.js";
+import { EntityManager, TICK_MS, type EntityManagerOptions, type PlayerView } from "../src/game/entities/manager.js";
+import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
 
-/** One physics world for the suite; unbounded budget so chunks build on the first tick. */
+/** One physics world for the suite (WASM init once); an unbounded budget builds chunks on the first tick. */
 let pw: PhysicsWorld;
 const live: EntityManager[] = [];
-const manager = (h: ReturnType<typeof makeHost>) => {
-  const m = new EntityManager(h.host, pw, { workBudgetMs: Infinity, log: false });
+const manager = (h: ReturnType<typeof makeHost>, opts: EntityManagerOptions = {}) => {
+  const m = new EntityManager(h.host, pw, { workBudgetMs: Infinity, log: false, ...opts });
   live.push(m);
   return m;
 };
@@ -41,26 +44,31 @@ describe("EntityManager (server authority)", () => {
   before(async () => {
     pw = await PhysicsWorld.create();
   });
-  // MEASURED: an abandoned capsule at the common spawn point boxed the next test's beeble in.
+  // Every test's bodies leave the shared world with it — an abandoned capsule
+  // at the common spawn point boxed the next test's beeble in (measured).
   afterEach(() => {
     for (const m of live) m.disposeAll();
     live.length = 0;
   });
 
-  it("registration answers with the full record; unknown kinds are static", () => {
+  it("registration answers with the full record; kinds outside the catalog are static", () => {
     const h = makeHost();
     const m = manager(h);
     m.register("A", "glitch-city", [{ id: "1_2_building", kind: "building", x: 1, y: 0, z: 2 }]);
     const u = h.to("A")[0];
     assert.equal(u.t, "entity:update");
     assert.equal(u.x, 1);
-    assert.equal(u.sm, undefined, "no machine for a static kind");
+    assert.equal(u.sm, undefined, "no machine for a building");
     assert.equal(m.get("1_2_building")!.runner, null);
+    m.register("A", "glitch-city", [{ id: "5_5_prop", kind: "some-static-prop", x: 5, y: 0, z: 5 }]);
+    assert.equal(m.get("5_5_prop")!.runner, null, "unknown kind → static record");
+    assert.equal(m.get("5_5_prop")!.npc, null);
     regBeeble(m, "A");
-    assert.ok(m.get(ID)!.runner, "beeble gets a state machine runner");
+    assert.ok(m.get(ID)!.runner, "beeble gets a state machine runner (catalog)");
+    assert.ok(m.get(ID)!.npc, "…and a ground body");
   });
 
-  it("the beeble machine runs on the server: it wanders, publishes pose + clip + state to every registrant", () => {
+  it("the beeble machine runs on the server: it wanders, publishes pose + animation + state to every registrant", () => {
     const h = makeHost();
     const m = manager(h);
     regBeeble(m, "A");
@@ -71,14 +79,19 @@ describe("EntityManager (server authority)", () => {
     ticks(m, 20, t0); // 2s
     const e = m.get(ID)!;
     assert.equal(e.sm, "idle-walk");
-    assert.equal(e.clip, "walk");
+    assert.equal(e.anim?.clip, "walk");
+    assert.equal(e.anim?.loop, "repeat");
     assert.ok(Math.hypot(e.x - 10, e.z - 20) > 1, `moved from spawn (${e.x.toFixed(2)}, ${e.z.toFixed(2)})`);
     const ua = h.to("A");
     const ub = h.to("B");
     assert.ok(ua.length > 0 && ub.length > 0, "both registrants receive updates");
-    assert.ok(ua.some((u: any) => u.clip === "walk" && typeof u.clipT0 === "number"), "clip published with start time");
+    const animUpdate = ua.find((u: any) => u.anim);
+    assert.ok(animUpdate, "the animation channel state is published");
+    assert.equal(animUpdate.anim.clip, "walk");
+    assert.equal(typeof animUpdate.anim.t0, "number", "…with the server-time clock it started on");
+    assert.ok(animUpdate.anim.t0 >= t0, "clip clock is server time (the tick's now)");
     assert.ok(ua.some((u: any) => u.sm === "idle-walk"), "machine state id published");
-    // The registration's y=3 is only a hint; the ground here is ~1.9.
+    // y is authoritative: the registration's y=3 was only a hint (ground here ~1.9).
     const groundAt = (x: number, z: number) => computeVertexData(x, z).height;
     for (const u of ua) {
       if (u.y === undefined) continue;
@@ -91,7 +104,8 @@ describe("EntityManager (server authority)", () => {
     assert.ok(stamped.length > 5, "position published every moving tick");
     assert.ok(stamped.every((u: any) => typeof u.st === "number"), "every positional update carries st");
     for (let i = 1; i < stamped.length; i++) assert.ok(stamped[i].st >= stamped[i - 1].st, "st is non-decreasing");
-    // A wander near a chunk edge un-readies the walker until the next tick builds the neighbor.
+    // A wander near a chunk edge requests the neighbor and un-readies the
+    // walker until the next tick builds it — settle before asserting.
     for (let i = 0; i < 3 && !e.npc!.ready; i++) ticks(m, 1, t0 + 2000 + i * TICK_MS);
     assert.ok(e.npc!.ready, "its chunks were built (unbounded budget)");
   });
@@ -101,20 +115,21 @@ describe("EntityManager (server authority)", () => {
     const m = manager(h);
     regBeeble(m, "A");
     regBeeble(m, "B");
-    h.setPlayer("A", 500, 500);
+    h.setPlayer("A", 500, 500); // A far away
     const t0 = Date.now();
     ticks(m, 3, t0);
     const e = m.get(ID)!;
+    // Put B 5u directly in front of the beeble's current facing.
     const yaw = e.ry;
     h.setPlayer("B", e.x + Math.sin(yaw) * 5, e.z + Math.cos(yaw) * 5);
     ticks(m, 3, t0 + 300);
     assert.equal(e.sm, "alert", "alerted by the second player");
-    assert.equal(e.clip, "idle");
+    assert.equal(e.anim?.clip, "idle");
     assert.equal(e.vx, 0);
     assert.equal(e.vz, 0);
   });
 
-  it("a forwarded click from a nearby player makes it ascend (vy > 0, once-clip)", () => {
+  it("a forwarded click from a nearby player makes it ascend (vy > 0, clip switch)", () => {
     const h = makeHost();
     const m = manager(h);
     regBeeble(m, "A");
@@ -130,10 +145,10 @@ describe("EntityManager (server authority)", () => {
     m.interact("B", ID, "mouse-left-click", m.playersFor("glitch-city"));
     ticks(m, 10, t0 + 500);
     assert.equal(e.sm, "ascending");
-    assert.equal(e.clip, "ascend");
-    assert.equal(typeof e.once, "boolean", "loop mode published with the clip");
+    assert.equal(e.anim?.clip, "ascend");
     assert.ok(e.vy > 0, "rising");
     assert.ok(e.y > y0 + 0.2, `y rises off the ground while vy is driven (${y0.toFixed(2)} → ${e.y.toFixed(2)})`);
+    // A click from far away is ignored.
     const h2 = makeHost();
     const m2 = manager(h2);
     regBeeble(m2, "A");
@@ -142,6 +157,57 @@ describe("EntityManager (server authority)", () => {
     m2.interact("A", ID, "mouse-left-click", m2.playersFor("glitch-city"));
     ticks(m2, 2, t0 + 200);
     assert.notEqual(m2.get(ID)!.sm, "ascending", "far click ignored");
+  });
+
+  it("a `movement: \"free\"` kind flies: no gravity, no ground, its velocity integrated as-is", () => {
+    const FLYER_SM: StateMachineConfig = {
+      initialState: "soar",
+      triggers: [],
+      states: [
+        {
+          id: "soar",
+          animation: { clip: "fly", speed: 1.5 },
+          onUpdate: (ctx) => {
+            ctx.motion.move(2, 0).fly(3).faceHeading();
+          },
+          transitions: [],
+        },
+      ],
+    };
+    const flyer: ActorSpec = { id: "test-flyer", stateMachine: FLYER_SM, body: "kinematic", movement: "free" };
+    const h = makeHost();
+    const m = manager(h, { specs: (kind) => (kind === flyer.id ? flyer : ACTOR_SPECS[kind]) });
+    m.register("A", "glitch-city", [{ id: "0_0_test-flyer", kind: "test-flyer", x: 0, y: 0, z: 0 }]);
+    h.setPlayer("A", 500, 500);
+    const e = m.get("0_0_test-flyer")!;
+    const ground = computeVertexData(0, 0).height;
+    const t0 = Date.now();
+    ticks(m, 10, t0); // 1s
+    assert.ok(Math.abs(e.x - 2) < 0.05, `flew 2u along +x (${e.x.toFixed(2)})`);
+    assert.ok(Math.abs(e.y - (ground + 3)) < 0.1, `climbed 3u above its spawn ground (${(e.y - ground).toFixed(2)})`);
+    assert.equal(e.z, 0);
+    assert.ok(Math.abs(e.ry - Math.PI / 2) < 1e-6, "faces its heading");
+    assert.equal(e.anim?.clip, "fly");
+    assert.equal(e.anim?.speed, 1.5);
+    assert.ok(e.npc!.ready, "a free body needs no chunks");
+  });
+
+  it("every mouse input is forwarded as an action and raised as its flag (hover keeps the level flag)", () => {
+    const h = makeHost();
+    const m = manager(h);
+    regBeeble(m, "A");
+    h.setPlayer("A", 11, 21);
+    const e = m.get(ID)!;
+    const bb = e.runner!.blackboard;
+    m.interact("A", ID, "mouse-hover-enter", m.playersFor("glitch-city"));
+    assert.equal(bb.__mouse_hover_enter, true);
+    assert.equal(bb.__mouse_hover_active, true);
+    m.interact("A", ID, "mouse-scroll-up", m.playersFor("glitch-city"));
+    assert.equal(bb.__mouse_scroll_up, true);
+    m.interact("A", ID, "mouse-hover-leave", m.playersFor("glitch-city"));
+    assert.equal(bb.__mouse_hover_active, false);
+    m.interact("A", ID, "not-a-mouse-thing", m.playersFor("glitch-city"));
+    assert.equal(bb["__not_a_mouse_thing"], undefined, "unknown actions never touch the blackboard");
   });
 
   it("doors: door:<i> toggles replicated state and broadcasts", () => {
@@ -158,6 +224,7 @@ describe("EntityManager (server authority)", () => {
     assert.equal(m.get(B)!.state.doors[2], true);
     m.interact("A", B, "door:2", m.playersFor("glitch-city"));
     assert.equal(m.get(B)!.state.doors[2], false);
+    // Late joiner gets the doors in the registration answer.
     h.clear();
     m.register("D", "glitch-city", [{ id: B, kind: "building", x: 0, y: 0, z: 0 }]);
     assert.deepEqual(h.to("D")[0].state.doors[2], false);
@@ -167,7 +234,8 @@ describe("EntityManager (server authority)", () => {
     const h = makeHost();
     const m = manager(h);
     const t0 = Date.now();
-    // Drain jobs earlier tests left queued before taking the baseline.
+    // The physics world is shared by the suite: drain generation jobs earlier
+    // tests left queued (their building hulls) before taking the baseline.
     ticks(m, 1, t0);
     const before = pw.stats();
     regBeeble(m, "A", "700_-600_beeble", 700, -600); // a spot no earlier test holds chunks at

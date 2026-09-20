@@ -1,10 +1,15 @@
 import { useGLTF } from "@react-three/drei";
+import { RootState } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
+import { ActorAttributes } from "../types";
+import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
+import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import { useKinematicMover } from "./kinematicMover";
 import {
   acquireModelClone,
   acquirePooledModelClone,
@@ -12,26 +17,25 @@ import {
   reclaimModelClone,
   releaseModelClone,
 } from "./modelClonePool";
-import { AnimationControl } from "./state/types";
-import { ActorAttributes } from "../types";
+import type { BodyKind, ColliderSpec, MovementKind } from "./spec";
 import { ActorProps } from "./spawning/types";
-import { RootState } from "@react-three/fiber";
-import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
-import { getServerTime } from "../../net/connection";
-import { INTERP_DELAY_MS } from "../../net/entities/interpolation";
-import { useKinematicMover, type ColliderSpec, type MoveIntent } from "./kinematicMover";
+import { createMotionOutput } from "./state/motion";
+import type { StateMachineConfig } from "./state/types";
+import { useMouseEvents } from "./state/useMouseEvents";
+import { useStateMachine } from "./state/useStateMachine";
 
 export { MAX_COLLIDER_RENDER_DISTANCE };
 
-// Animation LOD: mixers run at half rate past this fraction of renderDistance;
-// skipped time accumulates (capped) so loops stay continuous.
+// Animation LOD: mixers pause while frustum-culled and run at half rate past this
+// fraction of the render distance; skipped time accumulates (capped) so loops stay continuous.
 const ANIM_HALF_RATE_FRACTION = 0.4;
 const MAX_ANIM_CATCHUP = 0.5;
+const MOUSE_THROTTLE_FRAMES = 3;
 
 const taskQueue = new TaskQueue();
 
-// Debug "E = toggle animations" for instances without a state machine. ONE
-// shared listener — one per instance made every keypress O(spawns).
+// Debug "E = toggle animations" for instances without a state machine: ONE window
+// listener — a listener per instance made every keypress O(spawns).
 let manualAnimationsPlaying = false;
 const manualAnimationSubscribers = new Set<() => void>();
 let manualAnimationListenerAttached = false;
@@ -47,29 +51,40 @@ const ensureManualAnimationListener = (): void => {
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
+/**
+ * THE GLTF ACTOR: a pooled model clone, its colliders, the animation mixer + LOD,
+ * and the whole behavior wiring (state machine, mouse events, kinematic body,
+ * animation channel) — so an NPC is a spec and a state machine and nothing else.
+ * Everything else comes from the actor base. Owners get per-frame work through
+ * the `onFrame` prop (`ctx.machine` / `ctx.motion`), never a useFrame.
+ */
+
+/** Settable on the descriptor, forwarded to every instance. The simulation
+ *  attributes (stateMachine, body, collider, movement) come from the SPEC via describeActor. */
 export interface ModelActorAttributes extends ActorAttributes {
   model: string;
   scale?: THREE.Vector3Tuple;
-  /** Colliders never move (default true; movers pass false). */
+  /** Default true; movers pass false. */
   collidersNeverMove?: boolean;
   /** One trimesh over the whole model instead of per-node colliders. */
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
-  /** "fixed" (default) = GLTF colliders, never moves; "kinematic" = moved by
-   *  the owner's ctx.move intent (synced: parked at the server's pose). */
-  body?: "none" | "fixed" | "kinematic";
+  /** Synced instances run it on the server and mirror its state here; local ones run it here. */
+  stateMachine?: StateMachineConfig;
+  /** "fixed" (default) — colliders from the GLTF; "kinematic" — a body moved by the
+   *  machine's motion output (synced: parked at the server's pose); "none" — no colliders. */
+  body?: BodyKind;
   /** Kinematic body shape (default capsule r0.5 h2). */
   collider?: ColliderSpec;
-  /** Kinematic: "ground" = walkers (gravity, snap, slopes), "free" = flyers. */
-  movement?: "ground" | "free";
+  /** Kinematic: "ground" (gravity, snap, slopes) or "free" (flyers). */
+  movement?: MovementKind;
 }
 
 export interface ModelActorProps extends ActorProps<ModelActorAttributes> {
-  /** Body CENTER; written every frame by a kinematic ModelActor, unused otherwise. */
+  /** Body CENTER: ModelActor WRITES it every frame for kinematic bodies; an owner may pass its own ref to read it. */
   positionRef?: React.MutableRefObject<THREE.Vector3>;
   groupRef?: React.MutableRefObject<THREE.Group | null>;
-  animationControl?: AnimationControl;
-  /** The one frame callback an owner gets — never add a useFrame in the owner. */
+  /** Runs after the machine ticked and before the body moves. */
   onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
 }
 
@@ -90,27 +105,30 @@ export const ModelActor = ({
   rotation = [0, 0, 0],
   positionRef: ownerPositionRef,
   groupRef: ownerGroupRef,
+  stateMachine,
   body,
   collider,
   movement = "ground",
+  cursorOverride,
   renderDistance = DEFAULT_RENDER_DISTANCE,
   despawnDistance,
   frustumPadding,
   onDestroy,
-  animationControl,
   collidersNeverMove = true,
   wholeTrimesh = false,
   excludeColliderNames,
   quantization,
   onFrame,
 }: ModelActorProps) => {
-  const staticPositionRef = useRef(new THREE.Vector3(...coordinates));
-  const positionRef = ownerPositionRef ?? staticPositionRef;
-  const selfPositioned = !ownerPositionRef;
+  const isKinematic = body === "kinematic";
+  const ownPositionRef = useRef(new THREE.Vector3(...coordinates));
+  const positionRef = ownerPositionRef ?? ownPositionRef;
+  const groupRef = useRef<THREE.Group | null>(null);
   const gltf = useGLTF(model);
 
-  // Pool HIT is taken synchronously in render; a MISS renders null and builds
-  // on the task queue (20 fresh clones in one React commit was a hitch).
+  // Pool HIT is synchronous; a MISS renders null and builds through the shared queue
+  // (same peek-then-queue pattern as <Building>): a batch of 20 fresh clones used to
+  // run 20 full clone pipelines inside one React commit.
   const [pooled, setPooled] = useState<PooledModelClone | null>(() =>
     acquirePooledModelClone(model, quantization),
   );
@@ -126,26 +144,21 @@ export const ModelActor = ({
     };
   }, [pooled, model, gltf, quantization]);
 
+  const machine = useStateMachine(stateMachine, positionRef, groupRef);
+  const hasClickTrigger = !!stateMachine && stateMachine.triggers.some((t) => t.id === "mouse-left-click");
+  const mouse = useMouseEvents(machine, groupRef, {
+    shouldGrowCursor: cursorOverride ?? hasClickTrigger,
+    framePhase: framePhaseFromCoords(coordinates[0], coordinates[2], MOUSE_THROTTLE_FRAMES),
+  });
+  const localMotion = useRef(createMotionOutput()).current;
+  const motion = machine ? machine.motion.out : localMotion;
+  const animPlayer = useRef(new AnimationPlayer()).current;
+
   const animDeltaRef = useRef(0);
-  // Phase-offset per instance, or a whole spawn batch skips mixer updates on the same frames.
+  // Half-rate parity is phase-offset per instance, or a whole batch skips the same frames.
   const animFrameParityRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 2) === 1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
-
-  // Lazy binding: beeble.glb carries 14 clips (298 tracks) of which 4 ever
-  // play; eager binding pushed every unused track through the mixer per instance.
-  const getOrCreateAction = (clipName: string): THREE.AnimationAction | null => {
-    const mixer = pooled?.mixer;
-    if (!pooled || !mixer) return null;
-    let action = pooled.actions.get(clipName);
-    if (!action) {
-      const clip = pooled.animations.find((c: THREE.AnimationClip) => c.name === clipName);
-      if (!clip) return null;
-      action = mixer.clipAction(clip);
-      pooled.actions.set(clipName, action);
-    }
-    return action;
-  };
 
   const hasColliders =
     colliders !== null &&
@@ -154,13 +167,6 @@ export const ModelActor = ({
       colliders.boxColliders.length +
       colliders.trimeshColliders.length >
       0;
-
-  // Synced animation is STATE (clip + server start time): every client plays it in phase.
-  const syncAnimRef = useRef<AnimationControl>({ pendingCommand: null, dirty: false });
-  const syncClipRef = useRef<string | null>(null);
-  const syncClipT0Ref = useRef(0);
-  const moveIntent = useRef<MoveIntent>({ vx: 0, vy: null, vz: 0 }).current;
-  const isKinematic = body === "kinematic";
 
   const lifecycle = useActorLifecycle({
     id,
@@ -181,79 +187,36 @@ export const ModelActor = ({
         mats[i].transparent = opacity < 1;
       }
     },
-    // Distance only — gating on the frustum rebuilt the Rapier colliders every time the player turned around.
+    // Colliders gate on DISTANCE only: gating on the frustum rebuilt the Rapier
+    // colliders every time the player turned around.
     colliderDistance: hasColliders
       ? Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2)
       : undefined,
     onFrame: (state, delta, ctx) => {
-      // The owner's logic runs on every client; when the server simulates this
-      // actor its outputs (intent, animation, transform) are overridden below.
-      moveIntent.vx = 0;
-      moveIntent.vz = 0;
-      moveIntent.vy = null;
-      ctx.move = moveIntent;
-      onFrame?.(state, delta, ctx);
+      const dt = Math.min(delta, 0.1);
       const serverDriven = !!ctx.sync && ctx.sync.known;
-      mover.step(delta, ctx, moveIntent, serverDriven);
+
+      // On a synced actor the machine only mirrors: its outputs are overridden by the server's.
+      machine?.tick(state, dt, ctx.sync);
+      mouse.tick(state.camera, ctx.distanceSq, ctx.sync);
+      ctx.machine = machine;
+      ctx.motion = motion;
+      onFrame?.(state, delta, ctx);
+      mover.step(delta, ctx, motion, serverDriven);
 
       if (!pooled) return;
 
-      let control: AnimationControl | undefined = animationControl;
+      // Synced: the SERVER's channel, applied when the DELAYED render clock reaches its
+      // change time, so an idle clip starts exactly as the interpolated body stops.
       if (serverDriven) {
-        if (animationControl) animationControl.dirty = false; // consume, never apply
-        // Clip switches on the same DELAYED clock the pose is drawn on, so the
-        // idle clip starts exactly as the interpolated body reaches the stop.
-        const r = ctx.sync!.entity?.remote;
-        const renderTime = getServerTime() - INTERP_DELAY_MS;
-        if (
-          r &&
-          r.clip &&
-          (r.clip !== syncClipRef.current || (r.clipT0 ?? 0) !== syncClipT0Ref.current) &&
-          (!r.clipT0 || renderTime >= r.clipT0)
-        ) {
-          syncClipRef.current = r.clip;
-          syncClipT0Ref.current = r.clipT0 ?? 0;
-          syncAnimRef.current.pendingCommand = {
-            clipName: r.clip,
-            startTime: r.clipT0 ? Math.max(0, (renderTime - r.clipT0) / 1000) : 0,
-            loop: r.once ? THREE.LoopOnce : THREE.LoopRepeat,
-            clampWhenFinished: !!r.once,
-          };
-          syncAnimRef.current.dirty = true;
-        }
-        control = syncAnimRef.current;
-      } else {
-        syncClipRef.current = null;
-      }
-
-      // Commands are processed even while the mixer itself is LOD-skipped.
-      if (control && pooled.mixer && control.dirty) {
-        control.dirty = false;
-        const cmd = control.pendingCommand;
-        if (cmd) {
-          const targetAction = getOrCreateAction(cmd.clipName);
-          if (targetAction) {
-            pooled.actions.forEach((action) => {
-              action.stop();
-            });
-            targetAction.reset();
-            if (cmd.startTime) {
-              const duration = targetAction.getClip().duration;
-              targetAction.time =
-                cmd.loop === THREE.LoopOnce ? Math.min(cmd.startTime, duration) : cmd.startTime % duration;
-            }
-            targetAction.setLoop(cmd.loop ?? THREE.LoopRepeat, Infinity);
-            targetAction.timeScale = cmd.timeScale ?? 1.0;
-            targetAction.clampWhenFinished = cmd.clampWhenFinished ?? true;
-            targetAction.play();
-          } else {
-            console.error(`animation "${cmd.clipName}" does not exist`);
-          }
-        }
+        const anim = ctx.sync!.entity?.remote?.anim;
+        if (anim && ctx.syncRenderTime >= anim.changedAt) animPlayer.apply(pooled, anim, ctx.syncRenderTime);
+      } else if (machine) {
+        animPlayer.apply(pooled, machine.animation.state, state.clock.elapsedTime * 1000);
       }
 
       const mixer = pooled.mixer;
-      if (mixer && (control || isPlaying)) {
+      if (mixer && (machine || serverDriven || isPlaying)) {
         animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
         animFrameParityRef.current = !animFrameParityRef.current;
         const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
@@ -276,6 +239,8 @@ export const ModelActor = ({
     groupRef: lifecycle.groupRef,
   });
 
+  // reclaim/release are StrictMode-safe: the dev remount's cleanup schedules a
+  // DEFERRED release that the immediate re-setup cancels.
   useEffect(() => {
     if (!pooled) return;
     reclaimModelClone(pooled);
@@ -286,18 +251,19 @@ export const ModelActor = ({
       mat.transparent = true;
     }
     lifecycle.resetLife();
+    animPlayer.reset(); // a reused clone may be mid-clip from its previous life
 
     return () => releaseModelClone(pooled);
   }, [pooled]);
 
   useEffect(() => {
-    if (animationControl || !pooled) return;
+    if (stateMachine || !pooled) return;
 
     const apply = () => {
       setIsPlaying(manualAnimationsPlaying);
       if (manualAnimationsPlaying) {
         for (const clip of pooled.animations ?? []) {
-          const action = getOrCreateAction(clip.name);
+          const action = getOrCreateAction(pooled, clip.name);
           if (action) {
             action.paused = false;
             if (!action.isRunning()) action.play();
@@ -315,7 +281,7 @@ export const ModelActor = ({
     return () => {
       manualAnimationSubscribers.delete(apply);
     };
-  }, [animationControl, pooled]);
+  }, [stateMachine, pooled]);
 
   useEffect(() => {
     const task = async () => {
@@ -334,13 +300,14 @@ export const ModelActor = ({
 
   const setGroup = (el: THREE.Group | null) => {
     (lifecycle.groupRef as React.MutableRefObject<THREE.Group | null>).current = el;
+    groupRef.current = el;
     if (ownerGroupRef) ownerGroupRef.current = el;
   };
 
   return (
     <Suspense fallback={null}>
       {mover.element}
-      <group ref={setGroup} visible={false} position={selfPositioned || isKinematic ? coordinates : undefined}>
+      <group ref={setGroup} visible={false} position={coordinates}>
         <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
       {body !== "kinematic" && body !== "none" && lifecycle.collidersActive && colliders && (

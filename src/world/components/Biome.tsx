@@ -1,18 +1,30 @@
 import React, { useContext, useLayoutEffect, useMemo } from "react";
+import type { BiomeSpec } from "../types";
 import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
 export interface BiomeProps extends React.PropsWithChildren {
-  name: string;
-  id: number;
+  /** `<biome>/spec.ts` (flags + noise, shared with the server). Explicit props override it. */
+  spec?: BiomeSpec;
+  name?: string;
+  id?: number;
   joinable?: boolean;
   blendable?: boolean;
   blendWidth?: number;
 }
 
-export const Biome = ({ name, id, joinable = true, blendable = true, blendWidth, children }: BiomeProps) => {
+export const Biome = ({
+  spec,
+  name = spec?.name,
+  id = spec?.id,
+  joinable = spec?.joinable ?? true,
+  blendable = spec?.blendable ?? true,
+  blendWidth = spec?.blendWidth,
+  children,
+}: BiomeProps) => {
   const store = useDomainStore("Biome");
   const region = useContext(RegionContext);
   if (!region) throw new Error("<Biome> must be mounted inside <Region>");
+  if (name === undefined || id === undefined) throw new Error("<Biome> needs a `spec` or `name` + `id`");
   const regionId = region.regionId;
 
   useLayoutEffect(() => {

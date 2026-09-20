@@ -8,6 +8,7 @@ import { useDevContext } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
 import { useInput } from "./useInput";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
 import { getAssignedSpawnOffset } from "../net/connection";
 import {
   createCharacter,
@@ -39,8 +40,6 @@ const DEV_SPRINT_SPEED = 300;
 const DEV_VERTICAL_SPEED = 60;
 const DEV_VERTICAL_SPRINT_SPEED = 300;
 
-const PLAYER_HEIGHT = 2;
-const PLAYER_RADIUS = 0.5;
 const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
 const CAMERA_FAR = 7200;

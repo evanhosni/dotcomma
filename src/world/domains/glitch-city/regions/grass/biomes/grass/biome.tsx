@@ -3,36 +3,28 @@ import { Foliage } from "../../../../../../../objects/foliage/Foliage";
 import { GrassField } from "../../../../../../../objects/foliage/grass/GrassField";
 import { Actors, Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
+import { GRASS_BIOME } from "./spec";
 
 import { GRASS_BIOME_ID } from "../../../../../../constants";
 export { GRASS_BIOME_ID };
 
-/** Duplicated as the city region's CityGrassBiome (same id → registrations merge): keep them in sync. */
+/** Grassland biome: rolling noise terrain covered in swaying billboard grass.
+ *  Shares biome id 3 with the city region's CityGrassBiome, which re-exports
+ *  this folder's spec.ts (flags + noise) and material — only the mounts may
+ *  differ per region. */
 export const GrassBiome = () => (
-  <Biome name="grass" id={GRASS_BIOME_ID} joinable blendable>
-    <Terrain
-      noise={{
-        params: {
-          type: "perlin",
-          octaves: 3,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 100,
-          scale: 100,
-        },
-      }}
-    />
+  <Biome spec={GRASS_BIOME}>
+    <Terrain noise={GRASS_BIOME.noise} />
     <Material getMaterial={getMaterial} />
     <Actors>
-      {/* Distinct id: "building" belongs to the city and descriptors dedupe by id */}
+      {/* Distinct id: "building" belongs to the city registration and descriptors dedupe by id. */}
       <BuildingActor id="grass-building" biomeIds={[GRASS_BIOME_ID]} density={25} />
     </Actors>
-    {/* createFoliage props beat <Foliage> group defaults, so GrassField's own renderDistance wins */}
+    {/* GrassField's own defaults beat a renderDistance set on this group. */}
     <Foliage>
       <GrassField
         density={8000000}
-        slopeRange={[0, 28]} // the terrain shader fades the grass texture past ~0.25 rad
+        slopeRange={[0, 28]} // terrain shader fades grass texture out past ~0.25 rad, keep blades on the green
         slopeBlend={12}
         color="#6fff00"
         width={0.14}

@@ -1,39 +1,54 @@
-import { RootState, useFrame } from "@react-three/fiber";
+import { RootState } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../../context/GameContext";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
-import { getRemotePlayers } from "../../../net/remotePlayerStore";
+import { getRemotePlayers } from "../../../net/players/store";
+import type { AnimationChannel } from "./animation";
+import type { Input } from "./input";
+import type { Motion } from "./motion";
 import { StateMachineRunner } from "./runner";
-import { StateMachineConfig, StateMachineHandle } from "./types";
+import type { StateMachineConfig } from "./types";
 
-// React binding of StateMachineRunner. Synced actors (found via the sync
-// handle the base hangs on `group.userData.sync`) only MIRROR the server's
-// state; local actors tick here. "The player" is the NEAREST player, local or
-// remote — the same rule the server applies.
+/**
+ * React binding of StateMachineRunner. Local actors tick it authoritatively;
+ * synced actors only follow the server's state id (decided per tick from the
+ * sync handle). "The player" is the NEAREST player, local or remote — what the
+ * server does with everyone in the domain.
+ */
 
 const _playerDiff = new THREE.Vector3();
 const _nearestPlayer = new THREE.Vector3();
 
-export interface UseStateMachineOptions {
-  /** The owner calls `handle.tick` from its actor onFrame — never a useFrame per actor. */
-  externallyDriven?: boolean;
+export interface StateMachineHandle {
+  readonly currentStateId: string;
+  forceTransition: (stateId: string) => void;
+  blackboard: Record<string, any>;
+  motion: Motion;
+  animation: AnimationChannel;
+  input: Input;
+  /** Called from the owner's actor `onFrame` — never a useFrame of its own. */
+  tick: (state: RootState, delta: number, sync: SyncHandle | null) => void;
 }
 
 export function useStateMachine(
-  config: StateMachineConfig,
+  config: StateMachineConfig | undefined,
   positionRef: React.MutableRefObject<THREE.Vector3>,
   groupRef: React.MutableRefObject<THREE.Group | null>,
-  options: UseStateMachineOptions = {},
-): StateMachineHandle {
+): StateMachineHandle | null {
   const { playerPosition } = useGameContext();
 
-  const runner = useMemo(() => new StateMachineRunner(config, positionRef, groupRef), [config, positionRef, groupRef]);
-  useEffect(() => () => runner.dispose(), [runner]);
+  const runner = useMemo(
+    () => (config ? new StateMachineRunner(config, positionRef, groupRef) : null),
+    [config, positionRef, groupRef],
+  );
+  useEffect(() => () => runner?.dispose(), [runner]);
 
   const tick = useCallback(
-    (threeState: RootState, delta: number) => {
+    (threeState: RootState, delta: number, sync: SyncHandle | null) => {
+      if (!runner) return;
       const elapsed = threeState.clock.elapsedTime;
+      const clockMs = elapsed * 1000;
       const self = positionRef.current;
 
       let nearest: THREE.Vector3 = playerPosition;
@@ -49,45 +64,43 @@ export function useStateMachine(
         }
       }
 
-      const sync = groupRef.current?.userData.sync as SyncHandle | undefined;
       if (sync && sync.known) {
-        // Inject the server's outputs before the behavior runs, so visuals that
-        // read them (head tracking uses __yaw) see the real values.
+        // Inject the server's outputs before the behavior runs, so visuals that read
+        // them (head tracking uses the body yaw) see the real values.
         const r = sync.entity?.remote;
-        const bb = runner.blackboard;
         if (r) {
-          if (r.ry !== undefined) bb.__yaw = r.ry;
-          if (r.vx !== undefined) bb.__vel_x = r.vx;
-          if (r.vz !== undefined) bb.__vel_z = r.vz;
-          if (r.vy !== undefined) bb.__vel_y = r.vy !== 0 ? r.vy : undefined;
+          const out = runner.motion.out;
+          if (r.ry !== undefined) out.yaw = r.ry;
+          if (r.vx !== undefined) out.vx = r.vx;
+          if (r.vz !== undefined) out.vz = r.vz;
+          if (r.vy !== undefined) out.vy = r.vy !== 0 ? r.vy : null;
         }
         const sid = sync.stateId;
-        if (sid) runner.followServerState(sid, elapsed, delta, nearest, distSq);
+        if (sid) runner.followServerState(sid, elapsed, delta, clockMs, nearest, distSq);
         return;
       }
 
-      runner.tick(elapsed, delta, nearest, distSq);
-      const yaw = runner.blackboard.__yaw;
-      if (yaw !== undefined && groupRef.current) groupRef.current.rotation.y = yaw;
+      runner.tick(elapsed, delta, clockMs, nearest, distSq);
+      if (groupRef.current) groupRef.current.rotation.y = runner.motion.yaw;
     },
     [runner, positionRef, groupRef, playerPosition],
   );
 
-  const externallyDriven = options.externallyDriven ?? false;
-  useFrame((threeState, delta) => {
-    if (!externallyDriven) tick(threeState, delta);
-  });
-
-  return useMemo<StateMachineHandle>(
-    () => ({
-      get currentStateId() {
-        return runner.currentStateId;
-      },
-      forceTransition: (stateId: string) => runner.forceTransition(stateId),
-      blackboard: runner.blackboard,
-      animationControl: runner.animationControl,
-      tick,
-    }),
+  return useMemo<StateMachineHandle | null>(
+    () =>
+      runner
+        ? {
+            get currentStateId() {
+              return runner.currentStateId;
+            },
+            forceTransition: (stateId: string) => runner.forceTransition(stateId),
+            blackboard: runner.blackboard,
+            motion: runner.motion,
+            animation: runner.animation,
+            input: runner.input,
+            tick,
+          }
+        : null,
     [runner, tick],
   );
 }

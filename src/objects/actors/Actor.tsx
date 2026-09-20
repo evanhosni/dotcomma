@@ -5,13 +5,17 @@ import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { _quantization } from "../../utils/quantization/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
+import { PosePlayback } from "../../net/entities/posePlayback";
 import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
-import { getServerTime } from "../../net/connection";
-import { advanceRenderClock, INTERP_DELAY_MS, pruneSnapshots, sampleSnapshots, type SampledPose } from "../../net/entities/interpolation";
-import type { MoveIntent } from "./kinematicMover";
+import type { MotionOutput } from "./state/motion";
+import type { StateMachineHandle } from "./state/useStateMachine";
 
-// THE ACTOR BASE (see CLAUDE.md → objects/actors): everything shared by every
-// actor lives here — a world-wide effect is added ONCE in this file.
+/**
+ * THE ACTOR BASE (CLAUDE.md → "The three game-object classes"): everything every
+ * actor shares lives here, once — a world-wide effect added anywhere else is
+ * silently missed by the next actor. Members are <ModelActor> or a direct
+ * useActorLifecycle caller (Building).
+ */
 
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 export const DEFAULT_RENDER_DISTANCE = 500;
@@ -20,14 +24,14 @@ export const DEFAULT_FRUSTUM_PADDING = 3;
 export const DESPAWN_DISTANCE_FACTOR = 1.2;
 const FADE_DURATION = 1; // seconds
 
-// Collider ACTIVATION can mount Rapier trimeshes (several ms each), and actors
-// at similar distances cross the gate on the same frame — stacked builds were
-// a visible spike. One activation per window; a blocked actor retries next check.
+// Collider activation can mount Rapier trimeshes (several ms each), and actors at
+// similar distances cross the gate on the same frame — one activation per window.
+// A blocked actor retries at its next check; deactivation is never throttled.
 const COLLIDER_ACTIVATION_WINDOW_S = 0.05;
 let lastColliderActivationTime = -Infinity;
 
-// ONE frame subscriber for ALL actors (driven by ActorPool's useFrame). A
-// useFrame per instance meant hundreds of subscribers + churn per spawn batch.
+// ONE frame subscriber for every mounted actor (driven by ActorPool's useFrame):
+// per-instance useFrames were hundreds of subscribers plus churn per spawn batch.
 type ActorFrameUpdater = (state: RootState, delta: number) => void;
 const frameUpdaters = new Set<React.MutableRefObject<ActorFrameUpdater>>();
 const frustum = new THREE.Frustum();
@@ -40,11 +44,12 @@ export const driveActorFrames = (state: RootState, delta: number): void => {
   for (const updater of frameUpdaters) updater.current(state, delta);
 };
 
-/** The ONLY place actor materials are patched. Order is fixed: quantization
- *  REPLACES project_vertex, the others chain onto it; each patcher is
- *  idempotent. Skips are for materials where an effect is wrong (unlit → no
- *  irradiance for lamp glow; procedural → off the quantization lattice).
- *  Curvature has no skip: an uncurved object floats off the world. */
+/**
+ * The ONLY place actor materials are patched. Quantization REPLACES project_vertex,
+ * the other two chain onto it; each patcher is idempotent. The skips are for
+ * materials an effect is genuinely wrong for (unlit → no irradiance for lamp glow;
+ * procedural geometry is off the quantization lattice). Curvature has no skip.
+ */
 export const prepareActorMaterial = (
   material: THREE.Material,
   options: { quantization?: number; skipQuantization?: boolean; skipLampGlow?: boolean } = {},
@@ -56,9 +61,9 @@ export const prepareActorMaterial = (
 
 export interface ActorLifecycleOptions {
   id: string;
-  /** The server picks the simulation (state machine) by it. */
+  /** The server picks the simulation by it. */
   descriptorId?: string;
-  /** Default true. False = purely local, never registered with the server. */
+  /** Default true. False = purely local, never registered. */
   serverSynced?: boolean;
   coordinates: THREE.Vector3Tuple;
   /** Live position for actors that move. Falls back to coordinates. */
@@ -67,51 +72,58 @@ export interface ActorLifecycleOptions {
   /** Default renderDistance × DESPAWN_DISTANCE_FACTOR. */
   despawnDistance?: number;
   onDestroy: (id: string) => void;
-  /** Frames between gate evaluations (fade and kill still run every frame). Default 1. */
+  /** Frames between gate evaluations (fade and kill run every frame). Default 1. */
   checkInterval?: number;
-  /** Called ONLY when the opacity changed. */
+  /** Receives the opacity ONLY when it changed. */
   applyFade?: (opacity: number) => void;
   /** Omit to skip the frustum test (meshes that cull themselves). */
   boundsRadius?: number;
   frustumPadding?: number;
-  /** Frames forced visible after mount so the warm draw can happen (utils/uploadOnFirstDraw). Default 3. */
+  /** Frames held visible after mount so the uploadOnFirstDraw warm draw can happen. Default 3. */
   forceVisibleFrames?: number;
-  /** Omit for no collider gate. */
   colliderDistance?: number;
-  /** Extra reach retained once a gate is active, so it can't flicker. */
+  /** Extra distance retained once a gate is active, so it can't flicker. */
   gateHysteresis?: number;
   throttleColliderActivation?: boolean;
-  /** Gate for dynamic content (children, interiors, doors); omit for none. */
+  /** Distance inside which dynamic content (children, interiors, doors) is live. */
   nearDistance?: number;
-  /** Static actors: hundreds of them otherwise pay compose() per Object3D per frame. */
+  /** Static actors: freeze the matrix subtree, unfreeze inside nearDistance. */
   freezeMatrices?: boolean;
   /** Per-frame work inside the shared driver — never a useFrame of your own. */
   onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
 }
 
 export interface ActorFrameContext {
+  /** 2D squared camera distance — the one the gates used this frame. */
   distanceSq: number;
-  /** null when serverSynced={false}. */
+  /** Null when serverSynced={false}. */
   sync: SyncHandle | null;
-  /** Kinematic movers write this frame's desired velocity here. */
-  move?: MoveIntent;
+  /** The delayed server time this frame is drawn at; NaN while unsynced. Anything
+   *  keyed to the server clock (clip switches) applies against this. */
+  syncRenderTime: number;
+  machine?: StateMachineHandle | null;
+  /** The motion output the kinematic mover resolves this frame. */
+  motion?: MotionOutput;
   /** True on frames where the throttled gate checks ran. */
   gatesChecked: boolean;
-  /** True when the frustum test is disabled. */
+  /** This frame's frustum result (true when the test is disabled). */
   visible: boolean;
 }
 
 export interface ActorLifecycle {
+  /** Attach to the actor's root <group>: visibility and matrix freezing are written through it. */
   groupRef: React.RefObject<THREE.Group>;
   collidersActive: boolean;
   nearActive: boolean;
   distanceSqRef: React.MutableRefObject<number>;
   destroyedRef: React.MutableRefObject<boolean>;
   sync: SyncHandle | null;
-  /** Pooled-clone actors call this on mount: the clone's materials carry the previous life's opacity. */
+  /** Re-arm for a fresh life. Pooled clones carry the previous life's opacity. */
   resetLife: () => void;
 }
 
+/** Runs inside the shared driver, one 2D squared distance per frame, no allocation.
+ *  Gates are React state (they mount subtrees); visibility, fade and freezing are ref writes. */
 export const useActorLifecycle = ({
   id,
   descriptorId,
@@ -146,19 +158,19 @@ export const useActorLifecycle = ({
   const forceVisibleFramesRef = useRef(forceVisibleFrames);
   const matricesFrozenRef = useRef(false);
   const boundsRef = useRef(new THREE.Sphere()).current;
-  // Phase-offset per instance so a spawn batch's throttled work never lands on the same frames.
+  // Per-instance phase so a spawn batch's throttled work spreads across frames.
   const frameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], checkInterval));
-  // Without this the seeded phase leaves a fresh mount ungated for up to checkInterval frames.
+  // The seeded phase would otherwise leave a fresh mount ungated for up to checkInterval frames.
   const everCheckedRef = useRef(false);
 
   const sync = useSyncedEntity(serverSynced ? id : null, descriptorId ?? "unknown", coordinates);
-  const renderClockRef = useRef(NaN);
-  const sampled = useRef<SampledPose>({ x: 0, y: 0, z: 0, ry: 0, vx: 0, vy: 0, vz: 0 }).current;
+  const playback = useRef(new PosePlayback()).current;
 
+  // Per-life constants derived per RENDER, not per frame — this is the hottest loop in the project.
   const killDistance = despawnDistance ?? renderDistance * DESPAWN_DISTANCE_FACTOR;
   const killDistanceSq = killDistance * killDistance;
   const renderDistanceSq = renderDistance * renderDistance;
-  // Very large actors also pass the frustum test on proximity (errs toward visible).
+  // Very large actors also pass the frustum test on proximity — errs toward VISIBLE.
   const closeThreshold = (boundsRadius ?? 0) * 3 * (renderDistance / DEFAULT_RENDER_DISTANCE);
   const closeThresholdSq = closeThreshold * closeThreshold;
   const paddedBoundsRadius = (boundsRadius ?? 0) * frustumPadding;
@@ -168,7 +180,7 @@ export const useActorLifecycle = ({
   const frameUpdaterRef = useRef<ActorFrameUpdater>(() => {});
   frameUpdaterRef.current = (state, delta) => {
     // onDestroy fires ONCE: re-firing until the pool unmounts us rewrote the
-    // despawn-ledger timestamp every frame and delayed the respawn cooldown.
+    // respawn-block timestamp every frame and delayed the respawn cooldown.
     if (destroyedRef.current) return;
 
     const position = positionRef?.current ?? staticPosition;
@@ -206,8 +218,6 @@ export const useActorLifecycle = ({
       boundsRef.center.copy(position);
       boundsRef.radius = paddedBoundsRadius;
       visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
-      // An actor mounted behind the player would otherwise be culled before
-      // its forced first draw uploads programs/textures.
       if (forceVisibleFramesRef.current > 0) {
         forceVisibleFramesRef.current--;
         visible = true;
@@ -218,9 +228,9 @@ export const useActorLifecycle = ({
       }
     }
 
-    // matrixWorldAutoUpdate = false stops the renderer descending into the
-    // subtree. The near gate re-enables it up close, which covers every dynamic
-    // case (hinges, children, collider mounts, raycasts act only in that range).
+    // matrixWorldAutoUpdate = false stops the renderer's per-frame updateMatrixWorld
+    // from descending into the subtree; the near gate re-enables it, which covers
+    // every dynamic case (hinges, children, collider mounts, raycasts).
     const group = groupRef.current;
     if (freezeMatrices && group && !matricesFrozenRef.current) {
       matricesFrozenRef.current = true;
@@ -263,40 +273,18 @@ export const useActorLifecycle = ({
 
     // Snapshot interpolation (net/entities/interpolation.ts): drawn as it was
     // INTERP_DELAY_MS ago on the SERVER clock — arrival time plays no part, so
-    // hitches and bunched packets can't overshoot or slide. Sampled BEFORE
-    // onFrame so a kinematic mover can park its collider on the pose.
+    // hitches and bunched packets cannot overshoot or slide.
     const synced = !!sync && sync.known;
-    if (synced) {
+    if (synced) playback.sample(sync.entity!, delta, sync.target);
+    else playback.reset();
+
+    onFrame?.(state, delta, { distanceSq, gatesChecked: checked, visible, sync, syncRenderTime: playback.renderTime });
+
+    // The server's pose wins over anything the component's logic wrote.
+    if (synced && group && sync.target.valid) {
       const t = sync.target;
-      const dtMs = Math.min(delta, 0.25) * 1000;
-      renderClockRef.current = advanceRenderClock(renderClockRef.current, dtMs, getServerTime() - INTERP_DELAY_MS);
-      const snaps = sync.entity!.snapshots;
-      pruneSnapshots(snaps, renderClockRef.current);
-      const status = sampleSnapshots(snaps, renderClockRef.current, sampled);
-      if (status !== "none") {
-        t.x = sampled.x;
-        t.y = sampled.y;
-        t.z = sampled.z;
-        t.ry = sampled.ry;
-        t.vx = sampled.vx;
-        t.vy = sampled.vy;
-        t.vz = sampled.vz;
-        t.valid = true;
-      }
-    } else {
-      renderClockRef.current = NaN;
-    }
-
-    onFrame?.(state, delta, { distanceSq, gatesChecked: checked, visible, sync });
-
-    // After onFrame, so the server's pose overrides anything local logic wrote.
-    if (sync && group) {
-      if (group.userData.sync !== sync) group.userData.sync = sync;
-      if (synced && sync.target.valid) {
-        const t = sync.target;
-        group.position.set(t.x, t.y, t.z);
-        group.rotation.y = t.ry;
-      }
+      group.position.set(t.x, t.y, t.z);
+      group.rotation.y = t.ry;
     }
   };
 

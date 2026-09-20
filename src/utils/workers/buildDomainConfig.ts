@@ -1,8 +1,10 @@
 import { getAllBiomes } from "../utils";
-import { TerrainParams } from "../../world/types";
-import { Region } from "../../world/types";
-import { FlattenDescriptor, SerializedRegion, DomainConfig } from "./vertexCompute";
+import { Region, TerrainParams } from "../../world/types";
+import { assembleDomainConfig, toFlattenDescriptor } from "../../world/domains/domainConfig";
+import { DomainConfig, FlattenDescriptor, SerializedRegion } from "./vertexCompute";
 
+/** The <Domain> commit's DomainConfig — assembled by the same function as the
+ *  domains' Three-free configs (world/domains/domainConfig.ts), so the server runs on the same object. */
 export function buildDomainConfig(regions: Region[], params: TerrainParams): DomainConfig {
   const serializedRegions: SerializedRegion[] = regions.map((r) => ({
     id: r.id,
@@ -21,39 +23,14 @@ export function buildDomainConfig(regions: Region[], params: TerrainParams): Dom
     if (biome.noise) biomeNoiseConfigs[biome.id] = biome.noise;
   }
 
-  // flattenGround actors' placement rules ride along so the height function can pad under every instance (deduped by id).
+  // Deduped by id, like collectDescriptors.
   const flattenById = new Map<string, FlattenDescriptor>();
   for (const biome of getAllBiomes(regions)) {
     for (const d of biome.actors ?? []) {
       if (!d.flattenGround) continue;
-      flattenById.set(d.id, {
-        id: d.id,
-        density: d.density,
-        clustering: d.clustering,
-        footprint: d.footprint,
-        priority: d.priority ?? 50,
-        biomeIds: d.biomeIds,
-        heightRange: d.heightRange,
-        roadDistanceRange: d.roadDistanceRange,
-        radius: d.flattenRadius ?? d.footprint * 0.45,
-        skirt: d.flattenSkirt ?? d.footprint * 0.35,
-      });
+      flattenById.set(d.id, toFlattenDescriptor(d));
     }
   }
-  const flattenDescriptors = Array.from(flattenById.values());
 
-  return {
-    flattenDescriptors,
-    seed: params.seed,
-    regions: serializedRegions,
-    gridSize: params.gridSize,
-    regionGridSize: params.regionGridSize,
-    boundaryWidth: params.boundaryWidth,
-    riverWidth: params.riverWidth,
-    defaultBlendWidth: params.defaultBlendWidth,
-    roadNoiseParams: params.roadNoise,
-    baseNoiseParams: params.baseNoise,
-    biomeNoiseConfigs,
-    cityConfig: params.cityConfig,
-  };
+  return assembleDomainConfig(serializedRegions, biomeNoiseConfigs, Array.from(flattenById.values()), params);
 }

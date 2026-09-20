@@ -1,26 +1,22 @@
-import type { AnimationControl, BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
+import { AnimationChannel } from "./animation";
+import { Input } from "./input";
+import { Motion, type Vec3Like } from "./motion";
+import type { BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
+
+export type { Vec3Like };
 
 /**
- * Three-free state machine core, run by the SERVER (the authority) and by the
- * client (ticking for local actors, MIRRORING the server's state id for synced
- * ones so state-keyed visuals still happen). See NPC_TRACKING.md.
- *
- * THE CONTRACT for a StateMachineConfig:
- *   - OUTPUTS go to the blackboard — `__vel_x/_z` (`__vel_y`, undefined =
- *     gravity), `__yaw`, animation via `state.animation` — never to the scene;
- *   - anything scene-bound guards on `ctx.groupRef.current` (null on the server);
- *   - no Three at RUNTIME (`import type` only; loop modes from types.ts);
- *   - `Math.random` is fine: the server is the single source of truth.
+ * The Three-free state machine core. The SAME config file runs on the server
+ * (the one authority; its `motion`/`animation` outputs are published) and on
+ * the client (local actors tick; synced actors follow the server's state id so
+ * state-keyed visuals run). THE AUTHORING CONTRACT: movement through
+ * `ctx.motion`, animation through `ctx.animation` — never the scene; anything
+ * scene-bound guards on `ctx.groupRef.current` (null on the server); no Three at
+ * runtime in a config (`import type`); `Math.random` is fine.
  */
 
-/** THREE.Vector3 on the client, a plain object on the server. */
-export interface Vec3Like {
-  x: number;
-  y: number;
-  z: number;
-}
-
-const MOUSE_ONE_SHOT_FLAGS = [
+/** One-shot flags written by useMouseEvents (client) or raised from a forwarded input (server). */
+export const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_hover_enter",
   "__mouse_hover_leave",
   "__mouse_left_click",
@@ -35,7 +31,14 @@ const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_double_click",
   "__mouse_middle_click",
 ] as const;
+export type MouseFlag = (typeof MOUSE_ONE_SHOT_FLAGS)[number];
 
+/** `__mouse_hover_enter` → `mouse-hover-enter`, the wire action name. */
+export const mouseActionOf = (flag: MouseFlag): string => flag.slice(2).replace(/_/g, "-");
+const FLAG_BY_ACTION = new Map<string, MouseFlag>(MOUSE_ONE_SHOT_FLAGS.map((f) => [mouseActionOf(f), f]));
+export const mouseFlagOf = (action: string): MouseFlag | undefined => FLAG_BY_ACTION.get(action);
+
+// Lookup maps are pure functions of the module-constant config — once per config, not per instance.
 const configMapsCache = new WeakMap<
   StateMachineConfig,
   { stateMap: Map<string, StateDef>; triggerMap: Map<string, TriggerDef> }
@@ -55,13 +58,16 @@ const getConfigMaps = (config: StateMachineConfig) => {
 
 export class StateMachineRunner {
   readonly blackboard: Record<string, any> = {};
-  readonly animationControl: AnimationControl = { pendingCommand: null, dirty: false };
+  readonly motion: Motion;
+  readonly animation = new AnimationChannel();
+  readonly input = new Input(this.blackboard);
   private readonly stateMap: Map<string, StateDef>;
   private readonly triggerMap: Map<string, TriggerDef>;
   private stateId: string;
   private stateEnteredAt = 0;
   private exitCleanup: (() => void) | null = null;
   private entered = false;
+  /** ONE context object per instance, mutated per tick — no allocation. */
   private readonly ctx: BehaviorContext;
 
   constructor(
@@ -73,6 +79,7 @@ export class StateMachineRunner {
     this.stateMap = maps.stateMap;
     this.triggerMap = maps.triggerMap;
     this.stateId = config.initialState;
+    this.motion = new Motion(positionRef);
     this.ctx = {
       positionRef: positionRef as BehaviorContext["positionRef"],
       playerPosition: positionRef.current as BehaviorContext["playerPosition"],
@@ -81,6 +88,9 @@ export class StateMachineRunner {
       elapsed: 0,
       stateElapsed: 0,
       blackboard: this.blackboard,
+      motion: this.motion,
+      animation: this.animation,
+      input: this.input,
       groupRef: groupRef as BehaviorContext["groupRef"],
     };
   }
@@ -103,8 +113,8 @@ export class StateMachineRunner {
     this.stateId = stateId;
     this.stateEnteredAt = elapsed;
     if (state.animation) {
-      this.animationControl.pendingCommand = state.animation;
-      this.animationControl.dirty = true;
+      const { clip, ...spec } = state.animation;
+      this.animation.play(clip, spec);
     }
     if (state.onEnter) {
       const cleanup = state.onEnter(this.ctx);
@@ -112,18 +122,20 @@ export class StateMachineRunner {
     }
   }
 
-  private prepare(elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+  private prepare(elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
     const c = this.ctx;
     c.playerPosition = playerPosition as BehaviorContext["playerPosition"];
     c.playerDistanceSq = playerDistanceSq;
     c.delta = delta;
     c.elapsed = elapsed;
     c.stateElapsed = elapsed - this.stateEnteredAt;
+    this.animation.setClock(clockMs);
   }
 
-  /** AUTHORITATIVE step. */
-  tick(elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
-    this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
+  /** AUTHORITATIVE step. `elapsed`/`delta` in seconds; `clockMs` is the animation
+   *  clock (server time on the server, the local frame clock on a local actor). */
+  tick(elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+    this.prepare(elapsed, delta, clockMs, playerPosition, playerDistanceSq);
     const bb = this.blackboard;
 
     if (!this.entered) {
@@ -158,15 +170,14 @@ export class StateMachineRunner {
     this.clearMouseFlags();
   }
 
-  /** FOLLOWER step: adopt the server's state id (onEnter/cleanup run as the
-   *  server's did) and run the behavior for its visual side effects only. */
-  followServerState(stateId: string, elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
-    this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
+  /** FOLLOWER step (synced client): adopt the server's state id, running
+   *  onEnter/cleanup as the server did, and run the behavior for its visual side
+   *  effects. Outputs written here are ignored in favor of the server's. */
+  followServerState(stateId: string, elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+    this.prepare(elapsed, delta, clockMs, playerPosition, playerDistanceSq);
     if (!this.entered || this.stateId !== stateId) {
       this.entered = true;
       this.enterState(stateId, elapsed);
-      this.animationControl.pendingCommand = null;
-      this.animationControl.dirty = false;
     }
     this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);
     this.clearMouseFlags();
@@ -182,6 +193,16 @@ export class StateMachineRunner {
   raise(flag: string): void {
     this.blackboard[flag] = true;
     this.blackboard.__mouse_dirty = true;
+  }
+
+  /** Raise the flag a forwarded mouse ACTION names; false if it isn't one. */
+  raiseMouseAction(action: string): boolean {
+    const flag = mouseFlagOf(action);
+    if (!flag) return false;
+    this.raise(flag);
+    if (flag === "__mouse_hover_enter") this.blackboard.__mouse_hover_active = true;
+    else if (flag === "__mouse_hover_leave") this.blackboard.__mouse_hover_active = false;
+    return true;
   }
 
   dispose(): void {

@@ -8,7 +8,7 @@ import {
   type CharacterInput,
   type CharacterStepResult,
 } from "../../../../src/physics/characterMovement";
-import type { PhysicsWorld } from "./world.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /** A kinematic capsule on THE shared character resolver (src/physics/characterMovement.ts) — no server copy of any movement rule. */
 

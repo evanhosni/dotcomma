@@ -9,7 +9,7 @@ import { _curvature } from "../../vfx/curvature";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
-import { createDefaultsGroup } from "../utils";
+import { createDefaultsGroup, warnUnsupportedSync } from "../utils";
 import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./foliageWorker";
 
 /**
@@ -22,7 +22,7 @@ import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./f
 
 export type FoliageDefaults = Pick<FoliageAttributes, "renderDistance">;
 
-const FoliageGroup = createDefaultsGroup<FoliageDefaults>();
+const FoliageGroup = createDefaultsGroup<FoliageDefaults>("foliage");
 export const Foliage = FoliageGroup.Group;
 
 export const useFoliageRenderDistance = (own: number | undefined, featureDefault: number): number => {
@@ -202,8 +202,10 @@ export const FoliageField: React.FC<FoliageAttributes> = ({
   renderDistance: renderDistanceProp,
   seed = "foliage",
   quantization,
+  serverSynced,
 }) => {
   const renderDistance = useFoliageRenderDistance(renderDistanceProp, 500);
+  warnUnsupportedSync("foliage", serverSynced);
   const groupRef = useRef<THREE.Group>(null);
   const chunksRef = useRef(new Map<number, FoliageChunk>());
   const pendingRef = useRef(new Set<number>());

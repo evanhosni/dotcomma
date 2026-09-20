@@ -1,28 +1,29 @@
-import type { DomainId, EntityUpdateFields, ServerMessage } from "../../protocol.js";
-import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
+import type { DomainId, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
-import { TICK_HZ, TICK_MS } from "../tick.js";
+import { getActorSpec } from "../../../../src/objects/actors/catalog";
+import type { ActorSpec } from "../../../../src/objects/actors/spec";
+import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
 import { createBuildingCollider } from "../physics/buildings.js";
-import { NpcBody, type Pose } from "../physics/npc.js";
-import { PlayerBodies } from "../physics/players.js";
-import { DEFAULT_WORK_BUDGET_MS, type PhysicsWorld } from "../physics/world.js";
-import { getKind } from "./kinds.js";
-import { fullUpdate, publishTick, type Published } from "./publish.js";
+import { createNpcBody, type NpcBody, type Pose } from "../physics/npcBody.js";
+import { DEFAULT_WORK_BUDGET_MS, PHYSICS_DOMAIN, type PhysicsWorld } from "../physics/physicsWorld.js";
+import { PlayerBodies } from "../physics/playerBodies.js";
+import { TICK_HZ, TICK_MS } from "../tick.js";
+import { createPublished, fullUpdate, publishTick, type Published } from "./publish.js";
 
-export { TICK_HZ, TICK_MS };
+export { PHYSICS_DOMAIN, TICK_HZ, TICK_MS };
 
 /**
- * THE authority for every synced actor (CLAUDE.md → Entity sync). Entities
- * exist because clients register them; zero registrants → forgotten. Each tick
- * a machine runs with the NEAREST player as "the player" and drives an NpcBody;
- * changed fields go to the registrants. Only PHYSICS_DOMAIN has terrain on the
- * server — a walker registered elsewhere runs its machine but stays put.
+ * THE authority for every synced actor (CLAUDE.md → Entity sync). Entities exist
+ * because clients register them; the first registration creates the record, zero
+ * registrants forgets it. A kind in the actor catalog runs its state machine here
+ * with the nearest player as "the player" and its body on the server physics world;
+ * building kinds get a sealed hull; unknown kinds are static records with
+ * replicated state. Inputs cross the wire, never triggers.
  */
 
 const MAX_PLAYER_EXTRAPOLATION_S = 0.5;
-/** A click must come from a player this close (2D). */
+/** A click must come from a player within this 2D reach. */
 const INTERACT_REACH_SQ = 8 * 8;
-export const PHYSICS_DOMAIN: DomainId = "glitch-city";
 const STATS_LOG_EVERY_TICKS = TICK_HZ * 10;
 const SLOW_TICK_WARN_MS = 50;
 const NO_PLAYER_POSITION = { x: 1e9, y: 0, z: 1e9 };
@@ -49,18 +50,26 @@ export interface EntityRecord extends Published {
   domain: DomainId;
   registrants: Set<string>;
   runner: StateMachineRunner | null;
-  /** What the runner reads; kept equal to x/y/z. */
+  /** The position object the runner reads (kept equal to x/y/z). */
   position: { x: number; y: number; z: number };
-  /** Walker kinds in PHYSICS_DOMAIN only. */
   npc: NpcBody | null;
-  /** Building kinds only. */
   hull: ProxyColliderHandle | null;
 }
 
 export interface EntityManagerOptions {
-  /** Tests pass Infinity. */
+  /** Per-tick generation budget for the physics world (tests: Infinity). */
   workBudgetMs?: number;
   log?: boolean;
+  /** Kind → spec (default: the actor catalog; tests inject kinds). */
+  specs?: (kind: string) => ActorSpec | undefined;
+}
+
+interface RegisterItem {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  z: number;
 }
 
 const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: number; y: number; z: number }; distSq: number } => {
@@ -79,11 +88,14 @@ const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: numb
 export class EntityManager {
   private readonly entities = new Map<string, EntityRecord>();
   private readonly bySession = new Map<string, Set<string>>();
-  private readonly startedAt = performance.now();
+  /** Simulation time (s), advanced exactly one tick per tick so a machine's
+   *  `elapsed` agrees with its `delta` (like the client's frame clock). */
+  private elapsed = 0;
   private readonly players: PlayerBodies | null;
   private readonly workBudgetMs: number;
   private readonly log: boolean;
-  private readonly pose: Pose = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+  private readonly specs: (kind: string) => ActorSpec | undefined;
+  private readonly poseScratch: Pose = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
   private tickNo = 0;
   private maxTickMs = 0;
   private npcCount = 0;
@@ -96,6 +108,7 @@ export class EntityManager {
     this.players = physics ? new PlayerBodies(physics) : null;
     this.workBudgetMs = opts.workBudgetMs ?? DEFAULT_WORK_BUDGET_MS;
     this.log = opts.log ?? true;
+    this.specs = opts.specs ?? getActorSpec;
   }
 
   get size(): number {
@@ -106,7 +119,7 @@ export class EntityManager {
     return this.entities.get(id);
   }
 
-  register(sessionId: string, domain: DomainId, items: { id: string; kind: string; x: number; y: number; z: number }[]): void {
+  register(sessionId: string, domain: DomainId, items: RegisterItem[]): void {
     for (const item of items) {
       let e = this.entities.get(item.id);
       if (e && e.domain !== domain) continue;
@@ -119,41 +132,30 @@ export class EntityManager {
     }
   }
 
-  private create(item: { id: string; kind: string; x: number; y: number; z: number }, domain: DomainId): EntityRecord {
-    const kind = getKind(item.kind);
+  private create(item: RegisterItem, domain: DomainId): EntityRecord {
+    const spec = this.specs(item.kind);
     const physical = this.physics !== null && domain === PHYSICS_DOMAIN;
-    const npc = kind?.body && physical ? new NpcBody(this.physics!, item.x, item.z, kind.body) : null;
+    const npc = spec && physical ? createNpcBody(this.physics!, spec, item.x, item.z) : null;
     if (npc) this.npcCount++;
-    // The server owns the ground; the registration's y is only a hint.
+    // The server owns the ground: the registration's y is only a hint.
     const position = { x: item.x, y: npc ? npc.y : item.y, z: item.z };
     const e: EntityRecord = {
+      ...createPublished(position.x, position.y, position.z),
       id: item.id,
       kind: item.kind,
       domain,
       registrants: new Set(),
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      ry: 0,
-      clip: undefined,
-      clipT0: 0,
-      once: false,
-      sm: undefined,
-      state: {},
-      runner: kind?.sm ? new StateMachineRunner(kind.sm, { current: position }, { current: null }) : null,
+      runner: spec?.stateMachine ? new StateMachineRunner(spec.stateMachine, { current: position }, { current: null }) : null,
       position,
       npc,
       hull: null,
     };
     this.entities.set(e.id, e);
-    if (kind?.hull && physical) {
-      // Budgeted: a client entering the city registers hundreds of buildings at once.
-      const spec = kind.hull;
+    if (spec?.hull && physical) {
+      // Budgeted queue: a client entering the city registers hundreds of buildings at once.
+      const attrs = spec.hull;
       this.physics!.jobs.enqueue(`hull:${e.id}`, () => {
-        if (this.entities.get(e.id) === e && !e.hull) e.hull = createBuildingCollider(this.physics!, spec, e.x, e.y, e.z);
+        if (this.entities.get(e.id) === e && !e.hull) e.hull = createBuildingCollider(this.physics!, attrs, e.x, e.y, e.z);
         return true;
       });
     }
@@ -193,17 +195,14 @@ export class EntityManager {
     this.players?.dispose();
   }
 
-  /** Mouse actions become blackboard flags (the machine's own triggers decide);
+  /** A mouse action becomes the machine's blackboard flag (its own triggers decide);
    *  "door:<i>" toggles replicated state generically. */
   interact(sessionId: string, id: string, action: string, players: PlayerView[]): void {
     const e = this.entities.get(id);
     if (!e || !e.registrants.has(sessionId)) return;
     const from = players.find((p) => p.id === sessionId);
     if (from && (from.x - e.x) ** 2 + (from.z - e.z) ** 2 > INTERACT_REACH_SQ) return;
-    if (action === "mouse-left-click") {
-      e.runner?.raise("__mouse_left_click");
-      return;
-    }
+    if (e.runner?.raiseMouseAction(action)) return;
     const door = /^door:(\d+)$/.exec(action);
     if (door) {
       const idx = Number(door[1]);
@@ -214,7 +213,7 @@ export class EntityManager {
     }
   }
 
-  /** Extrapolated to `now`. */
+  /** Players of a domain, extrapolated to now. */
   playersFor(domain: DomainId, now = Date.now()): PlayerView[] {
     const list: PlayerView[] = [];
     for (const p of this.host.playersIn(domain)) {
@@ -228,7 +227,8 @@ export class EntityManager {
     const tickStart = performance.now();
     this.tickNo++;
     const dt = TICK_MS / 1000;
-    const elapsed = (performance.now() - this.startedAt) / 1000;
+    this.elapsed += dt;
+    const elapsed = this.elapsed;
     const playersByDomain = new Map<DomainId, PlayerView[]>();
     const playersOf = (domain: DomainId): PlayerView[] => {
       let list = playersByDomain.get(domain);
@@ -255,11 +255,10 @@ export class EntityManager {
       e.position.x = e.x;
       e.position.y = e.y;
       e.position.z = e.z;
-      r.tick(elapsed, dt, pos, distSq);
+      r.tick(elapsed, dt, now, pos, distSq);
       if (e.npc) {
-        const bb = r.blackboard;
-        const vy = bb.__vel_y;
-        e.npc.step(dt, bb.__vel_x ?? 0, bb.__vel_z ?? 0, vy !== undefined && vy !== 0 ? vy : null);
+        const m = r.motion.out;
+        e.npc.step(dt, m.vx, m.vz, m.vy);
       }
     }
 
@@ -267,7 +266,7 @@ export class EntityManager {
 
     for (const e of this.entities.values()) {
       if (!e.runner) continue;
-      const pose = e.npc ? e.npc.resolvePose(dt, this.pose) : null;
+      const pose = e.npc ? e.npc.resolvePose(dt, this.poseScratch) : null;
       const fields = publishTick(e, pose, e.runner, now);
       if (fields) this.send(e, fields);
     }

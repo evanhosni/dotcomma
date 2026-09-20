@@ -1,31 +1,19 @@
-import { loadPlayer, savePlayerData, type PlayerData } from "../data/players.js";
+import type { DomainId, MoveIntent, PlayerData, PlayerSnapshot, ServerMessage } from "../../../src/net/protocol";
 import { EntityManager, type PlayerView } from "./entities/manager.js";
-import type { PhysicsWorld } from "./physics/world.js";
-import type { DomainId, MoveIntent, PlayerSnapshot, ServerMessage } from "../protocol.js";
+import { PlayerPersistence } from "./persistence.js";
+import type { PhysicsWorld } from "./physics/physicsWorld.js";
 
 /**
- * THE GAME STATE, transport-agnostic: the transport calls these methods and
- * hands in an `Outbox`. The Outbox is the ONLY abstraction (so the transport
- * could be swapped for e.g. Colyseus) — do not widen it.
- *
- * WRITE POLICY — never on the tick: on disconnect if dirty, otherwise at most
- * once per SAVE_INTERVAL_MS per player if dirty. Two tabs on one identity share
- * a row: last write wins.
- *
- * Domains are ROOMS: every broadcast is scoped to one; a domain change is a
- * leave + a join, never a filter.
+ * Sessions (ephemeral presence), rooms (one per domain — every broadcast is room-scoped,
+ * a domain change is leave + join), entities and persistence. Transport-agnostic: the
+ * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
 
 export interface Session extends PlayerSnapshot {
-  /** NOT broadcast. */
+  /** Persistence key — NOT broadcast. */
   identity: string;
   domain: DomainId;
-  /** For future authority / anti-teleport checks. */
   lastMoveAt: number;
-  /** Mutate via setPlayerData/updatePlayerData so it is marked dirty. */
-  data: PlayerData;
-  dataDirty: boolean;
-  dataSavedAt: number;
 }
 
 export interface Outbox {
@@ -34,7 +22,6 @@ export interface Outbox {
 }
 
 const GOLDEN_ANGLE_DEG = 137.508;
-export const SAVE_INTERVAL_MS = 30_000;
 const SPAWN_RING_RADIUS = 3;
 
 const hslToHex = (h: number, s: number, l: number): string => {
@@ -66,9 +53,10 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
 export class World {
   private readonly sessions = new Map<string, Session>();
   private readonly rooms = new Map<DomainId, Set<string>>();
-  /** Monotonic; drives color and spawn-slot assignment. */
+  /** Drives color and spawn-slot assignment. */
   private joinCount = 0;
   readonly entities: EntityManager;
+  readonly persistence = new PlayerPersistence();
 
   constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
     this.entities = new EntityManager(
@@ -118,7 +106,7 @@ export class World {
       domain: s.domain,
       players: this.roster(s.domain, s.id),
       serverTime: Date.now(),
-      data: s.data,
+      data: this.persistence.get(s.identity)?.data ?? {},
     });
     this.out.sendMany(room, { t: "join", player: snapshotOf(s) }, s.id);
   }
@@ -138,7 +126,7 @@ export class World {
 
   addSession(id: string, identity: string, domain: DomainId): Session {
     const spawn = this.nextSpawn();
-    const record = loadPlayer(identity);
+    this.persistence.attach(identity);
     const s: Session = {
       id,
       identity,
@@ -152,9 +140,6 @@ export class World {
       vz: 0,
       ry: 0,
       lastMoveAt: Date.now(),
-      data: record.data,
-      dataDirty: false,
-      dataSavedAt: Date.now(),
     };
     this.joinCount++;
     this.sessions.set(id, s);
@@ -168,55 +153,40 @@ export class World {
     this.sessions.delete(id);
     this.entities.removeSession(id);
     this.leaveRoom(s);
-    if (s.dataDirty) this.persist(s);
+    this.persistence.detach(s.identity);
   }
 
-  private persist(s: Session): void {
-    savePlayerData(s.identity, s.data);
-    s.dataDirty = false;
-    s.dataSavedAt = Date.now();
-  }
-
-  setPlayerData(id: string, data: PlayerData): void {
+  /** Merge a client's patch into its identity's blob and echo it to every session of that identity. */
+  patchPlayerData(id: string, patch: unknown): void {
     const s = this.sessions.get(id);
     if (!s) return;
-    s.data = data;
-    s.dataDirty = true;
+    const merged = this.persistence.patch(s.identity, patch);
+    if (!merged) return;
+    this.broadcastPlayerData(s.identity, merged);
   }
 
-  updatePlayerData(id: string, patch: PlayerData): void {
-    const s = this.sessions.get(id);
-    if (!s) return;
-    s.data = { ...s.data, ...patch };
-    s.dataDirty = true;
+  setPlayerData(identity: string, data: PlayerData): void {
+    this.persistence.set(identity, data);
+    this.broadcastPlayerData(identity, data);
+  }
+
+  private broadcastPlayerData(identity: string, data: PlayerData): void {
+    for (const other of this.sessions.values()) {
+      if (other.identity === identity) this.out.send(other.id, { t: "data", data });
+    }
   }
 
   /** Call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
-    let n = 0;
-    for (const s of this.sessions.values()) {
-      if (s.dataDirty && now - s.dataSavedAt >= SAVE_INTERVAL_MS) {
-        this.persist(s);
-        n++;
-      }
-    }
-    return n;
+    return this.persistence.flushDirty(now);
   }
 
-  /** Shutdown: ignores the interval. */
   saveAll(): number {
-    let n = 0;
-    for (const s of this.sessions.values()) {
-      if (s.dataDirty) {
-        this.persist(s);
-        n++;
-      }
-    }
-    return n;
+    return this.persistence.saveAll();
   }
 
-  /** NOT authoritative (yet): the claimed intent is relayed as-is. Authority would
-   *  slot in here (validate against lastMoveAt/speed, relay the corrected state). */
+  /** NOT authoritative yet: the intent is relayed as claimed. Validation against
+   *  lastMoveAt/speed would slot in here. */
   move(id: string, m: MoveIntent): void {
     const s = this.sessions.get(id);
     if (!s) return;

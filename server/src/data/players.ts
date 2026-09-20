@@ -5,8 +5,8 @@ import { getDb } from "./db.js";
  * at module load, so this must load after the schema exists (getDb enforces it).
  */
 
-/** Opaque: nothing may assume a key inside it. */
-export type PlayerData = Record<string, unknown>;
+import type { PlayerData } from "../../../src/net/protocol";
+export type { PlayerData };
 
 /** A type alias, not an interface: aliases get an implicit index signature, which
  *  makes the cast from node:sqlite's Record<string, SQLOutputValue> legal. */

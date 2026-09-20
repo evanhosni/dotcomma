@@ -3,36 +3,29 @@ import { Foliage } from "../../../../../../../objects/foliage/Foliage";
 import { GrassField } from "../../../../../../../objects/foliage/grass/GrassField";
 import { Actors, Biome, Material, Terrain } from "../../../../../../components";
 import { getMaterial } from "./material";
+import { CITY_GRASS_BIOME } from "./spec";
 
 import { GRASS_BIOME_ID as CITY_GRASS_BIOME_ID } from "../../../../../../constants";
 export { CITY_GRASS_BIOME_ID };
 
-/** Duplicate of the grass region's GrassBiome (same id → registrations merge): keep them in sync. */
+/** Grassland biome as it appears inside the city region (rolling noise
+ *  terrain covered in swaying billboard grass). Shares biome id 3 with the
+ *  grass region's GrassBiome — flags + noise come from ONE spec (re-exported
+ *  from the grass region's folder), so the terrain can't drift; the mounts
+ *  below are what may legitimately differ per region. */
 export const CityGrassBiome = () => (
-  <Biome name="grass" id={CITY_GRASS_BIOME_ID} joinable blendable>
-    <Terrain
-      noise={{
-        params: {
-          type: "perlin",
-          octaves: 3,
-          persistence: 1,
-          lacunarity: 1,
-          exponentiation: 1,
-          height: 100,
-          scale: 100,
-        },
-      }}
-    />
+  <Biome spec={CITY_GRASS_BIOME}>
+    <Terrain noise={CITY_GRASS_BIOME.noise} />
     <Material getMaterial={getMaterial} />
     <Actors>
-      {/* Distinct id: "building" belongs to the city and descriptors dedupe by id */}
+      {/* Distinct id: "building" belongs to the city registration and descriptors dedupe by id. */}
       <BuildingActor id="grass-building" biomeIds={[CITY_GRASS_BIOME_ID]} density={25} />
     </Actors>
-    {/* createFoliage props beat <Foliage> group defaults, so GrassField's own renderDistance wins */}
+    {/* GrassField's own defaults beat a renderDistance set on this group. */}
     <Foliage>
       <GrassField
         density={8000000}
-        slopeRange={[0, 28]} // the terrain shader fades the grass texture past ~0.25 rad
+        slopeRange={[0, 28]} // terrain shader fades grass texture out past ~0.25 rad, keep blades on the green
         slopeBlend={12}
         color="#6fff00"
         width={0.14}

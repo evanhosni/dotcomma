@@ -1,5 +1,5 @@
 import { useConnectionState } from "../../net/connection";
-import { useRosterVersion, getRemotePlayers } from "../../net/remotePlayerStore";
+import { useRosterVersion, getRemotePlayers } from "../../net/players/store";
 
 /**
  * Connection status HUD (top-right). Re-renders only on UI-cadence events:

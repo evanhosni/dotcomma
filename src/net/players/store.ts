@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type * as THREE from "three";
-import { onServerMessage } from "./connection";
-import type { PlayerSnapshot } from "./protocol";
+import { onServerMessage } from "../connection";
+import type { PlayerSnapshot } from "../protocol";
 
 /**
  * Module state mutated per frame; React only sees the ROSTER through a version
@@ -12,23 +12,19 @@ import type { PlayerSnapshot } from "./protocol";
 export interface RemotePlayer {
   id: string;
   color: string;
-  /** Last intent received: position … */
   targetX: number;
   targetY: number;
   targetZ: number;
-  /** … velocity … */
   vx: number;
   vy: number;
   vz: number;
-  /** … yaw, and performance.now() of arrival (extrapolation base). */
   ry: number;
   receivedAt: number;
-  /** Display state — what is actually rendered. */
+  /** Displayed position (eased toward the target). */
   x: number;
   y: number;
   z: number;
   displayYaw: number;
-  /** True until the first frame has placed the object (the one allowed snap). */
   needsInitialPlacement: boolean;
   object: THREE.Object3D | null;
 }

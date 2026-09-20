@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import type * as THREE from "three";
 import { TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
@@ -50,6 +50,16 @@ export interface BiomeNoiseConfig {
   absNeg?: boolean;
   scale?: number;
   offset?: number;
+}
+
+/** What a biome folder's `spec.ts` exports — read by the JSX and by the server's shared config. */
+export interface BiomeSpec {
+  id: number;
+  name: string;
+  joinable: boolean;
+  blendable: boolean;
+  blendWidth?: number;
+  noise?: BiomeNoiseConfig;
 }
 
 export interface Region {

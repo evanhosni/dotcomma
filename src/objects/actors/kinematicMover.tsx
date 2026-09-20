@@ -10,50 +10,41 @@ import {
   type CharacterInput,
 } from "../../physics/characterMovement";
 import type { ActorFrameContext } from "./Actor";
+import { DEFAULT_COLLIDER, type ColliderSpec, type MovementKind } from "./spec";
+import type { MotionOutput } from "./state/motion";
 
-// The body of a `body: "kinematic"` ModelActor. Synced (default): the server
-// simulates and this only PARKS the capsule at the server's pose so the local
-// player collides with it. Local: the owner's ctx.move velocity goes through
-// the shared character resolver (physics/characterMovement.ts).
+/**
+ * The body of a `body: "kinematic"` model actor. Synced (default): the SERVER
+ * simulates it and this only PARKS the capsule at the published pose so the local
+ * player collides with it. Local (`serverSynced={false}`): the machine's motion
+ * output is resolved here through THE shared character resolver
+ * (physics/characterMovement.ts — the player's and the server's code), or
+ * integrated as a free 3-axis velocity for flyers.
+ */
 
-export interface CapsuleColliderSpec {
-  shape: "capsule";
-  radius: number;
-  /** Total height, feet to top. */
-  height: number;
-}
-export type ColliderSpec = CapsuleColliderSpec;
-
-/** vy === null → gravity applies. */
-export interface MoveIntent {
-  vx: number;
-  vy: number | null;
-  vz: number;
-}
-
-const DEFAULT_SPEC: CapsuleColliderSpec = { shape: "capsule", radius: 0.5, height: 2 };
 const _next = { x: 0, y: 0, z: 0 };
 const _input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null };
 
 export interface KinematicMoverOptions {
   enabled: boolean;
   collider?: ColliderSpec;
-  movement: "ground" | "free";
+  movement: MovementKind;
   coordinates: THREE.Vector3Tuple;
-  /** Body CENTER, written every frame. */
+  /** Body CENTER, written every frame (the state machine reads it). */
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  /** Model group (feet at origin); placed here for LOCAL actors, by the base for synced ones. */
+  /** The model group (feet at the origin) — placed under the body for LOCAL actors. */
   groupRef: React.RefObject<THREE.Group>;
 }
 
 export interface KinematicMover {
-  step(delta: number, ctx: ActorFrameContext, move: MoveIntent, serverDriven: boolean): void;
+  step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void;
+  /** The <RigidBody> to render (null when disabled). */
   element: JSX.Element | null;
 }
 
 export const useKinematicMover = ({
   enabled,
-  collider = DEFAULT_SPEC,
+  collider = DEFAULT_COLLIDER,
   movement,
   coordinates,
   positionRef,
@@ -75,7 +66,7 @@ export const useKinematicMover = ({
     };
   }, [world, rapier, enabled, movement, collider.height, collider.radius]);
 
-  const step = (delta: number, ctx: ActorFrameContext, move: MoveIntent, serverDriven: boolean): void => {
+  const step = (delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void => {
     const rb = rigidBodyRef.current;
     if (!enabled || !rb) return;
 
@@ -93,21 +84,21 @@ export const useKinematicMover = ({
     const dt = Math.min(delta, 0.1);
     const pos = rb.translation();
     if (movement === "free") {
-      _next.x = pos.x + move.vx * dt;
-      _next.y = pos.y + (move.vy ?? 0) * dt;
-      _next.z = pos.z + move.vz * dt;
+      _next.x = pos.x + motion.vx * dt;
+      _next.y = pos.y + (motion.vy ?? 0) * dt;
+      _next.z = pos.z + motion.vz * dt;
       rb.setNextKinematicTranslation(_next);
     } else {
       const character = characterRef.current;
       const shape = rb.collider(0);
       if (!character || !shape) return;
-      _input.dirX = move.vx;
-      _input.dirZ = move.vz;
-      _input.speed = Math.hypot(move.vx, move.vz);
-      _input.vyOverride = move.vy;
+      _input.dirX = motion.vx;
+      _input.dirZ = motion.vz;
+      _input.speed = Math.hypot(motion.vx, motion.vz);
+      _input.vyOverride = motion.vy;
       stepCharacter(world, character, rb, shape, pos.x, pos.y, pos.z, _input, dt, result);
     }
-    // The body moves at the physics step, so `pos` is still this frame's position.
+    // The body moves at the physics step, so `pos` is still current.
     positionRef.current.set(pos.x, pos.y, pos.z);
     groupRef.current?.position.set(pos.x, pos.y - halfHeight, pos.z);
   };

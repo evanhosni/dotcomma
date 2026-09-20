@@ -1,9 +1,17 @@
-import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
-import { StateMachineHandle } from "./types";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
+import { mouseActionOf, type MouseFlag } from "./runner";
+import type { StateMachineHandle } from "./useStateMachine";
+
+/**
+ * A throttled screen-center raycast against the model's skinned meshes raises
+ * one-shot flags on the machine's blackboard. Every input is ALSO forwarded to
+ * the server (`entity:interact "mouse-<flag>"`) — inputs cross the wire, never
+ * triggers; the server's machine evaluates its own triggers. `sm === null` makes
+ * the hook inert.
+ */
 
 export interface MouseEventDistances {
   onMouseHoverEnter?: number;
@@ -24,29 +32,28 @@ export interface MouseEventDistances {
 export interface UseMouseEventsOptions {
   distances?: MouseEventDistances;
   shouldGrowCursor?: boolean;
-  /** Per-instance phase for the every-3-frames raycast throttle. */
+  /** Per-instance seed (hash of spawn coords) so batch-mounted actors don't all raycast on the same frame. */
   framePhase?: number;
-  /** The owner calls `tick` from its actor onFrame instead of this hook owning a useFrame. */
-  externallyDriven?: boolean;
 }
 
 export interface MouseEventsHandle {
-  tick: (camera: THREE.Camera, distanceSq?: number) => void;
+  /** `distanceSq` is the actor base's 2D squared distance — a lower bound on the 3D one. */
+  tick: (camera: THREE.Camera, distanceSq: number, sync: SyncHandle | null) => void;
 }
 
-/** The dirty bit lets the machine clear the one-shot set only on frames something was raised. */
-const raise = (bb: Record<string, any>, flag: string): void => {
+const raise = (bb: Record<string, any>, flag: MouseFlag, sync: SyncHandle | null): void => {
   bb[flag] = true;
   bb.__mouse_dirty = true;
+  if (sync && sync.known) sync.interact(mouseActionOf(flag));
 };
 
 const DEFAULT_DISTANCE = 5;
 
-// Angular pre-test: the ×3-inflated sphere reject rarely rejects, and a miss
-// scanned every CPU-skinned triangle of every mesh. Skipped very close, where
-// the actor spans a wide angle.
+// Angular pre-test: the per-triangle CPU-skinned test below is expensive and the
+// ×3-inflated sphere reject rarely rejects, so skip actors more than ~18° off the
+// view ray — except very close ones, where the normalized direction is unstable.
 const VIEW_CONE_COS = Math.cos((18 * Math.PI) / 180);
-const VIEW_CONE_SKIP_WITHIN_SQ = 16; // within 4u, run the full test regardless
+const VIEW_CONE_SKIP_WITHIN_SQ = 16;
 const _toActor = new THREE.Vector3();
 
 const _raycaster = new THREE.Raycaster();
@@ -61,14 +68,15 @@ const _tC = new THREE.Vector3();
 const _hitPt = new THREE.Vector3();
 
 export function useMouseEvents(
-  sm: StateMachineHandle,
+  sm: StateMachineHandle | null,
   groupRef: React.MutableRefObject<THREE.Group | null>,
   options: UseMouseEventsOptions = {},
 ): MouseEventsHandle {
-  const bb = sm.blackboard;
+  const bb = sm?.blackboard ?? null;
   const growCursor = options.shouldGrowCursor ?? false;
   const activeHoverRef = useRef(false);
   const hitDistRef = useRef(Infinity);
+  const syncRef = useRef<SyncHandle | null>(null);
 
   const distances = useMemo(
     () => ({
@@ -103,7 +111,9 @@ export function useMouseEvents(
     [distances],
   );
 
-  const tick = (camera: THREE.Camera, distanceSq2D = 0): void => {
+  const tick = (camera: THREE.Camera, distanceSq2D: number, sync: SyncHandle | null): void => {
+    syncRef.current = sync;
+    if (!bb) return;
     frameCountRef.current++;
 
     if (frameCountRef.current % 3 !== 0) {
@@ -113,8 +123,7 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      // The 2D squared distance is a lower bound on the 3D one, so it rejects first for free.
-      const threshold = maxEventDist + 3;
+      const threshold = maxEventDist + 3; // padding for object height/radius
       const thresholdSq = threshold * threshold;
       const dist3DSq =
         distanceSq2D > thresholdSq ? Infinity : camera.position.distanceToSquared(groupRef.current.position);
@@ -132,7 +141,7 @@ export function useMouseEvents(
         if (outsideViewCone) {
           hitDistRef.current = Infinity;
         } else {
-          // Largest-first so the body mesh is tested before tiny face meshes.
+          // Largest-first so the body mesh (most likely hit) is tested before tiny face meshes.
           if (cachedMeshesRef.current.length === 0) {
             groupRef.current.traverse((child) => {
               if ((child as THREE.SkinnedMesh).isSkinnedMesh)
@@ -143,9 +152,9 @@ export function useMouseEvents(
             );
           }
 
-          // Manual SkinnedMesh triangle test: three's intersectObject silently
-          // drops valid hits for SkinnedMeshes mounted after the initial batch
-          // (cause unknown); this uses the same data and reliably hits.
+          // Manual ray-triangle test: three's intersectObject silently drops valid hits
+          // for SkinnedMeshes mounted after the initial batch (cause unknown — geometry,
+          // bones and matrices are all correct). Same data, reliable hits.
           let hitDist = Infinity;
           const meshes = cachedMeshesRef.current;
 
@@ -186,12 +195,12 @@ export function useMouseEvents(
 
     if (isHovering && !activeHoverRef.current) {
       activeHoverRef.current = true;
-      raise(bb, "__mouse_hover_enter");
+      raise(bb, "__mouse_hover_enter", sync);
       bb.__mouse_hover_active = true;
       if (growCursor) showCursor();
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
-      raise(bb, "__mouse_hover_leave");
+      raise(bb, "__mouse_hover_leave", sync);
       // false, not delete: deleting keys forces the blackboard into dictionary mode.
       bb.__mouse_hover_active = false;
       if (growCursor) hideCursor();
@@ -200,64 +209,58 @@ export function useMouseEvents(
   const tickRef = useRef(tick);
   tickRef.current = tick;
 
-  const externallyDriven = options.externallyDriven ?? false;
-  useFrame(({ camera }) => {
-    if (!externallyDriven) tickRef.current(camera);
-  });
-
   useEffect(() => {
+    if (!bb) return;
     const dist = () => hitDistRef.current;
+    const input = (flag: MouseFlag) => raise(bb, flag, syncRef.current);
 
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
       if (dist() > distances.leftClick) return;
-      raise(bb, "__mouse_left_click");
-      // Forwarded to the server's machine (left click only; hover stays local).
-      const h = groupRef.current?.userData.sync as SyncHandle | undefined;
-      if (h && h.known) h.interact("mouse-left-click");
+      input("__mouse_left_click");
     };
 
     const handleContextMenu = () => {
       if (dist() > distances.rightClick) return;
-      raise(bb, "__mouse_right_click");
+      input("__mouse_right_click");
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > distances.leftClickDown) return;
-        raise(bb, "__mouse_left_click_down");
+        input("__mouse_left_click_down");
       } else if (e.button === 1) {
         if (dist() > distances.middleClick) return;
-        raise(bb, "__mouse_middle_click");
+        input("__mouse_middle_click");
       } else if (e.button === 2) {
         if (dist() > distances.rightClickDown) return;
-        raise(bb, "__mouse_right_click_down");
+        input("__mouse_right_click_down");
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
         if (dist() > distances.leftClickUp) return;
-        raise(bb, "__mouse_left_click_up");
+        input("__mouse_left_click_up");
       } else if (e.button === 2) {
         if (dist() > distances.rightClickUp) return;
-        raise(bb, "__mouse_right_click");
-        raise(bb, "__mouse_right_click_up");
+        input("__mouse_right_click");
+        input("__mouse_right_click_up");
       }
     };
 
     const handleDblClick = () => {
       if (dist() > distances.doubleClick) return;
-      raise(bb, "__mouse_double_click");
+      input("__mouse_double_click");
     };
 
     const handleWheel = (e: WheelEvent) => {
       if (dist() > distances.scroll) return;
-      raise(bb, "__mouse_scroll");
+      input("__mouse_scroll");
       if (e.deltaY < 0 && dist() <= distances.scrollUp) {
-        raise(bb, "__mouse_scroll_up");
+        input("__mouse_scroll_up");
       } else if (e.deltaY > 0 && dist() <= distances.scrollDown) {
-        raise(bb, "__mouse_scroll_down");
+        input("__mouse_scroll_down");
       }
     };
 
@@ -278,8 +281,7 @@ export function useMouseEvents(
     };
   }, [bb, distances]);
 
-  // Deliberately NOTHING is attached to the R3F group: even no-op pointer
-  // handlers put every actor in R3F's interaction list — a recursive
-  // CPU-skinned raycast per actor on every pointermove.
-  return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq) => tickRef.current(camera, distanceSq) }), []);
+  // NOTHING is attached to the R3F group: even no-op pointer handlers register the
+  // actor in R3F's interaction list, which raycasts it recursively on every pointermove.
+  return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq, sync) => tickRef.current(camera, distanceSq, sync) }), []);
 }

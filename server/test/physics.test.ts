@@ -6,12 +6,12 @@ import { before, after, describe, it } from "node:test";
 import { build } from "esbuild";
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import { computeVertexData, getFlattenPoints } from "../../src/utils/workers/vertexCompute";
-import { BUILDING_ATTRS } from "../../src/objects/actors/building/variants";
+import { BUILDING_ATTRS } from "../../src/objects/actors/building/spec";
 import { LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/lampSpec";
 import { createBuildingCollider } from "../src/game/physics/buildings.js";
 import { createObstacleBodies, enumerateObstacles } from "../src/game/physics/obstacles.js";
 import { GRASS_BIOME_ID } from "../../src/world/constants";
-import { PhysicsWorld, PHYSICS_DT } from "../src/game/physics/world.js";
+import { PhysicsWorld, PHYSICS_DT } from "../src/game/physics/physicsWorld.js";
 import { Walker } from "../src/game/physics/walker.js";
 import { findBiomePatch, findSlopeSpot, type SlopeSample } from "../src/cli/terrainScan.js";
 import { chunkIndex, sampleChunkHeights, TERRAIN_SEGMENTS, vertexWorld } from "../src/game/physics/terrain.js";
@@ -118,7 +118,7 @@ describe("server physics", () => {
     assert.ok(gap > -0.02 && gap < 0.3, `feet ${gap.toFixed(3)}u above the surface (contact offset 0.08 + snap)`);
     assert.ok(w.lastStep.walkableSupport, "resolver reports walkable support");
     assert.ok(pw.stats().steps > 0 && pw.stats().maxStepMs >= 0, "step time is recorded");
-    // Off-vertex: the heightfield triangle plane vs the smooth surface.
+    // Off-vertex: heightfield triangle plane vs the smooth surface.
     w.placeFeet(flat.x + 1.7, flat.height + 5, flat.z + 2.2);
     settle(w, 30);
     const p = w.position();
@@ -174,7 +174,7 @@ describe("server physics", () => {
     assert.ok(b, "a building placed near the origin");
     held.push(...pw.holdTerrainAround(b.x, b.z));
     const before = pw.stats().colliders;
-    const hull = createBuildingCollider(pw, { attrs: BUILDING_ATTRS }, b.x, b.y, b.z);
+    const hull = createBuildingCollider(pw, BUILDING_ATTRS, b.x, b.y, b.z);
     assert.equal(pw.stats().colliders, before + 1, "one convex hull collider");
     // 30u east, pushing at the center for 8s (40u of intent).
     const sx = b.x + 30;
@@ -197,16 +197,17 @@ describe("server physics", () => {
   it("dressing obstacles: deterministic per chunk, one body per point with a cuboid per part", () => {
     let gx = 0;
     let gz = 0;
-    let pts = enumerateObstacles(gx, gz);
+    const fw = pw.config.cityConfig.freewayWidth;
+    let pts = enumerateObstacles(gx, gz, fw);
     for (let r = 1; pts.length === 0 && r <= 3; r++) {
       for (let i = -r; i <= r && pts.length === 0; i++) for (let j = -r; j <= r && pts.length === 0; j++) {
-        pts = enumerateObstacles(i, j);
+        pts = enumerateObstacles(i, j, fw);
         if (pts.length) (gx = i), (gz = j);
       }
     }
     assert.ok(pts.length > 0, "a city chunk near the origin has dressing obstacles");
     assert.ok(pts.some((p) => p.parts === LAMP_COLLIDER_PARTS), "street lamps among them");
-    assert.deepEqual(enumerateObstacles(gx, gz), pts, "deterministic");
+    assert.deepEqual(enumerateObstacles(gx, gz, fw), pts, "deterministic");
     const before = pw.stats();
     const bodies = createObstacleBodies(pw, pts);
     const after = pw.stats();

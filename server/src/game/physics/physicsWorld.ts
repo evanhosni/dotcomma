@@ -1,21 +1,25 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
-import { initCompute } from "../../../../src/utils/workers/vertexCompute";
+import type { DomainId } from "../../../../src/net/protocol";
 import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
+import { initCompute, type DomainConfig } from "../../../../src/utils/workers/vertexCompute";
+import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import { TICK_MS } from "../tick.js";
 import { ChunkStore, JobQueue } from "./chunks.js";
-import { GLITCH_CITY_DOMAIN_CONFIG } from "./domainConfig.js";
 import { createObstacleBodies, enumerateObstacles } from "./obstacles.js";
 import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_ROWS, TERRAIN_SEGMENTS } from "./terrain.js";
 
 /**
- * Headless Rapier (the client's own package, bundled from the root install)
- * stepped at the entity tick, with two refcounted ChunkStores on one budgeted
- * JobQueue. Initialized with the glitch-city DomainConfig — the only domain
- * with terrain-walking NPCs today.
+ * Headless Rapier (the client's package, bundled from the root install) stepped at the
+ * entity tick: the world, the budgeted JobQueue, and two refcounted ChunkStores —
+ * TERRAIN heightfields (the client's LOD1 recipe, sampled row by row across ticks)
+ * and DRESSING obstacles. Whoever needs a chunk holds it; nothing is built world-wide.
+ * The height pipeline is initialized from the physics domain's shared DomainConfig
+ * (src/world/domains/configs.ts); walkers in other domains run their machine but stay put.
  */
 
+export const PHYSICS_DOMAIN: DomainId = "glitch-city";
 export const PHYSICS_DT = TICK_MS / 1000;
-/** Matches Player.tsx GRAVITY. Kinematic bodies ignore it; here for any future dynamic body. */
+/** Matches Player.tsx GRAVITY; kinematic bodies ignore it — here for any future dynamic body. */
 export const GRAVITY = -100;
 export const DEFAULT_WORK_BUDGET_MS = 8;
 
@@ -25,6 +29,7 @@ export const initRapier = (): Promise<void> => (rapierReady ??= RAPIER.init());
 
 export class PhysicsWorld {
   readonly world: RAPIER.World;
+  readonly config: DomainConfig;
   readonly jobs = new JobQueue();
   readonly terrain: ChunkStore<RAPIER.RigidBody>;
   readonly dressing: ChunkStore<RAPIER.RigidBody[]>;
@@ -35,8 +40,9 @@ export class PhysicsWorld {
   private steps = 0;
   private queriesDirty = false;
 
-  private constructor(world: RAPIER.World) {
+  private constructor(world: RAPIER.World, config: DomainConfig) {
     this.world = world;
+    this.config = config;
     this.terrain = new ChunkStore(
       this.jobs,
       "terrain",
@@ -53,23 +59,25 @@ export class PhysicsWorld {
       },
       (body) => this.removeBody(body),
     );
+    const freewayWidth = config.cityConfig.freewayWidth;
     this.dressing = new ChunkStore(
       this.jobs,
       "dressing",
-      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz)),
+      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz, freewayWidth)),
       (bodies) => bodies.forEach((b) => this.removeBody(b)),
     );
   }
 
-  static async create(): Promise<PhysicsWorld> {
+  static async create(domain: DomainId = PHYSICS_DOMAIN): Promise<PhysicsWorld> {
+    const config = DOMAIN_CONFIGS[domain];
+    if (!config) throw new Error(`no shared domain config for "${domain}" (src/world/domains/configs.ts)`);
     await initRapier();
-    initCompute(GLITCH_CITY_DOMAIN_CONFIG);
+    initCompute(config);
     const world = new RAPIER.World({ x: 0, y: GRAVITY, z: 0 });
     world.timestep = PHYSICS_DT;
-    return new PhysicsWorld(world);
+    return new PhysicsWorld(world, config);
   }
 
-  /** Tests pass Infinity. */
   workFor(budgetMs = DEFAULT_WORK_BUDGET_MS): number {
     const ms = this.jobs.workFor(budgetMs);
     if (ms > 0) this.queriesDirty = true;
@@ -78,9 +86,9 @@ export class PhysicsWorld {
     return ms;
   }
 
-  /** Rapier only rebuilds its query structure inside step(), so a body swept against
-   *  a chunk built THIS tick passes straight through — MEASURED: a beeble fell 1u into
-   *  a just-built heightfield and sat wedged. Call after generation, before moving anything. */
+  /** Rapier only rebuilds its query structure inside step(), so a body stepped against
+   *  a chunk built THIS tick sweeps straight through it — MEASURED: a beeble fell 1u
+   *  into a just-built heightfield and sat wedged. Call after generation, before moving. */
   ensureQueries(): void {
     if (!this.queriesDirty) return;
     this.world.updateSceneQueries();
@@ -99,7 +107,7 @@ export class PhysicsWorld {
 
   private createHeightfield(gx: number, gz: number, heights: Float32Array): RAPIER.RigidBody {
     const desc = RAPIER.ColliderDesc.heightfield(TERRAIN_SEGMENTS, TERRAIN_SEGMENTS, heights, { x: TERRAIN_CHUNK_SIZE, y: 1, z: TERRAIN_CHUNK_SIZE });
-    // Desc before body: a failure can't leave an empty body behind.
+    // Desc before body: a failure can't leave an empty body.
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(chunkCenter(gx), 0, chunkCenter(gz)));
     this.world.createCollider(desc, body);
     this.queriesDirty = true;
@@ -124,7 +132,7 @@ export class PhysicsWorld {
     this.queriesDirty = true;
   }
 
-  /** Tests/tools: builds the 3×3 around (x, z) NOW; returns keys to release. */
+  /** Tests/tools: hold and build NOW the 3×3 terrain chunks around (x, z); returns keys to release. */
   holdTerrainAround(x: number, z: number): string[] {
     const gx = chunkIndex(x);
     const gz = chunkIndex(z);

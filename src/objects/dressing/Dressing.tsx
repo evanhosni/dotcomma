@@ -24,9 +24,9 @@ const UPDATE_INTERVAL_FRAMES = 31;
 // can't stack mesh assembly into one frame.
 const dressingQueue = new TaskQueue();
 
-export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance">;
+export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
 
-const DressingGroup = createDefaultsGroup<DressingDefaults>();
+const DressingGroup = createDefaultsGroup<DressingDefaults>("dressing");
 export const Dressing = DressingGroup.Group;
 
 /** Resolve a group-defaultable attribute: own prop > <Dressing> group > feature default. */
