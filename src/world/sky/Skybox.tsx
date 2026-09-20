@@ -205,7 +205,7 @@ export const SkyboxSystem = () => {
           voronoi
             .create({
               seed: params.seed,
-              currentVertex: new THREE.Vector2(camera.position.x, camera.position.z),
+              currentVertex: { x: camera.position.x, z: camera.position.z },
               gridSize: params.gridSize,
               regionGridSize: params.regionGridSize,
               regions,

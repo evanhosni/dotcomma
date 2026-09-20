@@ -27,9 +27,9 @@ const ensureInit = async (): Promise<void> => {
   }
 };
 
-export const getVertexData = async (x: number, y: number): Promise<VertexResult> => {
+export const getVertexData = async (x: number, z: number): Promise<VertexResult> => {
   await ensureInit();
-  return computeVertexData(x, y);
+  return computeVertexData(x, z);
 };
 
 /** PAD-FREE vertex data for FREQUENT main-thread callers (player ground
@@ -44,9 +44,9 @@ export const getVertexData = async (x: number, y: number): Promise<VertexResult>
  *  fall-through backstop teleport them out of a building's excavation every
  *  few frames. Use it as a cheap PRE-FILTER and confirm with getVertexData
  *  before acting (see resolveEmbeddedSurface in player/Player.tsx). */
-export const getVertexDataRaw = async (x: number, y: number): Promise<VertexResult> => {
+export const getVertexDataRaw = async (x: number, z: number): Promise<VertexResult> => {
   await ensureInit();
-  return computeVertexDataRaw(x, y);
+  return computeVertexDataRaw(x, z);
 };
 
 /** PADDED vertex data computed OFF-THREAD (in the dressing worker — it idles

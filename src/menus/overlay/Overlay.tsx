@@ -1,6 +1,5 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useRef, useEffect } from "react";
-import * as THREE from "three";
 import { voronoi } from "../../utils/voronoi/voronoi";
 import { useGameContext } from "../../context/GameContext";
 import { useDevMode } from "../../context/DevContext";
@@ -246,7 +245,7 @@ const OverlayHUD = () => {
         voronoi
           .create({
             seed: params.seed,
-            currentVertex: new THREE.Vector2(pos.x, pos.z),
+            currentVertex: { x: pos.x, z: pos.z },
             gridSize: params.gridSize,
             regionGridSize: params.regionGridSize,
             regions,

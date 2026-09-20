@@ -6,6 +6,7 @@ import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
 import { createWorkerClient } from "../../utils/workers/workerClient";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import type { PointXZ } from "../../utils/math/types";
 import { getActiveDomainConfig } from "../domains/utils";
 import { getMaterial } from "./material";
 import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
@@ -16,7 +17,7 @@ const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
   const aHalf = a.lod.chunkSize / 2;
   const bHalf = b.lod.chunkSize / 2;
   const overlapX = a.offset.x + aHalf > b.offset.x - bHalf && a.offset.x - aHalf < b.offset.x + bHalf;
-  const overlapZ = a.offset.y + aHalf > b.offset.y - bHalf && a.offset.y - aHalf < b.offset.y + bHalf;
+  const overlapZ = a.offset.z + aHalf > b.offset.z - bHalf && a.offset.z - aHalf < b.offset.z + bHalf;
   return overlapX && overlapZ;
 };
 
@@ -52,8 +53,8 @@ class ChunkIndex {
   add(chunk: Chunk): void {
     const half = chunk.lod.chunkSize / 2;
     const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
+    const tz0 = Math.floor((chunk.offset.z - half) / INDEX_TILE);
+    const tz1 = Math.floor((chunk.offset.z + half) / INDEX_TILE);
     for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
       let col = this.tiles.get(tx);
       if (!col) {
@@ -74,8 +75,8 @@ class ChunkIndex {
     if (this.count === 0) return false;
     const half = chunk.lod.chunkSize / 2;
     const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
+    const tz0 = Math.floor((chunk.offset.z - half) / INDEX_TILE);
+    const tz1 = Math.floor((chunk.offset.z + half) / INDEX_TILE);
     for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
       const col = this.tiles.get(tx);
       if (!col) continue;
@@ -623,7 +624,7 @@ export const TerrainRenderer = () => {
 
       const { position, lod } = desiredChunks[chunkKey];
       const [cx, cz] = position;
-      const offset = new THREE.Vector2(cx, cz);
+      const offset: PointXZ = { x: cx, z: cz };
 
       const chunk = QueueChunk(chunkKey, offset, lod, material);
       terrain.chunks[chunkKey] = {
@@ -671,8 +672,8 @@ export const TerrainRenderer = () => {
         lastSortZ = playerZ;
         terrain.queued_to_build.sort((a, b) => {
           if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-          const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-          const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+          const distA = (a.offset.x - playerX) ** 2 + (a.offset.z - playerZ) ** 2;
+          const distB = (b.offset.x - playerX) ** 2 + (b.offset.z - playerZ) ** 2;
           return distB - distA;
         });
       }
@@ -719,7 +720,7 @@ export const TerrainRenderer = () => {
       terrain.queued_to_destroy.size > 0;
   };
 
-  const QueueChunk = (chunkKey: string, offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
+  const QueueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: THREE.Material) => {
     const plane = new THREE.Mesh(acquireGeometry(lod), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
@@ -733,7 +734,7 @@ export const TerrainRenderer = () => {
 
     const chunk: Chunk = {
       key: chunkKey,
-      offset: new THREE.Vector2(offset.x, offset.y),
+      offset: { x: offset.x, z: offset.z },
       plane: plane,
       rebuildIterator: null,
       colliderBody: null,
@@ -770,7 +771,7 @@ export const TerrainRenderer = () => {
       segments,
       chunk.lod.chunkSize,
       offset.x,
-      offset.y,
+      offset.z,
       !chunk.lod.hasCollider,
       chunk.lod.hasCollider
     );
@@ -873,7 +874,7 @@ export const TerrainRenderer = () => {
     }
     (chunk.plane.geometry.attributes.normal as THREE.BufferAttribute).needsUpdate = true;
 
-    chunk.plane.position.set(offset.x, 0, offset.y);
+    chunk.plane.position.set(offset.x, 0, offset.z);
 
     if (chunk.lod.hasCollider && workerResult.colliderHeights) {
       GenerateColliders(chunk, offset, workerResult.colliderHeights);
@@ -894,12 +895,12 @@ export const TerrainRenderer = () => {
    *  r-t-r's per-frame body sync, and every built chunk re-rendered this
    *  component to reconcile the whole collider list. The desc is created
    *  before the body so a failure can't leave an empty body behind. */
-  const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2, heights: Float32Array) => {
+  const GenerateColliders = (chunk: Chunk, offset: PointXZ, heights: Float32Array) => {
     const segments = chunk.lod.segments;
     const cs = chunk.lod.chunkSize;
     const t0 = performance.now();
     const desc = rapier.ColliderDesc.heightfield(segments, segments, heights, { x: cs, y: 1, z: cs });
-    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.y));
+    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.z));
     try {
       world.createCollider(desc, body);
     } catch (e) {

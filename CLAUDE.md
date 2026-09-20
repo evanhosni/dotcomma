@@ -783,6 +783,7 @@ All overlays, menus, and HUD elements should follow the established style set by
 
 - PascalCase for components/types, camelCase for utilities/functions/properties
 - SCREAMING_SNAKE_CASE for constants and enums
+- **The horizontal plane is x/z, everywhere** — the world is y-up and `y` is always height, including inside 2D code (voronoi, city grid, density placement, chunk offsets): those use `PointXZ` (`utils/math/types.ts`) and `ix/iz`, `dx/dz`, `sx/sz` names, never `THREE.Vector2` or `.y` for a horizontal coordinate. The ONLY `(x, y)` pair is the abstract 2D noise samplers (`simplex2`/`perlin2`/`terrainNoise` in `vertexCompute.ts`), whose inputs are not world axes (the road warp feeds them `(z, 0)`)
 - **Hierarchy ownership**: DOMAIN → REGION → BIOME is both the content hierarchy and the folder hierarchy — put code at the level it belongs to (biome-specific in the biome folder, and so on up); only genuinely shared code lives outside `world/domains/`
 - **Pattern files per folder**: `types.ts`, `constants.ts`, `defaults.ts`, `utils.ts` at the appropriate level — no grab-bag singleton modules (the old `registry.ts` was split this way)
 - **Extend, don't duplicate**: every game object extends its CLASS BASE (`objects/actors/Actor.tsx`, `objects/dressing/Dressing.tsx`, `objects/foliage/Foliage.tsx`) plus the shared attribute types (`objects/types.ts`); actor variants spread a base descriptor

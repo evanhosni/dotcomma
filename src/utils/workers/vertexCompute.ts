@@ -2,13 +2,14 @@
  * Shared vertex data computation module.
  * Imported by both terrain.worker.ts and spawn.worker.ts.
  *
- * Inlines: noise FBM, voronoi grid/Delaunay/walls/distance,
+ * Inlines: noise FBM, voronoi grid/Delaunay/walls/distance (all on the x/z world plane),
  * biome height functions, city grid logic.
  */
 
 import Delaunator from "delaunator";
 import Noise from "noise-ts";
 import { seedRand, smoothstep } from "../math/_math";
+import type { PointXZ } from "../math/types";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
 
@@ -110,18 +111,15 @@ export interface VertexResult {
 }
 
 // Internal types
-interface Vec2 {
-  x: number;
-  y: number;
-}
+/** A voronoi wall segment on the horizontal plane (warped space). */
 interface Wall {
   sx: number;
-  sy: number;
+  sz: number;
   ex: number;
-  ey: number;
+  ez: number;
 }
 interface VGrid {
-  point: Vec2;
+  point: PointXZ;
   element: any;
 }
 
@@ -189,26 +187,29 @@ const voronoiCaches: { [seed: string]: { [gridKey: string]: any } } = {};
 
 const getVoronoiGrid = (
   seed: string,
-  currentVertex: Vec2,
+  currentVertex: PointXZ,
   cellArray: any[],
   gridSize: number,
-  gridFunction: (point: Vec2, array: any[]) => any
+  gridFunction: (point: PointXZ, array: any[]) => any
 ): VGrid[] => {
   const x = Math.floor(currentVertex.x / gridSize);
-  const y = Math.floor(currentVertex.y / gridSize);
+  const z = Math.floor(currentVertex.z / gridSize);
 
   if (!voronoiCaches[seed]) voronoiCaches[seed] = {};
   const cache = voronoiCaches[seed];
-  const gridKey = `${x},${y}`;
+  const gridKey = `${x},${z}`;
 
+  // The jitter seeds are rolled IDENTICALLY by utils/voronoi/voronoi.worker.ts
+  // (the main-thread biome lookup) and by getCityVoronoiSites below — change
+  // all three together or the biome map disagrees with itself.
   let grid: VGrid[] = cache[gridKey];
   if (!grid) {
     grid = [];
     for (let ix = x - 2; ix <= x + 2; ix++) {
-      for (let iy = y - 2; iy <= y + 2; iy++) {
-        const px = seedRand(`${seed} - ${ix}X${iy}`);
-        const py = seedRand(`${seed} - ${ix}Y${iy}`);
-        const point: Vec2 = { x: (ix + px) * gridSize, y: (iy + py) * gridSize };
+      for (let iz = z - 2; iz <= z + 2; iz++) {
+        const jitterX = seedRand(`${seed} - ${ix}X${iz}`);
+        const jitterZ = seedRand(`${seed} - ${ix}Z${iz}`);
+        const point: PointXZ = { x: (ix + jitterX) * gridSize, z: (iz + jitterZ) * gridSize };
         const element = gridFunction(point, cellArray);
         grid.push({ point, element });
       }
@@ -217,8 +218,8 @@ const getVoronoiGrid = (
 
     // Evict distant entries
     for (const key in cache) {
-      const [cx, cy] = key.split(",").map(Number);
-      if (Math.abs(x - cx) > 5 || Math.abs(y - cy) > 5) {
+      const [cx, cz] = key.split(",").map(Number);
+      if (Math.abs(x - cx) > 5 || Math.abs(z - cz) > 5) {
         delete cache[key];
       }
     }
@@ -226,13 +227,13 @@ const getVoronoiGrid = (
   return grid;
 };
 
-const getNearestEntry = (point: Vec2, grid: VGrid[]): VGrid => {
+const getNearestEntry = (point: PointXZ, grid: VGrid[]): VGrid => {
   let minDist = Infinity;
   let nearest = grid[0];
   for (let i = 0; i < grid.length; i++) {
     const dx = point.x - grid[i].point.x;
-    const dy = point.y - grid[i].point.y;
-    const d = dx * dx + dy * dy;
+    const dz = point.z - grid[i].point.z;
+    const d = dx * dx + dz * dz;
     if (d < minDist) {
       minDist = d;
       nearest = grid[i];
@@ -241,15 +242,15 @@ const getNearestEntry = (point: Vec2, grid: VGrid[]): VGrid => {
   return nearest;
 };
 
-const getTwoNearest = (px: number, py: number, grid: VGrid[]): [VGrid, VGrid] => {
+const getTwoNearest = (px: number, pz: number, grid: VGrid[]): [VGrid, VGrid] => {
   let min1 = Infinity;
   let min2 = Infinity;
   let idx1 = 0;
   let idx2 = 1;
   for (let i = 0; i < grid.length; i++) {
     const dx = px - grid[i].point.x;
-    const dy = py - grid[i].point.y;
-    const d = dx * dx + dy * dy;
+    const dz = pz - grid[i].point.z;
+    const d = dx * dx + dz * dz;
     if (d < min1) {
       min2 = min1;
       idx2 = idx1;
@@ -276,7 +277,7 @@ const getDelaunayData = (grid: VGrid[]) => {
   const coords = new Float64Array(grid.length * 2);
   for (let i = 0; i < grid.length; i++) {
     coords[i * 2] = grid[i].point.x;
-    coords[i * 2 + 1] = grid[i].point.y;
+    coords[i * 2 + 1] = grid[i].point.z;
   }
   const delaunay = new Delaunator(coords);
 
@@ -286,18 +287,18 @@ const getDelaunayData = (grid: VGrid[]) => {
     const bi = delaunay.triangles[i + 1];
     const ci = delaunay.triangles[i + 2];
     const ax = grid[ai].point.x,
-      ay = grid[ai].point.y;
+      az = grid[ai].point.z;
     const bx = grid[bi].point.x,
-      by = grid[bi].point.y;
+      bz = grid[bi].point.z;
     const cx = grid[ci].point.x,
-      cy = grid[ci].point.y;
+      cz = grid[ci].point.z;
 
-    const ad = ax * ax + ay * ay;
-    const bd = bx * bx + by * by;
-    const cd = cx * cx + cy * cy;
-    const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    const ad = ax * ax + az * az;
+    const bd = bx * bx + bz * bz;
+    const cd = cx * cx + cz * cz;
+    const D = 2 * (ax * (bz - cz) + bx * (cz - az) + cx * (az - bz));
     circumcenters.push(
-      (1 / D) * (ad * (by - cy) + bd * (cy - ay) + cd * (ay - by)),
+      (1 / D) * (ad * (bz - cz) + bd * (cz - az) + cd * (az - bz)),
       (1 / D) * (ad * (cx - bx) + bd * (ax - cx) + cd * (bx - ax))
     );
   }
@@ -322,7 +323,7 @@ const wallsCache = new WeakMap<
 
 const getWalls = (
   seed: string,
-  currentVertex: Vec2,
+  currentVertex: PointXZ,
   grid: VGrid[],
   regionGrid: VGrid[],
   gridSize: number
@@ -331,7 +332,7 @@ const getWalls = (
   if (memo && memo.regionGrid === regionGrid) return memo;
 
   const x = Math.floor(currentVertex.x / gridSize);
-  const y = Math.floor(currentVertex.y / gridSize);
+  const z = Math.floor(currentVertex.z / gridSize);
 
   const wallSeed = `${seed} - walls`;
   if (!voronoiCaches[wallSeed]) voronoiCaches[wallSeed] = {};
@@ -349,21 +350,21 @@ const getWalls = (
     const t1 = Math.floor(i / 3);
     const t2 = Math.floor(edge / 3);
     const v1x = circumcenters[t1 * 2],
-      v1y = circumcenters[t1 * 2 + 1];
+      v1z = circumcenters[t1 * 2 + 1];
     const v2x = circumcenters[t2 * 2],
-      v2y = circumcenters[t2 * 2 + 1];
+      v2z = circumcenters[t2 * 2 + 1];
 
     const midX = (v1x + v2x) / 2;
-    const midY = (v1y + v2y) / 2;
-    const label = `${Math.floor(midX)},${Math.floor(midY)}`;
+    const midZ = (v1z + v2z) / 2;
+    const label = `${Math.floor(midX)},${Math.floor(midZ)}`;
 
     if (cache[label] === undefined) {
-      const [nearest1, nearest2] = getTwoNearest(midX, midY, grid);
+      const [nearest1, nearest2] = getTwoNearest(midX, midZ, grid);
       const region1 = getNearestEntry(nearest1.point, regionGrid)?.element;
       const region2 = getNearestEntry(nearest2.point, regionGrid)?.element;
 
       cache[label] = {
-        grid: [x, y],
+        grid: [x, z],
         isRegionBoundary: region1 !== region2,
         isBiomeBoundary: !nearest1.element.joinable || nearest1.element !== nearest2.element,
       };
@@ -372,15 +373,15 @@ const getWalls = (
       for (const key in cache) {
         const cachedData = cache[key];
         if (cachedData.grid) {
-          const [cx, cy] = cachedData.grid;
-          if (Math.abs(x - cx) > 5 || Math.abs(y - cy) > 5) {
+          const [cx, cz] = cachedData.grid;
+          if (Math.abs(x - cx) > 5 || Math.abs(z - cz) > 5) {
             delete cache[key];
           }
         }
       }
     }
 
-    const wall: Wall = { sx: v1x, sy: v1y, ex: v2x, ey: v2y };
+    const wall: Wall = { sx: v1x, sz: v1z, ex: v2x, ez: v2z };
 
     if (cache[label].isRegionBoundary) {
       riverWalls.push(wall);
@@ -402,24 +403,24 @@ const getWalls = (
  *  guard drops the paint over the jump slivers). */
 let lastWallAlong = 0;
 
-const distanceToWall = (px: number, py: number, walls: Wall[]): number => {
+const distanceToWall = (px: number, pz: number, walls: Wall[]): number => {
   let minDistSq = Infinity;
   lastWallAlong = 0;
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
     const dx = w.ex - w.sx;
-    const dy = w.ey - w.sy;
-    const lenSq = dx * dx + dy * dy;
-    let t = lenSq > 0 ? ((px - w.sx) * dx + (py - w.sy) * dy) / lenSq : 0;
+    const dz = w.ez - w.sz;
+    const lenSq = dx * dx + dz * dz;
+    let t = lenSq > 0 ? ((px - w.sx) * dx + (pz - w.sz) * dz) / lenSq : 0;
     if (t < 0) t = 0;
     else if (t > 1) t = 1;
     const cx = w.sx + t * dx;
-    const cy = w.sy + t * dy;
-    const ddx = px - cx, ddy = py - cy;
-    const distSq = ddx * ddx + ddy * ddy;
+    const cz = w.sz + t * dz;
+    const ddx = px - cx, ddz = pz - cz;
+    const distSq = ddx * ddx + ddz * ddz;
     if (distSq < minDistSq) {
       minDistSq = distSq;
-      lastWallAlong = t * Math.sqrt(lenSq) + w.sx + w.sy;
+      lastWallAlong = t * Math.sqrt(lenSq) + w.sx + w.sz;
     }
   }
   return minDistSq === Infinity ? Infinity : Math.sqrt(minDistSq);
@@ -530,68 +531,68 @@ interface CityCell {
 
 /** Unique per-cell label for triangle/circle cells. Collisions between two
  *  adjacent special cells would only merge their boundary road — harmless. */
-const cityUniqueLabel = (ix: number, iy: number): number =>
-  1000 + ((((ix * 73856093) ^ (iy * 19349663)) >>> 0) % 1000000);
+const cityUniqueLabel = (ix: number, iz: number): number =>
+  1000 + ((((ix * 73856093) ^ (iz * 19349663)) >>> 0) % 1000000);
 
 /** A 2×2 super-cell only hosts a shape feature (roundabout / flatiron pair)
  *  when the WHOLE super-cell is clear of the biome rim and of the district's
  *  arterial boundaries — a half circle or clipped diagonal at a boundary is
  *  worse than no feature. Coordinates are district-local. */
-const superCellHasRoom = (sx: number, sy: number, walls: Wall[], d: CityDistrict): boolean => {
+const superCellHasRoom = (sx: number, sz: number, walls: Wall[], d: CityDistrict): boolean => {
   const city = cfg!.cityConfig;
   const gs = city.gridSize;
-  const w = cityLocalToWorld((2 * sx + 1) * gs, (2 * sy + 1) * gs, d);
+  const w = cityLocalToWorld((2 * sx + 1) * gs, (2 * sz + 1) * gs, d);
   // Covers every member cell's own rim check (cell centers sit ≤ 0.71·gs from
   // the super center; cells go rim under 0.65·gs) plus breathing room.
-  if (distanceToWall(w.x, w.y, walls) < gs * 1.6) return false;
+  if (distanceToWall(w.x, w.z, walls) < gs * 1.6) return false;
   // Arterial clearance: rotated super-cell extent (√2·gs) + arterial road,
   // measured against the actual wiggly boundary curves.
-  return cityArterialDist(w.x, w.y, d) >= gs * 1.7;
+  return cityArterialDist(w.x, w.z, d) >= gs * 1.7;
 };
 
 /** Label a cell would get if it is NOT a roundabout member (rim −1,
  *  triangle unique, or square roll) — null when the cell IS a roundabout
  *  member. Lets roundabout members COPY an outward neighbor's label without
  *  recursion. Coordinates are district-local; seeds are salted by district. */
-const baseCityLabel = (ix: number, iy: number, walls: Wall[], d: CityDistrict): number | null => {
+const baseCityLabel = (ix: number, iz: number, walls: Wall[], d: CityDistrict): number | null => {
   const city = cfg!.cityConfig;
   const gs = city.gridSize;
   const px = (ix + 0.5) * gs;
-  const py = (iy + 0.5) * gs;
-  const w = cityLocalToWorld(px, py, d);
-  if (distanceToWall(w.x, w.y, walls) < gs * 0.15) return -1;
+  const pz = (iz + 0.5) * gs;
+  const w = cityLocalToWorld(px, pz, d);
+  if (distanceToWall(w.x, w.z, walls) < gs * 0.15) return -1;
   const sx = Math.floor(ix / 2);
-  const sy = Math.floor(iy / 2);
-  const superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sy}`);
+  const sz = Math.floor(iz / 2);
+  const superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sz}`);
   if (
     superRoll < city.roundaboutChance + city.triangleChance &&
-    superCellHasRoom(sx, sy, walls, d)
+    superCellHasRoom(sx, sz, walls, d)
   ) {
     if (superRoll < city.roundaboutChance) return null;
-    return cityUniqueLabel(sx, sy);
+    return cityUniqueLabel(sx, sz);
   }
-  return Math.floor(seedRand(`${d.key}|${px},${py}`) * city.blockCount);
+  return Math.floor(seedRand(`${d.key}|${px},${pz}`) * city.blockCount);
 };
 
 /** Per-cell block cell (label + shape), cached so terrain, spawns, and the
  *  road-marker enumeration always agree. Coordinates are DISTRICT-LOCAL;
  *  each district has its own seeded layout (seeds salted by district key).
  *  Nested numeric maps under the district key: the old flat string key
- *  (`${d.key}:${ix},${iy}`) allocated ~10 strings per city vertex on HITS. */
+ *  (`${d.key}:${ix},${iz}`) allocated ~10 strings per city vertex on HITS. */
 interface CityCellStore {
   count: number;
   districts: Map<string, Map<number, Map<number, CityCell>>>;
 }
 const cityCellCaches: { [seed: string]: CityCellStore } = {};
 
-const cityCellLookup = (store: CityCellStore, dKey: string, ix: number, iy: number): CityCell | undefined =>
-  store.districts.get(dKey)?.get(ix)?.get(iy);
+const cityCellLookup = (store: CityCellStore, dKey: string, ix: number, iz: number): CityCell | undefined =>
+  store.districts.get(dKey)?.get(ix)?.get(iz);
 
-const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): CityCell => {
+const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): CityCell => {
   const city = cfg!.cityConfig;
   let store = cityCellCaches[city.seed];
   if (!store) store = cityCellCaches[city.seed] = { count: 0, districts: new Map() };
-  let cell = cityCellLookup(store, d.key, ix, iy);
+  let cell = cityCellLookup(store, d.key, ix, iz);
   if (cell === undefined) {
     if (store.count > 20000) {
       // Drop the oldest half of the DISTRICTS (insertion order ≈ distance)
@@ -604,12 +605,12 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
     }
     const gs = city.gridSize;
     const px = (ix + 0.5) * gs;
-    const py = (iy + 0.5) * gs;
-    const w = cityLocalToWorld(px, py, d);
+    const pz = (iz + 0.5) * gs;
+    const w = cityLocalToWorld(px, pz, d);
     // Only cells basically ON the boundary go full-road: the BELT freeway
     // now owns the rim zone (it melts any block it clips), so blocks run
     // right up to the beltway instead of a wide rim plaza.
-    if (distanceToWall(w.x, w.y, walls) < gs * 0.15) {
+    if (distanceToWall(w.x, w.z, walls) < gs * 0.15) {
       cell = { label: -1, shape: CITY_SHAPE_SQUARE };
     } else {
       // Roundabouts AND triangles roll per 2×2 SUPER-CELL — each feature
@@ -617,11 +618,11 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
       // super-cell has room (clear of the biome rim and the district's
       // arterial boundaries).
       const sx = Math.floor(ix / 2);
-      const sy = Math.floor(iy / 2);
-      let superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sy}`);
+      const sz = Math.floor(iz / 2);
+      let superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sz}`);
       if (
         superRoll < city.roundaboutChance + city.triangleChance &&
-        !superCellHasRoom(sx, sy, walls, d)
+        !superCellHasRoom(sx, sz, walls, d)
       ) {
         superRoll = 1; // not enough room — fall through to a normal square
       }
@@ -634,10 +635,10 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
         // itself is protected in getCityTerrain (boundary constraints are
         // suppressed inside the ring, and its height is overridden flat).
         const nx = ix === 2 * sx ? 2 * sx - 1 : 2 * sx + 2; // outward x neighbor
-        const ny = iy === 2 * sy ? 2 * sy - 1 : 2 * sy + 2; // outward y neighbor
-        const copied = baseCityLabel(nx, iy, walls, d) ?? baseCityLabel(ix, ny, walls, d);
+        const nz = iz === 2 * sz ? 2 * sz - 1 : 2 * sz + 2; // outward z neighbor
+        const copied = baseCityLabel(nx, iz, walls, d) ?? baseCityLabel(ix, nz, walls, d);
         cell = {
-          label: copied ?? Math.floor(seedRand(`${d.key}|${px},${py}`) * city.blockCount),
+          label: copied ?? Math.floor(seedRand(`${d.key}|${px},${pz}`) * city.blockCount),
           shape: CITY_SHAPE_CIRCLE,
         };
       } else if (superRoll < city.roundaboutChance + city.triangleChance) {
@@ -645,15 +646,15 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
         // streets are guaranteed, so the diagonal always ends in an
         // intersection.
         cell = {
-          label: cityUniqueLabel(sx, sy),
+          label: cityUniqueLabel(sx, sz),
           shape:
-            seedRand(`${city.seed}-tri-${d.key}|${sx},${sy}`) < 0.5
+            seedRand(`${city.seed}-tri-${d.key}|${sx},${sz}`) < 0.5
               ? CITY_SHAPE_TRI_NE
               : CITY_SHAPE_TRI_NW,
         };
       } else {
         cell = {
-          label: Math.floor(seedRand(`${d.key}|${px},${py}`) * city.blockCount),
+          label: Math.floor(seedRand(`${d.key}|${px},${pz}`) * city.blockCount),
           shape: CITY_SHAPE_SQUARE,
         };
       }
@@ -668,7 +669,7 @@ const getCityCell = (ix: number, iy: number, walls: Wall[], d: CityDistrict): Ci
       col = new Map();
       dmap.set(ix, col);
     }
-    col.set(iy, cell);
+    col.set(iz, cell);
     store.count++;
   }
   return cell;
@@ -798,7 +799,7 @@ interface CityDistrict {
   cos: number; // rotation: a seeded multiple of 15°
   sin: number;
   px: number; // rotation pivot (district center, world)
-  py: number;
+  pz: number;
   minX: number; // district rect BASELINE (world; actual edges wiggle ±CITY_WIGGLE_AMP)
   maxX: number;
   minZ: number;
@@ -826,7 +827,7 @@ const cityDistrictByIndex = (r: number, m: number): CityDistrict => {
       cos: Math.cos(angle),
       sin: Math.sin(angle),
       px: (minX + maxX) / 2,
-      py: (minZ + maxZ) / 2,
+      pz: (minZ + maxZ) / 2,
       minX,
       maxX,
       minZ,
@@ -856,15 +857,15 @@ const cityArterialDist = (vx: number, vz: number, d: CityDistrict): number =>
   );
 
 /** District-local → world (rotate by +angle about the district pivot). */
-const cityLocalToWorld = (lx: number, ly: number, d: CityDistrict): Vec2 => {
+const cityLocalToWorld = (lx: number, lz: number, d: CityDistrict): PointXZ => {
   const dx = lx - d.px;
-  const dz = ly - d.py;
-  return { x: d.px + dx * d.cos - dz * d.sin, y: d.py + dx * d.sin + dz * d.cos };
+  const dz = lz - d.pz;
+  return { x: d.px + dx * d.cos - dz * d.sin, z: d.pz + dx * d.sin + dz * d.cos };
 };
 
 const getCityTerrain = (
   vx: number,
-  vy: number,
+  vz: number,
   city: DomainConfig["cityConfig"],
   walls: Wall[],
   biomeBoundaryDist: number,
@@ -877,14 +878,14 @@ const getCityTerrain = (
   // −angle about the district pivot). ALL block logic below runs in local
   // coordinates; distances/heights are rotation-invariant, so the outputs
   // need no back-transform.
-  const d = getCityDistrict(vx, vy);
+  const d = getCityDistrict(vx, vz);
   const rdx = vx - d.px;
-  const rdz = vy - d.py;
+  const rdz = vz - d.pz;
   const lx = d.px + rdx * d.cos + rdz * d.sin;
-  const ly = d.py - rdx * d.sin + rdz * d.cos;
+  const lz = d.pz - rdx * d.sin + rdz * d.cos;
 
   const ix = Math.floor(lx / gs);
-  const iy = Math.floor(ly / gs);
+  const iz = Math.floor(lz / gs);
 
   // ── Block grid ──
   // Square cells labeled with a block index; neighbors that roll the same
@@ -893,14 +894,14 @@ const getCityTerrain = (
   // cells carry a UNIQUE label, so they are always ringed by boundary roads —
   // their internal features (diagonal / roundabout) terminate cleanly into
   // grid intersections and can never shave a sliver off a neighbor.
-  const cell = getCityCell(ix, iy, walls, d);
+  const cell = getCityCell(ix, iz, walls, d);
   const cur = cell.label;
-  // 3×3 labels: L[(a+1)*3 + (b+1)] = label of cell (ix+a, iy+b). The full
+  // 3×3 labels: L[(a+1)*3 + (b+1)] = label of cell (ix+a, iz+b). The full
   // neighborhood (not just 4 neighbors) feeds the SEGMENT constraints below.
   const L: number[] = [];
   for (let a = -1; a <= 1; a++) {
     for (let b = -1; b <= 1; b++) {
-      L[(a + 1) * 3 + (b + 1)] = getCityCell(ix + a, iy + b, walls, d).label;
+      L[(a + 1) * 3 + (b + 1)] = getCityCell(ix + a, iz + b, walls, d).label;
     }
   }
   const n = L[5]; // (0, +1)
@@ -938,12 +939,12 @@ const getCityTerrain = (
   let circUz = 0;
   if (cell.shape === CITY_SHAPE_CIRCLE) {
     const scx = (2 * Math.floor(ix / 2) + 1) * gs;
-    const scz = (2 * Math.floor(iy / 2) + 1) * gs;
-    circleR = Math.hypot(lx - scx, ly - scz);
+    const scz = (2 * Math.floor(iz / 2) + 1) * gs;
+    circleR = Math.hypot(lx - scx, lz - scz);
     ringR = gs * CITY_RING_RADIUS_FRAC;
     if (circleR > 1e-6) {
       circUx = (lx - scx) / circleR;
-      circUz = (ly - scz) / circleR;
+      circUz = (lz - scz) / circleR;
     }
   }
   const insideRing = circleR < ringR;
@@ -970,10 +971,10 @@ const getCityTerrain = (
         const differs = b <= 1 && L[(a + 1) * 3 + (b + 1)] !== L[(a + 2) * 3 + (b + 1)];
         if (differs && runStart === 99) runStart = b;
         if (!differs && runStart !== 99) {
-          const z0 = (iy + runStart) * gs;
-          const z1 = (iy + b) * gs;
+          const z0 = (iz + runStart) * gs;
+          const z1 = (iz + b) * gs;
           const ddx = X - lx;
-          const ddz = ly < z0 ? z0 - ly : ly > z1 ? z1 - ly : 0;
+          const ddz = lz < z0 ? z0 - lz : lz > z1 ? z1 - lz : 0;
           const dd = Math.hypot(ddx, ddz);
           if (dd < 1e-6) considerLocal(0, 1, 0);
           else considerLocal(dd, ddx / dd, ddz / dd);
@@ -983,7 +984,7 @@ const getCityTerrain = (
     }
     // Horizontal boundary lines (between cell rows b and b+1):
     for (let b = -1; b <= 0; b++) {
-      const Z = (iy + b + 1) * gs;
+      const Z = (iz + b + 1) * gs;
       let runStart = 99;
       for (let a = -1; a <= 2; a++) {
         const differs = a <= 1 && L[(a + 1) * 3 + (b + 1)] !== L[(a + 1) * 3 + (b + 2)];
@@ -991,7 +992,7 @@ const getCityTerrain = (
         if (!differs && runStart !== 99) {
           const x0 = (ix + runStart) * gs;
           const x1 = (ix + a) * gs;
-          const ddz = Z - ly;
+          const ddz = Z - lz;
           const ddx = lx < x0 ? x0 - lx : lx > x1 ? x1 - lx : 0;
           const dd = Math.hypot(ddx, ddz);
           if (dd < 1e-6) considerLocal(0, 0, 1);
@@ -1008,7 +1009,7 @@ const getCityTerrain = (
     // area into two large flatiron halves. Its unique label guarantees
     // boundary streets, so the diagonal always ends in an intersection.
     const dx = lx - 2 * Math.floor(ix / 2) * gs;
-    const dz = ly - 2 * Math.floor(iy / 2) * gs;
+    const dz = lz - 2 * Math.floor(iz / 2) * gs;
     if (cell.shape === CITY_SHAPE_TRI_NE) {
       // Line x − z = 0 (super-local); gradient (√½, −√½)
       const sig = (dx - dz) * Math.SQRT1_2;
@@ -1037,10 +1038,10 @@ const getCityTerrain = (
   // the shader bands, curb dip, and spawn filters everywhere — arterial
   // features just render stretched by freewayWidth / roadWidth.
   const fwScale = city.roadWidth / city.freewayWidth;
-  const aS = vy - cityRowEdgeZ(d.r, vx);
-  const aN = cityRowEdgeZ(d.r + 1, vx) - vy;
-  const aW = vx - citySegEdgeX(d.r, d.m, vy);
-  const aE = citySegEdgeX(d.r, d.m + 1, vy) - vx;
+  const aS = vz - cityRowEdgeZ(d.r, vx);
+  const aN = cityRowEdgeZ(d.r + 1, vx) - vz;
+  const aW = vx - citySegEdgeX(d.r, d.m, vz);
+  const aE = citySegEdgeX(d.r, d.m + 1, vz) - vx;
   let arterialReal = aS;
   let aUx = 0;
   let aUz = -1;
@@ -1055,13 +1056,13 @@ const getCityTerrain = (
     arterialReal = aW;
     aUx = -1;
     aUz = 0;
-    arterialAlong = vy; // segment boundaries run along z
+    arterialAlong = vz; // segment boundaries run along z
   }
   if (aE < arterialReal) {
     arterialReal = aE;
     aUx = 1;
     aUz = 0;
-    arterialAlong = vy;
+    arterialAlong = vz;
   }
   arterialReal = Math.max(0, arterialReal);
   // Normalized (× roadWidth/freewayWidth) through the visual bands so the
@@ -1109,21 +1110,21 @@ const getCityTerrain = (
   const rampFrac = (city.roadWidth + CITY_RAMP_SPAN) / gs;
   const flatEdge = 0.5 - rampFrac;
   const fx = lx / gs - (ix + 0.5); // [-0.5, 0.5] across the cell
-  const fy = ly / gs - (iy + 0.5);
+  const fz = lz / gs - (iz + 0.5);
   const wx = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fx));
-  const wy = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fy));
+  const wz = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fz));
   const dxi = fx >= 0 ? 1 : -1;
-  const dyi = fy >= 0 ? 1 : -1;
+  const dzi = fz >= 0 ? 1 : -1;
   const hC = cityBlockElevation(city.seed, cur, city.maxBlockElevation);
   const hX = cityBlockElevation(city.seed, fx >= 0 ? e : w, city.maxBlockElevation);
-  const hY = cityBlockElevation(city.seed, fy >= 0 ? n : s, city.maxBlockElevation);
+  const hZ = cityBlockElevation(city.seed, fz >= 0 ? n : s, city.maxBlockElevation);
   const hD = cityBlockElevation(
     city.seed,
-    getCityCell(ix + dxi, iy + dyi, walls, d).label,
+    getCityCell(ix + dxi, iz + dzi, walls, d).label,
     city.maxBlockElevation
   );
   let elevation =
-    hC * (1 - wx) * (1 - wy) + hX * wx * (1 - wy) + hY * (1 - wx) * wy + hD * wx * wy;
+    hC * (1 - wx) * (1 - wz) + hX * wx * (1 - wz) + hZ * (1 - wx) * wz + hD * wx * wz;
 
   // Freeways (arterials + belt) sit at MID-PLATEAU GRADE (maxBlockElevation/2
   // — the expected value of the seeded plateaus), and the transition spreads
@@ -1146,7 +1147,7 @@ const getCityTerrain = (
   if (insideRing) {
     const islandH = cityBlockElevation(
       city.seed,
-      cityUniqueLabel(Math.floor(ix / 2), Math.floor(iy / 2)),
+      cityUniqueLabel(Math.floor(ix / 2), Math.floor(iz / 2)),
       city.maxBlockElevation
     );
     const islandMask = 1 - smoothstep(ringR - 12, ringR - 2, circleR);
@@ -1533,21 +1534,21 @@ export function initCompute(config: DomainConfig): void {
   }
 }
 
-const regionGridFn = (point: Vec2, regions: SerializedRegion[]) => {
-  const uuid = seedRand(`${point.x},${point.y}`);
+const regionGridFn = (point: PointXZ, regions: SerializedRegion[]) => {
+  const uuid = seedRand(`${point.x},${point.z}`);
   return regions[Math.floor(uuid * regions.length)];
 };
 
-const biomeGridFn = (point: Vec2, rGrid: VGrid[]) => {
+const biomeGridFn = (point: PointXZ, rGrid: VGrid[]) => {
   const nearest = getNearestEntry(point, rGrid);
   const region: SerializedRegion = nearest.element;
-  const uuid = seedRand(`${point.x},${point.y}`);
+  const uuid = seedRand(`${point.x},${point.z}`);
   return region.biomes[Math.floor(uuid * region.biomes.length)];
 };
 
 /** Region + biome voronoi context at a (road-noise-warped) vertex — shared by
  *  computeVertexData and the road-marker enumeration. */
-const getBiomeContext = (currentVertex: Vec2) => {
+const getBiomeContext = (currentVertex: PointXZ) => {
   const regionGrid = getVoronoiGrid(
     `${cfg!.seed} - regionGrid`,
     currentVertex,
@@ -1579,7 +1580,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // Step 1: Road noise offset
   const cvx = x + terrainNoise(cfg.roadNoiseParams, z, 0);
   const cvz = z + terrainNoise(cfg.roadNoiseParams, x, 0);
-  const currentVertex: Vec2 = { x: cvx, y: cvz };
+  const currentVertex: PointXZ = { x: cvx, z: cvz };
 
   // Step 2: Voronoi — region grid, biome grid, walls
   const { biome, biomeWalls, riverWalls } = getBiomeContext(currentVertex);
@@ -1664,23 +1665,23 @@ export function computeVertexData(x: number, z: number): VertexResult {
 
 /** District-local cell lookup with the local biome walls (rim detection),
  *  mirroring computeVertexData's road-noise warp for the context. */
-const cityCellAtLocal = (ix: number, iy: number, d: CityDistrict): CityCell => {
+const cityCellAtLocal = (ix: number, iz: number, d: CityDistrict): CityCell => {
   // Cache-first: getCityCell only needs the walls/noise context on a genuine
   // miss, but building that context costs 2 road-noise FBMs + the voronoi
   // lookup — paying it on every call made cache HITS the dominant cost of
   // the dressing enumerations (markers probe this 3× per candidate).
   const city = cfg!.cityConfig;
   const store = cityCellCaches[city.seed];
-  const cached = store && cityCellLookup(store, d.key, ix, iy);
+  const cached = store && cityCellLookup(store, d.key, ix, iz);
   if (cached) return cached;
 
   const gs = city.gridSize;
-  const w = cityLocalToWorld((ix + 0.5) * gs, (iy + 0.5) * gs, d);
-  const warped: Vec2 = {
-    x: w.x + terrainNoise(cfg!.roadNoiseParams, w.y, 0),
-    y: w.y + terrainNoise(cfg!.roadNoiseParams, w.x, 0),
+  const w = cityLocalToWorld((ix + 0.5) * gs, (iz + 0.5) * gs, d);
+  const warped: PointXZ = {
+    x: w.x + terrainNoise(cfg!.roadNoiseParams, w.z, 0),
+    z: w.z + terrainNoise(cfg!.roadNoiseParams, w.x, 0),
   };
-  return getCityCell(ix, iy, getBiomeContext(warped).biomeWalls, d);
+  return getCityCell(ix, iz, getBiomeContext(warped).biomeWalls, d);
 };
 
 /** Local AABB of the chunk∩district overlap (rotate the overlap's corners
@@ -1709,9 +1710,9 @@ const cityChunkLocalAABB = (
     [wx1, wz1],
   ]) {
     const dx = cxw - d.px;
-    const dz = czw - d.py;
+    const dz = czw - d.pz;
     const lcx = d.px + dx * d.cos + dz * d.sin;
-    const lcz = d.py - dx * d.sin + dz * d.cos;
+    const lcz = d.pz - dx * d.sin + dz * d.cos;
     if (lcx < lminX) lminX = lcx;
     if (lcx > lmaxX) lmaxX = lcx;
     if (lcz < lminZ) lminZ = lcz;
@@ -1795,14 +1796,14 @@ export function getCityRoadMarkers(
 
       // Cell lookup with the local biome walls (rim detection), mirroring
       // computeVertexData's road-noise warp for the context.
-      const cellAt = (ix: number, iy: number): CityCell => cityCellAtLocal(ix, iy, d);
+      const cellAt = (ix: number, iz: number): CityCell => cityCellAtLocal(ix, iz, d);
 
       const emitLocal = (lmx: number, lmz: number, ldx: number, ldz: number) => {
         const p = cityLocalToWorld(lmx, lmz, d);
-        if (p.x < minX || p.x >= maxX || p.y < minZ || p.y >= maxZ) return; // chunk ownership
-        if (getCityDistrict(p.x, p.y).key !== d.key) return; // district clip (wiggly edges)
-        if (cityArterialDist(p.x, p.y, d) < city.freewayWidth + 5) return; // stop at arterials
-        tryEmit(p.x, p.y, ldx * d.cos - ldz * d.sin, ldx * d.sin + ldz * d.cos);
+        if (p.x < minX || p.x >= maxX || p.z < minZ || p.z >= maxZ) return; // chunk ownership
+        if (getCityDistrict(p.x, p.z).key !== d.key) return; // district clip (wiggly edges)
+        if (cityArterialDist(p.x, p.z, d) < city.freewayWidth + 5) return; // stop at arterials
+        tryEmit(p.x, p.z, ldx * d.cos - ldz * d.sin, ldx * d.sin + ldz * d.cos);
       };
 
       // Local marker on a boundary sits exactly on a cell edge — test the
@@ -1810,15 +1811,15 @@ export function getCityRoadMarkers(
       const insideRoundabout = (lmx: number, lmz: number): boolean => {
         const cx = Math.floor(lmx / gs);
         const cz = Math.floor(lmz / gs);
-        for (const [ix, iy] of [
+        for (const [ix, iz] of [
           [cx, cz],
           [cx - 1, cz],
           [cx, cz - 1],
         ]) {
-          if (cellAt(ix, iy).shape !== CITY_SHAPE_CIRCLE) continue;
+          if (cellAt(ix, iz).shape !== CITY_SHAPE_CIRCLE) continue;
           const sx = Math.floor(ix / 2);
-          const sy = Math.floor(iy / 2);
-          const rr = Math.hypot(lmx - (2 * sx + 1) * gs, lmz - (2 * sy + 1) * gs);
+          const sz = Math.floor(iz / 2);
+          const rr = Math.hypot(lmx - (2 * sx + 1) * gs, lmz - (2 * sz + 1) * gs);
           if (rr < gs * CITY_RING_RADIUS_FRAC + city.roadWidth + 4) return true;
         }
         return false;
@@ -1834,22 +1835,22 @@ export function getCityRoadMarkers(
       const iy0 = Math.floor(lminZ / gs) - 1;
       const iy1 = Math.floor(lmaxZ / gs) + 1;
       for (let ix = ix0; ix <= ix1; ix++) {
-        for (let iy = iy0; iy <= iy1; iy++) {
-          const cell = cellAt(ix, iy);
+        for (let iz = iy0; iz <= iy1; iz++) {
+          const cell = cellAt(ix, iz);
           const curL = cell.label;
 
-          // East boundary: x = (ix+1)·gs, z ∈ [iy·gs, (iy+1)·gs]
-          if (cellAt(ix + 1, iy).label !== curL) {
+          // East boundary: x = (ix+1)·gs, z ∈ [iz·gs, (iz+1)·gs]
+          if (cellAt(ix + 1, iz).label !== curL) {
             const bx = (ix + 1) * gs;
-            for (let z = iy * gs + inset; z <= (iy + 1) * gs - inset; z += streetSpacing) {
+            for (let z = iz * gs + inset; z <= (iz + 1) * gs - inset; z += streetSpacing) {
               if (insideRoundabout(bx, z)) continue;
               emitLocal(bx, z, 0, 1);
             }
           }
 
-          // North boundary: z = (iy+1)·gs, x ∈ [ix·gs, (ix+1)·gs]
-          if (cellAt(ix, iy + 1).label !== curL) {
-            const bz = (iy + 1) * gs;
+          // North boundary: z = (iz+1)·gs, x ∈ [ix·gs, (ix+1)·gs]
+          if (cellAt(ix, iz + 1).label !== curL) {
+            const bz = (iz + 1) * gs;
             for (let x = ix * gs + inset; x <= (ix + 1) * gs - inset; x += streetSpacing) {
               if (insideRoundabout(x, bz)) continue;
               emitLocal(x, bz, 1, 0);
@@ -1860,14 +1861,14 @@ export function getCityRoadMarkers(
             // 2×2 flatiron — emitted from the super-cell's anchor cell only;
             // per-marker ownership dedupes across chunks.
             const sx = Math.floor(ix / 2);
-            const sy = Math.floor(iy / 2);
-            if (ix !== 2 * sx || iy !== 2 * sy) continue;
+            const sz = Math.floor(iz / 2);
+            if (ix !== 2 * sx || iz !== 2 * sz) continue;
             const side = 2 * gs;
             const diagLen = side * Math.SQRT2;
             const dirX = Math.SQRT1_2;
             const dirZ = cell.shape === CITY_SHAPE_TRI_NE ? Math.SQRT1_2 : -Math.SQRT1_2;
             const startX = 2 * sx * gs;
-            const startZ = cell.shape === CITY_SHAPE_TRI_NE ? 2 * sy * gs : 2 * sy * gs + side;
+            const startZ = cell.shape === CITY_SHAPE_TRI_NE ? 2 * sz * gs : 2 * sz * gs + side;
             const diagInset = inset * Math.SQRT1_2 + city.roadWidth;
             for (let t = diagInset; t <= diagLen - diagInset; t += streetSpacing) {
               emitLocal(startX + dirX * t, startZ + dirZ * t, dirX, dirZ);
@@ -1876,10 +1877,10 @@ export function getCityRoadMarkers(
             // 2×2 roundabout — emitted from the anchor cell only; markers
             // ring the island tangentially.
             const sx = Math.floor(ix / 2);
-            const sy = Math.floor(iy / 2);
-            if (ix !== 2 * sx || iy !== 2 * sy) continue;
+            const sz = Math.floor(iz / 2);
+            if (ix !== 2 * sx || iz !== 2 * sz) continue;
             const scx = (2 * sx + 1) * gs;
-            const scz = (2 * sy + 1) * gs;
+            const scz = (2 * sz + 1) * gs;
             const ringR = gs * CITY_RING_RADIUS_FRAC;
             const count = Math.max(8, Math.round((2 * Math.PI * ringR) / streetSpacing));
             for (let i = 0; i < count; i++) {
@@ -1960,14 +1961,14 @@ export function getCityRoadMarkers(
   const wcz = (minZ + maxZ) / 2;
   const beltWalls = getBiomeContext({
     x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
-    y: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+    z: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
   }).biomeWalls;
   for (const wall of beltWalls) {
     // getWalls emits each voronoi wall twice (once per Delaunay halfedge,
     // endpoints swapped) — keep the canonical orientation only.
-    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ey < wall.sy)) continue;
+    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ez < wall.sz)) continue;
     const wdx = wall.ex - wall.sx;
-    const wdz = wall.ey - wall.sy;
+    const wdz = wall.ez - wall.sz;
     const wlen = Math.hypot(wdx, wdz);
     if (wlen < freewaySpacing) continue;
     const ux = wdx / wlen;
@@ -1976,7 +1977,7 @@ export function getCityRoadMarkers(
       for (const side of [1, -1]) {
         // Warped-space point on the belt centerline
         const twx = wall.sx + ux * t - uz * beltR * side;
-        const twz = wall.sy + uz * t + ux * beltR * side;
+        const twz = wall.sz + uz * t + ux * beltR * side;
         // Invert the road-noise warp (fixed point; the warp is smooth and
         // large-scale, so a few iterations land within the sanity filters)
         let mx = twx;
@@ -2039,10 +2040,10 @@ export function getCityVoronoiSites(
   const iy1 = Math.floor(maxZ / gs) + 1;
 
   for (let ix = ix0; ix <= ix1; ix++) {
-    for (let iy = iy0; iy <= iy1; iy++) {
-      const px = seedRand(`${seed} - ${ix}X${iy}`);
-      const py = seedRand(`${seed} - ${ix}Y${iy}`);
-      const site: Vec2 = { x: (ix + px) * gs, y: (iy + py) * gs };
+    for (let iz = iy0; iz <= iy1; iz++) {
+      const jitterX = seedRand(`${seed} - ${ix}X${iz}`);
+      const jitterZ = seedRand(`${seed} - ${ix}Z${iz}`);
+      const site: PointXZ = { x: (ix + jitterX) * gs, z: (iz + jitterZ) * gs };
       // Same biome roll the grid makes for this cell: nearest region point →
       // seeded pick among that region's biomes.
       const regionGrid = getVoronoiGrid(
@@ -2056,15 +2057,15 @@ export function getCityVoronoiSites(
       if (biome.id !== 1) continue;
       // Invert the road-noise warp (fixed point — same as the belt markers)
       let wx = site.x;
-      let wz = site.y;
+      let wz = site.z;
       for (let it = 0; it < 3; it++) {
         wx = site.x - terrainNoise(cfg.roadNoiseParams, wz, 0);
-        wz = site.y - terrainNoise(cfg.roadNoiseParams, wx, 0);
+        wz = site.z - terrainNoise(cfg.roadNoiseParams, wx, 0);
       }
       // RAW height: the site feeds a beacon floating heightOffset above the
       // ground — flatten-pad deltas are irrelevant, and the padded path
       // would compute pad tiles for every site.
-      out.push({ key: `${ix},${iy}`, x: wx, y: computeVertexDataRaw(wx, wz).height, z: wz });
+      out.push({ key: `${ix},${iz}`, x: wx, y: computeVertexDataRaw(wx, wz).height, z: wz });
     }
   }
 
@@ -2128,12 +2129,12 @@ export function getCityTrafficLightPoints(
       const iy0 = Math.floor(aabb.lminZ / gs) - 1;
       const iy1 = Math.floor(aabb.lmaxZ / gs) + 2;
       for (let ix = ix0; ix <= ix1; ix++) {
-        for (let iy = iy0; iy <= iy1; iy++) {
-          // Corner at local (ix·gs, iy·gs); the four cells around it.
-          const A = cityCellAtLocal(ix - 1, iy - 1, d);
-          const B = cityCellAtLocal(ix, iy - 1, d);
-          const C = cityCellAtLocal(ix - 1, iy, d);
-          const D = cityCellAtLocal(ix, iy, d);
+        for (let iz = iy0; iz <= iy1; iz++) {
+          // Corner at local (ix·gs, iz·gs); the four cells around it.
+          const A = cityCellAtLocal(ix - 1, iz - 1, d);
+          const B = cityCellAtLocal(ix, iz - 1, d);
+          const C = cityCellAtLocal(ix - 1, iz, d);
+          const D = cityCellAtLocal(ix, iz, d);
           // Rim cells (whole cell = ring road) and roundabout territory
           // (curved ring roads, radiating tees) never get signals.
           if (A.label < 0 || B.label < 0 || C.label < 0 || D.label < 0) continue;
@@ -2150,19 +2151,19 @@ export function getCityTrafficLightPoints(
             (A.label !== C.label ? 1 : 0) + // west arm
             (B.label !== D.label ? 1 : 0); // east arm
           if (arms < 3) continue;
-          if (seedRand(`${city.seed}-tl-${d.key}|${ix},${iy}`) >= chance) continue;
+          if (seedRand(`${city.seed}-tl-${d.key}|${ix},${iz}`) >= chance) continue;
 
-          const pc = cityLocalToWorld(ix * gs, iy * gs, d);
+          const pc = cityLocalToWorld(ix * gs, iz * gs, d);
           // Ownership by the corner's world position — one deterministic
           // point decides which chunk emits the whole intersection.
-          if (pc.x < minX || pc.x >= maxX || pc.y < minZ || pc.y >= maxZ) continue;
-          if (getCityDistrict(pc.x, pc.y).key !== d.key) continue; // wiggly district clip
+          if (pc.x < minX || pc.x >= maxX || pc.z < minZ || pc.z >= maxZ) continue;
+          if (getCityDistrict(pc.x, pc.z).key !== d.key) continue; // wiggly district clip
           // Intersections near arterials lose their corners to the wide
           // chamfer — skip them entirely.
-          if (cityArterialDist(pc.x, pc.y, d) < city.freewayWidth + 16) continue;
+          if (cityArterialDist(pc.x, pc.z, d) < city.freewayWidth + 16) continue;
 
           const lx = ix * gs;
-          const lz = iy * gs;
+          const lz = iz * gs;
           for (const [sx, sz] of [
             [1, 1],
             [1, -1],
@@ -2177,7 +2178,7 @@ export function getCityTrafficLightPoints(
                 lz + sz * off * Math.SQRT1_2,
                 d
               );
-              const vd = computeVertexData(p.x, p.y);
+              const vd = computeVertexData(p.x, p.z);
               if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) break;
               // One-sided like the road markers: only strictly inside the belt
               // ring (skips the corridor AND the strip beyond it).
@@ -2192,10 +2193,10 @@ export function getCityTrafficLightPoints(
               out.push({
                 x: p.x,
                 y: vd.height,
-                z: p.y,
+                z: p.z,
                 dirX: fx * d.cos - fz * d.sin,
                 dirZ: fx * d.sin + fz * d.cos,
-                phase: seedRand(`${city.seed}-tlph-${d.key}|${ix},${iy}|${sx},${sz}`),
+                phase: seedRand(`${city.seed}-tlph-${d.key}|${ix},${iz}|${sx},${sz}`),
               });
               break;
             }
@@ -2379,18 +2380,18 @@ export function getCityFreewaySidePoints(
   const wcz = (minZ + maxZ) / 2;
   const beltWalls = getBiomeContext({
     x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
-    y: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+    z: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
   }).biomeWalls;
   const evalBelt = (wall: Wall, t: number, s: number, side: number, owned: boolean): Candidate => {
-    if (t <= 0 || t >= Math.hypot(wall.ex - wall.sx, wall.ey - wall.sy)) return null;
+    if (t <= 0 || t >= Math.hypot(wall.ex - wall.sx, wall.ez - wall.sz)) return null;
     const wdx = wall.ex - wall.sx;
-    const wdz = wall.ey - wall.sy;
+    const wdz = wall.ez - wall.sz;
     const wlen = Math.hypot(wdx, wdz);
     const ux = wdx / wlen;
     const uz = wdz / wlen;
     const o = beltR + side * lateral;
     const twx = wall.sx + ux * t - uz * o * s;
-    const twz = wall.sy + uz * t + ux * o * s;
+    const twz = wall.sz + uz * t + ux * o * s;
     let mx = twx;
     let mz = twz;
     for (let it = 0; it < 3; it++) {
@@ -2409,8 +2410,8 @@ export function getCityFreewaySidePoints(
   };
   for (const wall of beltWalls) {
     // getWalls emits each wall twice endpoint-swapped — canonical orientation only.
-    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ey < wall.sy)) continue;
-    const wlen = Math.hypot(wall.ex - wall.sx, wall.ey - wall.sy);
+    if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ez < wall.sz)) continue;
+    const wlen = Math.hypot(wall.ex - wall.sx, wall.ez - wall.sz);
     if (wlen < spacing) continue;
     for (let t = spacing / 2; t < wlen; t += spacing) {
       for (const s of [1, -1]) {

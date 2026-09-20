@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { PointXZ } from "../../utils/math/types";
 export interface TerrainProps {
   group: THREE.Group;
   chunks: { [key: string]: { position: number[]; chunk: Chunk } };
@@ -11,7 +12,8 @@ export interface Chunk {
   /** Canonical `${lod.level}/${gx}/${gz}` key — cached at queue time so the
    *  per-frame passes never rebuild strings from float math. */
   key: string;
-  offset: THREE.Vector2;
+  /** World-space chunk center on the horizontal plane. */
+  offset: PointXZ;
   plane: THREE.Mesh;
   rebuildIterator: AsyncIterator<any> | null;
   /** The chunk's Rapier heightfield body — built IMPERATIVELY (rapier-side

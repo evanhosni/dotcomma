@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import type { PointXZ } from "../math/types";
 import { Biome, Region } from "../../world/types";
 
 export enum VORONOI_FUNCTION {
@@ -11,34 +11,48 @@ export enum VORONOI_FUNCTION {
   GET_DISTANCE_TO_WALL = "get-distance-to-wall",
 }
 
+/** One jittered voronoi site on the horizontal (x/z) world plane and the
+ *  element (region / biome) it was assigned. */
 export interface VoronoiGrid {
-  point: THREE.Vector2;
+  point: PointXZ;
   element: any;
+}
+
+/** A voronoi cell wall: a segment on the horizontal plane between two
+ *  circumcenters. Same shape as the inlined pipeline's Wall
+ *  (utils/workers/vertexCompute.ts). */
+export interface VoronoiWall {
+  sx: number;
+  sz: number;
+  ex: number;
+  ez: number;
 }
 
 export interface VoronoiGetGridParams {
   seed: string;
-  currentVertex: THREE.Vector2;
+  currentVertex: PointXZ;
   cellArray: any[];
   gridSize: number;
-  gridFunction: (point: THREE.Vector2, array: any[]) => any;
+  gridFunction: (point: PointXZ, array: any[]) => any;
 }
 
 export interface VoronoiGetWallsParams {
   seed: string;
-  currentVertex: THREE.Vector2;
+  currentVertex: PointXZ;
   grid: VoronoiGrid[];
+  regionGrid: VoronoiGrid[];
   gridSize: number;
 }
 
 export interface VoronoiGetDistanceToWallParams {
-  currentVertex: THREE.Vector2;
-  walls: THREE.Line3[];
+  currentVertex: PointXZ;
+  walls: VoronoiWall[];
 }
 
 interface VoronoiCreateParamsBase {
   seed: string;
-  currentVertex: THREE.Vector2;
+  /** Horizontal world position to classify (x/z — NOT a screen/plane x/y). */
+  currentVertex: PointXZ;
   gridSize: number;
 }
 

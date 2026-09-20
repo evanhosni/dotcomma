@@ -1,5 +1,5 @@
 import Delaunator from "delaunator";
-import * as THREE from "three";
+import type { PointXZ } from "../math/types";
 import { Biome, Region } from "../../world/types";
 import { _math } from "../math/_math";
 import { TaskQueue } from "../task-queue/TaskQueue";
@@ -8,8 +8,18 @@ import {
   VoronoiCreateParams,
   VoronoiGetDistanceToWallParams,
   VoronoiGetGridParams,
+  VoronoiGetWallsParams,
   VoronoiGrid,
+  VoronoiWall,
 } from "./types";
+
+// Everything in this worker is 2D on the HORIZONTAL world plane: points are
+// { x, z } (PointXZ), never THREE.Vector2 — the world is y-up and `y` is
+// height everywhere in the codebase. This is the low-rate main-thread lookup
+// (Skybox / stats overlay); the terrain pipeline runs the same algorithm
+// inlined in utils/workers/vertexCompute.ts, and the two MUST roll identical
+// seeds (`${seed} - ${ix}X${iz}` / `${seed} - ${ix}Z${iz}`) to agree on the
+// biome at a point.
 
 interface MessageData {
   type: VORONOI_FUNCTION;
@@ -28,6 +38,7 @@ async function handleTask(task: MessageData) {
 
   const create = (params: VoronoiCreateParams) => {
     const { seed, currentVertex, regionGridSize, regions, gridSize, biomes } = params as VoronoiCreateParams;
+    const vertex: PointXZ = { x: currentVertex.x, z: currentVertex.z };
 
     let grid: VoronoiGrid[] = [];
     let regionGrid: VoronoiGrid[] = [];
@@ -35,11 +46,11 @@ async function handleTask(task: MessageData) {
     if (regionGridSize && regions?.length) {
       regionGrid = getGrid({
         seed: `${seed} - regionGrid`,
-        currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
+        currentVertex: vertex,
         cellArray: regions,
         gridSize: regionGridSize,
-        gridFunction: (point: THREE.Vector2, regions: Region[]): Region => {
-          let uuid = _math.seedRand(`${point.x},${point.y}`);
+        gridFunction: (point: PointXZ, regions: Region[]): Region => {
+          let uuid = _math.seedRand(`${point.x},${point.z}`);
           let region = regions[Math.floor(uuid * regions.length)];
           return region;
         },
@@ -47,13 +58,13 @@ async function handleTask(task: MessageData) {
 
       grid = getGrid({
         seed: `${seed} - grid`,
-        currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
+        currentVertex: vertex,
         cellArray: regionGrid,
         gridSize: gridSize,
-        gridFunction: (point: THREE.Vector2, grid: VoronoiGrid[]): Biome => {
+        gridFunction: (point: PointXZ, grid: VoronoiGrid[]): Biome => {
           const nearest = getNearestEntry(point, grid);
           const region: Region = nearest.element;
-          let uuid = _math.seedRand(`${point.x},${point.y}`);
+          let uuid = _math.seedRand(`${point.x},${point.z}`);
           let biome = region.biomes[Math.floor(uuid * region.biomes.length)];
           return biome;
         },
@@ -61,39 +72,33 @@ async function handleTask(task: MessageData) {
     } else if (biomes?.length) {
       grid = getGrid({
         seed: `${seed} - grid`,
-        currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
+        currentVertex: vertex,
         cellArray: biomes!,
         gridSize: gridSize,
-        gridFunction: (point: THREE.Vector2, biomes: Biome[]): Biome => {
-          let uuid = _math.seedRand(`${point.x},${point.y}`);
+        gridFunction: (point: PointXZ, biomes: Biome[]): Biome => {
+          let uuid = _math.seedRand(`${point.x},${point.z}`);
           let biome = biomes[Math.floor(uuid * biomes.length)];
           return biome;
         },
       });
     }
 
-    const region = getCurrentRegion(new THREE.Vector2(currentVertex.x, currentVertex.y), regionGrid);
-    const regionSite = getCurrentRegionSite(new THREE.Vector2(currentVertex.x, currentVertex.y), regionGrid);
-    const biome = getCurrentBiome(new THREE.Vector2(currentVertex.x, currentVertex.y), grid);
-    const biomeSite = getCurrentBiomeSite(new THREE.Vector2(currentVertex.x, currentVertex.y), grid);
+    const region = getCurrentRegion(vertex, regionGrid);
+    const regionSite = getCurrentRegionSite(vertex, regionGrid);
+    const biome = getCurrentBiome(vertex, grid);
+    const biomeSite = getCurrentBiomeSite(vertex, grid);
 
     // Get walls with river boundary information
     const { biomeWalls, riverWalls } = getWalls({
       seed: `${seed} - walls`,
-      currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
+      currentVertex: vertex,
       grid,
       regionGrid,
       gridSize,
     });
 
-    const distanceToBiomeBoundary = getDistanceToWall({
-      currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
-      walls: biomeWalls,
-    });
-    const distanceToRiver = getDistanceToWall({
-      currentVertex: new THREE.Vector2(currentVertex.x, currentVertex.y),
-      walls: riverWalls,
-    });
+    const distanceToBiomeBoundary = getDistanceToWall({ currentVertex: vertex, walls: biomeWalls });
+    const distanceToRiver = getDistanceToWall({ currentVertex: vertex, walls: riverWalls });
 
     return {
       currentVertex,
@@ -109,21 +114,21 @@ async function handleTask(task: MessageData) {
   };
 
   const getGrid = ({ seed, currentVertex, cellArray, gridSize, gridFunction }: VoronoiGetGridParams): VoronoiGrid[] => {
-    const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
-    const [x, y] = currentGrid;
+    const x = Math.floor(currentVertex.x / gridSize);
+    const z = Math.floor(currentVertex.z / gridSize);
 
     if (!caches[seed]) caches[seed] = {};
     const cache = caches[seed];
 
-    const gridKey = `${x},${y}`;
+    const gridKey = `${x},${z}`;
     let grid: VoronoiGrid[] = cache[gridKey];
     if (!grid) {
       grid = [];
       for (let ix = x - 2; ix <= x + 2; ix++) {
-        for (let iy = y - 2; iy <= y + 2; iy++) {
-          const pointX = _math.seedRand(`${seed} - ${ix}X${iy}`);
-          const pointY = _math.seedRand(`${seed} - ${ix}Y${iy}`);
-          const point = new THREE.Vector2((ix + pointX) * gridSize, (iy + pointY) * gridSize);
+        for (let iz = z - 2; iz <= z + 2; iz++) {
+          const jitterX = _math.seedRand(`${seed} - ${ix}X${iz}`);
+          const jitterZ = _math.seedRand(`${seed} - ${ix}Z${iz}`);
+          const point: PointXZ = { x: (ix + jitterX) * gridSize, z: (iz + jitterZ) * gridSize };
           const element = gridFunction(point, cellArray);
           grid.push({ point, element });
         }
@@ -131,8 +136,8 @@ async function handleTask(task: MessageData) {
       cache[gridKey] = grid;
 
       for (const key in cache) {
-        const [cachedX, cachedY] = key.split(",").map(Number);
-        if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
+        const [cachedX, cachedZ] = key.split(",").map(Number);
+        if (Math.abs(x - cachedX) > 5 || Math.abs(z - cachedZ) > 5) {
           delete cache[key];
         }
       }
@@ -141,28 +146,28 @@ async function handleTask(task: MessageData) {
     return grid;
   };
 
-  const getNearestEntry = (point: THREE.Vector2, grid: VoronoiGrid[]): VoronoiGrid => {
+  const getNearestEntry = (point: PointXZ, grid: VoronoiGrid[]): VoronoiGrid => {
     let minDist = Infinity, nearest = grid[0];
     for (const entry of grid) {
-      const d = (point.x - entry.point.x) ** 2 + (point.y - entry.point.y) ** 2;
+      const d = (point.x - entry.point.x) ** 2 + (point.z - entry.point.z) ** 2;
       if (d < minDist) { minDist = d; nearest = entry; }
     }
     return nearest;
   };
 
-  const getCurrentBiome = (point: THREE.Vector2, grid: VoronoiGrid[]): Biome => {
+  const getCurrentBiome = (point: PointXZ, grid: VoronoiGrid[]): Biome => {
     return getNearestEntry(point, grid).element;
   };
 
-  const getCurrentBiomeSite = (point: THREE.Vector2, grid: VoronoiGrid[]): THREE.Vector2 => {
+  const getCurrentBiomeSite = (point: PointXZ, grid: VoronoiGrid[]): PointXZ => {
     return getNearestEntry(point, grid).point;
   };
 
-  const getCurrentRegion = (point: THREE.Vector2, regionGrid: VoronoiGrid[]): Region => {
+  const getCurrentRegion = (point: PointXZ, regionGrid: VoronoiGrid[]): Region => {
     return getNearestEntry(point, regionGrid).element;
   };
 
-  const getCurrentRegionSite = (point: THREE.Vector2, regionGrid: VoronoiGrid[]): THREE.Vector2 => {
+  const getCurrentRegionSite = (point: PointXZ, regionGrid: VoronoiGrid[]): PointXZ => {
     return getNearestEntry(point, regionGrid).point;
   };
 
@@ -176,26 +181,26 @@ async function handleTask(task: MessageData) {
     const coords = new Float64Array(grid.length * 2);
     for (let i = 0; i < grid.length; i++) {
       coords[i * 2] = grid[i].point.x;
-      coords[i * 2 + 1] = grid[i].point.y;
+      coords[i * 2 + 1] = grid[i].point.z;
     }
     const delaunay = new Delaunator(coords);
 
-    // Pre-compute circumcenters as flat [x, y, x, y, ...] array
+    // Pre-compute circumcenters as flat [x, z, x, z, ...] array
     const circumcenters: number[] = [];
     for (let i = 0; i < delaunay.triangles.length; i += 3) {
       const ai = delaunay.triangles[i];
       const bi = delaunay.triangles[i + 1];
       const ci = delaunay.triangles[i + 2];
-      const ax = grid[ai].point.x, ay = grid[ai].point.y;
-      const bx = grid[bi].point.x, by = grid[bi].point.y;
-      const cx = grid[ci].point.x, cy = grid[ci].point.y;
+      const ax = grid[ai].point.x, az = grid[ai].point.z;
+      const bx = grid[bi].point.x, bz = grid[bi].point.z;
+      const cx = grid[ci].point.x, cz = grid[ci].point.z;
 
-      const ad = ax * ax + ay * ay;
-      const bd = bx * bx + by * by;
-      const cd = cx * cx + cy * cy;
-      const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+      const ad = ax * ax + az * az;
+      const bd = bx * bx + bz * bz;
+      const cd = cx * cx + cz * cz;
+      const D = 2 * (ax * (bz - cz) + bx * (cz - az) + cx * (az - bz));
       circumcenters.push(
-        (1 / D) * (ad * (by - cy) + bd * (cy - ay) + cd * (ay - by)),
+        (1 / D) * (ad * (bz - cz) + bd * (cz - az) + cd * (az - bz)),
         (1 / D) * (ad * (cx - bx) + bd * (ax - cx) + cd * (bx - ax))
       );
     }
@@ -206,11 +211,11 @@ async function handleTask(task: MessageData) {
   };
 
   /** Find the two nearest grid entries to a point (by squared distance). */
-  const getTwoNearest = (px: number, py: number, grid: VoronoiGrid[]) => {
+  const getTwoNearest = (px: number, pz: number, grid: VoronoiGrid[]) => {
     let min1 = Infinity, min2 = Infinity;
     let idx1 = 0, idx2 = 1;
     for (let i = 0; i < grid.length; i++) {
-      const d = (px - grid[i].point.x) ** 2 + (py - grid[i].point.y) ** 2;
+      const d = (px - grid[i].point.x) ** 2 + (pz - grid[i].point.z) ** 2;
       if (d < min1) { min2 = min1; idx2 = idx1; min1 = d; idx1 = i; }
       else if (d < min2) { min2 = d; idx2 = i; }
     }
@@ -223,23 +228,17 @@ async function handleTask(task: MessageData) {
     grid,
     regionGrid,
     gridSize,
-  }: {
-    seed: string;
-    currentVertex: THREE.Vector2;
-    grid: VoronoiGrid[];
-    regionGrid: VoronoiGrid[];
-    gridSize: number;
-  }): { biomeWalls: THREE.Line3[]; riverWalls: THREE.Line3[] } => {
-    const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
-    const [x, y] = currentGrid;
+  }: VoronoiGetWallsParams): { biomeWalls: VoronoiWall[]; riverWalls: VoronoiWall[] } => {
+    const x = Math.floor(currentVertex.x / gridSize);
+    const z = Math.floor(currentVertex.z / gridSize);
 
     if (!caches[seed]) caches[seed] = {};
     const cache = caches[seed];
 
     const { delaunay, circumcenters } = getDelaunayData(grid);
 
-    const biomeWalls: THREE.Line3[] = [];
-    const riverWalls: THREE.Line3[] = [];
+    const biomeWalls: VoronoiWall[] = [];
+    const riverWalls: VoronoiWall[] = [];
 
     for (let i = 0; i < delaunay.halfedges.length; i++) {
       const edge = delaunay.halfedges[i];
@@ -247,15 +246,15 @@ async function handleTask(task: MessageData) {
       if (edge !== -1) {
         const t1 = Math.floor(i / 3);
         const t2 = Math.floor(edge / 3);
-        const v1x = circumcenters[t1 * 2], v1y = circumcenters[t1 * 2 + 1];
-        const v2x = circumcenters[t2 * 2], v2y = circumcenters[t2 * 2 + 1];
+        const v1x = circumcenters[t1 * 2], v1z = circumcenters[t1 * 2 + 1];
+        const v2x = circumcenters[t2 * 2], v2z = circumcenters[t2 * 2 + 1];
 
         const midX = (v1x + v2x) / 2;
-        const midY = (v1y + v2y) / 2;
-        const label = `${Math.floor(midX)},${Math.floor(midY)}`;
+        const midZ = (v1z + v2z) / 2;
+        const label = `${Math.floor(midX)},${Math.floor(midZ)}`;
 
         if (cache[label] === undefined) {
-          const [nearest1, nearest2] = getTwoNearest(midX, midY, grid);
+          const [nearest1, nearest2] = getTwoNearest(midX, midZ, grid);
 
           // Find which region each biome belongs to
           const region1 = getNearestEntry(nearest1.point, regionGrid)?.element;
@@ -266,7 +265,7 @@ async function handleTask(task: MessageData) {
             !nearest1.element.joinable || nearest1.element !== nearest2.element;
 
           cache[label] = {
-            grid: currentGrid,
+            grid: [x, z],
             isRegionBoundary,
             isBiomeBoundary,
           };
@@ -274,24 +273,21 @@ async function handleTask(task: MessageData) {
           for (const key in cache) {
             const cachedData = cache[key];
             if (cachedData.grid) {
-              const [cachedX, cachedY] = cachedData.grid;
-              if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
+              const [cachedX, cachedZ] = cachedData.grid;
+              if (Math.abs(x - cachedX) > 5 || Math.abs(z - cachedZ) > 5) {
                 delete cache[key];
               }
             }
           }
         }
 
-        // Use Vector3 with z=0 for Line3 compatibility (needed by getDistanceToWall)
-        const start = new THREE.Vector3(v1x, v1y, 0);
-        const end = new THREE.Vector3(v2x, v2y, 0);
-        const line = new THREE.Line3(start, end);
+        const wall: VoronoiWall = { sx: v1x, sz: v1z, ex: v2x, ez: v2z };
 
         if (cache[label].isRegionBoundary) {
-          riverWalls.push(line);
-          biomeWalls.push(line);
+          riverWalls.push(wall);
+          biomeWalls.push(wall);
         } else if (cache[label].isBiomeBoundary) {
-          biomeWalls.push(line);
+          biomeWalls.push(wall);
         }
       }
     }
@@ -299,87 +295,24 @@ async function handleTask(task: MessageData) {
     return { biomeWalls, riverWalls };
   };
 
-  // const getWalls = ({ seed, currentVertex, grid, gridSize }: VoronoiGetWallsParams): THREE.Line3[] => {
-  //   const currentGrid = [Math.floor(currentVertex.x / gridSize), Math.floor(currentVertex.y / gridSize)];
-  //   const [x, y] = currentGrid;
-
-  //   if (!caches[seed]) caches[seed] = {};
-  //   const cache = caches[seed];
-
-  //   const points = grid.map(({ point }) => point);
-  //   const delaunay = Delaunator.from(points.map((point) => [point.x, point.y]));
-
-  //   const circumcenters: THREE.Vector3[] = [];
-  //   for (let i = 0; i < delaunay.triangles.length; i += 3) {
-  //     const a = points[delaunay.triangles[i]];
-  //     const b = points[delaunay.triangles[i + 1]];
-  //     const c = points[delaunay.triangles[i + 2]];
-
-  //     const ad = a.x * a.x + a.y * a.y;
-  //     const bd = b.x * b.x + b.y * b.y;
-  //     const cd = c.x * c.x + c.y * c.y;
-  //     const D = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
-  //     const circumcenter = new THREE.Vector3( //TODO any way to use vector2 instead?
-  //       (1 / D) * (ad * (b.y - c.y) + bd * (c.y - a.y) + cd * (a.y - b.y)),
-  //       (1 / D) * (ad * (c.x - b.x) + bd * (a.x - c.x) + cd * (b.x - a.x)),
-  //       0
-  //     );
-  //     circumcenters.push(circumcenter);
-  //   }
-
-  //   const voronoiWalls = [];
-  //   for (let i = 0; i < delaunay.halfedges.length; i++) {
-  //     const edge = delaunay.halfedges[i];
-
-  //     if (edge !== -1) {
-  //       const v1 = circumcenters[Math.floor(i / 3)];
-  //       const v2 = circumcenters[Math.floor(edge / 3)];
-
-  //       const mid = new THREE.Vector2((v1.x + v2.x) / 2, (v1.y + v2.y) / 2);
-  //       const label = `${Math.floor(mid.x)},${Math.floor(mid.y)}`;
-
-  //       if (cache[label] === undefined) {
-  //         var midClosestPoints = grid.sort((a, b) => a.point.distanceTo(mid) - b.point.distanceTo(mid));
-  //         cache[label] = {
-  //           grid: currentGrid,
-  //           joinable:
-  //             midClosestPoints[0].element.joinable && midClosestPoints[0].element === midClosestPoints[1].element,
-  //         };
-
-  //         for (const key in cache) {
-  //           const [cachedX, cachedY] = cache[key].grid;
-  //           if (Math.abs(x - cachedX) > 5 || Math.abs(y - cachedY) > 5) {
-  //             delete cache[key];
-  //           }
-  //         }
-  //       }
-
-  //       if (!cache[label].joinable) {
-  //         voronoiWalls.push(new THREE.Line3(v1, v2));
-  //       }
-  //     }
-  //   }
-  //   return voronoiWalls;
-  // };
-
   const getDistanceToWall = ({ currentVertex, walls }: VoronoiGetDistanceToWallParams): number => {
-    const px = currentVertex.x, py = currentVertex.y;
+    const px = currentVertex.x, pz = currentVertex.z;
     let minDistSq = Infinity;
 
     for (let i = 0; i < walls.length; i++) {
       const wall = walls[i];
-      const ax = wall.start.x, ay = wall.start.y;
-      const bx = wall.end.x, by = wall.end.y;
+      const ax = wall.sx, az = wall.sz;
+      const bx = wall.ex, bz = wall.ez;
 
-      // Inline closest-point-on-segment distance (2D, z is always 0)
-      const dx = bx - ax, dy = by - ay;
-      const lenSq = dx * dx + dy * dy;
-      let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
+      // Inline closest-point-on-segment distance on the horizontal plane
+      const dx = bx - ax, dz = bz - az;
+      const lenSq = dx * dx + dz * dz;
+      let t = lenSq > 0 ? ((px - ax) * dx + (pz - az) * dz) / lenSq : 0;
       if (t < 0) t = 0; else if (t > 1) t = 1;
 
-      const cx = ax + t * dx, cy = ay + t * dy;
-      const ddx = px - cx, ddy = py - cy;
-      const distSq = ddx * ddx + ddy * ddy;
+      const cx = ax + t * dx, cz = az + t * dz;
+      const ddx = px - cx, ddz = pz - cz;
+      const distSq = ddx * ddx + ddz * ddz;
       if (distSq < minDistSq) minDistSq = distSq;
     }
 
