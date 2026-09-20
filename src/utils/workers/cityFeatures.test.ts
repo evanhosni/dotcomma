@@ -1,9 +1,5 @@
-/**
- * Smoke tests for the city feature enumerators (traffic lights / freeway-side
- * points): determinism, duplicate-freedom across chunk splits, and placement
- * validity against the shared vertex pipeline. Runs the REAL compute module
- * with a config mirroring the live GlitchCityDomain registrations.
- */
+/** Smoke tests for the city feature enumerators — determinism, chunk-split dedupe,
+ *  placement validity — on the REAL compute module with a GlitchCityDomain-like config. */
 import { DEFAULT_TERRAIN_PARAMS } from "../../world/defaults";
 import {
   computeVertexData,
@@ -43,8 +39,6 @@ const config: DomainConfig = {
   baseNoiseParams: P.baseNoise,
   biomeNoiseConfigs: {},
   cityConfig: P.cityConfig,
-  // Mirrors BuildingDescriptor's placement rules (flattenGround: true) plus
-  // the grass-biome country building.
   flattenDescriptors: [
     {
       id: "building",
@@ -128,7 +122,6 @@ describe("getCityTrafficLightPoints", () => {
       // Sidewalk band of the road field (poles never stand on asphalt).
       expect(vd.distanceToRoadCenter).toBeGreaterThanOrEqual(8.4);
       expect(vd.distanceToRoadCenter).toBeLessThanOrEqual(11.6);
-      // Facing direction is unit-length.
       expect(Math.hypot(p.dirX, p.dirZ)).toBeCloseTo(1, 5);
       expect(p.phase).toBeGreaterThanOrEqual(0);
       expect(p.phase).toBeLessThan(1);
@@ -193,7 +186,6 @@ describe("flatten-ground pads", () => {
     ];
     expect(parts.map(key).sort()).toEqual(whole.map(key).sort());
     expect(new Set(parts.map(key)).size).toBe(parts.length);
-    // Spacing: no two points within the descriptor footprint.
     for (let i = 0; i < whole.length; i++) {
       for (let j = i + 1; j < whole.length; j++) {
         const d = Math.hypot(whole[i].x - whole[j].x, whole[i].z - whole[j].z);
@@ -257,12 +249,12 @@ describe("getCityFreewaySidePoints", () => {
       whole.filter(isArterial).map(key).sort()
     );
 
-    const fwScale = P.cityConfig.roadWidth / P.cityConfig.freewayWidth;
+    const freewayToStreetScale = P.cityConfig.roadWidth / P.cityConfig.freewayWidth;
     for (const p of whole) {
       const vd = vdOf(p);
       expect(vd.biomeId).toBe(1);
       expect(vd.height).toBeCloseTo(p.y, 5);
-      expect(vd.distanceToRoadCenter).toBeGreaterThanOrEqual(LATERAL * fwScale - 1.5);
+      expect(vd.distanceToRoadCenter).toBeGreaterThanOrEqual(LATERAL * freewayToStreetScale - 1.5);
       expect(Math.hypot(p.dirX, p.dirZ)).toBeCloseTo(1, 5);
       expect(Math.abs(p.side)).toBe(1);
     }

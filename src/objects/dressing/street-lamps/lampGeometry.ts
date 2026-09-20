@@ -1,22 +1,11 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 
-/**
- * Street-lamp art: the merged low-poly post geometry and its material
- * template. Feature-owned (the lamp is DRESSING — see StreetLamps.tsx); the
- * lighting these feed lives in lighting/lampGlow.ts.
- *
- * ONE merged mesh per lamp (base + pole + arm + head): part colors are baked
- * as vertex colors, and an aLampMask attribute (1 on the head, 0 elsewhere)
- * gates the material's emissive so only the head glows — one draw call and
- * one material for the whole lamp instead of two of each.
- */
+// One merged mesh per lamp: part colors baked as vertex colors, aLampMask (1 on the head)
+// gates the emissive so the whole lamp is one draw call and one material.
 
-// The numbers (part boxes, yaw, collider parts, placement) live in lampSpec.ts
-// — Three-free, shared with the server's colliders; re-exported here so the
-// feature's imports keep one entry point.
 import { LAMP_PARTS } from "./lampSpec";
-export { LAMP_POLE_HEIGHT, LAMP_ARM_X, LAMP_COLLIDER_DISTANCE, LAMP_PARTS, lampYaw } from "./lampSpec";
+export { LAMP_POLE_HEIGHT, LAMP_HEAD_OFFSET_X, LAMP_COLLIDER_DISTANCE, LAMP_PARTS, lampYaw } from "./lampSpec";
 
 let lampPostGeometry: THREE.BufferGeometry | null = null;
 
@@ -53,10 +42,7 @@ export const getLampPostGeometry = (): THREE.BufferGeometry => {
   return lampPostGeometry;
 };
 
-/** Material template — cloned per chunk through the dressing base (which is
- *  what applies the shared material logic: curvature, disposal). Its
- *  emissiveIntensity is driven by the global window-lights ramp, so every lamp
- *  fades in together at nightfall and out together at dawn. */
+/** Template — clone it through useDressingAssets. emissiveIntensity is driven by the night ramp. */
 export const LAMP_POST_MATERIAL = new THREE.MeshStandardMaterial({
   vertexColors: true,
   emissive: 0xffd166,
@@ -65,10 +51,8 @@ export const LAMP_POST_MATERIAL = new THREE.MeshStandardMaterial({
   metalness: 0.05,
 });
 
-/** Gate the emissive to the head via the aLampMask attribute. Every clone gets
- *  the same patch, and the fixed cache key keeps them all on one compiled
- *  program. NOTE: this ASSIGNS onBeforeCompile — apply it before any patcher
- *  that chains (the dressing base's material prep runs after, by construction). */
+/** ASSIGNS onBeforeCompile (does not chain) — apply before patchers that chain, e.g. the
+ *  dressing base's curvature prep. The fixed cache key keeps every clone on one program. */
 export const patchLampMask = (material: THREE.MeshStandardMaterial): void => {
   material.customProgramCacheKey = () => "lamp-post";
   material.onBeforeCompile = (shader) => {

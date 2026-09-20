@@ -7,15 +7,9 @@ const ActorsContext = createContext<Partial<AnyActorDescriptor> | null>(null);
 
 export interface ActorsProps extends React.PropsWithChildren, Partial<AnyActorDescriptor> {}
 
-/**
- * Groups a biome's actors. Any descriptor props set here act as shared
- * defaults for child <Actor>s — a child's own props always win. E.g.
- * `<Actors biomeIds={[CITY_BIOME_ID]}>` restricts every child to the city
- * biome unless a child sets its own `biomeIds`.
- */
+/** Props set here are shared defaults for child <Actor>s; a child's own props win. */
 export const Actors = ({ children, ...defaults }: ActorsProps) => {
   const { component, ...serializable } = defaults;
-  // stable context value so parent re-renders don't churn child registrations
   const dataKey = JSON.stringify(serializable);
   const value = useMemo(() => defaults, [dataKey, component]);
   return <ActorsContext.Provider value={value}>{children}</ActorsContext.Provider>;
@@ -23,39 +17,22 @@ export const Actors = ({ children, ...defaults }: ActorsProps) => {
 
 export type ActorRegistrationProps = AnyActorDescriptor;
 
-/**
- * Registers an ACTOR descriptor from inside a <Biome> — the per-object spawn
- * class (beebles, buildings: objects with their own identity, state, or
- * interaction; each mounts as its own React component through ActorPool).
- * Props are the full ActorDescriptor: `component`, `footprint`, `density`,
- * the member's own attributes (`model`, `stories`, …), plus spawn restrictions (`biomeIds`, `heightRange`,
- * `slopeRange`, spacing, priority…). Defaults from an enclosing <Actors>
- * fill in unset optional props.
- *
- * Note: `biomeIds` is the actual spawn-location restriction (unset = spawns
- * in every biome); mounting inside a <Biome> only namespaces the
- * registration.
- *
- * Renders nothing — the spawn system instantiates `component` at generated
- * spawn points. Mass stateless scenery should be DRESSING instead (see
- * objects/dressing/) — instanced chunks, no per-object components.
- */
+/** Registers an ActorDescriptor. `biomeIds` is the actual spawn restriction
+ *  (unset = every biome); the enclosing <Biome> only namespaces the registration. */
 export const Actor = (props: ActorRegistrationProps) => {
   const store = useDomainStore("Actor");
   const biome = useContext(BiomeContext);
   if (!biome) throw new Error("<Actor> must be mounted inside <Biome>");
   const inherited = useContext(ActorsContext);
 
-  // Merge <Actors> defaults under own props (explicit undefined doesn't
-  // clobber an inherited value).
+  // An explicit undefined must not clobber an inherited default.
   const descriptor: AnyActorDescriptor = { ...(inherited ?? {}) } as AnyActorDescriptor;
   for (const [key, value] of Object.entries(props)) {
     if (value !== undefined) (descriptor as any)[key] = value;
   }
 
   const { component, ...serializable } = descriptor;
-  // Registered under stringified deps so inline descriptor objects don't
-  // re-register on every parent render.
+  // Stringified deps: inline descriptor objects must not re-register per parent render.
   const dataKey = JSON.stringify(serializable);
   const descriptorId = descriptor.id;
 
@@ -72,14 +49,7 @@ export const Actor = (props: ActorRegistrationProps) => {
   return null;
 };
 
-/**
- * One-liner for actor definitions: builds the standard wrapper component that
- * registers `descriptor` with per-mount overrides.
- *
- *   export const BeebleActor = createActor(BeebleDescriptor);
- *   …
- *   <BeebleActor biomeIds={[CITY_BIOME_ID]} density={150} />
- */
+/** `export const BeebleActor = createActor(BeebleDescriptor)` → `<BeebleActor density={150} />` (props override). */
 export const createActor =
   <A extends ActorAttributes>(descriptor: ActorDescriptor<A>) =>
   (overrides: Partial<ActorDescriptor<A>>): JSX.Element =>

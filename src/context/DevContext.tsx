@@ -1,15 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { DevContextType } from "./types";
 
-interface DevState {
-  devMode: boolean;
-  noclip: boolean;
-  physicsDebug: boolean;
-  toggleDevMode: () => void;
-  setNoclip: (v: boolean) => void;
-  setPhysicsDebug: (v: boolean) => void;
+const DevContext = createContext<DevContextType | undefined>(undefined);
+
+interface DevContextProviderProps {
+  children: ReactNode;
 }
-
-const DevContext = createContext<DevState>(null!);
 
 function readDevParam(): boolean {
   return new URLSearchParams(window.location.search).has("devmode");
@@ -22,7 +18,7 @@ function writeDevParam(devMode: boolean) {
   window.history.replaceState(null, "", url.toString());
 }
 
-export const DevProvider = ({ children }: { children: React.ReactNode }) => {
+export const DevContextProvider: React.FC<DevContextProviderProps> = ({ children }) => {
   const [devMode, setDevMode] = useState(readDevParam);
   const [noclip, setNoclip] = useState(false);
   const [physicsDebug, setPhysicsDebug] = useState(false);
@@ -39,7 +35,6 @@ export const DevProvider = ({ children }: { children: React.ReactNode }) => {
     });
   }, []);
 
-  // F1 toggles devmode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "F1") {
@@ -51,7 +46,7 @@ export const DevProvider = ({ children }: { children: React.ReactNode }) => {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [toggleDevMode]);
 
-  const value = useMemo(
+  const value: DevContextType = useMemo(
     () => ({ devMode, noclip, physicsDebug, toggleDevMode, setNoclip, setPhysicsDebug }),
     [devMode, noclip, physicsDebug, toggleDevMode],
   );
@@ -59,4 +54,14 @@ export const DevProvider = ({ children }: { children: React.ReactNode }) => {
   return <DevContext.Provider value={value}>{children}</DevContext.Provider>;
 };
 
-export const useDevMode = () => useContext(DevContext);
+export const useDevContext = (): DevContextType => {
+  const context = useContext(DevContext);
+
+  if (context === undefined) {
+    throw new Error("useDevContext must be used within a DevContextProvider");
+  }
+
+  return context;
+};
+
+export default DevContext;

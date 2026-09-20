@@ -6,15 +6,7 @@ import {
 } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
 
-/**
- * Main-thread vertex queries (Player respawn raycasts, ad-hoc lookups).
- *
- * SINGLE SOURCE OF TRUTH: this is the same compute module the terrain, spawn,
- * and grass workers run (workers/vertexCompute.ts), initialized with the same
- * serialized DomainConfig from the active domain. There is no separate main-thread
- * height implementation — biome heights are defined once, in the shared
- * pipeline (declarative per-biome noise configs + the city branch).
- */
+// Main-thread adapter over the SAME compute module the workers run — never a second height implementation.
 
 let lastConfig: object | null = null;
 
@@ -32,29 +24,16 @@ export const getVertexData = async (x: number, z: number): Promise<VertexResult>
   return computeVertexData(x, z);
 };
 
-/** PAD-FREE vertex data for FREQUENT main-thread callers (player ground
- *  checks): the padded path computes flatten-pad tiles synchronously — a
- *  ~30–70ms hitch per new city tile the player walks into.
- *
- *  WARNING: this is NOT a lower bound on the real surface. Pads EXCAVATE as
- *  well as fill — they lerp terrain toward the actor's own ground height, so
- *  uphill of a building on a slope the true ground sits BELOW this height
- *  (measured up to 8.3u; 6% of pads exceed 2u). A below-surface test that
- *  trusts this alone will fire on solid ground — it made the player's
- *  fall-through backstop teleport them out of a building's excavation every
- *  few frames. Use it as a cheap PRE-FILTER and confirm with getVertexData
- *  before acting (see resolveEmbeddedSurface in player/Player.tsx). */
+/** PAD-FREE height for frequent callers (the padded path can spend 30–70ms
+ *  building a flatten tile). NOT a lower bound on the real surface: pads
+ *  EXCAVATE (up to 8.3u measured), so use it only as a pre-filter and confirm
+ *  with the padded height before acting (Player.tsx resolveEmbeddedSurface). */
 export const getVertexDataRaw = async (x: number, z: number): Promise<VertexResult> => {
   await ensureInit();
   return computeVertexDataRaw(x, z);
 };
 
-/** PADDED vertex data computed OFF-THREAD (in the dressing worker — it idles
- *  most of the time and runs the same pipeline). This is the safe way for a
- *  frequent caller to confirm a raw pre-filter hit: a flatten-tile miss
- *  inside the padded path costs 30–70ms, which the worker absorbs instead of
- *  the frame. Returns null until the worker is initialized — fall back to
- *  getVertexData (main thread, may hitch) for one-off callers that need an
- *  answer regardless. */
+/** PADDED height computed in the dressing worker (absorbs the flatten-tile
+ *  cost). null until the worker is up — fall back to getVertexData. */
 export { getVertexSample } from "../../objects/dressing/dressingWorker";
 

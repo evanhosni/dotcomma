@@ -1,18 +1,8 @@
 /**
- * Dressing placement worker (city features + generic density points + height samples).
+ * Dressing placement worker: the city feature enumerators, generic density
+ * points, city-light sites and padded height samples, behind a cheap
+ * chunk-center biome probe.
  *
- * Runs the deterministic city feature enumerations (road markers, traffic
- * lights, freeway-side points) OFF the main thread — the same shared vertex
- * pipeline the terrain/spawn/grass workers run. The main thread only builds
- * InstancedMeshes from the returned points, so dressing chunks can never
- * stall a frame the way main-thread computeVertexData loops did.
- *
- * Each request carries its chunk bounds; the worker runs the cheap biome
- * probe (chunk center in another biome AND no boundary in reach → no city
- * roads) before the full enumeration, so far-from-city chunks cost one
- * vertex computation.
- *
- * Messages:
  *   IN:  { type: "INIT", config: DomainConfig }
  *   IN:  { type: "ROAD_MARKERS",   id, minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing }
  *   IN:  { type: "TRAFFIC_LIGHTS", id, minX, minZ, maxX, maxZ, chance }
@@ -38,11 +28,7 @@ import { CITY_BIOME_ID } from "../../world/constants";
 
 let initialized = false;
 
-// Density-grid placement (street lamps) is generateDensityPoints in
-// ./densityPoints.ts — shared with the server's obstacle colliders.
-
-/** True when the chunk can't contain city roads (mirror of the probe the
- *  main-thread chunk hook used to run). */
+/** No city roads possible here: center in another biome and no boundary in reach. */
 const probeEmpty = (minX: number, minZ: number, maxX: number, maxZ: number): boolean => {
   const vd = computeVertexData((minX + maxX) / 2, (minZ + maxZ) / 2);
   return vd.biomeId !== CITY_BIOME_ID && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
@@ -60,17 +46,14 @@ self.onmessage = (e: MessageEvent) => {
 
   const { id, minX, minZ, maxX, maxZ } = e.data;
 
-  // Single PADDED vertex sample (Player backstop confirm) — a flatten-tile
-  // miss inside computeVertexData costs 30-70ms, which is exactly why the
-  // Player routes it here instead of paying it on the main thread.
+  // A flatten-tile miss costs 30-70ms — the Player confirms its backstop here instead of on the main thread.
   if (type === "VERTEX_SAMPLE") {
     const points = initialized ? [computeVertexData(e.data.x, e.data.z)] : [];
     (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
     return;
   }
 
-  // City-site scans use HUGE windows (scan radius ~1800) — the chunk-center
-  // biome probe doesn't apply, and the site enumeration self-filters cheaply.
+  // City-site scans use huge windows (~1800u), where the chunk-center probe doesn't apply.
   if (type === "CITY_SITES") {
     const points = initialized ? getCityVoronoiSites(minX, minZ, maxX, maxZ) : [];
     (self as any).postMessage({ type: "DRESSING_RESULT", id, points });

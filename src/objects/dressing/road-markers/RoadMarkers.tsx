@@ -7,16 +7,11 @@ import { getRoadMarkers } from "../dressingWorker";
 const MARKER_HEIGHT = 0.16;
 
 export interface RoadMarkersProps extends DressingAttributes {
-  /** Marker spacing along street / freeway centerlines (world units). */
   streetSpacing?: number;
   freewaySpacing?: number;
 }
 
-/**
- * DRESSING: raised pavement markers along city road centerlines — small
- * unlit 3D studs instead of painted lines (paint shimmered against the
- * quantized terrain). Unlit yellow reads as retroreflective at night.
- */
+/** Studs instead of a painted centerline — paint shimmered against the quantized terrain. */
 export const RoadMarkers = ({
   renderDistance,
   streetSpacing = 9,
@@ -25,9 +20,7 @@ export const RoadMarkers = ({
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
 
   const assets = useDressingAssets(() => {
-    // Tapered stud: pull the top face's four vertices inward so the marker
-    // reads as a low "turtle" dome (frustum) instead of a perfect box.
-    // Material is unlit, so no normal recompute needed.
+    // Top face pulled inward → a low frustum "turtle" (unlit, so no normal recompute).
     const geometry = new THREE.BoxGeometry(0.6, MARKER_HEIGHT, 0.38);
     const pos = geometry.getAttribute("position") as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
@@ -54,7 +47,7 @@ export const RoadMarkers = ({
       if (points.length === 0) return null;
       return instancedFromPoints(assets.geometry, assets.material, points, (p) => ({
         x: p.x,
-        y: p.y + MARKER_HEIGHT * 0.35, // slightly embedded
+        y: p.y + MARKER_HEIGHT * 0.35, // embedded in the road surface
         z: p.z,
         yaw: yawFromDir(p.dirX, p.dirZ),
       }));

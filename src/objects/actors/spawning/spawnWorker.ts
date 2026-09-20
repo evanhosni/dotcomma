@@ -1,27 +1,15 @@
-/**
- * Spawn point generation — worker client.
- *
- * The actual spawn algorithm now runs in spawn.worker.ts.
- * This module manages the worker lifecycle and provides
- * the same public API surface to ActorPool.
- */
-
 import { DomainConfig } from "../../../utils/workers/vertexCompute";
 import { createWorkerClient } from "../../../utils/workers/workerClient";
 import { AnyActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
 const SPAWN_CHUNK_SIZE = 250;
 
-// ── Worker management (plumbing from the shared worker-client base) ──
-
-/** Points for the chunks the worker actually finished, plus their keys — a
- *  time-budgeted request may complete only a prefix of what was asked for. */
+/** A time-budgeted request may finish only a prefix of the requested chunks. */
 interface SpawnsResult {
   points: SpawnPoint[];
   done: string[];
 }
 
-/** Payload for the next boot — set by initSpawnWorker before ensure(). */
 let pendingInit: { config: DomainConfig; maxFootprint: number } | null = null;
 
 const client = createWorkerClient({
@@ -30,12 +18,7 @@ const client = createWorkerClient({
   resultType: "SPAWNS_RESULT",
 });
 
-/**
- * Initialize the spawn worker with a dimension config.
- * Must be called before generateSpawnPoints. Always boots a FRESH worker:
- * ActorPool remounts on world switch (and re-inits when the max footprint
- * changes) — never leak the old one.
- */
+/** Always boots a FRESH worker (ActorPool re-inits on domain switch and footprint change). */
 export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Promise<void> => {
   client.reset();
   pendingInit = { config, maxFootprint };
@@ -44,9 +27,6 @@ export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Pro
 
 export type { SerializedActorDescriptor };
 
-/**
- * Strip React component from descriptors for worker serialization.
- */
 export const serializeDescriptors = (
   descriptors: AnyActorDescriptor[]
 ): SerializedActorDescriptor[] =>
@@ -65,41 +45,24 @@ export const serializeDescriptors = (
     flattenGround: d.flattenGround,
   }));
 
-// ── Client-side chunk cache ──
-// The pool re-requests ALL nearby chunks every spawn batch (~every 5 frames);
-// without a client cache the worker re-serializes hundreds of unchanged
-// points over postMessage each time. Chunks are cached here after first
-// delivery (points are deterministic per chunk and the descriptor set is
-// fixed for the session), so steady-state batches touch the worker only for
-// NEW chunks. Evicted in cleanupSpawnCache with the same radius rule as the
-// worker's cache, so revisited chunks regenerate in both places together.
-//
-// Entries carry their own world-space CENTER: eviction runs every batch over
-// the whole cache, and re-deriving coordinates by parsing the key string
-// ("cx_cz".split → Number) made the one operation that keeps the cache
-// bounded the most expensive thing about it. Distance is now pure arithmetic
-// on fields that are already there.
-// The cache entries themselves are what generateSpawnPoints returns — the
-// center coordinates double as the pool's per-bucket early-out (skip a whole
-// chunk when even its nearest corner is beyond every spawn radius) without a
-// second wrapper allocation. Treat as read-only outside this module.
-export interface SpawnChunkBucket {
+// Client-side chunk cache: the pool re-requests ALL nearby chunks every batch,
+// so without it the worker re-serialized hundreds of unchanged points each
+// time. Entries carry their CENTER because parsing it out of the key made
+// eviction the most expensive thing about the cache. Read-only outside this module.
+export interface CachedSpawnChunk {
   centerX: number;
   centerZ: number;
   points: SpawnPoint[];
 }
 
-const clientChunkCache = new Map<string, SpawnChunkBucket>();
+const clientChunkCache = new Map<string, CachedSpawnChunk>();
 
-/** Domain switch (resetDomainSystems): kill the worker and every cached point —
- *  spawn points are world-config-dependent, and the next ActorPool mount
- *  re-inits via initSpawnWorker with the new committed config. */
 export const resetSpawnWorker = () => {
   client.reset();
   clientChunkCache.clear();
 };
 
-const newCachedChunk = (cx: number, cz: number): SpawnChunkBucket => ({
+const emptyCachedChunk = (cx: number, cz: number): CachedSpawnChunk => ({
   centerX: (cx + 0.5) * SPAWN_CHUNK_SIZE,
   centerZ: (cz + 0.5) * SPAWN_CHUNK_SIZE,
   points: [],
@@ -108,41 +71,18 @@ const newCachedChunk = (cx: number, cz: number): SpawnChunkBucket => ({
 const chunkKeyOf = (p: SpawnPoint): string =>
   `${Math.floor(p.x / SPAWN_CHUNK_SIZE)}_${Math.floor(p.z / SPAWN_CHUNK_SIZE)}`;
 
-/**
- * How long the worker may spend generating NEW chunks per round-trip.
- *
- * A time budget rather than a chunk count, because per-chunk cost varies by
- * more than 10× with terrain — a dense city chunk runs the flatten engine over
- * thousands of pad candidates (~60ms), an empty grassland chunk is nearly
- * free. Any fixed count is therefore both too long in the city and too short
- * in open terrain, where the worker would idle against the batch cadence
- * floor (MIN_FRAMES_BETWEEN_BATCHES, ~83ms at 60fps — which is why this sits
- * just above it).
- *
- * This is also what makes catch-up a STREAM instead of a debt. Keys go out
- * sorted nearest-first; whatever the budget doesn't reach is left uncached and
- * re-requested next batch, re-sorted against the CURRENT camera position. So
- * ground the player has already left is never generated at all — it just stops
- * being asked for.
- */
+// A TIME budget, not a chunk count: per-chunk cost varies >10× with terrain
+// (a city chunk ~60ms of flatten pads, a grass chunk nearly free). Sits just
+// above the batch cadence floor (MIN_FRAMES_BETWEEN_BATCHES ≈ 83ms).
 const SPAWN_BUDGET_MS = 100;
 
-/**
- * Spawn points for the given chunk keys, as one bucket per resolved chunk,
- * each carrying its chunk CENTER (buckets are the cache's own entries/arrays
- * — do not mutate; point objects are identity-stable across calls while the
- * chunk stays cached, which is what lets the pool's mounted/ledger checks be
- * identity lookups instead of string builds). Chunk keys must be sorted
- * nearest-first: the worker spends SPAWN_BUDGET_MS on uncached chunks in that
- * order, and the remainder is picked up by later calls.
- *
- * All computation happens in the worker thread; delivered chunks are cached
- * client-side so only new chunks cost a round-trip.
- */
+/** Chunk keys must arrive sorted nearest-first: the budget covers them in that
+ *  order and the remainder is re-requested next batch. Returned buckets are
+ *  the cache's own entries — point objects stay identity-stable while cached. */
 export const generateSpawnPoints = async (
   chunkKeys: string[],
   descriptors: SerializedActorDescriptor[]
-): Promise<SpawnChunkBucket[]> => {
+): Promise<CachedSpawnChunk[]> => {
   if (!client.isReady()) return [];
 
   const missing = chunkKeys.filter((k) => !clientChunkCache.has(k));
@@ -154,13 +94,11 @@ export const generateSpawnPoints = async (
       descriptors,
       budgetMs: SPAWN_BUDGET_MS,
     });
-    // Only chunks the worker FINISHED get cached — the rest stay unknown and
-    // are re-requested (or dropped, if the player has moved on).
     for (const key of result.done) {
       const sep = key.indexOf("_");
       clientChunkCache.set(
         key,
-        newCachedChunk(Number(key.slice(0, sep)), Number(key.slice(sep + 1)))
+        emptyCachedChunk(Number(key.slice(0, sep)), Number(key.slice(sep + 1)))
       );
     }
     for (const p of result.points) {
@@ -169,7 +107,7 @@ export const generateSpawnPoints = async (
     }
   }
 
-  const out: SpawnChunkBucket[] = [];
+  const out: CachedSpawnChunk[] = [];
   for (const key of chunkKeys) {
     const entry = clientChunkCache.get(key);
     if (entry && entry.points.length > 0) out.push(entry);
@@ -177,25 +115,14 @@ export const generateSpawnPoints = async (
   return out;
 };
 
-// getNearbyChunkKeys memo: the set-and-order of nearby chunk keys only
-// changes when the player crosses into a different 250u chunk (the distances
-// are measured center-chunk-relative), yet the pool calls this every batch
-// (~every 5 frames) — ~49 wrapper objects + key strings + a sort each time,
-// almost always identical to the last call. One entry is enough: there is one
-// caller with one (constant-per-session) radius. Callers treat the result as
-// read-only (they filter/iterate, never mutate), so the same array is safe to
-// hand back.
+// One-entry memo: the key set only changes when the player crosses a chunk,
+// but the pool asks every batch (~49 objects + strings + a sort otherwise).
 let nearbyKeysCX = NaN;
 let nearbyKeysCZ = NaN;
 let nearbyKeysDist = NaN;
 let nearbyKeysCache: string[] = [];
 
-/**
- * Get chunk keys near a player position, sorted nearest-first (the order
- * generateSpawnPoints relies on to generate the nearest slice each batch).
- * Stays on main thread — pure math, no heavy computation. Returns a cached
- * (shared, read-only) array while the player stays in the same chunk.
- */
+/** Sorted nearest-first; returns a shared read-only array while the player stays in one chunk. */
 export const getNearbyChunkKeys = (
   playerX: number,
   playerZ: number,
@@ -231,15 +158,10 @@ export const getNearbyChunkKeys = (
     }
   }
 
-  // Sort on the distance we already computed — the old comparator re-parsed
-  // both keys out of their strings on every comparison (O(n log n) splits).
   nearby.sort((a, b) => a.distSq - b.distSq);
 
-  // Distances (and thus the order) are measured from the exact position at
-  // fill time, so within a chunk the memoized order is a snapshot — that only
-  // quantizes the worker's nearest-first SCHEDULING to chunk granularity
-  // (which chunks the time budget reaches first), never which points a chunk
-  // contains once generated.
+  // The memoized order is a snapshot at fill time: it only quantizes the
+  // worker's nearest-first scheduling to chunk granularity, never a chunk's contents.
   nearbyKeysCX = centerCX;
   nearbyKeysCZ = centerCZ;
   nearbyKeysDist = maxRenderDistance;
@@ -247,11 +169,7 @@ export const getNearbyChunkKeys = (
   return nearbyKeysCache;
 };
 
-/**
- * Tell the worker to evict cached chunks far from the player — and mirror the
- * eviction in the client cache (same radius rule), so a revisited chunk asks
- * the worker again and both regenerate together.
- */
+/** Same radius rule in both caches, so a revisited chunk regenerates in both together. */
 export const cleanupSpawnCache = (
   playerX: number,
   playerZ: number,
@@ -268,9 +186,6 @@ export const cleanupSpawnCache = (
   });
 };
 
-/**
- * Recreate the spatial hash with a new footprint.
- */
 export const updateSpawnFootprint = (maxFootprint: number): void => {
   client.post({ type: "UPDATE_FOOTPRINT", maxFootprint });
 };

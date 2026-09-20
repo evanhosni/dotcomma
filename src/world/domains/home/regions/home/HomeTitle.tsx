@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { makeLabelMaterial } from "./labelMaterial";
 
-/** The home page title: floating "dotcomma" text — not interactive. */
 export const HomeTitle = ({ position }: { position: [number, number, number] }) => {
   const { texture, material } = useMemo(() => makeLabelMaterial("dotcomma"), []);
 

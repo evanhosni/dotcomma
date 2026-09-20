@@ -4,32 +4,19 @@ import { BiomeNoiseConfig } from "../types";
 import { BiomeContext, RegionContext, RegionTerrainConfig, useDomainStore } from "./context";
 
 export interface TerrainConfigProps extends Partial<TerrainParams> {
-  /** Biome scope: the biome's height definition. Single source of truth —
-   *  evaluated by the shared pipeline (utils/workers/vertexCompute.ts) on both the
-   *  workers and the main thread. */
+  /** Biome scope: the biome's ONLY height definition. */
   noise?: BiomeNoiseConfig;
 }
 
-/**
- * Scope-aware terrain rules. Where it's mounted decides what it configures:
- *
- * - Inside <Domain>:  global terrain params (seed, grid sizes, boundary/river
- *   widths, base/road noise, city config). Unset props fall back to
- *   DEFAULT_TERRAIN_PARAMS.
- * - Inside <Region>: reserved — stored for future per-region terrain rules.
- * - Inside <Biome>:  the biome's height definition (`noise`), consumed by the
- *   shared vertex pipeline everywhere heights are computed.
- *
- * Renders nothing — pure registration.
- */
+/** Scope-aware: under <Domain> = global TerrainParams (unset → defaults),
+ *  under <Region> = reserved, under <Biome> = the height definition (`noise`). */
 export const Terrain = (props: TerrainConfigProps) => {
   const store = useDomainStore("Terrain");
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
 
   const { noise, ...domainParams } = props;
-  // Object props are registered under stringified deps so inline literals in
-  // JSX don't re-register (and re-commit the world) on every parent render.
+  // Stringified deps: inline JSX literals must not re-commit the world per parent render.
   const noiseKey = JSON.stringify(noise ?? null);
   const domainKey = JSON.stringify(domainParams);
 

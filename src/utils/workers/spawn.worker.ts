@@ -1,11 +1,7 @@
 /**
- * Spawn point generation worker.
+ * Spawn point worker: deterministic density placement with its own spatial hash
+ * and chunk cache.
  *
- * Runs the density-based deterministic spawn algorithm off the main thread.
- * Maintains its own spatial hash and chunk cache. Uses the inlined vertex
- * pipeline to resolve biome/height data for each candidate point.
- *
- * Messages:
  *   IN:  { type: "INIT", config: DomainConfig, maxFootprint: number }
  *   IN:  { type: "GENERATE_SPAWNS", id: number, chunkKeys: string[], descriptors: SerializedDescriptor[] }
  *   IN:  { type: "CLEANUP", playerX: number, playerZ: number, cleanupRadius: number }
@@ -16,23 +12,16 @@
 
 import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints } from "./vertexCompute";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
-// Type-only imports — erased at build time, so the React-dependent module
-// never enters the worker bundle.
+// Type-only: keeps the React-dependent module out of the worker bundle.
 import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
 
 const SPAWN_CHUNK_SIZE = 250;
 
-// ── Inline Spatial Hash ──
-
 class SpatialHash {
   private cellSize: number;
   private invCellSize: number;
-  // Nested numeric maps (cx → cz → bucket), the codebase-preferred pattern
-  // (see ChunkIndex in TerrainRenderer.tsx). The old `${cx}_${cz}` string key
-  // was built per candidate × 9 neighbor cells (~2,100 strings per
-  // descriptor-chunk); numeric lookups allocate nothing. Query/insert
-  // semantics and ordering are unchanged: buckets keep insertion order and
-  // isTooClose scans the same dx-then-dz cell order as before.
+  // Nested numeric maps (cx → cz → bucket): a string key was built per candidate
+  // × 9 neighbor cells. Buckets keep insertion order; isTooClose scans dx-then-dz.
   private cells = new Map<number, Map<number, SpawnPoint[]>>();
 
   constructor(maxFootprint: number) {
@@ -112,15 +101,12 @@ class SpatialHash {
   }
 }
 
-// ── Worker State ──
-
 let initialized = false;
 let spatialHash: SpatialHash | null = null;
 
-/** Cached chunk. Carries its own world-space CENTER and its spatial-hash
- *  membership: CLEANUP walks the whole cache on every spawn batch, and
- *  re-deriving coordinates by parsing the key string made eviction — the one
- *  thing keeping this cache bounded — the most expensive thing about it. */
+/** Carries its own center and hash membership: CLEANUP walks the whole cache
+ *  every batch, and parsing coordinates out of the key made eviction the most
+ *  expensive thing about it. */
 interface CachedChunk {
   centerX: number;
   centerZ: number;
@@ -130,20 +116,17 @@ interface CachedChunk {
 
 const chunkCache = new Map<string, CachedChunk>();
 
-// ── Spawn Generation ──
-
 const generateForChunk = (
   chunkKey: string,
-  sorted: SerializedDescriptor[] // pre-sorted by priority (once per message)
+  descriptorsByPriority: SerializedDescriptor[] // pre-sorted by priority (once per message)
 ): SpawnPoint[] => {
-  const hit = chunkCache.get(chunkKey);
-  if (hit) {
-    // Re-insert into spatial hash only if not already populated
-    if (!hit.inHash) {
-      for (const p of hit.points) spatialHash!.insert(p);
-      hit.inHash = true;
+  const cached = chunkCache.get(chunkKey);
+  if (cached) {
+    if (!cached.inHash) {
+      for (const p of cached.points) spatialHash!.insert(p);
+      cached.inHash = true;
     }
-    return hit.points;
+    return cached.points;
   }
 
   const sep = chunkKey.indexOf("_");
@@ -154,22 +137,15 @@ const generateForChunk = (
 
   const chunkPoints: SpawnPoint[] = [];
 
-  // getFlattenPoints re-scans the chunk's tile window and returns ALL flatten
-  // descriptors' points every call, so it's fetched ONCE per chunk (lazily, on
-  // the first flattenGround descriptor) and bucketed by descId. Each bucket is
-  // the exact subsequence the old per-descriptor `p.descId !== desc.id` filter
-  // saw, in the same enumeration order, and buckets are still consumed in the
-  // priority loop's order — so chunkPoints order and spatial-hash insertion
-  // order are byte-identical to calling the engine per descriptor.
+  // Fetched ONCE per chunk (getFlattenPoints returns every descriptor's points)
+  // and bucketed by descId; consumption order keeps spatial-hash insertion
+  // byte-identical to calling the engine per descriptor.
   let flattenByDesc: Map<string, FlattenPoint[]> | null = null;
 
-  for (const desc of sorted) {
-    // flattenGround actors: placement comes from the DETERMINISTIC flatten
-    // engine (workers/vertexCompute.ts) — the same function the terrain uses
-    // to put a flat pad under every instance, so points and pads can never
-    // disagree. Points still enter the spatial hash so OTHER descriptors
-    // space against them; their own spacing was already resolved by the
-    // engine's stateless greedy.
+  for (const desc of descriptorsByPriority) {
+    // flattenGround actors: points come from the flatten engine (the same function
+    // the terrain pads under) and still enter the hash so OTHER descriptors space
+    // against them.
     if (desc.flattenGround) {
       if (flattenByDesc === null) {
         flattenByDesc = new Map();
@@ -206,8 +182,6 @@ const generateForChunk = (
 
     if (desc.density <= 0) continue;
 
-    // Shared density scheme (utils/workers/densityPlacement.ts) — the flatten
-    // engine replays these exact rolls for flattenGround actors.
     const cellSize = densityCellSize(desc.density);
     const [startCellX, endCellX] = densityCellRange(chunkMinX, chunkMinX + SPAWN_CHUNK_SIZE, cellSize);
     const [startCellZ, endCellZ] = densityCellRange(chunkMinZ, chunkMinZ + SPAWN_CHUNK_SIZE, cellSize);
@@ -219,7 +193,6 @@ const generateForChunk = (
         if (!roll) continue;
         const { x, z } = roll;
 
-        // Only place within this chunk
         if (
           x < chunkMinX ||
           x >= chunkMinX + SPAWN_CHUNK_SIZE ||
@@ -229,15 +202,10 @@ const generateForChunk = (
           continue;
         }
 
-        // Get vertex data from inlined compute pipeline
         const vd = computeVertexData(x, z);
 
-        // Biome / height / road-distance restrictions (road distance = distance
-        // to the road centerline — in the city: keeps buildings inside blocks,
-        // lamps on sidewalks)
         if (!passesPlacementFilters(vd, desc)) continue;
 
-        // Spacing check via spatial hash
         if (
           spatialHash!.isTooClose(
             x,
@@ -272,8 +240,6 @@ const generateForChunk = (
   return chunkPoints;
 };
 
-// ── Message Handler ──
-
 self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
 
@@ -291,21 +257,14 @@ self.onmessage = (e: MessageEvent) => {
       return;
     }
 
-    // TIME-BUDGETED, not count-limited. Per-chunk cost varies by more than 10×
-    // with terrain (a dense city chunk runs the flatten engine over thousands
-    // of pad candidates; an empty grassland chunk is nearly free), so any fixed
-    // chunk count is simultaneously too slow somewhere and too long somewhere
-    // else. Keys arrive sorted nearest-first, so spending the budget in order
-    // always buys the most useful chunks; whatever is left over is simply
-    // re-requested next batch — re-sorted against the CURRENT camera position,
-    // so ground the player has already left is dropped rather than generated.
+    // TIME-budgeted: per-chunk cost varies >10× with terrain, so any fixed count is
+    // wrong somewhere. Keys arrive nearest-first; leftovers are re-requested next
+    // batch against the CURRENT camera position.
     const { id, chunkKeys, descriptors, budgetMs } = e.data;
     const deadline = performance.now() + budgetMs;
 
-    // Sort by priority once per message: lowest first (rarest objects placed
-    // first). The descriptor set is fixed within a message, so sorting inside
-    // generateForChunk just repeated the identical (stable) sort per chunk.
-    const sorted = ([...descriptors] as SerializedDescriptor[]).sort(
+    // Lowest priority first (rarest placed first).
+    const descriptorsByPriority = ([...descriptors] as SerializedDescriptor[]).sort(
       (a, b) => (a.priority ?? 50) - (b.priority ?? 50)
     );
 
@@ -313,11 +272,10 @@ self.onmessage = (e: MessageEvent) => {
     const done: string[] = [];
 
     for (const key of chunkKeys) {
-      const points = generateForChunk(key, sorted);
+      const points = generateForChunk(key, descriptorsByPriority);
       for (let i = 0; i < points.length; i++) allPoints.push(points[i]);
       done.push(key);
-      // Checked AFTER the first chunk, so a single chunk costlier than the
-      // whole budget still makes progress instead of deadlocking.
+      // Checked AFTER the first chunk so one over-budget chunk still makes progress.
       if (performance.now() >= deadline) break;
     }
 
@@ -335,10 +293,8 @@ self.onmessage = (e: MessageEvent) => {
       const dz = playerZ - entry.centerZ;
       if (dx * dx + dz * dz <= cleanupRadiusSq) return;
 
-      // Evict the chunk's points from the spatial hash too. Stale copies
-      // would otherwise block their own deterministic regeneration when the
-      // player returns (every candidate lands exactly on its old copy and
-      // fails the spacing check), permanently despawning the chunk's objects.
+      // Evict from the hash too: stale copies block their own deterministic
+      // regeneration (every candidate lands on its old copy and fails spacing).
       if (entry.inHash) {
         for (const p of entry.points) spatialHash!.remove(p);
         entry.inHash = false;

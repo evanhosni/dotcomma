@@ -1,28 +1,24 @@
 import { RingLevel } from "./types";
 
-/**
- * Shared ring-cross-section math for exterior lofts, used by both the plan
- * generator (door facet placement) and the geometry builder (wall emission).
- * Rings are emitted so that walking the point list gives outward-facing
- * walls: rect corners clockwise-from-above, ellipses with negated sin.
- */
+// Walking a ring's point list gives OUTWARD-facing walls: rect corners
+// clockwise-from-above, ellipses with negated sin.
 
 export type Pt2 = [number, number];
 
 export const ringPoints = (rect: boolean, sides: number, level: RingLevel, phase = 0): Pt2[] => {
-  const { cx, cz, hw, hd } = level;
+  const { cx, cz, halfWidth, halfDepth } = level;
   if (rect) {
     return [
-      [cx + hw, cz + hd],
-      [cx + hw, cz - hd],
-      [cx - hw, cz - hd],
-      [cx - hw, cz + hd],
+      [cx + halfWidth, cz + halfDepth],
+      [cx + halfWidth, cz - halfDepth],
+      [cx - halfWidth, cz - halfDepth],
+      [cx - halfWidth, cz + halfDepth],
     ];
   }
   const pts: Pt2[] = [];
   for (let j = 0; j < sides; j++) {
     const a = (j / sides) * Math.PI * 2 + phase;
-    pts.push([cx + Math.cos(a) * hw, cz - Math.sin(a) * hd]);
+    pts.push([cx + Math.cos(a) * halfWidth, cz - Math.sin(a) * halfDepth]);
   }
   return pts;
 };
@@ -57,8 +53,7 @@ export const edgeLength = (pts: Pt2[], j: number): number => {
   return Math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2);
 };
 
-/** True when p lies inside the (convex) ring polygon, at least `inset` from
- *  every edge. */
+/** Inside the convex ring polygon, at least `inset` from every edge. */
 export const pointInRing = (pts: Pt2[], p: Pt2, inset = 0): boolean => {
   for (let j = 0; j < pts.length; j++) {
     const n = edgeNormal(pts, j);
@@ -68,18 +63,17 @@ export const pointInRing = (pts: Pt2[], p: Pt2, inset = 0): boolean => {
   return true;
 };
 
-/** Largest factor f such that the axis-aligned rect with corners (±f·hw,
- *  ±f·hd) fits inside the ring polygon with `inset` clearance. */
-export const inscribedRectFactor = (pts: Pt2[], hw: number, hd: number, inset = 0): number => {
+/** Largest f such that the rect with corners (±f·halfWidth, ±f·halfDepth) fits inside the ring with `inset` clearance. */
+export const inscribedRectFactor = (pts: Pt2[], halfWidth: number, halfDepth: number, inset = 0): number => {
   let lo = 0.05;
   let hi = 1;
   for (let i = 0; i < 28; i++) {
     const mid = (lo + hi) / 2;
     const corners: Pt2[] = [
-      [mid * hw, mid * hd],
-      [mid * hw, -mid * hd],
-      [-mid * hw, -mid * hd],
-      [-mid * hw, mid * hd],
+      [mid * halfWidth, mid * halfDepth],
+      [mid * halfWidth, -mid * halfDepth],
+      [-mid * halfWidth, -mid * halfDepth],
+      [-mid * halfWidth, mid * halfDepth],
     ];
     if (corners.every((c) => pointInRing(pts, c, inset))) lo = mid;
     else hi = mid;
@@ -87,8 +81,7 @@ export const inscribedRectFactor = (pts: Pt2[], hw: number, hd: number, inset = 
   return lo;
 };
 
-/** Where the line `axis = at` crosses the ring polygon: the [min, max] of
- *  the other coordinate. E.g. ("x", at) → the z-range of the polygon at x=at. */
+/** [min, max] of the other coordinate where the line `axis = at` crosses the ring. */
 export const ringSpanAt = (pts: Pt2[], axis: "x" | "z", at: number): [number, number] => {
   let lo = Infinity;
   let hi = -Infinity;
@@ -107,7 +100,6 @@ export const ringSpanAt = (pts: Pt2[], axis: "x" | "z", at: number): [number, nu
   return [lo, hi];
 };
 
-/** Ring cross-section at height y, lerped between the bracketing levels. */
 export const interpRing = (levels: RingLevel[], y: number): RingLevel => {
   if (y <= levels[0].y) return levels[0];
   for (let i = 0; i < levels.length - 1; i++) {
@@ -119,8 +111,8 @@ export const interpRing = (levels: RingLevel[], y: number): RingLevel => {
         y,
         cx: a.cx + (b.cx - a.cx) * t,
         cz: a.cz + (b.cz - a.cz) * t,
-        hw: a.hw + (b.hw - a.hw) * t,
-        hd: a.hd + (b.hd - a.hd) * t,
+        halfWidth: a.halfWidth + (b.halfWidth - a.halfWidth) * t,
+        halfDepth: a.halfDepth + (b.halfDepth - a.halfDepth) * t,
       };
     }
   }

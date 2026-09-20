@@ -5,17 +5,7 @@ import { PhysicsWorld, PHYSICS_DT } from "../game/physics/world.js";
 import { Walker } from "../game/physics/walker.js";
 import { deg, findBiomePatch, findSlopeSpot, slopeAt, type SlopeSample } from "./terrainScan.js";
 
-/**
- * PHYSICS DEMO: `npm run physics:demo`
- *
- * Headless Rapier + real glitch-city terrain, stepped at the entity tick,
- * driven by the shared character resolver (the player's movement code).
- *   1. drops a capsule onto grassland — it must land at the analytic height
- *   2. walks it up a gentle slope — it must climb
- *   3. walks it up a steep (≥ 42°) slope — it must slide back down
- * A standalone check of the server's physics world — nothing in the game
- * depends on it.
- */
+/** `npm run physics:demo` — standalone: drop, gentle climb, steep slide. Nothing in the game depends on it. */
 
 const CAPSULE = { radius: 0.5, height: 2 }; // the player's dimensions
 const WALK_SPEED = 5; // BEEBLE_SPEED
@@ -45,7 +35,7 @@ const walk = (w: Walker, pw: PhysicsWorld, spot: SlopeSample, seconds: number, l
     if (i % 5 === 0 || i === 1) {
       const along = (p.x - start.x) * spot.ux + (p.z - start.z) * spot.uz;
       const h = computeVertexData(p.x, p.z).height;
-      console.log(`  ${String(i).padStart(4)} ${f(along)} ${f(feet)} ${f(h)} ${f(feet - h)}   ${w.last.walkableSupport ? "yes" : "no "}      ${deg(w.last.groundAngle)}`);
+      console.log(`  ${String(i).padStart(4)} ${f(along)} ${f(feet)} ${f(h)} ${f(feet - h)}   ${w.lastStep.walkableSupport ? "yes" : "no "}      ${deg(w.lastStep.groundAngle)}`);
     }
   }
   const p = w.position();
@@ -72,7 +62,6 @@ const main = async () => {
   );
   if (!flat || !gentle) throw new Error("scan failed");
 
-  // ── 1. drop ──────────────────────────────────────────────────────────────
   const held: string[] = [];
   for (const s of [flat, gentle, steep]) if (s) held.push(...pw.holdTerrainAround(s.x, s.z));
   let st = pw.stats();
@@ -86,18 +75,16 @@ const main = async () => {
     w.step(PHYSICS_DT, 0, 0);
     const ms = pw.step();
     const feet = w.feetY();
-    console.log(`  ${String(i).padStart(4)} ${f(feet)} ${f(flat.height)} ${f(feet - flat.height)} ${f(w.character.state.vy, 1)}   ${w.last.walkableSupport ? "yes" : "no "}     ${ms.toFixed(3)}`);
+    console.log(`  ${String(i).padStart(4)} ${f(feet)} ${f(flat.height)} ${f(feet - flat.height)} ${f(w.character.state.vy, 1)}   ${w.lastStep.walkableSupport ? "yes" : "no "}     ${ms.toFixed(3)}`);
   }
   const landGap = w.feetY() - flat.height;
   console.log(`→ landed ${landGap.toFixed(3)}u above the analytic surface (contact offset 0.08 expected)`);
 
-  // ── 2. gentle slope ──────────────────────────────────────────────────────
   w.placeFeet(gentle.x, gentle.height + 0.1, gentle.z);
   settle(w, pw, 5);
   const g = walk(w, pw, gentle, 4, "GENTLE");
   console.log(`→ climbed ${g.along.toFixed(2)}u uphill of ${g.expected.toFixed(2)}u expected, rose ${g.dy.toFixed(2)}u`);
 
-  // ── 3. steep slope ───────────────────────────────────────────────────────
   if (steep) {
     w.placeFeet(steep.x, steep.height + 0.1, steep.z);
     settle(w, pw, 5);

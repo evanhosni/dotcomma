@@ -1,43 +1,28 @@
 import * as THREE from "three";
 import { TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
+/** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
   seed: string;
-  /** Block grid cell size — the scale of one city block (same-index
-   *  neighbors merge into larger polyomino blocks). */
+  /** Block grid cell size. */
   gridSize: number;
-  /** Half-width of streets: distance from the road centerline (block
-   *  boundary) to the curb. Must match the band constants in the city
-   *  fragment shader. */
+  /** Street HALF-width (centerline → curb). Must match the city fragment shader's band constants. */
   roadWidth: number;
   blockCount: number;
-  /** Max plateau height of a city block; each block index rolls a seeded
-   *  elevation in [0, max]. Roads ramp between neighboring plateaus. */
+  /** Each block index rolls a seeded plateau elevation in [0, max]. */
   maxBlockElevation: number;
-  /** How far the road surface sits below the sidewalk (the curb step). */
+  /** Road surface depth below the sidewalk. */
   curbHeight: number;
-  /** Half-width of ARTERIALS — the wide roads along district boundaries,
-   *  rendered as scaled-up streets (bands, curb, markers all stretch by
-   *  freewayWidth / roadWidth). */
+  /** Arterial (district boundary road) HALF-width. */
   freewayWidth: number;
-  /** Average district size in CELLS. The city is partitioned into staggered
-   *  jittered rectangular districts (roughly 0.6–1.4 × this per side); each
-   *  district rotates its whole block grid by a seeded multiple of 15°, and
-   *  district boundaries carry the arterial roads. */
+  /** Average district size in CELLS (actual ~0.6–1.4×). */
   districtSize: number;
-  /** Probability a 2×2 SUPER-CELL is split by a corner-to-corner diagonal
-   *  road into two large flatiron triangle blocks (replacing four normal
-   *  blocks). */
+  /** Probability a 2×2 super-cell is split by a diagonal road into two flatirons. */
   triangleChance: number;
-  /** Probability a 2×2 SUPER-CELL becomes a roundabout: a large circular
-   *  block (replacing four normal blocks) surrounded by a ring road; the
-   *  wrap-around blocks outside the ring copy neighboring labels so they
-   *  MERGE with the surrounding grid — only the ring road separates the
-   *  neighbors from the island. */
+  /** Probability a 2×2 super-cell becomes a roundabout island + ring road. */
   roundaboutChance: number;
 }
 
-/** Global terrain rules — configured by a domain-level <Terrain> component. */
 export interface TerrainParams {
   seed: string;
   gridSize: number;
@@ -59,9 +44,7 @@ export interface RegionMaterialData {
   biomeTexture: THREE.Texture;
 }
 
-/** A biome's height definition — the SINGLE source of truth, evaluated by
- *  the shared vertex pipeline (utils/workers/vertexCompute.ts) on the terrain,
- *  spawn, and grass workers AND the main thread (world/terrain/vertexData.ts). */
+/** A biome's height definition — evaluated by the ONE shared pipeline (vertexCompute.ts). */
 export interface BiomeNoiseConfig {
   params: TerrainNoiseParams;
   absNeg?: boolean;
@@ -73,7 +56,7 @@ export interface Region {
   name: string;
   id: number;
   biomes: Biome[];
-  getMaterial?: () => Promise<RegionMaterialData>;
+  getBoundaryMaterial?: () => Promise<RegionMaterialData>;
 }
 export interface Biome {
   name: string;
@@ -82,11 +65,8 @@ export interface Biome {
   joinable: boolean;
   blendable: boolean;
   blendWidth?: number;
-  /** Height definition (see BiomeNoiseConfig). Biomes with bespoke height
-   *  logic (city) omit this — their branch lives in vertexCompute.ts. */
+  /** Omitted by biomes with bespoke height code (city → branch in vertexCompute.ts). */
   noise?: BiomeNoiseConfig;
-  /** Per-object spawn class registered by <Actor> components (see
-   *  src/world/components/Actor.tsx). Instanced dressing is NOT part of the
-   *  biome data model — dressing components render directly. */
+  /** Registered by <Actor>; dressing/foliage are not part of the data model. */
   actors?: import("../objects/actors/spawning/types").AnyActorDescriptor[];
 }

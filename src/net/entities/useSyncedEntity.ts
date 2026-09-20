@@ -2,24 +2,9 @@ import { useEffect, useMemo } from "react";
 import { getEntity, interactEntity, registerEntity, subscribeEntity, unregisterEntity, type ClientEntity } from "./entityStore";
 
 /**
- * THE sync handle an actor gets on `ctx.sync` (created by the actor base,
- * objects/actors/Actor.tsx — no component creates one itself).
- *
- * The SERVER is the authority for every synced actor — it simulates the body
- * on its own physics world and publishes x, y, z and velocity. On the client:
- *   - the base computes `target` every frame by SNAPSHOT INTERPOLATION of the
- *     server's published track on a delayed server clock (interpolation.ts)
- *     and places the group there. Nothing is predicted or resolved locally;
- *   - ModelActor's kinematic mover parks the capsule at `target` (player
- *     collision only);
- *   - ModelActor plays the server's clip in phase; useStateMachine MIRRORS the
- *     server's state id so state-keyed visuals run;
- *   - inputs go to the server with interact() (useMouseEvents forwards clicks;
- *     components send their own actions, e.g. "door:2") and come back as
- *     replicated `state` or as the machine's reaction.
- *
- * `known` is false until the server has acknowledged the registration; until
- * then the actor sits at its spawn point.
+ * The sync handle on `ctx.sync`, created only by the actor base (Actor.tsx).
+ * The actor base writes `target` each frame from snapshot interpolation; movers
+ * and visuals read it. See CLAUDE.md → Entity sync.
  */
 
 export interface PuppetTarget {
@@ -36,17 +21,15 @@ export interface PuppetTarget {
 export interface SyncHandle {
   readonly id: string;
   readonly entity: ClientEntity | undefined;
-  /** Server has acknowledged this entity (we have its fields). */
+  /** False until the server has acknowledged the registration (the actor sits at spawn). */
   readonly known: boolean;
-  /** Placement target this frame (written by the base, read by movers). */
   readonly target: PuppetTarget;
-  /** Replicated state blob (server-owned; toggled via interact()). */
+  /** Server-owned; toggled via interact(). */
   readonly state: Record<string, unknown> | undefined;
-  /** The server-side machine's current state id (for mirrored visuals). */
+  /** The server-side machine's current state id. */
   readonly stateId: string | undefined;
-  /** Send an input to the server. */
   interact(action: string): void;
-  /** UI-cadence: state / clip / machine-state changes. */
+  /** Fires on state / clip / machine-state changes only. */
   subscribe(fn: (e: ClientEntity) => void): () => void;
 }
 

@@ -7,33 +7,16 @@ import { getRemotePlayers } from "../../../net/remotePlayerStore";
 import { StateMachineRunner } from "./runner";
 import { StateMachineConfig, StateMachineHandle } from "./types";
 
-/**
- * React binding of the StateMachineRunner (runner.ts — read its contract).
- *
- * LOCAL actor (`serverSynced={false}`): the runner ticks here, authoritative,
- * and the facing output (`__yaw`) is applied to the model. Velocity outputs
- * are read by the owner's onFrame into ctx.move; animation by ModelActor.
- *
- * SYNCED actor (the default): the SERVER runs this machine. Here it only
- * MIRRORS the server's state id — entering states exactly as the server did,
- * so state-keyed visuals (head tracking, the sphere-inflate) happen — while
- * every logic output is ignored in favor of the server's published pose and
- * clip. The hook finds out which case it is from the sync handle the actor
- * base hangs on the group (`group.userData.sync`); no component tells it.
- *
- * "The player" a machine reacts to is the NEAREST player — local or remote —
- * matching what the server does with all players in the domain.
- */
+// React binding of StateMachineRunner. Synced actors (found via the sync
+// handle the base hangs on `group.userData.sync`) only MIRROR the server's
+// state; local actors tick here. "The player" is the NEAREST player, local or
+// remote — the same rule the server applies.
 
 const _playerDiff = new THREE.Vector3();
 const _nearestPlayer = new THREE.Vector3();
 
 export interface UseStateMachineOptions {
-  /** The owner drives the machine itself by calling `handle.tick(state,
-   *  delta)` from its actor `onFrame` (the shared actor frame driver) instead
-   *  of this hook subscribing its own useFrame. Actors should always do this —
-   *  a useFrame per actor is the subscription churn the shared driver exists
-   *  to remove (CLAUDE.md: "Do NOT add a useFrame to an actor"). */
+  /** The owner calls `handle.tick` from its actor onFrame — never a useFrame per actor. */
   externallyDriven?: boolean;
 }
 
@@ -45,7 +28,6 @@ export function useStateMachine(
 ): StateMachineHandle {
   const { playerPosition } = useGameContext();
 
-  // positionRef/groupRef are stable per instance; the config is module-constant.
   const runner = useMemo(() => new StateMachineRunner(config, positionRef, groupRef), [config, positionRef, groupRef]);
   useEffect(() => () => runner.dispose(), [runner]);
 
@@ -54,7 +36,6 @@ export function useStateMachine(
       const elapsed = threeState.clock.elapsedTime;
       const self = positionRef.current;
 
-      // Nearest player (2D): the local one, then every remote player we render.
       let nearest: THREE.Vector3 = playerPosition;
       _playerDiff.subVectors(nearest, self);
       let distSq = _playerDiff.x * _playerDiff.x + _playerDiff.z * _playerDiff.z;
@@ -70,11 +51,8 @@ export function useStateMachine(
 
       const sync = groupRef.current?.userData.sync as SyncHandle | undefined;
       if (sync && sync.known) {
-        // The server owns this machine: follow its state for the visuals only.
-        // Its OUTPUTS come from the server too — inject them before the
-        // behavior runs, so visuals that read them (head tracking uses __yaw
-        // as the body angle) see the real values, not what the local mirrored
-        // machine happened to compute.
+        // Inject the server's outputs before the behavior runs, so visuals that
+        // read them (head tracking uses __yaw) see the real values.
         const r = sync.entity?.remote;
         const bb = runner.blackboard;
         if (r) {
@@ -84,13 +62,11 @@ export function useStateMachine(
           if (r.vy !== undefined) bb.__vel_y = r.vy !== 0 ? r.vy : undefined;
         }
         const sid = sync.stateId;
-        if (sid) runner.mirror(sid, elapsed, delta, nearest, distSq);
+        if (sid) runner.followServerState(sid, elapsed, delta, nearest, distSq);
         return;
       }
 
       runner.tick(elapsed, delta, nearest, distSq);
-      // Facing is a machine OUTPUT; apply it to the model here (local only —
-      // synced actors get the server's yaw from the base).
       const yaw = runner.blackboard.__yaw;
       if (yaw !== undefined && groupRef.current) groupRef.current.rotation.y = yaw;
     },

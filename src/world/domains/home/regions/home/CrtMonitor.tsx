@@ -5,10 +5,7 @@ import { hideCursor, showCursor } from "../../../../../utils/cursor/cursor";
 import { switchDomain, domainIdFromPath } from "../../../navigation";
 import { getDomainDioramaTexture } from "./domainDiorama";
 
-/**
- * The 7 domains on the selector. Only glitch-city is real today — the rest
- * render as locked "???" pages. To unlock one later, give it a label + href.
- */
+/** Entries without an href render as locked "???" pages. */
 const DOMAINS: { label: string; href?: string }[] = [
   { label: "/glitch-city", href: "/glitch-city" },
   { label: "???" },
@@ -20,21 +17,19 @@ const DOMAINS: { label: string; href?: string }[] = [
 ];
 const PAGE_COUNT = DOMAINS.length;
 
-/** Screen is a classic 4:3 CRT. HUGE — the shell stands ~4.8u tall. */
-const SCREEN_W = 4.8;
+const SCREEN_W = 4.8; // 4:3
 const SCREEN_H = 3.6;
 
-/** Interact reach — larger than doors (7): the screen is huge, you click it
- *  from conversation distance, not nose-to-glass. */
+// Larger than doors (7): the screen is huge, you click it from conversation distance.
 const INTERACT_DISTANCE = 14;
-const HOVER_GATE = 50;
+const HOVER_CHECK_DISTANCE = 50;
 const SCROLL_COOLDOWN_MS = 250;
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 const _worldPos = new THREE.Vector3();
 
-// ── Text atlas: one 4:3 row per page, drawn once with canvas 2D ────────────
+// Text atlas: one row per page.
 const ATLAS_W = 512;
 const ATLAS_ROW_H = 384; // 4:3, matches the screen so text isn't stretched
 
@@ -44,7 +39,6 @@ const drawAtlas = (ctx: CanvasRenderingContext2D) => {
   ctx.clearRect(0, 0, ATLAS_W, ATLAS_ROW_H * PAGE_COUNT);
   ctx.textAlign = "center";
   ctx.lineJoin = "round";
-  // Thin dark outline keeps text readable over the bright thumbnail
   const text = (str: string, x: number, y: number) => {
     ctx.lineWidth = 5;
     ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
@@ -55,14 +49,12 @@ const drawAtlas = (ctx: CanvasRenderingContext2D) => {
     const top = i * ATLAS_ROW_H;
     ctx.fillStyle = "#00ff00";
     if (domain.href) {
-      // Unlocked: title up top, overlaid on the full-page thumbnail
       ctx.font = font(44);
       text(domain.label, ATLAS_W / 2, top + 62);
       ctx.font = font(20);
       ctx.fillStyle = "#00dd44";
       text("click to enter", ATLAS_W / 2, top + 356);
     } else {
-      // Locked: big ??? and nothing else to see
       ctx.fillStyle = "#1d6b2f";
       ctx.font = font(84);
       text(domain.label, ATLAS_W / 2, top + 186);
@@ -77,7 +69,6 @@ const drawAtlas = (ctx: CanvasRenderingContext2D) => {
   });
 };
 
-// ── Screen shader: scrollable pages + thumbnail + CRT dressing ─────────────
 const screenVertexShader = `
   varying vec2 vUv;
   void main() {
@@ -111,25 +102,21 @@ const screenFragmentShader = `
     float halfH = 0.5 * open;
 
     if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && uPower > 0.001 && dy < halfH) {
-      // Content squeezed into the open band while it expands
       float cy = 0.5 + (uv.y - 0.5) / max(open, 0.001);
 
-      // Vertical page scroll: content coordinate grows downward
       float cv = (1.0 - cy) + uScroll;
       float page = floor(cv);
       float ly = fract(cv);
 
-      // Raster glow — the tube is visibly "on" even where nothing is drawn
+      // Raster glow: the tube reads as "on" where nothing is drawn
       col = vec3(0.010, 0.028, 0.014);
 
       if (page >= -0.5 && page < PAGES - 0.5) {
-        // Page 0: the baked mini-world thumbnail fills the whole page
         if (page < 0.5) {
           vec3 world = texture2D(uWorld, vec2(uv.x, 1.0 - ly)).rgb;
           col = pow(world, vec3(0.4545)) * 0.9; // linear bake -> display, dimmed a touch for text contrast
         }
 
-        // Text overlaid in front (the atlas rows have transparent backgrounds)
         vec2 auv = vec2(uv.x, 1.0 - (page + ly) / PAGES);
         vec4 text = texture2D(uAtlas, auv);
         col = mix(col, text.rgb, text.a);
@@ -152,26 +139,14 @@ const screenFragmentShader = `
   }
 `;
 
-// ── Shell dimensions (local; group origin = screen center) ────────────────
+// Shell dimensions (local; group origin = screen center)
 const BEZEL = 0.6;
 const FRAME_DEPTH = 0.95;
 const FRAME_Z = -0.225; // screen (z=0) recessed 0.25 behind the bezel front
 
-/**
- * A HUGE retro CRT monitor: the home page's domain selector. It powers on
- * (classic line-expand + fade) a moment after the player clicks into the
- * canvas, washing the wireframe grid in green screen-glow. The screen lists
- * the domains one page at a time — scroll (mouse wheel) to flip pages, walk
- * up and click an unlocked page to load that domain (a CLIENT-SIDE switch:
- * switchDomain pushes a fake URL path and index.tsx remounts the canvas after
- * resetDomainSystems re-arms the workers/accessors). Page 1 is /glitch-city
- * with the baked mini-world thumbnail (domainDiorama.ts); the other six are
- * locked.
- *
- * The glow point light is PARKED at intensity 0 from mount — a first light
- * appearing mid-play changes NUM_POINT_LIGHTS and recompiles every lit
- * shader at the exact frame of entry (the DayNightCycle nightfall hitch).
- */
+/** The home page's domain selector (see CLAUDE.md). The glow light is PARKED
+ *  at intensity 0 from mount: a light appearing mid-play changes
+ *  NUM_POINT_LIGHTS and recompiles every lit shader at that frame. */
 export const CrtMonitor = ({
   position = [0, 2.2, -36] as [number, number, number],
   glowIntensity = 26,
@@ -184,8 +159,8 @@ export const CrtMonitor = ({
   const lightRef = useRef<THREE.PointLight>(null);
   const ledMatRef = useRef<THREE.MeshStandardMaterial>(null);
 
-  const triggeredRef = useRef(false);
-  const progressRef = useRef(0);
+  const powerOnTriggeredRef = useRef(false);
+  const powerProgressRef = useRef(0);
   const scrollRef = useRef(0);
   const targetPageRef = useRef(0);
   const lastScrollAtRef = useRef(0);
@@ -199,7 +174,6 @@ export const CrtMonitor = ({
     const ctx = canvas.getContext("2d")!;
     drawAtlas(ctx);
     const atlasTexture = new THREE.CanvasTexture(canvas);
-    // Kode Mono loads async — redraw once webfonts are in
     document.fonts?.ready.then(() => {
       drawAtlas(ctx);
       atlasTexture.needsUpdate = true;
@@ -222,8 +196,7 @@ export const CrtMonitor = ({
     };
   }, []);
 
-  // Bake (or reuse) the mini-world thumbnail — outside the render phase,
-  // since baking issues a gl.render
+  // In an effect: baking issues a gl.render.
   useEffect(() => {
     screenMaterial.uniforms.uWorld.value = getDomainDioramaTexture(gl);
   }, [gl, screenMaterial]);
@@ -237,13 +210,12 @@ export const CrtMonitor = ({
     };
   }, [atlasTexture, screenMaterial, shellMaterial]);
 
-  // Power on delayMs after the player first clicks in (pointer lock)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onLockChange = () => {
       if (!document.pointerLockElement || timer !== null) return;
       timer = setTimeout(() => {
-        triggeredRef.current = true;
+        powerOnTriggeredRef.current = true;
       }, delayMs);
       document.removeEventListener("pointerlockchange", onLockChange);
     };
@@ -254,10 +226,10 @@ export const CrtMonitor = ({
     };
   }, [delayMs]);
 
-  // Wheel flips pages (one per cooldown tick, so a fast flick isn't 6 pages)
+  // One page per cooldown tick, so a fast flick isn't 6 pages.
   useEffect(() => {
     const onWheel = (e: WheelEvent) => {
-      if (!document.pointerLockElement || !triggeredRef.current) return;
+      if (!document.pointerLockElement || !powerOnTriggeredRef.current) return;
       const dir = Math.sign(e.deltaY);
       if (dir === 0) return;
       const now = performance.now();
@@ -271,14 +243,11 @@ export const CrtMonitor = ({
     return () => window.removeEventListener("wheel", onWheel);
   }, []);
 
-  // Click an unlocked, settled page to load its domain
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0 || !hoverRef.current) return;
       const href = DOMAINS[targetPageRef.current].href;
-      // Client-side switch (fake URL path) — a real navigation would put a
-      // cross-document entry in history and reopen the back button as an
-      // escape hatch out of the game (see world/domains/navigation.ts).
+      // Never a real navigation: that would reopen the back button as an exit (navigation.ts).
       if (href) switchDomain(domainIdFromPath(href));
     };
     window.addEventListener("click", handleClick);
@@ -289,17 +258,15 @@ export const CrtMonitor = ({
     const u = screenMaterial.uniforms;
     u.uTime.value = clock.elapsedTime;
 
-    // Power fade (ease-in-out) — drives the screen, glow light, and LED
-    if (triggeredRef.current && progressRef.current < 1) {
-      const progress = Math.min(1, progressRef.current + (dt * 1000) / fadeMs);
-      progressRef.current = progress;
+    if (powerOnTriggeredRef.current && powerProgressRef.current < 1) {
+      const progress = Math.min(1, powerProgressRef.current + (dt * 1000) / fadeMs);
+      powerProgressRef.current = progress;
       const power = progress * progress * (3 - 2 * progress);
       u.uPower.value = power;
       if (lightRef.current) lightRef.current.intensity = glowIntensity * power;
       if (ledMatRef.current) ledMatRef.current.emissiveIntensity = 2 * power;
     }
 
-    // Smooth scroll toward the target page
     const target = targetPageRef.current;
     const scroll = scrollRef.current;
     if (scroll !== target) {
@@ -308,14 +275,12 @@ export const CrtMonitor = ({
       u.uScroll.value = next;
     }
 
-    // Hover: screen-center raycast every 3rd frame, only nearby, and only
-    // meaningful when the settled page is unlocked
     if (++frameRef.current % 3 !== 0) return;
     const screen = screenRef.current;
     if (!screen) return;
     let hover = false;
     const unlocked = !!DOMAINS[target].href && Math.abs(scroll - target) < 0.1;
-    if (unlocked && triggeredRef.current && camera.position.distanceTo(screen.getWorldPosition(_worldPos)) < HOVER_GATE) {
+    if (unlocked && powerOnTriggeredRef.current && camera.position.distanceTo(screen.getWorldPosition(_worldPos)) < HOVER_CHECK_DISTANCE) {
       _raycaster.setFromCamera(_center, camera);
       _raycaster.far = INTERACT_DISTANCE;
       hover = _raycaster.intersectObject(screen, false).length > 0;
@@ -331,12 +296,10 @@ export const CrtMonitor = ({
 
   return (
     <group position={position}>
-      {/* The tube */}
       <mesh ref={screenRef}>
         <planeGeometry args={[SCREEN_W, SCREEN_H]} />
         <primitive object={screenMaterial} attach="material" />
       </mesh>
-      {/* Bezel frame around the screen */}
       <mesh position={[0, SCREEN_H / 2 + BEZEL / 2, FRAME_Z]} material={shellMaterial}>
         <boxGeometry args={[SCREEN_W + BEZEL * 2, BEZEL, FRAME_DEPTH]} />
       </mesh>
@@ -349,16 +312,13 @@ export const CrtMonitor = ({
       <mesh position={[SCREEN_W / 2 + BEZEL / 2, 0, FRAME_Z]} material={shellMaterial}>
         <boxGeometry args={[BEZEL, SCREEN_H, FRAME_DEPTH]} />
       </mesh>
-      {/* Deep tube body behind the frame */}
       <mesh position={[0, 0, -2.2]} material={shellMaterial}>
         <boxGeometry args={[SCREEN_W + 0.4, SCREEN_H + 0.6, 3.2]} />
       </mesh>
-      {/* Power LED on the bottom bezel */}
       <mesh position={[SCREEN_W / 2 - 0.15, -(SCREEN_H / 2 + BEZEL / 2), FRAME_Z + FRAME_DEPTH / 2 + 0.02]}>
         <boxGeometry args={[0.12, 0.12, 0.04]} />
         <meshStandardMaterial ref={ledMatRef} color="#0a1a0a" emissive="#00ff44" emissiveIntensity={0} />
       </mesh>
-      {/* Screen glow washing the grid in front of the monitor */}
       <pointLight ref={lightRef} position={[0, 0.3, 5]} color="#8fffc8" intensity={0} distance={glowDistance} decay={2} />
     </group>
   );

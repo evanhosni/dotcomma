@@ -5,28 +5,15 @@ import { BUILDING_ATTRS, SKYSCRAPER_ATTRS } from "../../../../src/objects/actors
 import type { BuildingKindSpec } from "../physics/buildings.js";
 
 /**
- * ENTITY KINDS — what the server simulates for each actor DESCRIPTOR id.
- *
- * Everything here is the CLIENT'S file, imported straight from src/ (the
- * server is bundled with esbuild, which follows those imports): the state
- * machine config, the body spec (beeble/spec.ts — the capsule the descriptor
- * mounts), the building variant attributes (building/variants.ts — the plan
- * the hull is built from). A behavior or a shape is written ONCE, in the
- * actor's folder, and runs here as the one authority; the client only mirrors.
- * See src/objects/actors/state/runner.ts for the contract a config must follow.
- *
- * - `sm` + `body`: a walker — its machine runs here and its capsule moves on
- *   the server physics world (physics/world.ts) with the shared character
- *   resolver; position published authoritatively (x, y AND z).
- * - `hull`: a building — a sealed convex hull collider at its origin, so
- *   walkers can't enter it; static, with replicated `state` (doors).
- * - neither: static, replicated state + interactions only.
- *
- * Adding a synced NPC: its descriptor id → { sm, body } here.
+ * Actor descriptor id → what the server simulates. Everything imported is the
+ * CLIENT's own file (esbuild follows the src/ imports): a behavior or shape is
+ * written once. Adding a synced NPC = its descriptor id → { sm, body } here.
  */
 export interface EntityKind {
+  /** With `body`: a walker — machine + capsule run here, pose published authoritatively. */
   sm?: StateMachineConfig;
   body?: { radius: number; height: number };
+  /** A building: sealed convex hull, static, replicated door state. */
   hull?: BuildingKindSpec;
 }
 

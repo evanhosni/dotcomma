@@ -1,15 +1,4 @@
-/**
- * City dressing placement — worker client.
- *
- * The enumerations (road markers, traffic lights, freeway-side points) run in
- * utils/workers/dressing.worker.ts on the shared vertex pipeline; one shared
- * worker serves every dressing component (RoadMarkers, TrafficLights,
- * PowerLines). The worker also runs the per-chunk biome
- * probe, so a request costs the main thread nothing but the postMessage.
- *
- * Lifecycle/plumbing (lazy boot, INIT handshake, request ids, teardown) comes
- * from the shared worker-client base — this file is only the typed wrappers.
- */
+/** Typed wrappers over the ONE dressing worker (utils/workers/dressing.worker.ts). */
 
 import {
   CityFreewaySidePoint,
@@ -34,15 +23,12 @@ const client = createWorkerClient({
   resultType: "DRESSING_RESULT",
 });
 
-/** Domain switch (resetDomainSystems): drop the worker so the next dressing
- *  request re-inits it with the new world's config. In-flight requests never
- *  resolve — callers unmounted with the old world. */
+/** In-flight requests never resolve after a reset — their callers unmounted with the old domain. */
 export const resetDressingWorker = client.reset;
 
 const request = (message: Record<string, unknown>): Promise<any[]> =>
   client.request<{ points: any[] }>(message).then((r) => r.points);
 
-/** Raised-pavement-marker positions along city road centerlines. */
 export const getRoadMarkers = (
   minX: number,
   minZ: number,
@@ -53,7 +39,6 @@ export const getRoadMarkers = (
 ): Promise<RoadMarkerPoint[]> =>
   request({ type: "ROAD_MARKERS", minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing });
 
-/** Traffic-light pole positions on seeded-selected intersection corners. */
 export const getTrafficLightPoints = (
   minX: number,
   minZ: number,
@@ -63,7 +48,6 @@ export const getTrafficLightPoints = (
 ): Promise<CityTrafficLightPoint[]> =>
   request({ type: "TRAFFIC_LIGHTS", minX, minZ, maxX, maxZ, chance });
 
-/** Points offset laterally from the freeway centerlines (arterials + belt). */
 export const getFreewaySidePoints = (
   minX: number,
   minZ: number,
@@ -84,9 +68,7 @@ export interface DensityPoint {
   z: number;
 }
 
-/** Deterministic spawn-system-style density placement (stateless spacing) —
- *  for mass static dressing rendered instanced (e.g. street lights). CITY
- *  ONLY: requests share the worker's city biome probe. */
+/** CITY ONLY: the worker's chunk probe returns nothing outside the city biome. */
 export const getDensityPoints = (
   minX: number,
   minZ: number,
@@ -96,18 +78,14 @@ export const getDensityPoints = (
 ): Promise<DensityPoint[]> =>
   request({ type: "DENSITY_POINTS", minX, minZ, maxX, maxZ, params });
 
-/** One PADDED vertex sample, computed in the worker. The Player's backstop
- *  confirm uses this: a flatten-tile miss inside the padded path costs
- *  30-70ms, and paying that on the main thread was a roaming lag spike.
- *  Returns null until the worker is initialized (callers fall back). */
+/** Padded height sample off-thread: a flatten-tile miss costs 30–70ms, a lag spike on the main
+ *  thread. null until the worker is initialized. */
 export const getVertexSample = async (x: number, z: number): Promise<VertexResult | null> => {
   const points = await request({ type: "VERTEX_SAMPLE", x, z });
   return (points[0] as VertexResult) ?? null;
 };
 
-/** Voronoi site point of every city-biome cell in the bounds (CityLights
- *  beacons). Ran on the main thread before and each site could compute a
- *  flatten-pad tile synchronously — a periodic lag spike while roaming. */
+/** Off-thread for the same reason as getVertexSample (each site can compute a pad tile). */
 export const getCityLightSites = (
   minX: number,
   minZ: number,

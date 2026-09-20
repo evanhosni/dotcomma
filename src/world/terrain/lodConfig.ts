@@ -1,50 +1,33 @@
-// ── Terrain Tuning Constants ─────────────────────────────────────────────────
-// Adjust these to tweak terrain quality, performance, and draw distance.
-
-/** Domain-space size of the base terrain chunk (width & depth). */
 export const CHUNK_SIZE = 420;
 
-/** Per-LOD chunk sizes (must be integer multiples of CHUNK_SIZE). */
+// Integer multiples of CHUNK_SIZE.
 export const LOD3_CHUNK_SIZE = CHUNK_SIZE * 2; // 840
 export const LOD4_CHUNK_SIZE = CHUNK_SIZE * 4; // 1680
 export const LOD5_CHUNK_SIZE = CHUNK_SIZE * 8; // 3360
 
-/** Mesh segment counts per LOD level (higher = more detail).
- *  LOD2 is 24 (17.5u spacing): with LOD1 confined to the innermost ring the
- *  old 12 (35u) made an 8× density cliff right at the player's doorstep. */
+// LOD2 = 24 (17.5u): 12 made an 8× density cliff right at the LOD1 ring's edge.
 export const LOD1_SEGMENTS = 96;
 export const LOD2_SEGMENTS = 24;
 export const LOD3_SEGMENTS = 4;
 export const LOD4_SEGMENTS = 2;
 export const LOD5_SEGMENTS = 1;
 
-/** Max distance from the player at which each LOD level is used.
- *  LOD1 (4.375u spacing) used to reach CHUNK_SIZE*2 and carried 92% of ALL
- *  terrain triangles; nothing needs that density past the immediate ring —
- *  flatten pads are 13-24u features and the city's fine detail (roads, curbs)
- *  is painted by the FRAGMENT shader from distance attributes, not resolved
- *  by geometry. The player always stands on LOD1, so the slope-slide tuning
- *  (measured at LOD1 collider resolution) is unaffected. */
+// LOD1 (4.375u) once reached CHUNK_SIZE*2 and carried 92% of ALL terrain
+// triangles. The player always stands on LOD1, so the slope-slide tuning
+// (measured at LOD1 resolution) is unaffected by the ring sizes.
 export const LOD1_MAX_DISTANCE = CHUNK_SIZE;
 export const LOD2_MAX_DISTANCE = CHUNK_SIZE * 4;
 export const LOD3_MAX_DISTANCE = CHUNK_SIZE * 8;
-/** The outer rings are bounded by the camera far plane (Player.tsx
- *  CAMERA_FAR = 7200): terrain past it is clipped by the projection and can
- *  never be seen. LOD5 used to reach 20160u — ~100 chunks per root scan that
- *  were generated in the worker, given pooled geometry and kept forever
- *  without ever producing a pixel, on the same worker that streams the
- *  chunks the player stands on. One LOD5 chunk of slack past the far plane
- *  keeps the horizon edge solid through the world curvature. */
+// Bounded by CAMERA_FAR (7200, Player.tsx): chunks past it are generated and
+// kept without ever producing a pixel. One LOD5 chunk of slack keeps the
+// horizon solid through the world curvature.
 export const LOD4_MAX_DISTANCE = CHUNK_SIZE * 16; // 6720
 export const LOD5_MAX_DISTANCE = CHUNK_SIZE * 20; // 8400 (> CAMERA_FAR)
 
-/** Vertical depth of skirt geometry added around chunk edges to hide LOD seams. */
+/** Vertical skirt around chunk edges hiding LOD seams. */
 export const SKIRT_DEPTH = 30;
 
-/** Absolute maximum terrain render distance (matches coarsest LOD). */
 export const MAX_RENDER_DISTANCE = LOD5_MAX_DISTANCE;
-
-// ── LOD Level Definitions ────────────────────────────────────────────────────
 
 export interface LODLevel {
   level: number;

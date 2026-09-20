@@ -10,7 +10,6 @@ const font = (px: number) => `${px}px 'Kode Mono', 'Courier New', Courier, monos
 
 const drawLabel = (ctx: CanvasRenderingContext2D, label: string) => {
   ctx.clearRect(0, 0, TEX_W, TEX_H);
-  // Auto-fit: shrink the font until the label fits the canvas
   ctx.font = font(BASE_FONT_PX);
   const baseWidth = ctx.measureText(label).width;
   const maxWidth = TEX_W - FIT_PADDING * 2;
@@ -22,9 +21,7 @@ const drawLabel = (ctx: CanvasRenderingContext2D, label: string) => {
   ctx.fillText(label, TEX_W / 2, TEX_H / 2 - size * 0.18);
 };
 
-/** CanvasTexture text label material (redrawn once webfonts load — Kode Mono
- *  is async; the first paint may have fallen back to Courier). Dispose both
- *  texture and material on unmount. */
+/** Caller disposes both texture and material. */
 export const makeLabelMaterial = (label: string) => {
   const canvas = document.createElement("canvas");
   canvas.width = TEX_W;

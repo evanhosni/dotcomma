@@ -2,12 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import React, { createContext, useContext, useRef, useState } from "react";
 import { DayNightPhase, getDayNightPhase, getNightBlend } from "./dayNight";
 
-/**
- * React access to the day/night cycle. Consumers re-render only when the
- * PHASE flips (day → dusk → night → dawn), never per frame — continuous
- * values stay available through the dayNight.ts getters (`getNightBlend()`,
- * `getWindowLightsProgress()`) for useFrame code.
- */
+// Re-renders only on phase flips; continuous values come from the dayNight.ts getters.
 
 export interface DayNightState {
   phase: DayNightPhase;
@@ -17,8 +12,7 @@ export interface DayNightState {
 
 const DayNightContext = createContext<DayNightState>({ phase: "day", isNight: false });
 
-/** Mounted inside the Canvas (it polls via useFrame), wrapping the world so
- *  any component can call useDayNight(). */
+/** Must mount inside the Canvas (polls via useFrame). */
 export const DayNightProvider = ({ children }: React.PropsWithChildren) => {
   const [state, setState] = useState<DayNightState>(() => ({
     phase: getDayNightPhase(),

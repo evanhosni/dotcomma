@@ -7,10 +7,7 @@ import { getMaterial } from "./material";
 import { GRASS_BIOME_ID as CITY_GRASS_BIOME_ID } from "../../../../../../constants";
 export { CITY_GRASS_BIOME_ID };
 
-/** Grassland biome as it appears inside the city region (rolling noise
- *  terrain covered in swaying billboard grass). Shares biome id 3 with the
- *  grass region's GrassBiome — registrations for the same id are merged, so
- *  keep the two in sync if you change terrain/material settings. */
+/** Duplicate of the grass region's GrassBiome (same id → registrations merge): keep them in sync. */
 export const CityGrassBiome = () => (
   <Biome name="grass" id={CITY_GRASS_BIOME_ID} joinable blendable>
     <Terrain
@@ -28,19 +25,14 @@ export const CityGrassBiome = () => (
     />
     <Material getMaterial={getMaterial} />
     <Actors>
-      {/* Sparse country buildings — flattenGround pads level the rolling
-          terrain under each one. Distinct id: "building" belongs to the city
-          registration and descriptors dedupe by id. (Kept in sync with the
-          grass region's duplicate of this biome.) */}
+      {/* Distinct id: "building" belongs to the city and descriptors dedupe by id */}
       <BuildingActor id="grass-building" biomeIds={[CITY_GRASS_BIOME_ID]} density={25} />
     </Actors>
-    {/* GrassField's baked default (500) governs the render distance — a
-        renderDistance on this group is shadowed by the field's own defaults
-        (createFoliage spreads them as props, which beat group context). */}
+    {/* createFoliage props beat <Foliage> group defaults, so GrassField's own renderDistance wins */}
     <Foliage>
       <GrassField
         density={8000000}
-        slopeRange={[0, 28]} // terrain shader fades grass texture out past ~0.25 rad, keep blades on the green
+        slopeRange={[0, 28]} // the terrain shader fades the grass texture past ~0.25 rad
         slopeBlend={12}
         color="#6fff00"
         width={0.14}

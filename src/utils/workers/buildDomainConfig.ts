@@ -3,14 +3,6 @@ import { TerrainParams } from "../../world/types";
 import { Region } from "../../world/types";
 import { FlattenDescriptor, SerializedRegion, DomainConfig } from "./vertexCompute";
 
-/**
- * Builds a serializable DomainConfig from regions + global terrain params.
- * This config is sent to terrain/spawn/grass workers to initialize the
- * inlined vertex computation pipeline.
- *
- * Global params come from the world-level <Terrain> component; per-biome
- * noise comes from each biome-level <Terrain noise={...}> registration.
- */
 export function buildDomainConfig(regions: Region[], params: TerrainParams): DomainConfig {
   const serializedRegions: SerializedRegion[] = regions.map((r) => ({
     id: r.id,
@@ -29,9 +21,7 @@ export function buildDomainConfig(regions: Region[], params: TerrainParams): Dom
     if (biome.noise) biomeNoiseConfigs[biome.id] = biome.noise;
   }
 
-  // Actors with flattenGround get their placement rules serialized into the
-  // config so the height function can flatten a pad under every instance
-  // (deduped by id, like collectDescriptors).
+  // flattenGround actors' placement rules ride along so the height function can pad under every instance (deduped by id).
   const flattenById = new Map<string, FlattenDescriptor>();
   for (const biome of getAllBiomes(regions)) {
     for (const d of biome.actors ?? []) {

@@ -1,13 +1,4 @@
-/**
- * Foliage placement — worker client (shared by every foliage feature).
- *
- * The placement algorithm runs in utils/workers/foliage.worker.ts (coarse
- * terrain grid + bilinear interpolation per instance). ONE shared worker
- * serves every mounted field, whatever the plant; results come back as
- * transferable Float32Arrays that go straight into GPU instance attributes.
- *
- * Lifecycle/plumbing comes from the shared worker-client base.
- */
+/** Typed wrappers over the ONE foliage worker (utils/workers/foliage.worker.ts), shared by every field. */
 
 import { DomainConfig } from "../../utils/workers/vertexCompute";
 import { createWorkerClient } from "../../utils/workers/workerClient";
@@ -26,29 +17,23 @@ export interface FoliageChunkResult {
   count: number;
   minY: number;
   maxY: number;
-  offsets: Float32Array; // x, y, z per blade
-  instanceData: Float32Array; // phase, scale, tint per blade
+  offsets: Float32Array; // x, y, z per instance
+  instanceData: Float32Array; // phase, scale, tint per instance
 }
 
-/** Config handed to the next boot (initFoliageWorker sets it before ensure). */
-let pendingConfig: DomainConfig | null = null;
+let configForNextBoot: DomainConfig | null = null;
 
 const client = createWorkerClient({
   create: () => new Worker(new URL("../../utils/workers/foliage.worker.ts", import.meta.url), { type: "module" }),
-  init: () => ({ config: pendingConfig }),
+  init: () => ({ config: configForNextBoot }),
   resultType: "FOLIAGE_RESULT",
 });
 
-/** Domain switch (resetDomainSystems): drop the worker so the next foliage
- *  field mount re-inits it with the new world's config. */
 export const resetFoliageWorker = client.reset;
 
-/**
- * Initialize the shared foliage worker. Idempotent — safe to call from
- * every mounted field.
- */
+/** Idempotent — every mounted field calls it. */
 export const initFoliageWorker = (config: DomainConfig): Promise<void> => {
-  if (!client.exists()) pendingConfig = config;
+  if (!client.exists()) configForNextBoot = config;
   return client.ensure();
 };
 
@@ -60,7 +45,6 @@ const EMPTY_RESULT: FoliageChunkResult = {
   instanceData: new Float32Array(0),
 };
 
-/** Generate the instance transforms for one foliage chunk. */
 export const generateFoliageChunk = (
   chunkX: number,
   chunkZ: number,

@@ -1,9 +1,7 @@
 /**
- * Shared vertex data computation module.
- * Imported by both terrain.worker.ts and spawn.worker.ts.
- *
- * Inlines: noise FBM, voronoi grid/Delaunay/walls/distance (all on the x/z world plane),
- * biome height functions, city grid logic.
+ * THE height pipeline (CLAUDE.md: "Heights have a single source of truth"):
+ * noise, voronoi, biome heights, city grid, flatten pads and the city feature
+ * enumerators — run identically by every worker, the main thread and the server.
  */
 
 import Delaunator from "delaunator";
@@ -13,7 +11,6 @@ import type { PointXZ } from "../math/types";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
 
-// The deterministic roll every worker uses — one implementation (utils/math).
 export { seedRand };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -74,13 +71,9 @@ export interface DomainConfig {
     triangleChance: number; // probability a super-cell is split by a diagonal road
     roundaboutChance: number; // probability a super-cell is a circular block + ring road
   };
-  /** Actors with flattenGround: true — the terrain flattens a PAD under each
-   *  deterministic instance (see the flatten-pad engine below). */
   flattenDescriptors?: FlattenDescriptor[];
 }
 
-/** Serialized placement rules of a flattenGround actor — enough to replicate
- *  its spawn candidates deterministically inside the height function. */
 export interface FlattenDescriptor {
   id: string;
   density: number;
@@ -101,16 +94,12 @@ export interface VertexResult {
   distanceToBiomeBoundaryCenter: number;
   distanceToRiverCenter: number;
   distanceToRoadCenter: number;
-  /** REAL distance to the nearest freeway centerline (arterial edge or the
-   *  belt ring) — 99999 outside the city and in junction zones. Drives the
-   *  freeway lane paint. */
+  /** Real units; 99999 outside the city and in junction zones. */
   distanceToFreewayCenter: number;
-  /** Coordinate ALONG that freeway (axis coordinate for arterials, wall
-   *  projection for the belt) — the lane-paint dash phase. 0 outside. */
+  /** Lane-paint dash phase along that freeway; 0 outside. */
   freewayAlong: number;
 }
 
-// Internal types
 /** A voronoi wall segment on the horizontal plane (warped space). */
 interface Wall {
   sx: number;
@@ -118,7 +107,7 @@ interface Wall {
   ex: number;
   ez: number;
 }
-interface VGrid {
+interface VoronoiCell {
   point: PointXZ;
   element: any;
 }
@@ -132,9 +121,7 @@ const noiseInstance = new Noise(seedRand("bierce"));
 const simplex2 = (x: number, y: number) => noiseInstance.simplex2(x, y);
 const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
 
-// Per-params constants (gain + normalization depend only on the params
-// object, which is stable per world config) — recomputing 2**-persistence and
-// the amplitude sum per call added a pow per noise call, 3-4 calls per vertex.
+// Memoized per params object: recomputing 2**-persistence per call added a pow per noise call.
 const noiseParamsCache = new WeakMap<TerrainNoiseParams, { G: number; norm: number }>();
 const getNoiseConsts = (params: TerrainNoiseParams) => {
   let c = noiseParamsCache.get(params);
@@ -171,18 +158,16 @@ const terrainNoise = (params: TerrainNoiseParams, x: number, y: number): number 
   }
   total /= norm;
   total -= 0.5;
-  // pow() preserved exactly for arbitrary exponents; the common integer cases
-  // skip it (identical results — pow with integer exponents is exact here)
+  // Integer exponents skip pow() — identical results.
   const e = params.exponentiation;
   const shaped = e === 2 ? total * total : e === 1 ? total : Math.pow(total, e);
   return shaped * params.height;
 };
 
 // ══════════════════════════════════════════════════════════════════════
-// Voronoi (inlined from voronoi.worker.ts)
+// Voronoi
 // ══════════════════════════════════════════════════════════════════════
 
-// Caches keyed by seed string
 const voronoiCaches: { [seed: string]: { [gridKey: string]: any } } = {};
 
 const getVoronoiGrid = (
@@ -191,7 +176,7 @@ const getVoronoiGrid = (
   cellArray: any[],
   gridSize: number,
   gridFunction: (point: PointXZ, array: any[]) => any
-): VGrid[] => {
+): VoronoiCell[] => {
   const x = Math.floor(currentVertex.x / gridSize);
   const z = Math.floor(currentVertex.z / gridSize);
 
@@ -202,7 +187,7 @@ const getVoronoiGrid = (
   // The jitter seeds are rolled IDENTICALLY by utils/voronoi/voronoi.worker.ts
   // (the main-thread biome lookup) and by getCityVoronoiSites below — change
   // all three together or the biome map disagrees with itself.
-  let grid: VGrid[] = cache[gridKey];
+  let grid: VoronoiCell[] = cache[gridKey];
   if (!grid) {
     grid = [];
     for (let ix = x - 2; ix <= x + 2; ix++) {
@@ -216,7 +201,6 @@ const getVoronoiGrid = (
     }
     cache[gridKey] = grid;
 
-    // Evict distant entries
     for (const key in cache) {
       const [cx, cz] = key.split(",").map(Number);
       if (Math.abs(x - cx) > 5 || Math.abs(z - cz) > 5) {
@@ -227,7 +211,7 @@ const getVoronoiGrid = (
   return grid;
 };
 
-const getNearestEntry = (point: PointXZ, grid: VGrid[]): VGrid => {
+const getNearestEntry = (point: PointXZ, grid: VoronoiCell[]): VoronoiCell => {
   let minDist = Infinity;
   let nearest = grid[0];
   for (let i = 0; i < grid.length; i++) {
@@ -242,7 +226,7 @@ const getNearestEntry = (point: PointXZ, grid: VGrid[]): VGrid => {
   return nearest;
 };
 
-const getTwoNearest = (px: number, pz: number, grid: VGrid[]): [VGrid, VGrid] => {
+const getTwoNearest = (px: number, pz: number, grid: VoronoiCell[]): [VoronoiCell, VoronoiCell] => {
   let min1 = Infinity;
   let min2 = Infinity;
   let idx1 = 0;
@@ -264,13 +248,12 @@ const getTwoNearest = (px: number, pz: number, grid: VGrid[]): [VGrid, VGrid] =>
   return [grid[idx1], grid[idx2]];
 };
 
-// Delaunay cache (keyed by grid array reference)
 const delaunayCache = new WeakMap<
-  VGrid[],
+  VoronoiCell[],
   { delaunay: Delaunator<ArrayLike<number>>; circumcenters: number[] }
 >();
 
-const getDelaunayData = (grid: VGrid[]) => {
+const getDelaunayData = (grid: VoronoiCell[]) => {
   let cached = delaunayCache.get(grid);
   if (cached) return cached;
 
@@ -308,24 +291,19 @@ const getDelaunayData = (grid: VGrid[]) => {
   return cached;
 };
 
-// Wall lists are a pure function of the two grid arrays (the vertex only
-// feeds eviction bookkeeping), so memoize on grid identity like the Delaunay
-// cache. Without this, every vertex re-walked all ~96 halfedges and allocated
-// a label string per halfedge + a Wall object per boundary — ~900k string
-// allocations per LOD1 chunk, the dominant chunk-build cost. The regionGrid
-// identity is checked too: a biome grid cell always maps to one region grid
-// (gridSize divides regionGridSize), but the guard keeps the cache correct
-// even if that invariant ever changes.
+// Memoized on grid identity: rebuilding the wall list per vertex (~900k string
+// allocations per LOD1 chunk) was the dominant chunk-build cost. regionGrid is
+// checked too in case gridSize ever stops dividing regionGridSize.
 const wallsCache = new WeakMap<
-  VGrid[],
-  { regionGrid: VGrid[]; biomeWalls: Wall[]; riverWalls: Wall[] }
+  VoronoiCell[],
+  { regionGrid: VoronoiCell[]; biomeWalls: Wall[]; riverWalls: Wall[] }
 >();
 
 const getWalls = (
   seed: string,
   currentVertex: PointXZ,
-  grid: VGrid[],
-  regionGrid: VGrid[],
+  grid: VoronoiCell[],
+  regionGrid: VoronoiCell[],
   gridSize: number
 ): { biomeWalls: Wall[]; riverWalls: Wall[] } => {
   const memo = wallsCache.get(grid);
@@ -369,7 +347,6 @@ const getWalls = (
         isBiomeBoundary: !nearest1.element.joinable || nearest1.element !== nearest2.element,
       };
 
-      // Evict distant entries
       for (const key in cache) {
         const cachedData = cache[key];
         if (cachedData.grid) {
@@ -396,11 +373,9 @@ const getWalls = (
   return result;
 };
 
-/** Side-channel of the last distanceToWall call: a pseudo-arc coordinate
- *  along the WINNING wall (projection distance + a per-segment phase from
- *  the segment's start point). Continuous within a segment; jumps at wall
- *  joints — used for the belt freeway's dash phase (the shader's fwidth
- *  guard drops the paint over the jump slivers). */
+/** Pseudo-arc coordinate along the wall that won the last distanceToWall call
+ *  (the belt freeway's dash phase). Jumps at wall joints — the shader's fwidth
+ *  guard drops the paint there. */
 let lastWallAlong = 0;
 
 const distanceToWall = (px: number, pz: number, walls: Wall[]): number => {
@@ -427,13 +402,12 @@ const distanceToWall = (px: number, pz: number, walls: Wall[]): number => {
 };
 
 // ══════════════════════════════════════════════════════════════════════
-// City (block grid + triangle/roundabout cells + axis-aligned freeways)
+// City (districts, block grid, shape features, arterials, belt)
 // ══════════════════════════════════════════════════════════════════════
 
-/** Plateau height of a block index (edge blocks sit at 0). Keyed by index so
- *  adjacent cells of the same block — which have no road between them — are
- *  guaranteed the same height. Memoized: it runs 4× per city vertex and
- *  seedRand spins up a fresh seedrandom instance per call. */
+/** Keyed by block index so merged same-label cells share one plateau. Memoized
+ *  with a numeric key: seedRand builds a fresh seedrandom per call and this runs
+ *  4-5× per city vertex. */
 const cityElevationCache = new Map<number, number>();
 let cityElevationCacheSeed = "";
 const cityBlockElevation = (
@@ -442,8 +416,6 @@ const cityBlockElevation = (
   maxElevation: number
 ): number => {
   if (blockIndex === undefined || blockIndex < 0) return 0;
-  // Numeric memo key — the seeded string is only built on a genuine miss
-  // (this runs 4-5× per city vertex; the old string key allocated per HIT)
   if (cityElevationCacheSeed !== citySeed) {
     cityElevationCache.clear();
     cityElevationCacheSeed = citySeed;
@@ -457,105 +429,76 @@ const cityBlockElevation = (
 };
 
 interface CityTerrain {
-  dist: number; // distance to the nearest road centerline, in street units (0 = on it)
-  elevation: number; // height RELATIVE to the smooth base: plateau + road ramps +
-  //   curb dip (computeVertexData adds the base back). Flat footing for
-  //   buildings comes from the generic flatten-ground PADS, not from leveling
-  //   blocks (whole-block leveling was tried and REVERTED in favor of pads —
-  //   pads work in every biome).
-  paintDist: number; // REAL distance to the nearest freeway centerline (paint channel)
-  paintAlong: number; // dash-phase coordinate along that freeway
+  roadDistance: number; // to the nearest road centerline, in street units
+  relativeElevation: number; // relative to the regional base (computeVertexData adds it back)
+  freewayDistance: number; // real units to the nearest freeway centerline (lane paint)
+  freewayAlong: number; // dash-phase coordinate along that freeway
 }
 
-// Ramps between block plateaus extend this far BEYOND the road half-width on
-// each side (across the sidewalk) — the wide span keeps street grades gentle.
+// Plateau ramps extend this far past the road half-width (across the sidewalk) for gentle grades.
 const CITY_RAMP_SPAN = 4;
 
-// Scale of the pairwise chamfer/melt constraint: road-edge along the cut
-// sits at dᵢ + dⱼ = roadWidth / scale (≈ 28.6u span at 0.35) — corners get
-// straight diagonal cuts and thinner pinched fragments become road entirely.
+// The chamfer cut sits at dᵢ + dⱼ = roadWidth / scale (≈ 28.6u at 0.35);
+// fragments pinched narrower than that become road entirely.
 const CITY_CHAMFER_SCALE = 0.35;
 
-// A pair only chamfers when the two toward-road directions genuinely differ:
-// inside a corner wedge or a pinch they are ≥ 90° apart (dot ≤ 0), while a
-// road event ACROSS the street (T-junction stem, far-side bend) points the
-// same way as the near road (dot ≈ +1) and must not notch this block's edge.
-// The penalty fades in smoothly over the dot range so the field stays
-// continuous.
+// A pair only chamfers when its toward-road directions differ (corner wedge or
+// pinch: dot ≤ 0). A road event ACROSS the street points the same way (dot ≈ +1)
+// and must not notch this block's edge; the penalty fades in over [LO, HI].
 const CITY_CHAMFER_DOT_LO = 0.6;
 const CITY_CHAMFER_DOT_HI = 0.85;
 const CITY_CHAMFER_DOT_PENALTY = 60;
 
-// Arterial field recovery: the ×(roadWidth/freewayWidth) squash applies only
-// up to this NORMALIZED value (just past the interior-band start at 12, so
-// the stretched freeway bands render untouched); beyond it the field climbs
-// at the steep slope, letting buildings spawn at a near-normal setback from
-// the freeway curb instead of ~11×roadWidth away.
+// The ×(roadWidth/freewayWidth) squash applies up to this normalized value (just
+// past the interior band at 12), then the field recovers at the steep slope —
+// without the recovery, blocks along every arterial stayed empty of buildings.
 const CITY_ARTERIAL_RECOVER_NORM = 12.2;
 const CITY_ARTERIAL_RECOVER_SLOPE = 3;
 
-// Freeway grade ramp end (real units from the freeway centerline): plateaus
-// reach their full height this far out. Must stay well inside the building
-// setback (~35u from the centerline via the field recovery) so block
-// interiors are flat where buildings stand.
+// Real units from a freeway centerline at which plateaus reach full height.
+// Must stay inside the building setback (~35u) so block interiors are flat.
 const CITY_FREEWAY_RAMP_END = 24;
 
-// Constraint candidates: distance + toward-road unit direction (world frame).
-// Scratch buffers — workers are single-threaded.
-const cityConsD = new Float64Array(24);
-const cityConsUx = new Float64Array(24);
-const cityConsUz = new Float64Array(24);
+// Road-constraint scratch buffers (distance + toward-road world direction); workers are single-threaded.
+const roadConstraintDist = new Float64Array(24);
+const roadConstraintDirX = new Float64Array(24);
+const roadConstraintDirZ = new Float64Array(24);
 
-// ── Cell shapes ──
-// Every road feature is CONFINED to its own cell (nothing crosses blocks),
-// which is what guarantees no tiny leftover pieces: a feature can only carve
-// its own cell, in grid-aligned ways.
+// Every road feature is CONFINED to its own cell — that is what guarantees no tiny leftover pieces.
 const CITY_SHAPE_SQUARE = 0;
 const CITY_SHAPE_TRI_NE = 1; // diagonal road from the SW corner to the NE corner
 const CITY_SHAPE_TRI_NW = 2; // diagonal road from the NW corner to the SE corner
 const CITY_SHAPE_CIRCLE = 3; // circular block inside a roundabout ring road
 
-// Roundabout ring-road centerline radius (× gridSize). Roundabouts span a
-// 2×2 super-cell (they replace FOUR normal blocks); the ring is centered on
-// the super-cell, so ring + road must fit its half-size: frac + roadWidth/gs < 1.
+// Roundabout ring-road centerline radius (× gridSize), centered on its 2×2
+// super-cell: frac + roadWidth/gs must stay < 1.
 const CITY_RING_RADIUS_FRAC = 0.825;
 
 interface CityCell {
-  /** Block index in [0, blockCount) for squares (same-label neighbors merge),
-   *  a unique per-cell id (≥1000) for triangle/circle cells so they are
-   *  always ringed by boundary roads, or -1 near the biome wall (whole cell
-   *  = the rim ring road, plateau 0). */
+  /** Block index in [0, blockCount) for squares (same labels merge); a unique id
+   *  (≥1000) for triangle/circle cells so roads always ring them; -1 = rim road. */
   label: number;
   shape: number;
 }
 
-/** Unique per-cell label for triangle/circle cells. Collisions between two
- *  adjacent special cells would only merge their boundary road — harmless. */
+/** A collision between adjacent special cells would only merge their boundary road — harmless. */
 const cityUniqueLabel = (ix: number, iz: number): number =>
   1000 + ((((ix * 73856093) ^ (iz * 19349663)) >>> 0) % 1000000);
 
-/** A 2×2 super-cell only hosts a shape feature (roundabout / flatiron pair)
- *  when the WHOLE super-cell is clear of the biome rim and of the district's
- *  arterial boundaries — a half circle or clipped diagonal at a boundary is
- *  worse than no feature. Coordinates are district-local. */
 const superCellHasRoom = (sx: number, sz: number, walls: Wall[], d: CityDistrict): boolean => {
-  const city = cfg!.cityConfig;
+  const city = domainConfig!.cityConfig;
   const gs = city.gridSize;
   const w = cityLocalToWorld((2 * sx + 1) * gs, (2 * sz + 1) * gs, d);
-  // Covers every member cell's own rim check (cell centers sit ≤ 0.71·gs from
-  // the super center; cells go rim under 0.65·gs) plus breathing room.
+  // ≥ every member cell's own rim check (cells go rim under 0.65·gs, centers sit ≤ 0.71·gs out).
   if (distanceToWall(w.x, w.z, walls) < gs * 1.6) return false;
-  // Arterial clearance: rotated super-cell extent (√2·gs) + arterial road,
-  // measured against the actual wiggly boundary curves.
+  // Rotated super-cell extent (√2·gs) + the arterial road.
   return cityArterialDist(w.x, w.z, d) >= gs * 1.7;
 };
 
-/** Label a cell would get if it is NOT a roundabout member (rim −1,
- *  triangle unique, or square roll) — null when the cell IS a roundabout
- *  member. Lets roundabout members COPY an outward neighbor's label without
- *  recursion. Coordinates are district-local; seeds are salted by district. */
+/** The label a cell gets when it is NOT a roundabout member; null when it is.
+ *  Non-recursive, so roundabout members can copy an outward neighbor's label. */
 const baseCityLabel = (ix: number, iz: number, walls: Wall[], d: CityDistrict): number | null => {
-  const city = cfg!.cityConfig;
+  const city = domainConfig!.cityConfig;
   const gs = city.gridSize;
   const px = (ix + 0.5) * gs;
   const pz = (iz + 0.5) * gs;
@@ -574,11 +517,7 @@ const baseCityLabel = (ix: number, iz: number, walls: Wall[], d: CityDistrict): 
   return Math.floor(seedRand(`${d.key}|${px},${pz}`) * city.blockCount);
 };
 
-/** Per-cell block cell (label + shape), cached so terrain, spawns, and the
- *  road-marker enumeration always agree. Coordinates are DISTRICT-LOCAL;
- *  each district has its own seeded layout (seeds salted by district key).
- *  Nested numeric maps under the district key: the old flat string key
- *  (`${d.key}:${ix},${iz}`) allocated ~10 strings per city vertex on HITS. */
+// Nested numeric maps: a flat string key allocated ~10 strings per city vertex on HITS.
 interface CityCellStore {
   count: number;
   districts: Map<string, Map<number, Map<number, CityCell>>>;
@@ -589,7 +528,7 @@ const cityCellLookup = (store: CityCellStore, dKey: string, ix: number, iz: numb
   store.districts.get(dKey)?.get(ix)?.get(iz);
 
 const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): CityCell => {
-  const city = cfg!.cityConfig;
+  const city = domainConfig!.cityConfig;
   let store = cityCellCaches[city.seed];
   if (!store) store = cityCellCaches[city.seed] = { count: 0, districts: new Map() };
   let cell = cityCellLookup(store, d.key, ix, iz);
@@ -607,16 +546,10 @@ const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): Ci
     const px = (ix + 0.5) * gs;
     const pz = (iz + 0.5) * gs;
     const w = cityLocalToWorld(px, pz, d);
-    // Only cells basically ON the boundary go full-road: the BELT freeway
-    // now owns the rim zone (it melts any block it clips), so blocks run
-    // right up to the beltway instead of a wide rim plaza.
+    // Only cells basically ON the boundary go full-road — the belt freeway owns the rim zone.
     if (distanceToWall(w.x, w.z, walls) < gs * 0.15) {
       cell = { label: -1, shape: CITY_SHAPE_SQUARE };
     } else {
-      // Roundabouts AND triangles roll per 2×2 SUPER-CELL — each feature
-      // replaces four normal blocks, and only spawns when the whole
-      // super-cell has room (clear of the biome rim and the district's
-      // arterial boundaries).
       const sx = Math.floor(ix / 2);
       const sz = Math.floor(iz / 2);
       let superRoll = seedRand(`${city.seed}-super-${d.key}|${sx},${sz}`);
@@ -627,13 +560,9 @@ const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): Ci
         superRoll = 1; // not enough room — fall through to a normal square
       }
       if (superRoll < city.roundaboutChance) {
-        // Roundabout members COPY an outward neighbor's label, so the
-        // wrap-around corner blocks MERGE with the surrounding grid (no
-        // street between them — the ring road alone separates them from the
-        // island). Internal member boundaries with differing copied labels
-        // become the streets radiating from the roundabout; the island
-        // itself is protected in getCityTerrain (boundary constraints are
-        // suppressed inside the ring, and its height is overridden flat).
+        // Members COPY an outward neighbor's label so the wrap-around blocks merge
+        // with the surrounding grid; differing copied labels become the streets
+        // radiating from the ring (getCityTerrain suppresses them inside it).
         const nx = ix === 2 * sx ? 2 * sx - 1 : 2 * sx + 2; // outward x neighbor
         const nz = iz === 2 * sz ? 2 * sz - 1 : 2 * sz + 2; // outward z neighbor
         const copied = baseCityLabel(nx, iz, walls, d) ?? baseCityLabel(ix, nz, walls, d);
@@ -642,9 +571,7 @@ const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): Ci
           shape: CITY_SHAPE_CIRCLE,
         };
       } else if (superRoll < city.roundaboutChance + city.triangleChance) {
-        // Triangles keep one unique label across the super-cell: boundary
-        // streets are guaranteed, so the diagonal always ends in an
-        // intersection.
+        // One unique label across the super-cell guarantees boundary streets, so the diagonal ends in intersections.
         cell = {
           label: cityUniqueLabel(sx, sz),
           shape:
@@ -675,19 +602,14 @@ const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): Ci
   return cell;
 };
 
-// ── Districts (staggered rotated sections) ──
-// The city is partitioned into large rectangular DISTRICTS: jittered rows
-// ~districtSize cells tall, each row split into staggered jittered segments
-// ~districtSize cells wide (per-row phase offset = the stagger). Every
-// district rotates its ENTIRE block grid by a seeded multiple of 15° about
-// its own center; district boundaries carry the wide ARTERIAL roads
-// (freewayWidth), which also absorb the seams where differently-rotated
-// grids meet.
+// Districts: jittered rows ~districtSize cells tall, split into staggered jittered
+// segments. Each rotates its whole block grid by a seeded multiple of 15° about its
+// center; district boundaries carry the arterial roads, which hide the grid seams.
 
 const CITY_DISTRICT_JITTER = 0.4; // boundary jitter (× pitch): sizes ~0.6–1.4 × districtSize
 
 const cityScalarCache = new Map<string, number>();
-const cityScalar = (key: string, compute: () => number): number => {
+const cachedCityScalar = (key: string, compute: () => number): number => {
   let v = cityScalarCache.get(key);
   if (v === undefined) {
     if (cityScalarCache.size > 8192) dropOldestHalf(cityScalarCache);
@@ -697,20 +619,16 @@ const cityScalar = (key: string, compute: () => number): number => {
   return v;
 };
 
-const cityDistrictPitch = (): number => cfg!.cityConfig.districtSize * cfg!.cityConfig.gridSize;
+const cityDistrictPitch = (): number => domainConfig!.cityConfig.districtSize * domainConfig!.cityConfig.gridSize;
 
-// Row/segment boundaries are the hottest scalar lookups (the findCityRow /
-// findCitySeg while-loops probe them ≥4× per vertex) — dedicated numeric-key
-// maps so cache HITS allocate nothing (the seeded key strings are only built
-// on a miss). Bounded by the district cache's own eviction radius in practice;
-// entries are 8-byte numbers, so no explicit cap is needed.
+// Hottest scalar lookups (the find* loops probe them ≥4× per vertex): numeric keys so hits allocate nothing.
 const cityRowBoundaryCache = new Map<number, number>();
 /** Z of the boundary line between district rows k−1 and k. */
 const cityRowBoundary = (k: number): number => {
   let v = cityRowBoundaryCache.get(k);
   if (v === undefined) {
     const pitch = cityDistrictPitch();
-    v = (k + (seedRand(`${cfg!.cityConfig.seed}-drow-${k}`) - 0.5) * CITY_DISTRICT_JITTER) * pitch;
+    v = (k + (seedRand(`${domainConfig!.cityConfig.seed}-drow-${k}`) - 0.5) * CITY_DISTRICT_JITTER) * pitch;
     cityRowBoundaryCache.set(k, v);
   }
   return v;
@@ -728,26 +646,24 @@ const citySegBoundary = (r: number, m: number): number => {
   let v = row.get(m);
   if (v === undefined) {
     const pitch = cityDistrictPitch();
-    const phase = seedRand(`${cfg!.cityConfig.seed}-dphase-${r}`);
+    const phase = seedRand(`${domainConfig!.cityConfig.seed}-dphase-${r}`);
     v =
-      (m + phase + (seedRand(`${cfg!.cityConfig.seed}-dseg-${r}-${m}`) - 0.5) * CITY_DISTRICT_JITTER) *
+      (m + phase + (seedRand(`${domainConfig!.cityConfig.seed}-dseg-${r}-${m}`) - 0.5) * CITY_DISTRICT_JITTER) *
       pitch;
     row.set(m, v);
   }
   return v;
 };
 
-// Arterial wiggle: the district boundary roads bend with two seeded sine
-// octaves — windy freeways instead of straight lines. District ASSIGNMENT
-// follows the same curve, so the rotated-grid switch always stays buried
-// under the arterial road surface.
+// Arterials bend with two seeded sine octaves. District ASSIGNMENT follows the
+// same curve so the rotated-grid switch always stays under the road surface.
 const CITY_WIGGLE_AMP = 38;
 const CITY_WIGGLE_K1 = (2 * Math.PI) / 620;
 const CITY_WIGGLE_K2 = (2 * Math.PI) / 260;
 
 const cityWigglePhase = (tag: string, which: number): number =>
-  cityScalar(`wig${which}:${tag}`, () =>
-    seedRand(`${cfg!.cityConfig.seed}-wig${which}-${tag}`) * Math.PI * 2
+  cachedCityScalar(`wig${which}:${tag}`, () =>
+    seedRand(`${domainConfig!.cityConfig.seed}-wig${which}-${tag}`) * Math.PI * 2
   );
 
 const cityWiggle = (tag: string, t: number): number => {
@@ -819,7 +735,7 @@ const cityDistrictByIndex = (r: number, m: number): CityDistrict => {
     // 15°..75° in 15° steps — 0° is deliberately excluded so EVERY district
     // reads as rotated against its arterial frame.
     const angle =
-      (1 + Math.floor(seedRand(`${cfg!.cityConfig.seed}-dang-${key}`) * 5)) * (Math.PI / 12);
+      (1 + Math.floor(seedRand(`${domainConfig!.cityConfig.seed}-dang-${key}`) * 5)) * (Math.PI / 12);
     d = {
       key,
       r,
@@ -843,8 +759,7 @@ const getCityDistrict = (vx: number, vz: number): CityDistrict => {
   return cityDistrictByIndex(r, findCitySeg(r, vx, vz));
 };
 
-/** Distance from a world point to its district's wiggly arterial boundary
- *  centerlines (axis-approximate; the gentle wiggle slope keeps it close). */
+/** Axis-approximate distance to the district's wiggly arterial centerlines. */
 const cityArterialDist = (vx: number, vz: number, d: CityDistrict): number =>
   Math.max(
     0,
@@ -873,11 +788,7 @@ const getCityTerrain = (
 ): CityTerrain => {
   const gs = city.gridSize;
 
-  // ── District frame ──
-  // Find the vertex's district and rotate into its LOCAL grid frame (by
-  // −angle about the district pivot). ALL block logic below runs in local
-  // coordinates; distances/heights are rotation-invariant, so the outputs
-  // need no back-transform.
+  // Rotate into the district's LOCAL grid frame; distances and heights are rotation-invariant, so nothing is transformed back.
   const d = getCityDistrict(vx, vz);
   const rdx = vx - d.px;
   const rdz = vz - d.pz;
@@ -887,52 +798,39 @@ const getCityTerrain = (
   const ix = Math.floor(lx / gs);
   const iz = Math.floor(lz / gs);
 
-  // ── Block grid ──
-  // Square cells labeled with a block index; neighbors that roll the same
-  // index merge into larger polyomino blocks (no road between them). Streets
-  // run along the boundaries of differing-label cells. Triangle and circle
-  // cells carry a UNIQUE label, so they are always ringed by boundary roads —
-  // their internal features (diagonal / roundabout) terminate cleanly into
-  // grid intersections and can never shave a sliver off a neighbor.
   const cell = getCityCell(ix, iz, walls, d);
-  const cur = cell.label;
-  // 3×3 labels: L[(a+1)*3 + (b+1)] = label of cell (ix+a, iz+b). The full
-  // neighborhood (not just 4 neighbors) feeds the SEGMENT constraints below.
-  const L: number[] = [];
+  const cellLabel = cell.label;
+  // neighborLabels[(a+1)*3 + (b+1)] = label of cell (ix+a, iz+b)
+  const neighborLabels: number[] = [];
   for (let a = -1; a <= 1; a++) {
     for (let b = -1; b <= 1; b++) {
-      L[(a + 1) * 3 + (b + 1)] = getCityCell(ix + a, iz + b, walls, d).label;
+      neighborLabels[(a + 1) * 3 + (b + 1)] = getCityCell(ix + a, iz + b, walls, d).label;
     }
   }
-  const n = L[5]; // (0, +1)
-  const e = L[7]; // (+1, 0)
-  const s = L[3]; // (0, −1)
-  const w = L[1]; // (−1, 0)
+  const n = neighborLabels[5]; // (0, +1)
+  const e = neighborLabels[7]; // (+1, 0)
+  const s = neighborLabels[3]; // (0, −1)
+  const w = neighborLabels[1]; // (−1, 0)
 
-  // Collect road constraints with their toward-road unit directions (world
-  // frame — local directions are rotated out) for the direction-aware
-  // chamfer pairing below. NaN direction = pairable with anything (rim).
+  // Toward-road unit directions in the WORLD frame; NaN = pairable with anything (rim).
   let nCons = 0;
-  const considerLocal = (dd: number, lux: number, luz: number) => {
+  const addLocalConstraint = (dd: number, lux: number, luz: number) => {
     if (nCons >= 24) return;
-    cityConsD[nCons] = dd;
-    cityConsUx[nCons] = lux * d.cos - luz * d.sin;
-    cityConsUz[nCons] = lux * d.sin + luz * d.cos;
+    roadConstraintDist[nCons] = dd;
+    roadConstraintDirX[nCons] = lux * d.cos - luz * d.sin;
+    roadConstraintDirZ[nCons] = lux * d.sin + luz * d.cos;
     nCons++;
   };
-  const considerWorld = (dd: number, wux: number, wuz: number) => {
+  const addWorldConstraint = (dd: number, wux: number, wuz: number) => {
     if (nCons >= 24) return;
-    cityConsD[nCons] = dd;
-    cityConsUx[nCons] = wux;
-    cityConsUz[nCons] = wuz;
+    roadConstraintDist[nCons] = dd;
+    roadConstraintDirX[nCons] = wux;
+    roadConstraintDirZ[nCons] = wuz;
     nCons++;
   };
 
-  // Roundabout geometry (needed before the boundary constraints: inside the
-  // ring, boundary streets are suppressed so the internal member boundaries
-  // — whose copied labels usually differ — tee into the ring road instead of
-  // slicing across the island; the toggle happens under the ring road
-  // surface, so it is invisible).
+  // Inside the ring, boundary streets are suppressed so the members' internal
+  // boundaries tee into the ring road instead of slicing the island.
   let circleR = Infinity;
   let ringR = 0;
   let circUx = 1; // unit direction from the ring center to the vertex (local)
@@ -950,25 +848,17 @@ const getCityTerrain = (
   const insideRing = circleR < ringR;
 
   if (!insideRing) {
-    // Street constraints as boundary SEGMENTS over the whole 3×3 neighborhood
-    // (12 segments), not per-cell infinite lines. Segments are fixed geometric
-    // objects, and the ones that enter/leave the set when crossing a cell
-    // border are always ≥ ~half a cell away — so the field (and especially
-    // the s1+s2 chamfer, whose second constraint used to pop identity at cell
-    // borders and leave jagged notches in the road edge) stays continuous.
-    // Contiguous differing segments along one boundary LINE are merged into
-    // single runs before being considered: a straight road along two merged
-    // same-label cells is otherwise TWO collinear segments, and the s1+s2
-    // chamfer would pair them — two pieces of the SAME road — undercutting
-    // the field to ~70% and notching the sidewalk at every merged-block cell
-    // seam. (Run truncation at the 3×3 window edge is ≥ ~half a cell from
-    // any point in the current cell — beyond band/chamfer range.)
+    // Boundary SEGMENTS over the full 3×3 neighborhood, collinear runs MERGED.
+    // Per-cell infinite lines were REJECTED (the chamfer's second constraint
+    // popped identity at cell borders → notched road edges); unmerged collinear
+    // segments were REJECTED (the chamfer paired two pieces of the SAME road →
+    // notched sidewalks at every merged-block seam).
     // Vertical boundary lines (between cell columns a and a+1):
     for (let a = -1; a <= 0; a++) {
       const X = (ix + a + 1) * gs;
       let runStart = 99;
       for (let b = -1; b <= 2; b++) {
-        const differs = b <= 1 && L[(a + 1) * 3 + (b + 1)] !== L[(a + 2) * 3 + (b + 1)];
+        const differs = b <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 2) * 3 + (b + 1)];
         if (differs && runStart === 99) runStart = b;
         if (!differs && runStart !== 99) {
           const z0 = (iz + runStart) * gs;
@@ -976,8 +866,8 @@ const getCityTerrain = (
           const ddx = X - lx;
           const ddz = lz < z0 ? z0 - lz : lz > z1 ? z1 - lz : 0;
           const dd = Math.hypot(ddx, ddz);
-          if (dd < 1e-6) considerLocal(0, 1, 0);
-          else considerLocal(dd, ddx / dd, ddz / dd);
+          if (dd < 1e-6) addLocalConstraint(0, 1, 0);
+          else addLocalConstraint(dd, ddx / dd, ddz / dd);
           runStart = 99;
         }
       }
@@ -987,7 +877,7 @@ const getCityTerrain = (
       const Z = (iz + b + 1) * gs;
       let runStart = 99;
       for (let a = -1; a <= 2; a++) {
-        const differs = a <= 1 && L[(a + 1) * 3 + (b + 1)] !== L[(a + 1) * 3 + (b + 2)];
+        const differs = a <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 1) * 3 + (b + 2)];
         if (differs && runStart === 99) runStart = a;
         if (!differs && runStart !== 99) {
           const x0 = (ix + runStart) * gs;
@@ -995,8 +885,8 @@ const getCityTerrain = (
           const ddz = Z - lz;
           const ddx = lx < x0 ? x0 - lx : lx > x1 ? x1 - lx : 0;
           const dd = Math.hypot(ddx, ddz);
-          if (dd < 1e-6) considerLocal(0, 0, 1);
-          else considerLocal(dd, ddx / dd, ddz / dd);
+          if (dd < 1e-6) addLocalConstraint(0, 0, 1);
+          else addLocalConstraint(dd, ddx / dd, ddz / dd);
           runStart = 99;
         }
       }
@@ -1005,108 +895,81 @@ const getCityTerrain = (
 
   // In-super-cell shape features (each confined to its own 2×2 super-cell):
   if (cell.shape === CITY_SHAPE_TRI_NE || cell.shape === CITY_SHAPE_TRI_NW) {
-    // Diagonal road corner-to-corner across the SUPER-CELL: splits the 2×2
-    // area into two large flatiron halves. Its unique label guarantees
-    // boundary streets, so the diagonal always ends in an intersection.
+    // Diagonal road corner-to-corner across the 2×2 super-cell.
     const dx = lx - 2 * Math.floor(ix / 2) * gs;
     const dz = lz - 2 * Math.floor(iz / 2) * gs;
     if (cell.shape === CITY_SHAPE_TRI_NE) {
       // Line x − z = 0 (super-local); gradient (√½, −√½)
       const sig = (dx - dz) * Math.SQRT1_2;
       const f = sig >= 0 ? -1 : 1; // toward the line = −sign · gradient
-      considerLocal(Math.abs(sig), f * Math.SQRT1_2, -f * Math.SQRT1_2);
+      addLocalConstraint(Math.abs(sig), f * Math.SQRT1_2, -f * Math.SQRT1_2);
     } else {
       // Line x + z = 2·gs (super-local); gradient (√½, √½)
       const sig = (dx + dz - 2 * gs) * Math.SQRT1_2;
       const f = sig >= 0 ? -1 : 1;
-      considerLocal(Math.abs(sig), f * Math.SQRT1_2, f * Math.SQRT1_2);
+      addLocalConstraint(Math.abs(sig), f * Math.SQRT1_2, f * Math.SQRT1_2);
     }
   } else if (cell.shape === CITY_SHAPE_CIRCLE) {
-    // Roundabout ring road: outside the ring, the wrap-around blocks (labels
-    // copied from the surrounding grid) run right up to it — only the ring
-    // road separates them from the island. The island's field is compressed
-    // (× 0.75) so spawned buildings keep a safe margin from the curved curb.
-    if (insideRing) considerLocal((ringR - circleR) * 0.75, circUx, circUz);
-    else considerLocal(circleR - ringR, -circUx, -circUz);
+    // Island field compressed ×0.75 so buildings keep a margin from the curved curb.
+    if (insideRing) addLocalConstraint((ringR - circleR) * 0.75, circUx, circUz);
+    else addLocalConstraint(circleR - ringR, -circUx, -circUz);
   }
 
-  // Arterials: the wide roads along the district boundaries (WORLD-aligned —
-  // the partition itself is not rotated, only each district's interior grid).
-  // They also absorb the seams between differently-rotated grids: near the
-  // boundary everything is arterial road, so the frame switch is invisible.
-  // Distances are normalized into street units so the ONE road field drives
-  // the shader bands, curb dip, and spawn filters everywhere — arterial
-  // features just render stretched by freewayWidth / roadWidth.
-  const fwScale = city.roadWidth / city.freewayWidth;
-  const aS = vz - cityRowEdgeZ(d.r, vx);
-  const aN = cityRowEdgeZ(d.r + 1, vx) - vz;
-  const aW = vx - citySegEdgeX(d.r, d.m, vz);
-  const aE = citySegEdgeX(d.r, d.m + 1, vz) - vx;
-  let arterialReal = aS;
+  // Arterials are WORLD-aligned (only district interiors rotate) and normalized
+  // into street units so ONE road field drives shader bands, curb dip and spawn filters.
+  const freewayToStreetScale = city.roadWidth / city.freewayWidth;
+  const arterialSouth = vz - cityRowEdgeZ(d.r, vx);
+  const arterialNorth = cityRowEdgeZ(d.r + 1, vx) - vz;
+  const arterialWest = vx - citySegEdgeX(d.r, d.m, vz);
+  const arterialEast = citySegEdgeX(d.r, d.m + 1, vz) - vx;
+  let arterialReal = arterialSouth;
   let aUx = 0;
   let aUz = -1;
   let arterialAlong = vx; // row boundaries run along x
-  if (aN < arterialReal) {
-    arterialReal = aN;
+  if (arterialNorth < arterialReal) {
+    arterialReal = arterialNorth;
     aUx = 0;
     aUz = 1;
     arterialAlong = vx;
   }
-  if (aW < arterialReal) {
-    arterialReal = aW;
+  if (arterialWest < arterialReal) {
+    arterialReal = arterialWest;
     aUx = -1;
     aUz = 0;
     arterialAlong = vz; // segment boundaries run along z
   }
-  if (aE < arterialReal) {
-    arterialReal = aE;
+  if (arterialEast < arterialReal) {
+    arterialReal = arterialEast;
     aUx = 1;
     aUz = 0;
     arterialAlong = vz;
   }
   arterialReal = Math.max(0, arterialReal);
-  // Normalized (× roadWidth/freewayWidth) through the visual bands so the
-  // shader renders the arterial as a stretched street, then RECOVERING
-  // steeply just past the interior-band edge (max() of the two slopes keeps
-  // the field continuous; the bands themselves are untouched). Without the
-  // recovery, the squash held the field under the building-spawn threshold
-  // for ~11×roadWidth real units, leaving the blocks along every arterial
-  // empty — with the steep recovery, buildings reach a near-normal setback
-  // from the freeway curb.
+  // See CITY_ARTERIAL_RECOVER_NORM; max() of the two slopes keeps the field continuous.
   const recoverNorm = CITY_ARTERIAL_RECOVER_NORM;
-  considerWorld(
+  addWorldConstraint(
     Math.max(
-      arterialReal * fwScale,
-      (arterialReal - recoverNorm / fwScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
+      arterialReal * freewayToStreetScale,
+      (arterialReal - recoverNorm / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
     ),
     aUx,
     aUz
   );
 
-  // BELT freeway: the city rim is a freeway RING surrounding the whole biome
-  // — the arterials running outward empty into it. Its centerline sits
-  // boundaryWidth + freewayWidth inside the biome boundary, so the belt's
-  // outer road edge exactly abuts the boundary band. Same normalization +
-  // spawn recovery as arterials; blocks melt/chamfer against the curved belt
-  // like against any road. No direction is available (the boundary curves),
-  // so it pairs with anything in the chamfer.
-  const beltReal = Math.abs(biomeBoundaryDist - (cfg!.boundaryWidth + city.freewayWidth));
-  considerWorld(
+  // BELT freeway: centerline boundaryWidth + freewayWidth inside the biome boundary
+  // (outer edge abuts the boundary band). No direction — the boundary curves — so
+  // it pairs with anything in the chamfer.
+  const beltReal = Math.abs(biomeBoundaryDist - (domainConfig!.boundaryWidth + city.freewayWidth));
+  addWorldConstraint(
     Math.max(
-      beltReal * fwScale,
-      (beltReal - recoverNorm / fwScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
+      beltReal * freewayToStreetScale,
+      (beltReal - recoverNorm / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
     ),
     NaN,
     0
   );
 
-  // ── Plateau elevation ──
-  // Bilinear plateau interpolation toward the neighbors the vertex leans
-  // into: ramping only where labels differ (same label → same height → no
-  // seam). Heights are RELATIVE to the regional base, which the whole city
-  // rides smoothly; flat building footing comes from the flatten-ground
-  // PADS, not from leveling blocks. The ramp span covers street AND
-  // sidewalk (roadWidth + CITY_RAMP_SPAN each side) for gentle grades.
+  // Bilinear plateau interpolation toward the neighbors the vertex leans into (same label → same height → no seam).
   const rampFrac = (city.roadWidth + CITY_RAMP_SPAN) / gs;
   const flatEdge = 0.5 - rampFrac;
   const fx = lx / gs - (ix + 0.5); // [-0.5, 0.5] across the cell
@@ -1115,7 +978,7 @@ const getCityTerrain = (
   const wz = 0.5 * smoothstep(flatEdge, 0.5, Math.abs(fz));
   const dxi = fx >= 0 ? 1 : -1;
   const dzi = fz >= 0 ? 1 : -1;
-  const hC = cityBlockElevation(city.seed, cur, city.maxBlockElevation);
+  const hC = cityBlockElevation(city.seed, cellLabel, city.maxBlockElevation);
   const hX = cityBlockElevation(city.seed, fx >= 0 ? e : w, city.maxBlockElevation);
   const hZ = cityBlockElevation(city.seed, fz >= 0 ? n : s, city.maxBlockElevation);
   const hD = cityBlockElevation(
@@ -1126,24 +989,16 @@ const getCityTerrain = (
   let elevation =
     hC * (1 - wx) * (1 - wz) + hX * wx * (1 - wz) + hZ * (1 - wx) * wz + hD * wx * wz;
 
-  // Freeways (arterials + belt) sit at MID-PLATEAU GRADE (maxBlockElevation/2
-  // — the expected value of the seeded plateaus), and the transition spreads
-  // over CITY_FREEWAY_RAMP_END real units instead of hugging the centerline.
-  // Both sides of a boundary still ramp to the same constant, so elevation
-  // stays continuous across the district (and rotation) switch. (Grade 0 with
-  // a tight ramp was used before and REJECTED: every freeway read as a V
-  // TROUGH — high plateaus on both sides diving to zero along the median.
-  // Mid-plateau grade halves the worst offset and turns low-plateau sides
-  // into a gentle road crown.)
+  // Freeways sit at MID-PLATEAU grade so elevation stays continuous across the
+  // district switch. Grade 0 with a tight ramp was REJECTED: every freeway read
+  // as a V trough.
   const freewayGrade = city.maxBlockElevation * 0.5;
   const freewayRamp =
     smoothstep(2, CITY_FREEWAY_RAMP_END, arterialReal) *
     smoothstep(2, CITY_FREEWAY_RAMP_END, beltReal);
   elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
 
-  // Roundabout island: its own flat plateau, independent of the (possibly
-  // differing) wrap-around block heights — blended in UNDER the inner ring
-  // road surface so the transition is hidden by asphalt.
+  // Roundabout island: its own flat plateau, blended in under the inner ring road.
   if (insideRing) {
     const islandH = cityBlockElevation(
       city.seed,
@@ -1154,56 +1009,41 @@ const getCityTerrain = (
     elevation += (islandH - elevation) * islandMask;
   }
 
-  // Corner chamfer + sliver melt over ALL constraint PAIRS as LINEAR terms:
-  // (dᵢ + dⱼ) is constant along straight lines (a 45° cut for perpendicular
-  // roads), so min-ing it into the road field keeps every contour dead
-  // straight — block corners at intersections get crisp diagonal cuts, and
-  // fragments pinched under ~(roadWidth / scale) span become road entirely.
-  // Each pair carries a smooth direction PENALTY: inside a corner wedge or a
-  // pinch the two toward-road directions are ≥ 90° apart (dot ≤ 0, no
-  // penalty), while a road event ACROSS the street (T-junction stem, far-side
-  // bend, the far edge of the same corridor) points the same way (dot ≈ +1)
-  // and must not notch this block's edge. Fully pairwise (not "s1 vs s2") so
-  // no argmin identity switches — the field stays continuous. (A
-  // smoothstep-SCALED melt was tried first and REJECTED: multiplying the
-  // field bends band contours, rounding every block into a blob.)
-  let s1 = 99;
-  for (let i = 0; i < nCons; i++) if (cityConsD[i] < s1) s1 = cityConsD[i];
+  // Pairwise LINEAR chamfer/melt: (dᵢ + dⱼ) is constant along straight lines, so
+  // corners get 45° cuts and pinched fragments become road. Fully pairwise (no
+  // argmin identity switches) and linear — a smoothstep-SCALED melt was
+  // REJECTED: it rounded every block into a blob.
+  let nearestConstraint = 99;
+  for (let i = 0; i < nCons; i++) if (roadConstraintDist[i] < nearestConstraint) nearestConstraint = roadConstraintDist[i];
   let chamfer = 99;
   for (let i = 0; i < nCons; i++) {
     for (let j = i + 1; j < nCons; j++) {
       let pen = 0;
-      if (!Number.isNaN(cityConsUx[i]) && !Number.isNaN(cityConsUx[j])) {
-        const dot = cityConsUx[i] * cityConsUx[j] + cityConsUz[i] * cityConsUz[j];
+      if (!Number.isNaN(roadConstraintDirX[i]) && !Number.isNaN(roadConstraintDirX[j])) {
+        const dot = roadConstraintDirX[i] * roadConstraintDirX[j] + roadConstraintDirZ[i] * roadConstraintDirZ[j];
         pen = CITY_CHAMFER_DOT_PENALTY * smoothstep(CITY_CHAMFER_DOT_LO, CITY_CHAMFER_DOT_HI, dot);
       }
-      const c = (cityConsD[i] + cityConsD[j] + pen) * CITY_CHAMFER_SCALE;
+      const c = (roadConstraintDist[i] + roadConstraintDist[j] + pen) * CITY_CHAMFER_SCALE;
       if (c < chamfer) chamfer = c;
     }
   }
-  let dist = Math.min(s1, chamfer);
+  let roadDistance = Math.min(nearestConstraint, chamfer);
 
-  if (cur < 0) dist = 0; // biome-edge cells are all road (the rim ring road)
+  if (cellLabel < 0) roadDistance = 0; // biome-edge cells are all road (the rim ring road)
 
-  // Curb: the road surface sits a step below the sidewalk.
-  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, dist));
+  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, roadDistance));
 
-  // Lane-paint channels: distance to the NEAREST freeway centerline
-  // (arterial edge or belt) + the dash-phase coordinate along it (axis
-  // coordinate for arterials; biome-wall projection for the belt — its
-  // per-segment phase seams are dropped by the shader's fwidth guard).
-  // JUNCTION ZONES — anywhere a second freeway feature is within reach
-  // (arterial corners, tees into the belt, merges) — export "no paint", so
-  // lines end cleanly before interchanges instead of wandering across them.
-  let paintDist = arterialReal;
-  let paintAlong = arterialAlong;
-  if (beltReal < paintDist) {
-    paintDist = beltReal;
-    paintAlong = biomeWallAlong;
+  // Lane paint. JUNCTION ZONES (a second freeway feature within reach) export
+  // "no paint" so lines end cleanly before interchanges.
+  let freewayDistance = arterialReal;
+  let freewayAlong = arterialAlong;
+  if (beltReal < freewayDistance) {
+    freewayDistance = beltReal;
+    freewayAlong = biomeWallAlong;
   }
   let m1 = 99999;
   let m2 = 99999;
-  for (const v of [Math.max(0, aS), Math.max(0, aN), Math.max(0, aW), Math.max(0, aE), beltReal]) {
+  for (const v of [Math.max(0, arterialSouth), Math.max(0, arterialNorth), Math.max(0, arterialWest), Math.max(0, arterialEast), beltReal]) {
     if (v < m1) {
       m2 = m1;
       m1 = v;
@@ -1212,35 +1052,21 @@ const getCityTerrain = (
     }
   }
   if (m2 < city.freewayWidth + 10) {
-    paintDist = 99999;
-    paintAlong = 0;
+    freewayDistance = 99999;
+    freewayAlong = 0;
   }
 
-  return { dist, elevation, paintDist, paintAlong };
+  return { roadDistance, relativeElevation: elevation, freewayDistance, freewayAlong };
 };
 
 // ══════════════════════════════════════════════════════════════════════
 // Flatten-ground pads (actors with flattenGround: true)
 // ══════════════════════════════════════════════════════════════════════
-// Buildings — and future houses in ANY biome — need flat footing without
-// biome-specific terrain hacks: each flatten-enabled actor gets a terrain
-// PAD, flat at the actor's raw ground height inside `radius` and blending
-// back to the raw terrain over `skirt`.
-//
-// The chicken-and-egg (spawn points come from terrain height; terrain now
-// depends on spawn points) is resolved by making flatten-actor placement
-// FULLY DETERMINISTIC and having BOTH consumers use this one function:
-//   - candidates roll the exact same seeds/filters as spawn.worker's
-//     density algorithm (filters evaluate against the RAW, pad-free height —
-//     guarded against recursion);
-//   - spacing is a stateless greedy over a CANONICAL TILE window (all
-//     flatten descriptors together, ordered by priority → descriptor → cell,
-//     candidate rejected within its own footprint of any accepted point) —
-//     NOT the spawn worker's stateful spatial hash, which is chunk-visit-
-//     order dependent and unreproducible here;
-//   - spawn.worker sources these actors' points FROM getFlattenPoints, so
-//     every spawned instance sits exactly on a pad, and there are no vacant
-//     pads.
+// Spawn points need terrain height and the terrain now depends on spawn points;
+// resolved by FULLY DETERMINISTIC placement both consumers share: candidates roll
+// the exact spawn.worker seeds/filters against the RAW height (recursion guard),
+// spacing is stateless per canonical tile, and spawn.worker sources flattenGround
+// points FROM getFlattenPoints. See CLAUDE.md "Flatten-ground pads".
 
 const FLATTEN_TILE = 128; // world units per canonical placement tile
 // Spacing rounds: 1 round = Matérn II (~45% of greedy packing); 4 rounds
@@ -1267,11 +1093,9 @@ export interface FlattenPoint {
   skirt: number;
 }
 
-/** Overflow eviction for the hot Maps: drop the OLDEST half (Maps iterate in
- *  insertion order, so recency ≈ proximity to the player). A full clear() was
- *  a cliff — for flattenTileCache each entry is hundreds of raw
- *  computeVertexData calls (30–70ms), and clearing rebuilt the entire live
- *  working set from zero on the very next vertex. */
+/** Maps iterate in insertion order (≈ proximity to the player), so this evicts
+ *  the far half. clear() was REJECTED: a flatten tile costs 30–70ms to rebuild
+ *  and a full clear flooded the next queries. */
 const dropOldestHalf = <K, V>(map: Map<K, V>): void => {
   let remaining = map.size >> 1;
   for (const key of map.keys()) {
@@ -1281,31 +1105,24 @@ const dropOldestHalf = <K, V>(map: Map<K, V>): void => {
 };
 
 const flattenTileCache = new Map<string, FlattenPoint[]>();
-// Adjacent tiles' padded windows overlap by the spacing pad — the boundary
-// cells' candidates (each costing a RAW computeVertexData) would otherwise be
-// re-evaluated for every neighboring tile (~2.2× duplication at city
-// densities). null = rolled/filtered out.
+// Boundary cells are shared by overlapping tile windows (~2.2× re-evaluation without this). null = rolled/filtered out.
 const flattenCandCache = new Map<string, FlattenCandidate | null>();
 let flattenReach = 0; // max(radius + skirt) — vertex lookup reach
 let flattenSpacingPad = 0; // max footprint — spacing window pad
 let flattenBiomes: Set<number> | null = null; // union of descs' biomeIds; null = unrestricted
-let computingFlatten = false; // recursion guard: candidate filters use RAW height
+let evaluatingPadCandidates = false; // recursion guard: candidate filters use RAW height
 
-/** Vertex data WITHOUT flatten pads — for sparse scans (tests, probes) that
- *  would otherwise trigger a full pad-tile computation per lonely sample. */
+/** Pad-free — for sparse scans that would otherwise compute a pad tile per lonely sample. */
 export function computeVertexDataRaw(x: number, z: number): VertexResult {
-  computingFlatten = true;
+  evaluatingPadCandidates = true;
   try {
     return computeVertexData(x, z);
   } finally {
-    computingFlatten = false;
+    evaluatingPadCandidates = false;
   }
 }
 
-/** All accepted flatten points whose CENTER lies in the given tile.
- *  Canonical: candidates are gathered over the tile padded by the max
- *  footprint and greedily spaced in a fixed order, so every caller (terrain
- *  vertices, spawn worker, tests) sees the identical set. */
+/** Accepted flatten points whose center lies in the tile — canonical, so every caller sees the identical set. */
 const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
   const key = `${tx},${tz}`;
   const hit = flattenTileCache.get(key);
@@ -1321,15 +1138,12 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
   const pMaxX = maxX + flattenSpacingPad;
   const pMaxZ = maxZ + flattenSpacingPad;
 
-  const descs = cfg!.flattenDescriptors!;
+  const descs = domainConfig!.flattenDescriptors!;
   const candidates: FlattenCandidate[] = [];
-  computingFlatten = true;
+  evaluatingPadCandidates = true;
   try {
     for (let di = 0; di < descs.length; di++) {
       const desc = descs[di];
-      // EXACTLY the spawn.worker density algorithm (same seeds, same filters —
-      // both call the shared densityPlacement helpers), minus the stateful
-      // spacing hash.
       const cellSize = densityCellSize(desc.density);
       const [gx0, gx1] = densityCellRange(pMinX, pMaxX, cellSize);
       const [gz0, gz1] = densityCellRange(pMinZ, pMaxZ, cellSize);
@@ -1347,7 +1161,7 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
           let cand: FlattenCandidate | null = null;
           const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
           if (roll) {
-            const vd = computeVertexData(roll.x, roll.z); // RAW (computingFlatten guard)
+            const vd = computeVertexData(roll.x, roll.z); // RAW (evaluatingPadCandidates guard)
             if (passesPlacementFilters(vd, desc)) {
               cand = { x: roll.x, z: roll.z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
             }
@@ -1358,20 +1172,13 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
       }
     }
   } finally {
-    computingFlatten = false;
+    evaluatingPadCandidates = false;
   }
 
-  // Deterministic total order, then ITERATED LOCAL spacing (Matérn-II
-  // rounds): within a round, a candidate is rejected when any earlier-ordered
-  // POOL member sits within its own footprint — a purely local rule, so
-  // every tile computes identical results (greedy against ACCEPTED points
-  // was tried and REJECTED: acceptance chains propagate beyond any fixed
-  // window and neighboring tiles disagreed). A single round saturates at
-  // ~45% of greedy packing though — candidates blocked by other REJECTED
-  // candidates stay empty — so rejected-but-viable candidates re-enter for
-  // FLATTEN_SPACING_ROUNDS rounds against the actual winners, converging to
-  // greedy-level density. Locality: round k decisions depend on ≤ k×footprint
-  // neighborhoods, covered by the spacing window pad (ROUNDS × footprint).
+  // Iterated LOCAL spacing (Matérn-II rounds): a candidate is rejected by any
+  // earlier-ordered POOL member within its footprint — purely local, so tiles
+  // agree (greedy against ACCEPTED points was REJECTED: acceptance chains crossed
+  // tile windows). One round packs ~45% of greedy; the re-entry rounds converge.
   candidates.sort((a, b) => {
     const pa = descs[a.descIndex].priority;
     const pb = descs[b.descIndex].priority;
@@ -1396,7 +1203,6 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
         return true;
       });
     }
-    // Matérn II within the round's pool.
     const winners: FlattenCandidate[] = [];
     for (let ci = 0; ci < pool.length; ci++) {
       const c = pool[ci];
@@ -1436,15 +1242,13 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
   return points;
 };
 
-/** Flatten points with centers inside the bounds (spawn.worker sources
- *  flattenGround actors' spawn points from this). */
 export function getFlattenPoints(
   minX: number,
   minZ: number,
   maxX: number,
   maxZ: number
 ): FlattenPoint[] {
-  if (!cfg || !cfg.flattenDescriptors || cfg.flattenDescriptors.length === 0) return [];
+  if (!domainConfig || !domainConfig.flattenDescriptors || domainConfig.flattenDescriptors.length === 0) return [];
   const out: FlattenPoint[] = [];
   const tx0 = Math.floor(minX / FLATTEN_TILE);
   const tx1 = Math.floor((maxX - 0.001) / FLATTEN_TILE);
@@ -1460,16 +1264,11 @@ export function getFlattenPoints(
   return out;
 }
 
-/** Blend the height toward any overlapping pads (flat inside radius,
- *  smoothstep back to the raw terrain across the skirt). Influences apply in
- *  ASCENDING mask order so the dominant pad lands last: at dense packing a
- *  neighbor's skirt can reach into a pad's flat zone, and unordered
- *  application let it tilt the footing buildings stand on. */
-// Parallel reused buffers, insertion-sorted on write (ascending mask, then y —
-// almost always ≤3 entries). An object per influence per vertex was steady GC
-// churn across every collider chunk build.
-const flattenInfY: number[] = [];
-const flattenInfMask: number[] = [];
+// Influences apply in ASCENDING mask order so the dominant pad lands last (a
+// dense neighbor's skirt otherwise tilted the footing). Parallel reused buffers,
+// almost always ≤3 entries — an object per influence was steady GC churn.
+const padInfluenceHeights: number[] = [];
+const padInfluenceMasks: number[] = [];
 const applyFlattenPads = (x: number, z: number, height: number): number => {
   let infCount = 0;
   const tx0 = Math.floor((x - flattenReach) / FLATTEN_TILE);
@@ -1491,19 +1290,19 @@ const applyFlattenPads = (x: number, z: number, height: number): number => {
         let j = infCount++;
         while (
           j > 0 &&
-          (flattenInfMask[j - 1] > mask || (flattenInfMask[j - 1] === mask && flattenInfY[j - 1] > p.y))
+          (padInfluenceMasks[j - 1] > mask || (padInfluenceMasks[j - 1] === mask && padInfluenceHeights[j - 1] > p.y))
         ) {
-          flattenInfMask[j] = flattenInfMask[j - 1];
-          flattenInfY[j] = flattenInfY[j - 1];
+          padInfluenceMasks[j] = padInfluenceMasks[j - 1];
+          padInfluenceHeights[j] = padInfluenceHeights[j - 1];
           j--;
         }
-        flattenInfMask[j] = mask;
-        flattenInfY[j] = p.y;
+        padInfluenceMasks[j] = mask;
+        padInfluenceHeights[j] = p.y;
       }
     }
   }
   for (let i = 0; i < infCount; i++) {
-    height += (flattenInfY[i] - height) * flattenInfMask[i];
+    height += (padInfluenceHeights[i] - height) * padInfluenceMasks[i];
   }
   return height;
 };
@@ -1512,10 +1311,10 @@ const applyFlattenPads = (x: number, z: number, height: number): number => {
 // Main Pipeline
 // ══════════════════════════════════════════════════════════════════════
 
-let cfg: DomainConfig | null = null;
+let domainConfig: DomainConfig | null = null;
 
 export function initCompute(config: DomainConfig): void {
-  cfg = config;
+  domainConfig = config;
   flattenTileCache.clear();
   flattenCandCache.clear();
   flattenReach = 0;
@@ -1539,47 +1338,45 @@ const regionGridFn = (point: PointXZ, regions: SerializedRegion[]) => {
   return regions[Math.floor(uuid * regions.length)];
 };
 
-const biomeGridFn = (point: PointXZ, rGrid: VGrid[]) => {
+const biomeGridFn = (point: PointXZ, rGrid: VoronoiCell[]) => {
   const nearest = getNearestEntry(point, rGrid);
   const region: SerializedRegion = nearest.element;
   const uuid = seedRand(`${point.x},${point.z}`);
   return region.biomes[Math.floor(uuid * region.biomes.length)];
 };
 
-/** Region + biome voronoi context at a (road-noise-warped) vertex — shared by
- *  computeVertexData and the road-marker enumeration. */
 const getBiomeContext = (currentVertex: PointXZ) => {
   const regionGrid = getVoronoiGrid(
-    `${cfg!.seed} - regionGrid`,
+    `${domainConfig!.seed} - regionGrid`,
     currentVertex,
-    cfg!.regions,
-    cfg!.regionGridSize,
+    domainConfig!.regions,
+    domainConfig!.regionGridSize,
     regionGridFn
   );
   const biomeGrid = getVoronoiGrid(
-    `${cfg!.seed} - grid`,
+    `${domainConfig!.seed} - grid`,
     currentVertex,
     regionGrid,
-    cfg!.gridSize,
+    domainConfig!.gridSize,
     biomeGridFn
   );
   const biome: SerializedBiome = getNearestEntry(currentVertex, biomeGrid).element;
   const { biomeWalls, riverWalls } = getWalls(
-    cfg!.seed,
+    domainConfig!.seed,
     currentVertex,
     biomeGrid,
     regionGrid,
-    cfg!.gridSize
+    domainConfig!.gridSize
   );
   return { biome, biomeWalls, riverWalls };
 };
 
 export function computeVertexData(x: number, z: number): VertexResult {
-  if (!cfg) throw new Error("vertexCompute not initialized");
+  if (!domainConfig) throw new Error("vertexCompute not initialized");
 
   // Step 1: Road noise offset
-  const cvx = x + terrainNoise(cfg.roadNoiseParams, z, 0);
-  const cvz = z + terrainNoise(cfg.roadNoiseParams, x, 0);
+  const cvx = x + terrainNoise(domainConfig.roadNoiseParams, z, 0);
+  const cvz = z + terrainNoise(domainConfig.roadNoiseParams, x, 0);
   const currentVertex: PointXZ = { x: cvx, z: cvz };
 
   // Step 2: Voronoi — region grid, biome grid, walls
@@ -1589,58 +1386,47 @@ export function computeVertexData(x: number, z: number): VertexResult {
   const distanceToRiver = distanceToWall(cvx, cvz, riverWalls);
 
   // Step 3: Blend
-  const blendWidth = biome.blendWidth || cfg.defaultBlendWidth;
+  const blendWidth = biome.blendWidth || domainConfig.defaultBlendWidth;
   const blend =
-    Math.min(blendWidth, Math.max(distanceToBiomeBoundary - cfg.boundaryWidth, 0)) / blendWidth;
+    Math.min(blendWidth, Math.max(distanceToBiomeBoundary - domainConfig.boundaryWidth, 0)) / blendWidth;
 
-  // Step 4: Biome height (baseHeight computed once — the city branch levels
-  // its blocks against it, and step 5 adds it to every biome)
-  const baseHeight = terrainNoise(cfg.baseNoiseParams, x, z);
+  // Step 4: Biome height
+  const baseHeight = terrainNoise(domainConfig.baseNoiseParams, x, z);
   let biomeHeight = 0;
   let distanceToRoadCenter = distanceToBiomeBoundary;
   let distanceToFreewayCenter = 99999;
   let freewayAlong = 0;
 
-  if (distanceToRiver > cfg.riverWidth) {
-    const riverFade = Math.min(1.0, (distanceToRiver - cfg.riverWidth) / cfg.riverWidth);
+  if (distanceToRiver > domainConfig.riverWidth) {
+    const riverFade = Math.min(1.0, (distanceToRiver - domainConfig.riverWidth) / domainConfig.riverWidth);
     const biomeId = biome.id;
-    const noiseConfig = cfg.biomeNoiseConfigs[biomeId];
+    const noiseConfig = domainConfig.biomeNoiseConfigs[biomeId];
 
     if (noiseConfig) {
-      // Noise-based biome
       let h = terrainNoise(noiseConfig.params, x, z);
       if (noiseConfig.absNeg) h = Math.abs(h) * -1;
       if (noiseConfig.scale !== undefined) h *= noiseConfig.scale;
       if (noiseConfig.offset !== undefined) h += noiseConfig.offset;
       biomeHeight = h * blend * riverFade;
-    } else if (cfg.cityConfig && biomeId === CITY_BIOME_ID) {
-      // City biome — internal road distance + per-block plateau elevation
-      const city = getCityTerrain(x, z, cfg.cityConfig, biomeWalls, distanceToBiomeBoundary, biomeWallAlong);
-      distanceToRoadCenter = Math.min(city.dist, distanceToRiver);
-      distanceToFreewayCenter = city.paintDist;
-      freewayAlong = city.paintAlong;
-      // The city RIDES the regional base noise: cities sit at varied
-      // elevations following the region, with plateaus/roads/curbs as
-      // RELATIVE offsets on top (base added in step 5). Flat building
-      // footing comes from the flatten-ground PADS applied below — NOT from
-      // cancelling the base (every city at ~height 0 — rejected) or leveling
-      // whole blocks (city-only mechanism — rejected in favor of pads that
-      // work in every biome).
-      biomeHeight = city.elevation * blend * riverFade;
+    } else if (domainConfig.cityConfig && biomeId === CITY_BIOME_ID) {
+      const city = getCityTerrain(x, z, domainConfig.cityConfig, biomeWalls, distanceToBiomeBoundary, biomeWallAlong);
+      distanceToRoadCenter = Math.min(city.roadDistance, distanceToRiver);
+      distanceToFreewayCenter = city.freewayDistance;
+      freewayAlong = city.freewayAlong;
+      // The city RIDES the regional base noise; flat footing comes from the pads (see CLAUDE.md).
+      biomeHeight = city.relativeElevation * blend * riverFade;
     }
   }
 
   // Step 5: Base noise
   let height = biomeHeight + baseHeight;
 
-  // Step 6: flatten-ground pads (skipped while evaluating pad candidates —
-  // their filters and pad heights are defined against the RAW terrain — and
-  // skipped entirely in biomes no flatten descriptor targets, so pad tiles
-  // are only ever computed where pads can exist)
+  // Step 6: flatten pads — skipped while evaluating pad candidates (defined
+  // against the RAW terrain) and in biomes no flatten descriptor targets.
   if (
-    !computingFlatten &&
-    cfg.flattenDescriptors &&
-    cfg.flattenDescriptors.length > 0 &&
+    !evaluatingPadCandidates &&
+    domainConfig.flattenDescriptors &&
+    domainConfig.flattenDescriptors.length > 0 &&
     (flattenBiomes === null || flattenBiomes.has(biome.id))
   ) {
     height = applyFlattenPads(x, z, height);
@@ -1663,14 +1449,10 @@ export function computeVertexData(x: number, z: number): VertexResult {
 // traffic-light / freeway-side enumerations)
 // ══════════════════════════════════════════════════════════════════════
 
-/** District-local cell lookup with the local biome walls (rim detection),
- *  mirroring computeVertexData's road-noise warp for the context. */
 const cityCellAtLocal = (ix: number, iz: number, d: CityDistrict): CityCell => {
-  // Cache-first: getCityCell only needs the walls/noise context on a genuine
-  // miss, but building that context costs 2 road-noise FBMs + the voronoi
-  // lookup — paying it on every call made cache HITS the dominant cost of
-  // the dressing enumerations (markers probe this 3× per candidate).
-  const city = cfg!.cityConfig;
+  // Cache-first: the walls/noise context costs 2 FBMs + a voronoi lookup, and
+  // paying it on HITS made this the dominant cost of the dressing enumerations.
+  const city = domainConfig!.cityConfig;
   const store = cityCellCaches[city.seed];
   const cached = store && cityCellLookup(store, d.key, ix, iz);
   if (cached) return cached;
@@ -1678,15 +1460,13 @@ const cityCellAtLocal = (ix: number, iz: number, d: CityDistrict): CityCell => {
   const gs = city.gridSize;
   const w = cityLocalToWorld((ix + 0.5) * gs, (iz + 0.5) * gs, d);
   const warped: PointXZ = {
-    x: w.x + terrainNoise(cfg!.roadNoiseParams, w.z, 0),
-    z: w.z + terrainNoise(cfg!.roadNoiseParams, w.x, 0),
+    x: w.x + terrainNoise(domainConfig!.roadNoiseParams, w.z, 0),
+    z: w.z + terrainNoise(domainConfig!.roadNoiseParams, w.x, 0),
   };
   return getCityCell(ix, iz, getBiomeContext(warped).biomeWalls, d);
 };
 
-/** Local AABB of the chunk∩district overlap (rotate the overlap's corners
- *  into the district frame). District extent padded by the boundary wiggle
- *  amplitude. Null when chunk and district don't overlap. */
+/** District-frame AABB of the chunk∩district overlap (padded by the wiggle amplitude); null when disjoint. */
 const cityChunkLocalAABB = (
   d: CityDistrict,
   minX: number,
@@ -1733,18 +1513,8 @@ export interface RoadMarkerPoint {
   dirZ: number;
 }
 
-/**
- * Enumerates raised-pavement-marker positions along road CENTERLINES inside
- * the given world-space bounds: per-district street boundaries, triangle
- * diagonals and roundabout rings (computed in each district's rotated local
- * frame, then rotated out), plus the world-aligned arterial boundary roads.
- * Ownership by world position (deterministic positions per district / global
- * lattices for arterials) guarantees calls over non-overlapping chunks never
- * emit duplicates.
- *
- * Runs anywhere initCompute has run (uses the same caches as
- * computeVertexData) — the RoadMarkers component calls it on the main thread.
- */
+/** Ownership by world position (deterministic per district / global lattices
+ *  for arterials) keeps chunked calls duplicate-free. */
 export function getCityRoadMarkers(
   minX: number,
   minZ: number,
@@ -1753,37 +1523,28 @@ export function getCityRoadMarkers(
   streetSpacing: number,
   freewaySpacing: number
 ): RoadMarkerPoint[] {
-  if (!cfg || !cfg.cityConfig) return [];
-  const city = cfg.cityConfig;
+  if (!domainConfig || !domainConfig.cityConfig) return [];
+  const city = domainConfig.cityConfig;
   const gs = city.gridSize;
   const out: RoadMarkerPoint[] = [];
 
-  const tryEmit = (mx: number, mz: number, dirX: number, dirZ: number) => {
+  const emitIfOnRoadCenter = (mx: number, mz: number, dirX: number, dirZ: number) => {
     const vd = computeVertexData(mx, mz);
     if (vd.biomeId !== CITY_BIOME_ID) return; // city biome only
     if (vd.distanceToRiverCenter < 45) return;
     if (vd.distanceToRoadCenter > 2) return; // melted/chamfered zones drop out
-    // Street/arterial markers exist only strictly INSIDE the belt freeway
-    // ring (centerline at boundaryWidth + freewayWidth): one-sided check so
-    // it skips the belt corridor AND everything beyond it. (An abs-window
-    // corridor check was used before and LEAKED — the strip between the
-    // belt's outer edge and the biome boundary sits outside the window, and
-    // rim ring-road cell boundaries emitted markers past the city edge.)
+    // Strictly INSIDE the belt ring, one-sided: an abs-window corridor check
+    // LEAKED markers into the strip between the belt and the biome boundary.
     if (
       vd.distanceToBiomeBoundaryCenter <
-      cfg!.boundaryWidth + city.freewayWidth * 2 + 5
+      domainConfig!.boundaryWidth + city.freewayWidth * 2 + 5
     )
       return;
     out.push({ x: mx, y: vd.height, z: mz, dirX, dirZ });
   };
 
-  // ── District-local street / feature markers ──
-  // For each district overlapping the bounds, run the cell enumeration in the
-  // district's LOCAL frame and rotate results out. Every marker is owned by
-  // the chunk containing its WORLD position (positions are deterministic per
-  // district, so chunked calls never duplicate), clipped to the district
-  // (by the wiggly assignment), and stopped short of arterials. Index ranges
-  // padded ±1 for the boundary wiggle.
+  // Per district: enumerate in the LOCAL frame, rotate out, own by world
+  // position, clip to the wiggly district. Index ranges padded ±1 for the wiggle.
   const midX = (minX + maxX) / 2;
   const midZ = (minZ + maxZ) / 2;
   const rows0 = findCityRow(minZ, midX) - 1;
@@ -1794,20 +1555,17 @@ export function getCityRoadMarkers(
     for (let m = m0; m <= m1; m++) {
       const d = cityDistrictByIndex(r, m);
 
-      // Cell lookup with the local biome walls (rim detection), mirroring
-      // computeVertexData's road-noise warp for the context.
       const cellAt = (ix: number, iz: number): CityCell => cityCellAtLocal(ix, iz, d);
 
-      const emitLocal = (lmx: number, lmz: number, ldx: number, ldz: number) => {
+      const emitLocalMarker = (lmx: number, lmz: number, ldx: number, ldz: number) => {
         const p = cityLocalToWorld(lmx, lmz, d);
         if (p.x < minX || p.x >= maxX || p.z < minZ || p.z >= maxZ) return; // chunk ownership
         if (getCityDistrict(p.x, p.z).key !== d.key) return; // district clip (wiggly edges)
         if (cityArterialDist(p.x, p.z, d) < city.freewayWidth + 5) return; // stop at arterials
-        tryEmit(p.x, p.z, ldx * d.cos - ldz * d.sin, ldx * d.sin + ldz * d.cos);
+        emitIfOnRoadCenter(p.x, p.z, ldx * d.cos - ldz * d.sin, ldx * d.sin + ldz * d.cos);
       };
 
-      // Local marker on a boundary sits exactly on a cell edge — test the
-      // cell and its west/south neighbors for a roundabout ring.
+      // A boundary marker sits on a cell edge — test the cell and its west/south neighbors too.
       const insideRoundabout = (lmx: number, lmz: number): boolean => {
         const cx = Math.floor(lmx / gs);
         const cz = Math.floor(lmz / gs);
@@ -1844,7 +1602,7 @@ export function getCityRoadMarkers(
             const bx = (ix + 1) * gs;
             for (let z = iz * gs + inset; z <= (iz + 1) * gs - inset; z += streetSpacing) {
               if (insideRoundabout(bx, z)) continue;
-              emitLocal(bx, z, 0, 1);
+              emitLocalMarker(bx, z, 0, 1);
             }
           }
 
@@ -1853,13 +1611,12 @@ export function getCityRoadMarkers(
             const bz = (iz + 1) * gs;
             for (let x = ix * gs + inset; x <= (ix + 1) * gs - inset; x += streetSpacing) {
               if (insideRoundabout(x, bz)) continue;
-              emitLocal(x, bz, 1, 0);
+              emitLocalMarker(x, bz, 1, 0);
             }
           }
 
           if (cell.shape === CITY_SHAPE_TRI_NE || cell.shape === CITY_SHAPE_TRI_NW) {
-            // 2×2 flatiron — emitted from the super-cell's anchor cell only;
-            // per-marker ownership dedupes across chunks.
+            // Emitted from the super-cell's anchor cell only.
             const sx = Math.floor(ix / 2);
             const sz = Math.floor(iz / 2);
             if (ix !== 2 * sx || iz !== 2 * sz) continue;
@@ -1871,11 +1628,10 @@ export function getCityRoadMarkers(
             const startZ = cell.shape === CITY_SHAPE_TRI_NE ? 2 * sz * gs : 2 * sz * gs + side;
             const diagInset = inset * Math.SQRT1_2 + city.roadWidth;
             for (let t = diagInset; t <= diagLen - diagInset; t += streetSpacing) {
-              emitLocal(startX + dirX * t, startZ + dirZ * t, dirX, dirZ);
+              emitLocalMarker(startX + dirX * t, startZ + dirZ * t, dirX, dirZ);
             }
           } else if (cell.shape === CITY_SHAPE_CIRCLE) {
-            // 2×2 roundabout — emitted from the anchor cell only; markers
-            // ring the island tangentially.
+            // Emitted from the super-cell's anchor cell only; markers ring the island tangentially.
             const sx = Math.floor(ix / 2);
             const sz = Math.floor(iz / 2);
             if (ix !== 2 * sx || iz !== 2 * sz) continue;
@@ -1885,7 +1641,7 @@ export function getCityRoadMarkers(
             const count = Math.max(8, Math.round((2 * Math.PI * ringR) / streetSpacing));
             for (let i = 0; i < count; i++) {
               const a = (i / count) * 2 * Math.PI;
-              emitLocal(scx + Math.cos(a) * ringR, scz + Math.sin(a) * ringR, -Math.sin(a), Math.cos(a));
+              emitLocalMarker(scx + Math.cos(a) * ringR, scz + Math.sin(a) * ringR, -Math.sin(a), Math.cos(a));
             }
           }
         }
@@ -1893,10 +1649,7 @@ export function getCityRoadMarkers(
     }
   }
 
-  // ── Arterial centerlines (wiggly district boundary roads) ──
-  // Markers sit on GLOBAL parameter lattices, so chunked calls stay
-  // duplicate-free; positions follow the wiggle curve and are oriented along
-  // its tangent. Junctions with crossing arterials are skipped.
+  // Arterial centerlines: markers on GLOBAL parameter lattices (duplicate-free across chunks), oriented along the wiggle tangent.
   const pitch = cityDistrictPitch();
   const fwClear = city.freewayWidth + 6;
 
@@ -1923,7 +1676,7 @@ export function getCityRoadMarkers(
       if (nearVertical) continue;
       const slope = cityWiggleSlope(`r${k}`, mx);
       const norm = Math.hypot(1, slope);
-      tryEmit(mx, mz, 1 / norm, slope / norm);
+      emitIfOnRoadCenter(mx, mz, 1 / norm, slope / norm);
     }
   }
 
@@ -1944,28 +1697,22 @@ export function getCityRoadMarkers(
         if (mz - rz0 < fwClear || rz1 - mz < fwClear) continue;
         const slope = cityWiggleSlope(`s${r}:${m}`, mz);
         const norm = Math.hypot(1, slope);
-        tryEmit(mx, mz, slope / norm, 1 / norm);
+        emitIfOnRoadCenter(mx, mz, slope / norm, 1 / norm);
       }
     }
   }
 
-  // ── Belt freeway median markers (the ring around the city rim) ──
-  // The belt centerline is the offset curve (boundaryWidth + freewayWidth)
-  // inside the biome boundary. Enumerate by stepping along the biome WALL
-  // segments (warped space), offsetting perpendicular to BOTH sides, and
-  // inverting the road-noise warp back to real space; the off-city candidate
-  // and any drift die in the validity filters. Positions are deterministic
-  // per wall, so chunk-bounds ownership stays duplicate-free.
-  const beltR = cfg.boundaryWidth + city.freewayWidth;
+  // Belt median markers: step along the biome WALL segments in warped space,
+  // offset ±beltR, invert the road-noise warp; off-city candidates die in the filters.
+  const beltR = domainConfig.boundaryWidth + city.freewayWidth;
   const wcx = (minX + maxX) / 2;
   const wcz = (minZ + maxZ) / 2;
   const beltWalls = getBiomeContext({
-    x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
-    z: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+    x: wcx + terrainNoise(domainConfig.roadNoiseParams, wcz, 0),
+    z: wcz + terrainNoise(domainConfig.roadNoiseParams, wcx, 0),
   }).biomeWalls;
   for (const wall of beltWalls) {
-    // getWalls emits each voronoi wall twice (once per Delaunay halfedge,
-    // endpoints swapped) — keep the canonical orientation only.
+    // getWalls emits each wall twice endpoint-swapped — canonical orientation only.
     if (wall.ex < wall.sx || (wall.ex === wall.sx && wall.ez < wall.sz)) continue;
     const wdx = wall.ex - wall.sx;
     const wdz = wall.ez - wall.sz;
@@ -1975,16 +1722,14 @@ export function getCityRoadMarkers(
     const uz = wdz / wlen;
     for (let t = freewaySpacing / 2; t < wlen; t += freewaySpacing) {
       for (const side of [1, -1]) {
-        // Warped-space point on the belt centerline
         const twx = wall.sx + ux * t - uz * beltR * side;
         const twz = wall.sz + uz * t + ux * beltR * side;
-        // Invert the road-noise warp (fixed point; the warp is smooth and
-        // large-scale, so a few iterations land within the sanity filters)
+        // Invert the road-noise warp by fixed-point iteration (smooth, large-scale warp).
         let mx = twx;
         let mz = twz;
         for (let it = 0; it < 3; it++) {
-          mx = twx - terrainNoise(cfg.roadNoiseParams, mz, 0);
-          mz = twz - terrainNoise(cfg.roadNoiseParams, mx, 0);
+          mx = twx - terrainNoise(domainConfig.roadNoiseParams, mz, 0);
+          mz = twz - terrainNoise(domainConfig.roadNoiseParams, mx, 0);
         }
         if (mx < minX || mx >= maxX || mz < minZ || mz >= maxZ) continue; // chunk ownership
         const vd = computeVertexData(mx, mz);
@@ -2013,27 +1758,19 @@ export interface CitySitePoint {
   z: number;
 }
 
-/**
- * The voronoi SITE point (jittered seed point) of every biome-grid cell
- * inside the bounds that rolled the CITY biome — i.e. one point per city.
- * Rolls the exact same seeds as the biome grid (getVoronoiGrid + biomeGridFn),
- * so the result matches the pipeline's assignment without touching its caches'
- * semantics. Sites live in road-noise-warped space (where the biome voronoi is
- * evaluated), so each is warp-inverted back to real world coordinates — the
- * returned point is where the cell's visual voronoi center actually sits.
- */
+/** The jittered voronoi SITE of every biome-grid cell in the bounds that rolled
+ *  the city biome (same seeds as getVoronoiGrid), warp-inverted to real world space. */
 export function getCityVoronoiSites(
   minX: number,
   minZ: number,
   maxX: number,
   maxZ: number
 ): CitySitePoint[] {
-  if (!cfg) throw new Error("vertexCompute not initialized");
-  const gs = cfg.gridSize;
-  const seed = `${cfg.seed} - grid`;
+  if (!domainConfig) throw new Error("vertexCompute not initialized");
+  const gs = domainConfig.gridSize;
+  const seed = `${domainConfig.seed} - grid`;
   const out: CitySitePoint[] = [];
-  // Pad one cell ring: the road-noise warp shifts world↔warped by less than a
-  // cell, so sites belonging just outside the bounds can land inside them.
+  // Pad one cell ring: the warp shifts sites by less than a cell.
   const ix0 = Math.floor(minX / gs) - 1;
   const ix1 = Math.floor(maxX / gs) + 1;
   const iy0 = Math.floor(minZ / gs) - 1;
@@ -2044,13 +1781,11 @@ export function getCityVoronoiSites(
       const jitterX = seedRand(`${seed} - ${ix}X${iz}`);
       const jitterZ = seedRand(`${seed} - ${ix}Z${iz}`);
       const site: PointXZ = { x: (ix + jitterX) * gs, z: (iz + jitterZ) * gs };
-      // Same biome roll the grid makes for this cell: nearest region point →
-      // seeded pick among that region's biomes.
       const regionGrid = getVoronoiGrid(
-        `${cfg.seed} - regionGrid`,
+        `${domainConfig.seed} - regionGrid`,
         site,
-        cfg.regions,
-        cfg.regionGridSize,
+        domainConfig.regions,
+        domainConfig.regionGridSize,
         regionGridFn
       );
       const biome: SerializedBiome = biomeGridFn(site, regionGrid);
@@ -2059,12 +1794,10 @@ export function getCityVoronoiSites(
       let wx = site.x;
       let wz = site.z;
       for (let it = 0; it < 3; it++) {
-        wx = site.x - terrainNoise(cfg.roadNoiseParams, wz, 0);
-        wz = site.z - terrainNoise(cfg.roadNoiseParams, wx, 0);
+        wx = site.x - terrainNoise(domainConfig.roadNoiseParams, wz, 0);
+        wz = site.z - terrainNoise(domainConfig.roadNoiseParams, wx, 0);
       }
-      // RAW height: the site feeds a beacon floating heightOffset above the
-      // ground — flatten-pad deltas are irrelevant, and the padded path
-      // would compute pad tiles for every site.
+      // RAW height: the beacon floats heightOffset above anyway, and the padded path would build a pad tile per site.
       out.push({ key: `${ix},${iz}`, x: wx, y: computeVertexDataRaw(wx, wz).height, z: wz });
     }
   }
@@ -2085,20 +1818,10 @@ export interface CityTrafficLightPoint {
   phase: number; // seeded [0,1) — desynchronizes the per-light signal cycles
 }
 
-/**
- * Pole positions for traffic lights at SOME street intersections (seeded
- * per-intersection roll against `chance`). An intersection is a district-grid
- * corner where at least 3 road arms meet (labels differ across ≥3 of the 4
- * edges radiating from the corner). Each selected intersection gets a pole on
- * every block corner that survives validation: the pole is pushed diagonally
- * outward from the corner until it lands in the sidewalk band of the road
- * field (the corner chamfer means the diagonal offset varies), facing back
- * toward the intersection center.
- *
- * Ownership is by the CORNER's world position (a single deterministic point),
- * so calls over non-overlapping chunks never emit duplicate poles even when
- * an intersection's poles straddle a chunk border.
- */
+/** Seeded roll per intersection (a grid corner where ≥3 road arms meet); one
+ *  pole per block corner, marched diagonally out until the road field says
+ *  sidewalk. Ownership by the CORNER's world position keeps chunked calls
+ *  duplicate-free even when an intersection straddles a border. */
 export function getCityTrafficLightPoints(
   minX: number,
   minZ: number,
@@ -2106,10 +1829,10 @@ export function getCityTrafficLightPoints(
   maxZ: number,
   chance: number
 ): CityTrafficLightPoint[] {
-  if (!cfg || !cfg.cityConfig) return [];
-  const city = cfg.cityConfig;
+  if (!domainConfig || !domainConfig.cityConfig) return [];
+  const city = domainConfig.cityConfig;
   const gs = city.gridSize;
-  const beltR = cfg.boundaryWidth + city.freewayWidth;
+  const beltR = domainConfig.boundaryWidth + city.freewayWidth;
   const out: CityTrafficLightPoint[] = [];
 
   const midX = (minX + maxX) / 2;
@@ -2135,8 +1858,7 @@ export function getCityTrafficLightPoints(
           const B = cityCellAtLocal(ix, iz - 1, d);
           const C = cityCellAtLocal(ix - 1, iz, d);
           const D = cityCellAtLocal(ix, iz, d);
-          // Rim cells (whole cell = ring road) and roundabout territory
-          // (curved ring roads, radiating tees) never get signals.
+          // Rim cells and roundabout territory never get signals.
           if (A.label < 0 || B.label < 0 || C.label < 0 || D.label < 0) continue;
           if (
             A.shape === CITY_SHAPE_CIRCLE ||
@@ -2154,12 +1876,9 @@ export function getCityTrafficLightPoints(
           if (seedRand(`${city.seed}-tl-${d.key}|${ix},${iz}`) >= chance) continue;
 
           const pc = cityLocalToWorld(ix * gs, iz * gs, d);
-          // Ownership by the corner's world position — one deterministic
-          // point decides which chunk emits the whole intersection.
           if (pc.x < minX || pc.x >= maxX || pc.z < minZ || pc.z >= maxZ) continue;
           if (getCityDistrict(pc.x, pc.z).key !== d.key) continue; // wiggly district clip
-          // Intersections near arterials lose their corners to the wide
-          // chamfer — skip them entirely.
+          // The arterial chamfer eats these corners.
           if (cityArterialDist(pc.x, pc.z, d) < city.freewayWidth + 16) continue;
 
           const lx = ix * gs;
@@ -2170,8 +1889,7 @@ export function getCityTrafficLightPoints(
             [-1, 1],
             [-1, -1],
           ]) {
-            // March diagonally out from the corner until the road field says
-            // sidewalk (the chamfer cuts corners at varying depths).
+            // The chamfer cuts corners at varying depths, so march until the field says sidewalk.
             for (let off = 16; off <= 26; off += 2) {
               const p = cityLocalToWorld(
                 lx + sx * off * Math.SQRT1_2,
@@ -2180,14 +1898,11 @@ export function getCityTrafficLightPoints(
               );
               const vd = computeVertexData(p.x, p.z);
               if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) break;
-              // One-sided like the road markers: only strictly inside the belt
-              // ring (skips the corridor AND the strip beyond it).
+              // Strictly inside the belt ring, one-sided (see the road markers).
               if (vd.distanceToBiomeBoundaryCenter < beltR + city.freewayWidth + 5)
                 break;
               if (vd.distanceToRoadCenter < 8.4) continue; // still on road/curb
               if (vd.distanceToRoadCenter > 11.6) break; // past the sidewalk — no footing
-              // Face back toward the intersection center (local diagonal,
-              // rotated into the world frame).
               const fx = -sx * Math.SQRT1_2;
               const fz = -sz * Math.SQRT1_2;
               out.push({
@@ -2223,26 +1938,11 @@ export interface CityFreewaySidePoint {
   next?: { x: number; y: number; z: number }; // next point along the run (wire spans)
 }
 
-/**
- * Points offset `lateral` real units to BOTH sides of every freeway
- * centerline — the wiggly arterial district boundaries and the belt ring —
- * spaced `spacing` apart along the run, with the freeway tangent direction.
- * Candidates within `junctionClear` of a crossing freeway feature are
- * skipped (runs end cleanly before interchanges), and candidates whose road
- * field says they'd sit on road surface (street tees, merge chamfers) drop
- * out, leaving natural gaps at street mouths.
- *
- * Positions sit on global parameter lattices (arterials) / deterministic
- * per-wall steps (belt), so chunked calls never emit duplicates. With
- * `withNext`, each point carries the position of the NEXT valid point along
- * its run (the same point the neighboring lattice step would emit) so a
- * caller can hang wires across chunk borders without coordination.
- *
- * NOTE: belt candidates come from the wall set visible from the QUERY CENTER
- * (same caveat as the belt median markers) — call with a consistent chunk
- * size for stable belt coverage; ownership keeps disjoint queries
- * duplicate-free regardless.
- */
+/** Points `lateral` real units to both sides of every freeway centerline
+ *  (arterials + belt), `spacing` apart, with the tangent direction. Candidates
+ *  near a crossing freeway (junctionClear) or melted into road drop out. With
+ *  `withNext` each point carries its successor so wires span chunk borders.
+ *  Belt candidates depend on the query center's wall set — keep chunk size consistent. */
 export function getCityFreewaySidePoints(
   minX: number,
   minZ: number,
@@ -2253,22 +1953,19 @@ export function getCityFreewaySidePoints(
   junctionClear: number,
   withNext: boolean
 ): CityFreewaySidePoint[] {
-  if (!cfg || !cfg.cityConfig) return [];
-  const city = cfg.cityConfig;
-  const fwScale = city.roadWidth / city.freewayWidth;
-  const beltR = cfg.boundaryWidth + city.freewayWidth;
-  const minField = lateral * fwScale - 1.5; // reject points melted into road
+  if (!domainConfig || !domainConfig.cityConfig) return [];
+  const city = domainConfig.cityConfig;
+  const freewayToStreetScale = city.roadWidth / city.freewayWidth;
+  const beltR = domainConfig.boundaryWidth + city.freewayWidth;
+  const minField = lateral * freewayToStreetScale - 1.5; // reject points melted into road
   const out: CityFreewaySidePoint[] = [];
 
   type Candidate = { x: number; y: number; z: number; dirX: number; dirZ: number } | null;
 
-  // Ownership filter, applied BEFORE any expensive validation: candidates a
-  // chunk doesn't own must cost only the position arithmetic (the belt scan
-  // especially visits every nearby wall for EVERY city chunk — validating
-  // out-of-bounds candidates there made chunk builds an order of magnitude
-  // slower than the road markers). Next-link lookups (`owned = false`) skip
-  // it: a successor usually lives in the neighboring chunk.
-  const owns = (px: number, pz: number): boolean =>
+  // Ownership BEFORE validation: the belt scan visits every nearby wall for every
+  // city chunk, and validating unowned candidates made builds ~10× slower.
+  // Next-link lookups skip it — a successor usually lives in the neighbor chunk.
+  const chunkOwns = (px: number, pz: number): boolean =>
     px >= minX && px < maxX && pz >= minZ && pz < maxZ;
 
   const validate = (px: number, pz: number, ux: number, uz: number): Candidate => {
@@ -2281,7 +1978,6 @@ export function getCityFreewaySidePoints(
     return { x: px, y: vd.height, z: pz, dirX: ux, dirZ: uz };
   };
 
-  // ── Arterial rows (horizontal boundary curves) ──
   const evalRow = (k: number, j: number, side: number, owned: boolean): Candidate => {
     const mx = j * spacing;
     const mz = cityRowEdgeZ(k, mx);
@@ -2292,7 +1988,7 @@ export function getCityFreewaySidePoints(
     // Left normal of the tangent, flipped by side.
     const px = mx - uz * lateral * side;
     const pz = mz + ux * lateral * side;
-    if (owned && !owns(px, pz)) return null;
+    if (owned && !chunkOwns(px, pz)) return null;
     // Skip T-junctions with the vertical boundaries of both adjacent rows.
     for (const rr of [k - 1, k]) {
       const mm = findCitySeg(rr, mx, mz);
@@ -2310,9 +2006,7 @@ export function getCityFreewaySidePoints(
   for (let k = Math.floor(minZ / pitch) - 1; k <= Math.floor(maxZ / pitch) + 2; k++) {
     const bzBase = cityRowBoundary(k);
     if (bzBase < minZ - pad || bzBase >= maxZ + pad) continue;
-    // Lattice scan padded by `lateral`: the side offset shifts a point up to
-    // lateral·slope ALONG the row, so a point owned by these bounds can hang
-    // off a lattice step outside them (ownership dedupes the overlap).
+    // Scan padded by `lateral`: the side offset shifts a point up to lateral·slope along the row.
     for (let j = Math.ceil((minX - lateral) / spacing); j * spacing < maxX + lateral; j++) {
       for (const side of [1, -1]) {
         const p = evalRow(k, j, side, true);
@@ -2327,7 +2021,6 @@ export function getCityFreewaySidePoints(
     }
   }
 
-  // ── Arterial segments (vertical boundary curves, within each row) ──
   const evalSeg = (r: number, m: number, j: number, side: number, owned: boolean): Candidate => {
     const mz = j * spacing;
     const mx = citySegEdgeX(r, m, mz);
@@ -2337,7 +2030,7 @@ export function getCityFreewaySidePoints(
     const uz = 1 / norm;
     const px = mx - uz * lateral * side;
     const pz = mz + ux * lateral * side;
-    if (owned && !owns(px, pz)) return null;
+    if (owned && !chunkOwns(px, pz)) return null;
     // Clamp to this row's (wiggled) span, clear of the row-boundary junctions.
     const rz0 = cityRowEdgeZ(r, mx);
     const rz1 = cityRowEdgeZ(r + 1, mx);
@@ -2371,16 +2064,12 @@ export function getCityFreewaySidePoints(
     }
   }
 
-  // ── Belt freeway (the ring around the city rim) ──
-  // Same wall-stepping + warp-inversion approach as the belt median markers:
-  // offset each candidate beltR ± lateral from the biome wall in warped
-  // space, invert the road-noise warp, and let the validity filters kill the
-  // off-city candidates. side +1 = the city side of the belt.
+  // Belt: same wall-stepping + warp inversion as the belt median markers; side +1 = the city side.
   const wcx = (minX + maxX) / 2;
   const wcz = (minZ + maxZ) / 2;
   const beltWalls = getBiomeContext({
-    x: wcx + terrainNoise(cfg.roadNoiseParams, wcz, 0),
-    z: wcz + terrainNoise(cfg.roadNoiseParams, wcx, 0),
+    x: wcx + terrainNoise(domainConfig.roadNoiseParams, wcz, 0),
+    z: wcz + terrainNoise(domainConfig.roadNoiseParams, wcx, 0),
   }).biomeWalls;
   const evalBelt = (wall: Wall, t: number, s: number, side: number, owned: boolean): Candidate => {
     if (t <= 0 || t >= Math.hypot(wall.ex - wall.sx, wall.ez - wall.sz)) return null;
@@ -2395,10 +2084,10 @@ export function getCityFreewaySidePoints(
     let mx = twx;
     let mz = twz;
     for (let it = 0; it < 3; it++) {
-      mx = twx - terrainNoise(cfg!.roadNoiseParams, mz, 0);
-      mz = twz - terrainNoise(cfg!.roadNoiseParams, mx, 0);
+      mx = twx - terrainNoise(domainConfig!.roadNoiseParams, mz, 0);
+      mz = twz - terrainNoise(domainConfig!.roadNoiseParams, mx, 0);
     }
-    if (owned && !owns(mx, mz)) return null;
+    if (owned && !chunkOwns(mx, mz)) return null;
     const vd = computeVertexData(mx, mz);
     if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < 45) return null;
     if (Math.abs(vd.distanceToBiomeBoundaryCenter - o) > 2.5) return null; // drift / wrong side

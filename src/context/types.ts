@@ -8,13 +8,21 @@ export interface GameContextType {
   setChunks: (chunks: { [key: string]: { position: number[]; chunk: Chunk } }) => void;
   progress: number;
   setProgress: (progress: number) => void;
-  terrain_loaded: boolean;
-  setTerrainLoaded: (terrain_loaded: boolean) => void;
-  /** Where the active domain wants the player's FEET to spawn (ground-level
-   *  position); null = the default sky drop onto the terrain. Set by <Domain
-   *  playerSpawn>, read by the Player (which persists across domains). */
+  terrainLoaded: boolean;
+  setTerrainLoaded: (terrainLoaded: boolean) => void;
+  /** FEET position from <Domain playerSpawn>; null = the default sky drop. */
   playerSpawn: [number, number, number] | null;
   setPlayerSpawn: (spawn: [number, number, number] | null) => void;
-  /** True when LOD1/LOD2 (close, high-detail) terrain chunks are pending build. */
+  /** LOD1/LOD2 chunks still pending build. */
   terrainHighLODPending: React.MutableRefObject<boolean>;
+}
+
+export interface DevContextType {
+  /** Toggled by F1; mirrored to the `?devmode` URL param so a refresh keeps it. */
+  devMode: boolean;
+  noclip: boolean;
+  physicsDebug: boolean;
+  toggleDevMode: () => void;
+  setNoclip: (noclip: boolean) => void;
+  setPhysicsDebug: (physicsDebug: boolean) => void;
 }

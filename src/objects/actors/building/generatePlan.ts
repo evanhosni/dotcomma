@@ -27,17 +27,15 @@ import {
 
 export const WALL_THICKNESS = 0.24;
 export const SLAB_THICKNESS = 0.3;
-/** Ground-floor top surface sits this far above grade so flat terrain never
- *  z-fights or peeks through the interior floor. */
+/** Ground-floor top above grade, so flat terrain never z-fights through the floor. */
 export const FLOOR_LIFT = 0.12;
 export const RAMP_THICKNESS = 0.25;
 export const RAMP_WIDTH = 2.0; // ramp lane width
 const WALKWAY_WIDTH = 1.8; // sizing allowance beside the lane so the room around a shaft stays walkable
 const RAMP_LANDING = 1.2; // solid floor at each end of the run
-/** Shaft footprints keep this inset from the BSP domain edges so ramp faces
- *  and slab-hole rims never sit flush against (z-fight with) the shell. */
+/** Shaft inset from the BSP domain edges, so ramp faces never sit flush against the shell. */
 const RAMP_MARGIN = 0.3;
-const RAMP_RUN_FACTOR = 1.5; // run = storyHeight × this (≈34° slope, comfortably walkable)
+const RAMP_RUN_FACTOR = 1.5; // run = storyHeight × this (≈34° slope)
 const RAMP_RUN_MIN_FACTOR = 1.25; // steepest allowed fit (≈39°) before giving up on stories
 const DOORWAY_WIDTH = 2.4; // interior room-to-room openings
 const DOORWAY_HEIGHT = 4.2;
@@ -48,7 +46,6 @@ const FOUNDATION_DEPTH = 1;
 
 const SIDES: WallSide[] = ["+z", "-z", "+x", "-x"];
 
-// Default body colors: a grayscale ramp, with occasional muted accents.
 const GRAYSCALE = [0x2e3134, 0x45484c, 0x5a5e63, 0x6f7378, 0x84888d, 0x9aa0a5, 0xb4b9be, 0xd0d4d8];
 const ACCENTS = [0x5b8fc7, 0x6f5fb5, 0x8d7ec9, 0x9c3f3f, 0xb0632f, 0x8a5a33, 0x3f7f86];
 const DEFAULT_SIDES = [4, 5, 6, 7, 8];
@@ -59,8 +56,7 @@ const DOOR_BROWNS = [0x4a352a, 0x5a4030, 0x6b4a2f, 0x7a5a3a, 0x8a6a4a];
 
 const WINDOW_ROW_SPACING = 6.0;
 
-/** An interior wall created by a BSP split: lies at `at` on `axis`, running
- *  along the other axis from `from` to `to`, with one doorway at `doorAt`. */
+/** A BSP split wall at `at` on `axis`, running `from`..`to` along the other axis. */
 interface SplitWall {
   axis: "x" | "z";
   at: number;
@@ -77,12 +73,8 @@ const shade = (hex: number, f: number): number => {
   return (r << 16) | (g << 8) | b;
 };
 
-/**
- * Everything about a building derivable from its seed — interior layout
- * first (rooms per floor × floors), then an exterior sized to realistically
- * wrap it — as plain data. Pure and deterministic: same seed + options, same
- * plan, every load.
- */
+/** Interior-first: rooms × floors size the exterior. Pure and deterministic
+ *  (the server generates the same plan for its hull collider). */
 export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): BuildingPlan => {
   const rng = seedrandom(`building:${seed}`);
   const range = (a: number, b: number): number => a + rng() * (b - a);
@@ -97,15 +89,11 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     return out;
   };
 
-  // ---- Shape family ----
-  // 4 sides = boxy slab (axis-aligned rect); 5+ = faceted polygon canister
-  // with a random ring rotation so facets don't all face the same way.
   const sideChoices = opts.numberOfSides?.length ? opts.numberOfSides : DEFAULT_SIDES;
   const sides = Math.max(3, Math.round(pick(sideChoices)));
   const rect = sides === 4;
   const phase = rect ? 0 : range(0, Math.PI * 2);
 
-  // ---- Interior program: floors × rooms-per-floor drive the exterior ----
   const ceilingHeight = opts.ceilingHeight ?? 6;
   const storyHeight = ceilingHeight + SLAB_THICKNESS;
   const doorWidth = opts.doorSize?.[0] ?? 2.6;
@@ -114,80 +102,64 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
 
   let stories = clamp(Math.round(opts.stories ?? rangeInt(1, 5)), 1, 6);
   const requestedStories = stories;
-  // Rooms-per-floor choices: each story rolls its own count (a plain number
-  // pins the count, but layouts still vary per floor). The footprint is
-  // sized for the LARGEST choice so every floor's program fits.
   const roomChoices = (
     Array.isArray(opts.roomCount) ? opts.roomCount : opts.roomCount !== undefined ? [opts.roomCount] : null
   )?.map((n) => Math.max(1, Math.round(n)));
   const pickRoomCount = (): number => (roomChoices?.length ? pick(roomChoices) : rangeInt(3, 6));
-  // Unset: size for a seeded 4–6 so footprints vary like before; a floor
-  // rolling more rooms than fits just gets a denser split (BSP stops early).
+  // A floor rolling more rooms than fit just gets a denser split (BSP stops early).
   const maxRoomCount = roomChoices?.length ? Math.max(...roomChoices) : rangeInt(4, 6);
   const roomArea = range(70, 110);
   let rampRun = storyHeight * RAMP_RUN_FACTOR;
   let shaftLen = rampRun + 2 * RAMP_LANDING;
   const shaftWidth = RAMP_WIDTH + WALKWAY_WIDTH;
-  // Multi-story buildings keep a near-square footprint so the room block
-  // inscribed in a low-side-count polygon stays big enough for the shaft.
+  // Near-square when multi-story so the inscribed room block fits the shaft.
   let aspect = stories > 1 ? range(0.92, 1.08) : range(0.8, 1.25);
 
-  // The interior physically nests inside the shell: interior perimeter =
-  // shell inset by this gap (wall boxes are centered on the interior ring,
-  // so their outer face sits just inside the shell surface).
   const SHELL_INSET = 0.24;
 
-  let ihw: number; // interior perimeter half-extents (polygon radii)
-  let ihd: number;
-  let hw = 0; // exterior half-extents at ground level (final values below)
-  let hd = 0;
+  let interiorHalfWidth: number; // interior perimeter half-extents
+  let interiorHalfDepth: number;
+  let halfWidth = 0; // exterior half-extents at ground level
+  let halfDepth = 0;
   if (opts.exteriorSize) {
-    hw = opts.exteriorSize[0] / 2;
-    hd = opts.exteriorSize[2] / 2;
-    ihw = Math.max(4, hw - SHELL_INSET);
-    ihd = Math.max(4, hd - SHELL_INSET);
-    aspect = ihd / ihw;
+    halfWidth = opts.exteriorSize[0] / 2;
+    halfDepth = opts.exteriorSize[2] / 2;
+    interiorHalfWidth = Math.max(4, halfWidth - SHELL_INSET);
+    interiorHalfDepth = Math.max(4, halfDepth - SHELL_INSET);
+    aspect = interiorHalfDepth / interiorHalfWidth;
   } else {
-    // Footprint from the room program: enough inscribed-rect area for the
-    // rooms (plus the ramp shaft on multi-story buildings), plus a corridor
-    // ring on polygon interiors.
     const needed = maxRoomCount * roomArea + (stories > 1 ? shaftLen * shaftWidth * 1.4 : 0);
-    const unitPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: 1, hd: aspect }, phase);
+    const unitPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, halfWidth: 1, halfDepth: aspect }, phase);
     const f = rect ? 1 : inscribedRectFactor(unitPts, 1, aspect);
     const s = Math.sqrt(needed / (4 * f * f * aspect));
-    ihw = s;
-    ihd = s * aspect;
-    // Cap the footprint so shells never intersect at the spawn spacing
-    // (BSP just deals fewer/smaller rooms when the program is too ambitious).
-    const maxHalf = Math.max(ihw, ihd);
+    interiorHalfWidth = s;
+    interiorHalfDepth = s * aspect;
+    // Capped so shells never intersect at the spawn spacing.
+    const maxHalf = Math.max(interiorHalfWidth, interiorHalfDepth);
     if (maxHalf > 13) {
-      ihw *= 13 / maxHalf;
-      ihd *= 13 / maxHalf;
+      interiorHalfWidth *= 13 / maxHalf;
+      interiorHalfDepth *= 13 / maxHalf;
     }
   }
 
-  // Resolve the interior perimeter + inscribed BSP domain ONCE, growing the
-  // footprint (within the hard 16 half-extent bound) until the ramp shaft
-  // fits — a multi-story request must actually produce stories. The BSP
-  // domain is only room BOOKKEEPING: split walls are later stretched past it
-  // all the way to the shell's inner surface, so rooms genuinely end at the
-  // exterior wall (no enclosed room-within-a-room).
+  // The BSP domain is only room BOOKKEEPING: split walls are later stretched
+  // past it to the shell's inner surface (no enclosed room-within-a-room).
   const computeBlock = () => {
-    const pts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, hw: ihw, hd: ihd }, phase);
-    const f2 = rect ? 1 : inscribedRectFactor(pts, ihw, ihd, 0.4);
+    const pts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, halfWidth: interiorHalfWidth, halfDepth: interiorHalfDepth }, phase);
+    const f2 = rect ? 1 : inscribedRectFactor(pts, interiorHalfWidth, interiorHalfDepth, 0.4);
     return {
       pts,
-      halfW: Math.max(4, f2 * ihw),
-      halfD: Math.max(4, f2 * ihd),
+      halfW: Math.max(4, f2 * interiorHalfWidth),
+      halfD: Math.max(4, f2 * interiorHalfDepth),
     };
   };
   let block = computeBlock();
   if (stories > 1 && !opts.exteriorSize) {
     const needHalfW = (storyHeight * RAMP_RUN_MIN_FACTOR + 2 * RAMP_LANDING + 2.6) / 2;
     const needHalfD = (shaftWidth + 4) / 2;
-    for (let i = 0; i < 6 && (block.halfW < needHalfW || block.halfD < needHalfD) && Math.max(ihw, ihd) < 16; i++) {
-      ihw = Math.min(16, ihw * 1.1);
-      ihd = Math.min(16, ihd * 1.1);
+    for (let i = 0; i < 6 && (block.halfW < needHalfW || block.halfD < needHalfD) && Math.max(interiorHalfWidth, interiorHalfDepth) < 16; i++) {
+      interiorHalfWidth = Math.min(16, interiorHalfWidth * 1.1);
+      interiorHalfDepth = Math.min(16, interiorHalfDepth * 1.1);
       block = computeBlock();
     }
   }
@@ -199,8 +171,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   const bx1 = bspHalfW;
   const bz1 = bspHalfD;
 
-  // Fit the ramp shaft to the block: prefer the ≈34° run, steepen to ≈39°,
-  // and only as a last resort give up on stories.
+  // Prefer the ≈34° run, steepen to ≈39°, and only as a last resort give up on stories.
   if (stories > 1) {
     const maxShaftLen = bx1 - bx0 - 2.5;
     if (shaftLen > maxShaftLen) {
@@ -211,80 +182,62 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   }
 
   if (!opts.exteriorSize) {
-    hw = ihw + SHELL_INSET;
-    hd = ihd + SHELL_INSET;
+    halfWidth = interiorHalfWidth + SHELL_INSET;
+    halfDepth = interiorHalfDepth + SHELL_INSET;
   }
 
-  // Exterior height is LINKED to the FINAL floor count: a collapsed story
-  // request also drops the shell (shellHeightRange only applies when the floors
-  // it advertises actually exist).
-  let bh: number;
+  // shellHeightRange only applies when the floors it advertises actually exist.
+  let shellHeight: number;
   if (opts.exteriorSize) {
-    bh = opts.exteriorSize[1];
+    shellHeight = opts.exteriorSize[1];
   } else if (opts.shellHeightRange && stories === requestedStories) {
-    bh = Math.max(range(opts.shellHeightRange[0], opts.shellHeightRange[1]), stories * storyHeight + 2);
+    shellHeight = Math.max(range(opts.shellHeightRange[0], opts.shellHeightRange[1]), stories * storyHeight + 2);
   } else if (stories === 1) {
-    // Single-floor shells vary a lot — some wear tall mass above their one
-    // floor (mechanical space), reading as a bigger building than they are.
-    bh = storyHeight + range(3, 16);
+    shellHeight = storyHeight + range(3, 16);
   } else {
-    // Multi-floor shells are unmistakably tall: a base of extra mass plus
-    // per-floor visual height, so even the shortest 2-story building clears
-    // the tallest 1-story shell. Past 2 floors the per-floor mass grows —
-    // an eye reading a shell of height H should never expect FEWER floors
-    // than it contains (~30u ⇒ 2, ~48u ⇒ 3, ~60u ⇒ 4).
-    bh = stories * storyHeight + range(8, 12) + stories * (stories <= 2 ? range(2.5, 4.5) : range(5, 7));
+    // Even the shortest 2-story shell clears the tallest 1-story one, and a
+    // shell of height H never suggests FEWER floors than it has (~30u ⇒ 2, ~48u ⇒ 3, ~60u ⇒ 4).
+    shellHeight = stories * storyHeight + range(8, 12) + stories * (stories <= 2 ? range(2.5, 4.5) : range(5, 7));
   }
 
-  // ---- Gentle lean (banana-curve via exponent) + overall taper ----
-  // The interior now physically occupies the shell up to interiorTop, so
-  // rings in that band are clamped to always wrap the interior prism (plus
-  // the ring's own lean offset). Above the occupied floors the shell is free
-  // to lean, taper, and pinch as before.
+  // Rings up to interiorTop are clamped to wrap the interior prism; above it the shell leans/tapers freely.
   const interiorTop = stories * storyHeight + 0.5;
   const leanAngle = range(0, Math.PI * 2);
-  const leanMag = range(0, opts.maxLean ?? 0.08) * bh;
+  const leanMag = range(0, opts.maxLean ?? 0.08) * shellHeight;
   const leanExp = range(1.2, 1.9);
   const topScale = range(0.7, 1.25);
-  // Containment margin: for polygons the nearest face sits at apothem
-  // distance, so extents must be over-provisioned by 1/cos(π/N), and the
-  // FULL lean magnitude is charged to both axes (per-axis lean components
-  // under-cover diagonal lean directions). The generous 0.9 base makes the
-  // shell thick enough through the occupied floors that interior geometry
-  // can never reach the outer surface — the clamp only ever pushes the shell
-  // outward where it would have cut in.
+  // Polygon faces sit at apothem distance (over-provision by 1/cos(π/N)); the
+  // FULL lean is charged to both axes, since per-axis components under-cover diagonals.
   const apothem = rect ? 1 : Math.cos(Math.PI / sides);
   const clampMargin = (lean: number): number => (0.9 + lean) / apothem;
   const ringAt = (y: number, rScale: number): RingLevel => {
-    const t = clamp((y - doorBandTop) / Math.max(bh - doorBandTop, 1e-6), 0, 1);
+    const t = clamp((y - doorBandTop) / Math.max(shellHeight - doorBandTop, 1e-6), 0, 1);
     const lean = leanMag * Math.pow(t, leanExp);
     const g = 1 + (topScale - 1) * Math.pow(t, 1.15);
     const cx = Math.cos(leanAngle) * lean;
     const cz = Math.sin(leanAngle) * lean;
-    let rhw = hw * g * rScale;
-    let rhd = hd * g * rScale;
+    let ringHalfWidth = halfWidth * g * rScale;
+    let ringHalfDepth = halfDepth * g * rScale;
     if (y <= interiorTop) {
       const m = clampMargin(lean);
-      rhw = Math.max(rhw, ihw + m);
-      rhd = Math.max(rhd, ihd + m);
+      ringHalfWidth = Math.max(ringHalfWidth, interiorHalfWidth + m);
+      ringHalfDepth = Math.max(ringHalfDepth, interiorHalfDepth + m);
     }
-    return { y, cx, cz, hw: rhw, hd: rhd };
+    return { y, cx, cz, halfWidth: ringHalfWidth, halfDepth: ringHalfDepth };
   };
 
-  // ---- Colors: grayscale by default, with occasional accents ----
   const palette = opts.palette?.length ? opts.palette : GRAYSCALE;
   const accents = opts.accentColors?.length ? opts.accentColors : ACCENTS;
   const accentChance = opts.accentChance ?? 0.2;
   const primary = rng() < accentChance ? pick(accents) : pick(palette);
   const segColor = (): number => (rng() < 0.55 ? primary : rng() < accentChance * 0.4 ? pick(accents) : pick(palette));
 
-  // ---- Door band: prismatic ground section the doors are carved into ----
+  // Door band: the prismatic ground section the doors are carved into.
   const bandColor = segColor();
-  const bandBot: RingLevel = { y: -FOUNDATION_DEPTH, cx: 0, cz: 0, hw, hd };
+  const bandBot: RingLevel = { y: -FOUNDATION_DEPTH, cx: 0, cz: 0, halfWidth, halfDepth };
   const bandTop: RingLevel = { ...bandBot, y: doorBandTop };
-  const lofts: ExteriorLoft[] = [{ rect, sides, phase, levels: [bandBot, bandTop], color: bandColor, roof: false }];
+  const lofts: ExteriorLoft[] = [{ rect, sides, ringRotation: phase, levels: [bandBot, bandTop], color: bandColor, hasRoofFan: false }];
 
-  // Interior surface colors: match the exterior unless overridden.
   const interiorWall = opts.interiorColors?.wall ?? bandColor;
   const interiorColors = {
     wall: interiorWall,
@@ -293,7 +246,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     ramp: opts.interiorColors?.ramp ?? shade(interiorWall, 0.8),
   };
 
-  // ---- Body segments: stacked canister sections with lips and bulges ----
   const segCount = rangeInt(2, 4);
   const weights = Array.from({ length: segCount }, () => range(0.6, 1.6));
   const weightSum = weights.reduce((a, b) => a + b, 0);
@@ -301,19 +253,16 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   let y0 = doorBandTop;
   let prevTop = bandTop;
   for (let k = 0; k < segCount; k++) {
-    const y1 = k === segCount - 1 ? bh : y0 + ((bh - doorBandTop) * weights[k]) / weightSum;
+    const y1 = k === segCount - 1 ? shellHeight : y0 + ((shellHeight - doorBandTop) * weights[k]) / weightSum;
     const rScale = range(0.9, 1.1);
     const levels: RingLevel[] = [
-      { ...prevTop }, // continuity with the mass below (the lip step is the next level)
+      { ...prevTop }, // continuity with the mass below; the lip step is the next level
       ringAt(y0 + 0.06, rScale * range(1.0, 1.07)),
       ringAt((y0 + y1) / 2, rScale * range(0.97, 1.1)),
       ringAt(y1, rScale * range(0.92, 1.02)),
     ];
-    // The clamp in ringAt only acts AT ring levels — a wall interpolating
-    // from a clamped ring below interiorTop to a tapered ring above it would
-    // slice diagonally through the interior's top corner. Insert a clamped
-    // ring exactly at the crossing so the shell stays outside the occupied
-    // volume all the way up (the taper still runs free above it).
+    // ringAt clamps only AT levels: a wall lerping from a clamped ring to a
+    // tapered one above interiorTop would slice the interior's top corner.
     for (let i = 0; i < levels.length - 1; i++) {
       const A = levels[i];
       const B = levels[i + 1];
@@ -326,23 +275,19 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
           y: interiorTop,
           cx,
           cz,
-          hw: Math.max(A.hw + (B.hw - A.hw) * t, ihw + m),
-          hd: Math.max(A.hd + (B.hd - A.hd) * t, ihd + m),
+          halfWidth: Math.max(A.halfWidth + (B.halfWidth - A.halfWidth) * t, interiorHalfWidth + m),
+          halfDepth: Math.max(A.halfDepth + (B.halfDepth - A.halfDepth) * t, interiorHalfDepth + m),
         });
         break;
       }
     }
-    lofts.push({ rect, sides, phase, levels, color: segColor(), roof: k === segCount - 1 });
+    lofts.push({ rect, sides, ringRotation: phase, levels, color: segColor(), hasRoofFan: k === segCount - 1 });
     segBounds.push({ loft: lofts.length - 1, y0, y1 });
     prevTop = levels[levels.length - 1];
     y0 = y1;
   }
 
-  // ---- Rooftop caps ----
-  /** Pull an off-center roof decoration inward just enough that its base
-   *  sits fully on the roof polygon below (positions stay off-center — this
-   *  clamps, it never re-centers; dead center is only the give-up fallback
-   *  and is unreachable for our size ranges). */
+  /** Pulls a roof decoration inward just until its base sits on the roof polygon (clamps, never re-centers). */
   const fitOnRoof = (
     roof: RingLevel,
     x: number,
@@ -361,73 +306,68 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   let capBase = prevTop;
   const capCount = rangeInt(0, 2);
   for (let i = 0; i < capCount; i++) {
-    const cw = capBase.hw * range(0.3, 0.55);
-    const cd = capBase.hd * range(0.3, 0.55);
+    const cw = capBase.halfWidth * range(0.3, 0.55);
+    const cd = capBase.halfDepth * range(0.3, 0.55);
     const chh = range(1.5, 4) * (i === 0 ? 1.3 : 0.8);
     const [ccx, ccz] = fitOnRoof(
       capBase,
-      capBase.cx + range(-1, 1) * (capBase.hw - cw) * 0.5,
-      capBase.cz + range(-1, 1) * (capBase.hd - cd) * 0.5,
-      (x, z) => ringPoints(rect, sides, { y: 0, cx: x, cz: z, hw: cw, hd: cd }, phase),
+      capBase.cx + range(-1, 1) * (capBase.halfWidth - cw) * 0.5,
+      capBase.cz + range(-1, 1) * (capBase.halfDepth - cd) * 0.5,
+      (x, z) => ringPoints(rect, sides, { y: 0, cx: x, cz: z, halfWidth: cw, halfDepth: cd }, phase),
     );
-    const top: RingLevel = { y: capBase.y + chh, cx: ccx, cz: ccz, hw: cw * range(0.8, 1), hd: cd * range(0.8, 1) };
+    const top: RingLevel = { y: capBase.y + chh, cx: ccx, cz: ccz, halfWidth: cw * range(0.8, 1), halfDepth: cd * range(0.8, 1) };
     lofts.push({
       rect,
       sides,
-      phase,
-      levels: [{ y: capBase.y, cx: ccx, cz: ccz, hw: cw, hd: cd }, top],
+      ringRotation: phase,
+      levels: [{ y: capBase.y, cx: ccx, cz: ccz, halfWidth: cw, halfDepth: cd }, top],
       color: segColor(),
-      roof: true,
+      hasRoofFan: true,
     });
     capBase = top;
   }
 
-  // ---- Crooked rooftop pipes (base clamped onto the roof; bends may still
-  // overhang the edge, which reads as intentional) ----
   const pipeCount = rangeInt(0, 2);
   for (let p = 0; p < pipeCount; p++) {
     const pr = range(0.25, 0.5);
     const [px, pz] = fitOnRoof(
       capBase,
-      capBase.cx + range(-1, 1) * Math.max(0, capBase.hw - pr - 0.2),
-      capBase.cz + range(-1, 1) * Math.max(0, capBase.hd - pr - 0.2),
-      (x, z) => ringPoints(false, 8, { y: 0, cx: x, cz: z, hw: pr, hd: pr }, 0),
+      capBase.cx + range(-1, 1) * Math.max(0, capBase.halfWidth - pr - 0.2),
+      capBase.cz + range(-1, 1) * Math.max(0, capBase.halfDepth - pr - 0.2),
+      (x, z) => ringPoints(false, 8, { y: 0, cx: x, cz: z, halfWidth: pr, halfDepth: pr }, 0),
     );
     const bend = range(0, Math.PI * 2);
     const y1 = capBase.y + range(0.8, 2);
     const y2 = y1 + range(0.5, 1.1);
     const reach = range(0.5, 1.3);
     const levels: RingLevel[] = [
-      { y: capBase.y - 0.2, cx: px, cz: pz, hw: pr, hd: pr },
-      { y: y1, cx: px, cz: pz, hw: pr, hd: pr },
-      { y: y2, cx: px + Math.cos(bend) * reach, cz: pz + Math.sin(bend) * reach, hw: pr, hd: pr },
+      { y: capBase.y - 0.2, cx: px, cz: pz, halfWidth: pr, halfDepth: pr },
+      { y: y1, cx: px, cz: pz, halfWidth: pr, halfDepth: pr },
+      { y: y2, cx: px + Math.cos(bend) * reach, cz: pz + Math.sin(bend) * reach, halfWidth: pr, halfDepth: pr },
     ];
     if (rng() < 0.5) {
       levels.push({
         y: y2 + range(0.4, 1),
         cx: px + Math.cos(bend) * reach * 1.6,
         cz: pz + Math.sin(bend) * reach * 1.6,
-        hw: pr,
-        hd: pr,
+        halfWidth: pr,
+        halfDepth: pr,
       });
     }
-    lofts.push({ rect: false, sides: 8, phase: 0, levels, color: pick(PIPE_COLORS), roof: true });
+    lofts.push({ rect: false, sides: 8, ringRotation: 0, levels, color: pick(PIPE_COLORS), hasRoofFan: true });
   }
 
-  // ---- Door leaf color: only a color already on the exterior, a brown, or
-  // a grayscale tone — doors never introduce a new bright hue. ----
+  // Doors never introduce a new bright hue.
   const doorRoll = rng();
   const doorColor =
     doorRoll < 0.4 ? pick(lofts.map((l) => l.color)) : doorRoll < 0.7 ? pick(DOOR_BROWNS) : pick(GRAYSCALE);
 
-  // ---- Doors: carved into a flat facet of the door band ----
   const doorCount = opts.doorCount ?? (rng() < 0.4 ? 2 : 1);
   const bandPts = ringPoints(rect, sides, bandTop, phase);
   const makeDoor = (edge: number, offsetOverride?: number): DoorPlan => {
     const L = edgeLength(bandPts, edge);
     let t: number;
     if (offsetOverride !== undefined) {
-      // rect path: door center picked as a coordinate along the wall
       const a = bandPts[edge];
       const b = bandPts[(edge + 1) % bandPts.length];
       const c: Pt2 =
@@ -463,16 +403,13 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     doors = shuffle(SIDES)
       .slice(0, doorCount)
       .map((side) => {
-        const wallLen = side === "+z" || side === "-z" ? 2 * hw : 2 * hd;
+        const wallLen = side === "+z" || side === "-z" ? 2 * halfWidth : 2 * halfDepth;
         const maxOff = Math.max(0, wallLen / 2 - doorWidth / 2 - 0.8);
         return makeDoor(RECT_EDGE[side], range(-maxOff, maxOff));
       });
   }
 
-  // ---- Windows: big, scattered — jittered slot cells so they never overlap
-  // but never line up either. Shapes randomize per window (each building
-  // leans ~75% toward one shape; circles are opt-in), sizes/aspects vary,
-  // quads get a subtle skew — windows are rarely symmetrical. ----
+  // Windows sit in jittered slot cells: never overlapping, never lined up.
   const windows: BuildingPlan["windows"] = [];
   const windowLightChance = clamp(opts.windowLightChance ?? 0.6, 0, 1);
   const windowLightIntensity = Math.max(0, opts.windowLightIntensity ?? 1.4);
@@ -481,8 +418,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   const [winMin, winMax] = opts.windowSize ?? DEFAULT_WINDOW_SIZE;
   const primaryShape = pick(windowShapes);
 
-  // Collect every available window cell, then fill either a seeded fraction
-  // of them or a count picked from opts.windowCount.
   interface WindowCell {
     loft: number;
     edge: number;
@@ -516,7 +451,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     windows.push({
       loft: cell.loft,
       edge: cell.edge,
-      t: (cell.k + range(0.4, 0.6)) / cell.slots,
+      edgeParam: (cell.k + range(0.4, 0.6)) / cell.slots,
       y: cell.baseY + range(-0.5, 0.5),
       w,
       h,
@@ -525,19 +460,12 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
       maxFrac: 0.8 / cell.slots,
       glass,
       frame: cell.frame,
-      // Stable per-window random — the shader hashes it with a per-night
-      // seed to pick tonight's lit subset and stagger their turn-on times.
-      litRnd: rng(),
+      lightRandom: rng(),
     });
   }
 
-  // ---- Interior room layout (perimeter/block/shaft geometry was resolved
-  // above, before the exterior, so the shell height reflects real floors) ----
-
-  // Ramps: ONE per story gap, each placed independently — a different spot
-  // and orientation per gap. A shaft is NOT its own room: it sits inside
-  // whatever room the BSP grows around it (split walls never cross a shaft
-  // footprint, so each shaft always lands wholly inside one leaf room).
+  // A shaft is NOT its own room: split walls never cross it, so it always
+  // lands wholly inside one leaf room.
   const rectsOverlap = (a: RoomRect, b: RoomRect, m: number): boolean =>
     a.x0 < b.x1 + m && a.x1 > b.x0 - m && a.z0 < b.z1 + m && a.z1 > b.z0 - m;
 
@@ -566,9 +494,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     };
   };
 
-  /** Seed a shaft somewhere in the domain, clear of `avoid` rects (the
-   *  arrival hole/landing from the gap below; exterior door zones on the
-   *  ground floor). Falls back to alternating corners when crowded. */
+  /** Falls back to alternating corners when crowded. */
   const placeRamp = (story: number, avoid: RoomRect[]): RampSpec => {
     const axes: ("x" | "z")[] = [];
     if (bx1 - bx0 >= shaftLen + 2 * RAMP_MARGIN) axes.push("x");
@@ -596,13 +522,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     return corners.find((r) => !avoid.some((o) => rectsOverlap(r.rect, o, 0.5))) ?? corners[0];
   };
 
-  // One BSP pass = one story. Each split wall gets exactly one doorway, so
-  // the room graph is a tree — every room is reachable. Variation comes from
-  // three dice per split: WHICH room (area-weighted, not always the biggest),
-  // which AXIS (mostly the long one, sometimes across), and WHERE (ratio).
-  // Split walls never cross an obstacle rect (this story's ramp shaft, or
-  // the arrival hole + landing of the ramp from the story below), and never
-  // dead-end into a perpendicular wall right at its doorway.
+  // One BSP pass per story. Each split wall has exactly one doorway, so the
+  // room graph is a tree and every room is reachable.
   interface StoryLayout {
     rooms: RoomRect[];
     splitWalls: SplitWall[];
@@ -630,9 +551,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
           return false;
         }
       }
-      // The new wall T-junctions into perpendicular walls at its ends — keep
-      // those junctions clear of the perpendicular wall's doorway (a wall
-      // dead-ending right at a door reads as a generator bug).
+      // A wall dead-ending into a perpendicular wall right at its doorway reads as a bug.
       for (const w of splitWalls) {
         if (w.axis === axis) continue;
         const touches = w.at > cf - 0.1 && w.at < ct + 0.1 && at > w.from - 0.1 && at < w.to + 0.1;
@@ -641,8 +560,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
       return true;
     };
 
-    /** Doorways avoid opening straight onto a shaft flight or an arrival
-     *  hole right on the other side of the wall. */
+    /** Avoids opening straight onto a shaft or arrival hole behind the wall. */
     const chooseDoorAt = (axis: "x" | "z", at: number, from: number, to: number): number => {
       if (to - from <= 4.4) return (from + to) / 2;
       let doorAt = range(from + 1.8, to - 1.8);
@@ -667,7 +585,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
       const candidates = rooms
         .map((r, i) => ({ i, w: (r.x1 - r.x0) * (r.z1 - r.z0), r }))
         .filter(({ r }) => Math.max(r.x1 - r.x0, r.z1 - r.z0) >= MIN_ROOM_DIM * 2);
-      if (candidates.length === 0) break; // nothing left worth splitting
+      if (candidates.length === 0) break;
       // Area-weighted pick: big rooms split most often, but not always.
       const totalW = candidates.reduce((a, c) => a + c.w, 0);
       let roll = rng() * totalW;
@@ -682,7 +600,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
       const r = chosen.r;
       const rw = r.x1 - r.x0;
       const rd = r.z1 - r.z0;
-      // Long axis by default; cross-split sometimes when both directions fit.
       let splitX = rw >= rd;
       if (Math.min(rw, rd) >= MIN_ROOM_DIM * 2 && rng() < 0.35) splitX = !splitX;
       const axisOrder: ("x" | "z")[] = [splitX ? "x" : "z"];
@@ -694,7 +611,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
           const cand = lo + (hi - lo) * range(0.35, 0.65);
           if (validAt(axis, cand, r)) at = cand;
         }
-        if (at === null) continue; // blocked on this axis — try the other or re-pick
+        if (at === null) continue;
         if (axis === "x") {
           splitWalls.push({ axis: "x", at, from: r.z0, to: r.z1, doorAt: chooseDoorAt("x", at, r.z0, r.z1) });
           rooms.splice(chosen.i, 1, { ...r, x1: at }, { ...r, x0: at });
@@ -708,19 +625,17 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     return { rooms, splitWalls, obstacles };
   };
 
-  // Stories generate in order: place the gap's ramp first (clear of the
-  // arrival rects from the gap below), then BSP the floor around both. Every
-  // story rolls its own room count and layout — no two floors alike.
+  // Stories generate in order: the gap's ramp first (clear of the arrival
+  // rects from below), then the BSP around it.
   const ramps: RampSpec[] = [];
   const storyLayouts: StoryLayout[] = [];
-  // Keep ground-floor shafts away from the exterior door openings.
   const doorZones: RoomRect[] = doors.map((d) => ({
     x0: d.position[0] - d.width / 2 - 2.2,
     x1: d.position[0] + d.width / 2 + 2.2,
     z0: d.position[2] - d.width / 2 - 2.2,
     z1: d.position[2] + d.width / 2 + 2.2,
   }));
-  let arrival: RoomRect[] = []; // hole + top landing of the ramp arriving on this story
+  let arrival: RoomRect[] = []; // hole + landing of the ramp arriving on this story
   for (let s = 0; s < stories; s++) {
     const shaft: RoomRect[] = [];
     if (s < stories - 1) {
@@ -732,10 +647,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     arrival = s < stories - 1 ? [ramps[s].hole, ramps[s].landing] : [];
   }
 
-  // ---- Wall boxes (per story, story-local y; lifted per story at build time) ----
-  const T = WALL_THICKNESS;
 
-  /** Axis-aligned wall at `at` on `axis`, running `from`..`to`, carved by a doorway. */
   const addWallWithDoor = (
     boxes: WallBox[],
     axis: "x" | "z",
@@ -755,18 +667,15 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     for (const [f, t, y0s, y1s] of segs) {
       if (t - f <= 0.01) continue;
       if (axis === "x") {
-        boxes.push({ cx: at, cy: (y0s + y1s) / 2, cz: (f + t) / 2, sx: T, sy: y1s - y0s, sz: t - f });
+        boxes.push({ cx: at, cy: (y0s + y1s) / 2, cz: (f + t) / 2, sx: WALL_THICKNESS, sy: y1s - y0s, sz: t - f });
       } else {
-        boxes.push({ cx: (f + t) / 2, cy: (y0s + y1s) / 2, cz: at, sx: t - f, sy: y1s - y0s, sz: T });
+        boxes.push({ cx: (f + t) / 2, cy: (y0s + y1s) / 2, cz: at, sx: t - f, sy: y1s - y0s, sz: WALL_THICKNESS });
       }
     }
   };
 
-  // Split walls extend ALL THE WAY to the shell's inner surface — a two-room
-  // floor is one dividing wall running exterior-to-exterior, never an
-  // enclosed room-within-a-room. Any wall end on the BSP domain boundary is
-  // stretched to the interior polygon (+0.12 into the wall cavity; the inner
-  // shell surface is a straight prism, so this fit is exact at every story).
+  // Wall ends on the BSP boundary are stretched to the interior polygon
+  // (+0.06 into the cavity) so a two-room floor is one exterior-to-exterior wall.
   for (const layout of storyLayouts) {
     for (const w of layout.splitWalls) {
       const [lo, hi] = ringSpanAt(intPts, w.axis, w.at);
@@ -782,8 +691,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     for (const w of layout.splitWalls) {
       addWallWithDoor(boxes, w.axis, w.at, w.from, w.to, w.doorAt, DOORWAY_WIDTH, DOORWAY_HEIGHT);
     }
-    // Occasional pillars in big rooms — pure backrooms. Each floor rolls its
-    // own; a pillar landing on a ramp shaft or over an arrival hole is dropped.
+    // Occasional pillars in big rooms; one landing on a shaft or arrival hole is dropped.
     for (const r of layout.rooms) {
       const rw = r.x1 - r.x0;
       const rd = r.z1 - r.z0;
@@ -799,12 +707,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     return boxes;
   });
 
-  // ---- Door alignment ----
-  // Keep the opening off the interior edge's corners AND clear of any split
-  // wall that dead-ends into this stretch of the perimeter, then sync the
-  // final position back onto the exterior door so the shell carve,
-  // inner-shell carve, and door leaf always agree. Exterior doors live on
-  // the GROUND floor, so only story 0's walls matter here.
+  // Nudge doors clear of any ground-floor split wall dead-ending into the
+  // perimeter, then sync the position back so shell carve, inner carve and leaf agree.
   const groundWalls = storyLayouts[0].splitWalls;
   for (const d of doors) {
     const len = edgeLength(intPts, d.edge);
@@ -816,7 +720,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     let t = clamp((d.t0 + d.t1) / 2, tMargin, 1 - tMargin);
     for (let pass = 0; pass < 2; pass++) {
       for (const w of groundWalls) {
-        // Wall endpoints in the plane
         const ends: [number, number][] =
           w.axis === "x"
             ? [
@@ -831,8 +734,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
           const tE = ((ex - a[0]) * dirX + (ez - a[1]) * dirZ) / len;
           const perp = Math.abs((ex - a[0]) * -dirZ + (ez - a[1]) * dirX);
           if (perp > 0.6 || tE < -0.05 || tE > 1.05) continue;
-          if (Math.abs(tE - t) * len < d.width / 2 + T + 0.4) {
-            const shift = (d.width / 2 + T + 1) / len;
+          if (Math.abs(tE - t) * len < d.width / 2 + WALL_THICKNESS + 0.4) {
+            const shift = (d.width / 2 + WALL_THICKNESS + 1) / len;
             t = clamp(tE + (t >= tE ? shift : -shift), tMargin, 1 - tMargin);
           }
         }
@@ -846,15 +749,12 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     d.offset = d.side === "+z" || d.side === "-z" ? pc[0] : pc[1];
   }
 
-  // ---- Ceiling light panels (uniform grid clipped to the perimeter, a few
-  // tubes randomly dead — each floor rolls its own gaps; skipped near the
-  // slab hole piercing this story's ceiling) ----
   const lightPanelsPerStory: [number, number][][] = [];
   for (let s = 0; s < stories; s++) {
     const holes = ramps.filter((r) => r.story === s).map((r) => r.hole);
     const panels: [number, number][] = [];
-    for (let x = -ihw + LIGHT_PANEL_SPACING / 2; x < ihw - 1; x += LIGHT_PANEL_SPACING) {
-      for (let z = -ihd + LIGHT_PANEL_SPACING / 2; z < ihd - 1; z += LIGHT_PANEL_SPACING) {
+    for (let x = -interiorHalfWidth + LIGHT_PANEL_SPACING / 2; x < interiorHalfWidth - 1; x += LIGHT_PANEL_SPACING) {
+      for (let z = -interiorHalfDepth + LIGHT_PANEL_SPACING / 2; z < interiorHalfDepth - 1; z += LIGHT_PANEL_SPACING) {
         if (!pointInRing(intPts, [x, z], 1)) continue;
         if (holes.some((h) => x > h.x0 - 1.6 && x < h.x1 + 1.6 && z > h.z0 - 1.6 && z < h.z1 + 1.6)) continue;
         if (rng() > 0.15) panels.push([x, z]);
@@ -863,9 +763,6 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     lightPanelsPerStory.push(panels);
   }
 
-  // ---- Child slots: deterministic placements cycling stories, using each
-  // story's OWN room layout. Rooms can contain ramp shafts now, so slots
-  // re-roll away from this story's shaft and the arrival hole in its floor. ----
   const childSlots: ChildSlot[] = [];
   for (let i = 0; i < CHILD_SLOT_COUNT; i++) {
     const story = rangeInt(0, stories - 1);
@@ -890,8 +787,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
 
   return {
     seed,
-    footprint: [2 * hw, 2 * hd],
-    height: bh,
+    footprint: [2 * halfWidth, 2 * halfDepth],
+    height: shellHeight,
     doorBandTop,
     foundationDepth: FOUNDATION_DEPTH,
     lofts,
@@ -902,8 +799,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     windowLightIntensity,
     windows,
     interior: {
-      width: 2 * ihw,
-      depth: 2 * ihd,
+      width: 2 * interiorHalfWidth,
+      depth: 2 * interiorHalfDepth,
       ceilingHeight,
       colors: interiorColors,
       stories,

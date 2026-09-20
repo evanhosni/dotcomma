@@ -1,12 +1,7 @@
 /**
- * Grass blade placement worker.
+ * Foliage placement worker (every plant type): coarse terrain grid + bilinear
+ * interpolation per instance.
  *
- * Generates deterministic per-chunk grass blade transforms off the main
- * thread. Samples the shared vertex pipeline on a coarse grid, then bilinearly
- * interpolates height/slope per blade — far cheaper than one computeVertexData
- * call per blade.
- *
- * Messages:
  *   IN:  { type: "INIT", config: DomainConfig }
  *   IN:  { type: "GENERATE_FOLIAGE", id: number, chunkX: number, chunkZ: number, params: FoliageChunkParams }
  *   OUT: { type: "INIT_DONE" }
@@ -21,7 +16,7 @@ const GRID_STEP = 2; // world units between terrain samples
 const MAX_INSTANCES_PER_CHUNK = 65536;
 const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
 
-// ── Inline params type (mirrors FoliageChunkParams in foliage/grass/grassWorker.ts) ──
+// Mirrors FoliageChunkParams in objects/foliage/foliageWorker.ts.
 
 interface FoliageChunkParams {
   seed: string;
@@ -58,14 +53,8 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
   const minX = chunkX * size;
   const minZ = chunkZ * size;
 
-  // ── Emptiness pre-probe (mirrors dressing.worker's probeEmpty) ──
-  // One computeVertexData at the chunk center: when the center is outside
-  // every requested biome AND farther from the biome boundary than the
-  // chunk's half-diagonal (size × 0.75 > size × √2/2), no point in the chunk
-  // can be in a requested biome — every blade would fail the biome filter, so
-  // skip the (n×n)-sample terrain grid + blade loop entirely. Output for
-  // non-empty chunks is untouched (the probe only ever returns the same
-  // empty result the full loop would have produced).
+  // Center outside every requested biome AND farther from the boundary than the
+  // half-diagonal (0.75 > √2/2) → no point in the chunk passes the biome filter.
   if (params.biomeIds && params.biomeIds.length > 0) {
     const vd = computeVertexData(minX + size / 2, minZ + size / 2);
     if (!params.biomeIds.includes(vd.biomeId) && vd.distanceToBiomeBoundaryCenter > size * 0.75) {
@@ -73,57 +62,55 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
     }
   }
 
-  // ── Coarse terrain grid: height, biome, slope (degrees) per node ──
-  const n = Math.floor(size / GRID_STEP) + 1;
-  const heights = new Float32Array(n * n);
-  const slopes = new Float32Array(n * n);
-  const biomeIds = new Int32Array(n * n);
+  const gridNodes = Math.floor(size / GRID_STEP) + 1;
+  const heights = new Float32Array(gridNodes * gridNodes);
+  const slopes = new Float32Array(gridNodes * gridNodes);
+  const biomeIds = new Int32Array(gridNodes * gridNodes);
 
-  for (let gz = 0; gz < n; gz++) {
-    for (let gx = 0; gx < n; gx++) {
+  for (let gz = 0; gz < gridNodes; gz++) {
+    for (let gx = 0; gx < gridNodes; gx++) {
       const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
-      heights[gz * n + gx] = vd.height;
-      biomeIds[gz * n + gx] = vd.biomeId;
+      heights[gz * gridNodes + gx] = vd.height;
+      biomeIds[gz * gridNodes + gx] = vd.biomeId;
     }
   }
 
-  for (let gz = 0; gz < n; gz++) {
-    for (let gx = 0; gx < n; gx++) {
+  for (let gz = 0; gz < gridNodes; gz++) {
+    for (let gx = 0; gx < gridNodes; gx++) {
       const x0 = Math.max(gx - 1, 0);
-      const x1 = Math.min(gx + 1, n - 1);
+      const x1 = Math.min(gx + 1, gridNodes - 1);
       const z0 = Math.max(gz - 1, 0);
-      const z1 = Math.min(gz + 1, n - 1);
-      const dhdx = (heights[gz * n + x1] - heights[gz * n + x0]) / ((x1 - x0) * GRID_STEP);
-      const dhdz = (heights[z1 * n + gx] - heights[z0 * n + gx]) / ((z1 - z0) * GRID_STEP);
-      slopes[gz * n + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
+      const z1 = Math.min(gz + 1, gridNodes - 1);
+      const dhdx = (heights[gz * gridNodes + x1] - heights[gz * gridNodes + x0]) / ((x1 - x0) * GRID_STEP);
+      const dhdz = (heights[z1 * gridNodes + gx] - heights[z0 * gridNodes + gx]) / ((z1 - z0) * GRID_STEP);
+      slopes[gz * gridNodes + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
     }
   }
 
   const bilinear = (arr: Float32Array, x: number, z: number): number => {
-    const fx = Math.min(Math.max((x - minX) / GRID_STEP, 0), n - 1);
-    const fz = Math.min(Math.max((z - minZ) / GRID_STEP, 0), n - 1);
-    const x0 = Math.min(Math.floor(fx), n - 2);
-    const z0 = Math.min(Math.floor(fz), n - 2);
+    const fx = Math.min(Math.max((x - minX) / GRID_STEP, 0), gridNodes - 1);
+    const fz = Math.min(Math.max((z - minZ) / GRID_STEP, 0), gridNodes - 1);
+    const x0 = Math.min(Math.floor(fx), gridNodes - 2);
+    const z0 = Math.min(Math.floor(fz), gridNodes - 2);
     const tx = fx - x0;
     const tz = fz - z0;
-    const h00 = arr[z0 * n + x0];
-    const h10 = arr[z0 * n + x0 + 1];
-    const h01 = arr[(z0 + 1) * n + x0];
-    const h11 = arr[(z0 + 1) * n + x0 + 1];
+    const h00 = arr[z0 * gridNodes + x0];
+    const h10 = arr[z0 * gridNodes + x0 + 1];
+    const h01 = arr[(z0 + 1) * gridNodes + x0];
+    const h11 = arr[(z0 + 1) * gridNodes + x0 + 1];
     return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
   };
 
-  // ── Blade placement ──
-  const count = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
+  const targetCount = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
   const rand = mulberry32(Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31));
 
-  const offsets = new Float32Array(count * 3);
-  const instanceData = new Float32Array(count * 3); // phase, scale, tint
+  const offsets = new Float32Array(targetCount * 3);
+  const instanceData = new Float32Array(targetCount * 3); // phase, scale, tint
   let placed = 0;
   let minY = Infinity;
   let maxY = -Infinity;
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < targetCount; i++) {
     const x = minX + rand() * size;
     const z = minZ + rand() * size;
     const phase = rand() * Math.PI * 2;
@@ -131,9 +118,9 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
     const tint = rand();
 
     if (params.biomeIds && params.biomeIds.length > 0) {
-      const gx = Math.min(Math.max(Math.round((x - minX) / GRID_STEP), 0), n - 1);
-      const gz = Math.min(Math.max(Math.round((z - minZ) / GRID_STEP), 0), n - 1);
-      if (!params.biomeIds.includes(biomeIds[gz * n + gx])) continue;
+      const gx = Math.min(Math.max(Math.round((x - minX) / GRID_STEP), 0), gridNodes - 1);
+      const gz = Math.min(Math.max(Math.round((z - minZ) / GRID_STEP), 0), gridNodes - 1);
+      if (!params.biomeIds.includes(biomeIds[gz * gridNodes + gx])) continue;
     }
 
     const height = bilinear(heights, x, z);
@@ -142,8 +129,7 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
     }
 
     if (params.slopeRange) {
-      // soft edges: density dithers down and blades shorten across the blend
-      // band instead of cutting off at the exact slope limit
+      // Soft edges: density dithers down and blades shorten across the blend band.
       const slope = bilinear(slopes, x, z);
       const [minSlope, maxSlope] = params.slopeRange;
       const blend = Math.max(params.slopeBlend, 0.001);
@@ -168,13 +154,9 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
     if (y > maxY) maxY = y;
   }
 
-  // ── Sort blades by DESCENDING fade key ──
-  // The shader gives every blade its own fade-out distance from
-  // fract(phase * 1.618 + tint * 12.9898) (see GRASS_VERTEX_SHADER): past it
-  // the blade is invisible but still costs full vertex work. With instances
-  // ordered longest-lived first, the main thread can truncate a far chunk's
-  // instanceCount to just the blades whose fade hasn't zeroed them — instance
-  // order has no other meaning, so this is visually free.
+  // DESCENDING per-instance fade key (the shader's fract(phase * 1.618 + tint *
+  // 12.9898)) so the main thread can truncate instanceCount to the blades whose
+  // fade hasn't zeroed. The LOD taper silently biases if this order changes.
   const order: number[] = new Array(placed);
   const fadeKey = new Float32Array(placed);
   for (let i = 0; i < placed; i++) {
@@ -204,7 +186,6 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
   };
 };
 
-// ── Message Handler ──
 
 self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;

@@ -3,18 +3,12 @@ import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
 export interface BiomeProps extends React.PropsWithChildren {
   name: string;
-  /** Unique biome id — used by voronoi assignment and the vBiomeId shader varying. */
   id: number;
   joinable?: boolean;
   blendable?: boolean;
   blendWidth?: number;
 }
 
-/**
- * Declares a biome inside a <Region>. Children are config components
- * (<Terrain>, <Material>, <Actor>, <Skybox>) plus always-mounted visual
- * components (e.g. <GrassField>) that gate their own placement by biome.
- */
 export const Biome = ({ name, id, joinable = true, blendable = true, blendWidth, children }: BiomeProps) => {
   const store = useDomainStore("Biome");
   const region = useContext(RegionContext);

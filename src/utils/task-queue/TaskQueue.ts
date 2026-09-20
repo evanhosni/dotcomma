@@ -1,8 +1,6 @@
 type Task = () => Promise<void>;
 
-/** Main-thread budget per processing slice — heavy tasks (collider builds,
- *  building geometry) yield to the browser between slices so a burst of
- *  spawns can't stack synchronous work into a single frame. */
+/** Heavy tasks yield to the browser between slices so a burst of queued work can't stack into one frame. */
 const SLICE_BUDGET_MS = 6;
 
 export class TaskQueue {
@@ -29,25 +27,17 @@ export class TaskQueue {
 
     let sliceStart = performance.now();
     while (this.queue.length > 0) {
-      // Yield a macrotask once the slice budget is spent (awaiting a
-      // synchronous task only yields a MICROtask, which never lets the
-      // browser render — without this, N queued tasks run in one frame).
+      // Awaiting a synchronous task only yields a MICROtask, which never lets the browser render.
       if (performance.now() - sliceStart > SLICE_BUDGET_MS) {
         await new Promise((resolve) => setTimeout(resolve, 0));
         sliceStart = performance.now();
       }
       const { task } = this.queue.shift()!;
-      // The budget must measure SYNCHRONOUS main-thread time only. A task
-      // that awaits a worker round-trip suspends across a macrotask boundary
-      // — the browser already got its render turn there — but the wall-clock
-      // check above counted that idle wait, exhausted the budget every time,
-      // and inserted a (latency-adding) setTimeout yield between every such
-      // task. A self-rearming zero-timeout races the task: it can only fire
-      // while the task is suspended past a macrotask boundary, and each fire
-      // restarts the slice clock at that boundary (so only the task's
-      // synchronous tail after the last suspension keeps accumulating).
-      // Purely synchronous tasks resolve through microtasks alone — the
-      // timer never fires and their full cost still counts toward the slice.
+      // The budget must count SYNCHRONOUS time only: a task awaiting a worker
+      // round-trip suspends across a macrotask boundary (the browser already
+      // rendered), but wall-clock counted that wait and forced a yield after every
+      // such task. This self-rearming zero-timeout can only fire while the task is
+      // suspended, and each fire restarts the slice clock at that boundary.
       let boundaryTimer: ReturnType<typeof setTimeout>;
       const onMacrotaskBoundary = () => {
         sliceStart = performance.now();

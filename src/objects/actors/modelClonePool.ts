@@ -2,59 +2,23 @@ import * as THREE from "three";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { prepareActorMaterial } from "./Actor";
 
-/**
- * Pool of prepared GLTF model clones, keyed by (model url | quantization
- * override). Used by <ModelActor>.
- *
- * Spawn churn (despawn behind the player, respawn ahead) used to re-run the
- * full clone pipeline on EVERY mount: scene clone, traversals, material
- * clones + shader patches (quantization, lamp glow), skeleton rebind,
- * bounding-box measure — and the matching unmount disposed it all again. A
- * released clone is instead parked here and handed back fully prepared, so a
- * respawn costs a map lookup + a material opacity reset.
- *
- * Safety properties:
- *  - Clones are domain-agnostic (keyed by GLTF url), so pools deliberately
- *    survive domain switches — same policy as the geometry/texture/building
- *    caches (see world/domains/reset.ts). Materials WITHOUT a quantization
- *    override share the live global uniform (utils/quantization), so a domain
- *    changing the global grid is picked up automatically; overrides are baked
- *    per material, which is why the override value is part of the pool key.
- *  - Release is DEFERRED one macrotask and cancellable (reclaimModelClone):
- *    React 18 StrictMode re-runs effects (cleanup + setup) synchronously in
- *    dev, and an immediate release would let another component adopt a scene
- *    object still mounted in this component's tree.
- *  - The pool is bounded per key; overflow disposes exactly what the old
- *    per-mount teardown disposed — the material clones and each shared cloned
- *    skeleton's bone texture. Geometry is SHARED with the source GLTF scene
- *    and is never disposed here.
- */
+// Pool of prepared GLTF clones keyed by (model | quantization override).
+// Pools survive domain switches (clones are domain-agnostic); the override is
+// part of the key because it is BAKED into the materials, while no-override
+// materials follow the live global uniform. Geometry is shared with the
+// source GLTF and never disposed here.
 
-// Sized past ActorPool's MAX_MOUNTS_PER_BATCH (20): a batch that despawns
-// and respawns a wave of the same model should find every clone parked.
+// Past ActorPool's MAX_MOUNTS_PER_BATCH (20), so a despawn+respawn wave of one model finds every clone parked.
 const MAX_POOLED_PER_KEY = 24;
-/** Slack on the rest-pose bounds of skinned meshes, so an animated pose
- *  reaching past the bind pose isn't culled. Conservative is free here —
- *  ModelActor does its own (tighter) distance/frustum test on top. */
+/** Rest-pose bounds slack so an animated pose isn't culled. */
 const SKINNED_BOUNDS_PAD = 1.5;
 
-// ── Root-relative skinning (float32 far-from-origin fix) ───────────────────
-// three's stock Skeleton.update writes bone.matrixWorld × boneInverse — an
-// ABSOLUTE world matrix — into the float32 bone texture, and the shader
-// cancels those huge translations against bindMatrixInverse (≈ inverse mesh
-// world, also huge) PER VERTEX in float32. Far from the world origin the
-// cancellation loses precision and skinned actors (beebles) visibly jitter,
-// growing with distance — the same failure class the coordinate-precision
-// rules cover for static geometry (see CLAUDE.md).
-//
-// Fix: store ROOT-RELATIVE bone matrices (rootWorld⁻¹ × boneWorld ×
-// boneInverse — the huge translations cancel on the CPU in float64), and
-// freeze each skinned mesh's bindMatrixInverse at its CONSTANT root-relative
-// value (mesh nodes never move relative to their model root; only bones
-// animate). Mathematically identical — meshWorld⁻¹·boneWorld ≡
-// meshRel⁻¹·(rootWorld⁻¹·boneWorld) — but every float32-stored intermediate
-// (bone texture, bind uniforms) stays model-sized. Covers the GPU skinning
-// path AND the CPU one (applyBoneTransform — raycasts, skinned bounds).
+// Root-relative skinning (see CLAUDE.md → Coordinate Precision, "Skinned
+// actors"): stock skinning cancels ABSOLUTE bone matrices against
+// bindMatrixInverse per vertex in float32, so beebles jitter far from the
+// origin. Bone matrices are stored root-relative (cancelled in float64 here)
+// and each mesh's bindMatrixInverse is frozen at its constant root-relative
+// value. Both the GPU path and the CPU path (applyBoneTransform) must agree.
 
 const _boneOffset = new THREE.Matrix4();
 const _identityMatrix = new THREE.Matrix4();
@@ -65,10 +29,7 @@ const _skinnedVertex = new THREE.Vector3();
 
 class RootRelativeSkeleton extends THREE.Skeleton {
   private readonly root: THREE.Object3D;
-  /** root.matrixWorld⁻¹ as of the last update() — identity until then, which
-   *  is correct while the fresh clone is still detached at the origin. Shared
-   *  with applyBoneTransformRootRelative so the CPU path doesn't invert a
-   *  matrix per vertex. */
+  /** Identity until the first update(), correct while the detached clone sits at the origin. */
   readonly rootInverse = new THREE.Matrix4();
 
   constructor(bones: THREE.Bone[], boneInverses: THREE.Matrix4[], root: THREE.Object3D) {
@@ -81,9 +42,6 @@ class RootRelativeSkeleton extends THREE.Skeleton {
     const boneInverses = this.boneInverses;
     const boneMatrices = this.boneMatrices;
 
-    // The renderer calls update() after the scene graph's matrixWorld pass,
-    // so root.matrixWorld is current. Inverting here is float64 (JS numbers);
-    // one extra 4×4 multiply per bone is noise next to the skinning itself.
     this.rootInverse.copy(this.root.matrixWorld).invert();
 
     for (let i = 0, il = bones.length; i < il; i++) {
@@ -98,15 +56,10 @@ class RootRelativeSkeleton extends THREE.Skeleton {
   }
 }
 
-/** three's stock applyBoneTransform pairs the ABSOLUTE bone.matrixWorld with
- *  bindMatrixInverse (normally ≈ meshWorld⁻¹, so the two cancel into mesh-LOCAL
- *  space). Ours is frozen at the root-relative value, so the stock version
- *  returns near-WORLD-space points — and every caller (computeBoundingSphere /
- *  computeBoundingBox / raycast) then applies matrixWorld on top, DOUBLING the
- *  object's world position: the culling sphere ends up thousands of units away
- *  from the mesh, and skinned actors vanish the moment the sphere's constant
- *  offset subtends more than the FOV (i.e. as the player gets CLOSE). Inserting
- *  the root inverse restores the cancellation the frozen bind expects. */
+/** Stock applyBoneTransform reads the ABSOLUTE bone.matrixWorld, so with the
+ *  frozen bind it returned near-world-space points that callers (bounds,
+ *  raycast) re-multiplied by matrixWorld — a culling sphere at twice the
+ *  actor's position, and beebles vanished as the player approached. */
 function applyBoneTransformRootRelative(
   this: THREE.SkinnedMesh,
   index: number,
@@ -134,10 +87,7 @@ function applyBoneTransformRootRelative(
   return vector.applyMatrix4(this.bindMatrixInverse);
 }
 
-/** Object3D's updateMatrixWorld WITHOUT SkinnedMesh's attached-mode sync
- *  (which would overwrite bindMatrixInverse with the huge inverse world
- *  matrix every frame) — ours is frozen at its constant root-relative value,
- *  the pairing partner of RootRelativeSkeleton's bone matrices. */
+/** SkinnedMesh's attached-mode sync would overwrite the frozen bindMatrixInverse every frame. */
 function updateMatrixWorldKeepBind(this: THREE.SkinnedMesh, force?: boolean): void {
   THREE.Object3D.prototype.updateMatrixWorld.call(this, force);
 }
@@ -146,36 +96,20 @@ export interface PooledModelClone {
   key: string;
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
-  /** Deduped material clones (fade targets) — patched once at creation. */
   materials: THREE.Material[];
-  /** Deduped cloned skeletons (bone textures disposed on pool eviction). */
   skeletons: THREE.Skeleton[];
   mixer: THREE.AnimationMixer | null;
-  /** Lazily bound actions (see ModelActor's getOrCreateAction). */
   actions: Map<string, THREE.AnimationAction>;
-  /** Unscaled bounding radius (max bbox dimension / 2), measured once in
-   *  bind pose at creation. Per-instance sphere radius = this × max(scale). */
+  /** Unscaled bind-pose bounding radius; per-instance radius = this × max(scale). */
   baseRadius: number;
-  /** Pending deferred release, cancellable by reclaimModelClone. */
   releaseTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const pools = new Map<string, PooledModelClone[]>();
 
-/** Clone a GLTF scene with correctly rebound skeletons.
- *
- * Single pass over the clone: bones indexed by name (the old per-bone
- * re-traversal was O(bones × scene nodes) and caused spawn-batch hitches).
- * Material clones are deduped by SOURCE material: a model like beeble.glb has
- * 10 meshes sharing a handful of materials, and cloning per MESH meant that
- * many extra materials to patch, fade-drive, and dispose per instance.
- * Skeletons are deduped by SOURCE skeleton, mirroring SkeletonUtils.clone:
- * beeble.glb has 10 skinned meshes all bound to ONE 24-joint skeleton, and a
- * per-mesh skeleton.clone() created 10 skeletons → 10× Skeleton.update() +
- * 10 bone-texture uploads per instance per frame. One clone per source
- * skeleton (bones rebound to the cloned bone instances by name), bound to
- * each mesh with its own bindMatrix.
- */
+// Materials and skeletons are deduped by SOURCE object: beeble.glb has 10
+// skinned meshes on ONE skeleton, and a skeleton per mesh meant 10×
+// Skeleton.update() + 10 bone-texture uploads per instance per frame.
 function cloneModelWithAnimations(gltf: any): {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
@@ -235,11 +169,8 @@ function cloneModelWithAnimations(gltf: any): {
     }
   }
 
-  // Freeze each skinned mesh's bindMatrixInverse at its ROOT-RELATIVE value
-  // (see RootRelativeSkeleton). The clone is detached here, so one world pass
-  // makes matrixWorld the root-chain transform; meshWorld⁻¹ · sceneWorld is
-  // then exactly the mesh-relative-to-root inverse, constant for the clone's
-  // lifetime — the attached-mode per-frame sync is disabled by the override.
+  // The clone is detached, so after one world pass meshWorld⁻¹ · sceneWorld is
+  // exactly the constant root-relative bind inverse (see RootRelativeSkeleton).
   scene.updateMatrixWorld(true);
   for (const node of clonedSkinned) {
     node.bindMatrixInverse.copy(node.matrixWorld).invert().multiply(scene.matrixWorld);
@@ -250,9 +181,6 @@ function cloneModelWithAnimations(gltf: any): {
   return { scene, animations, skinnedMeshes: clonedSkinned };
 }
 
-/** Fresh clone, fully prepared: materials patched (quantization + lamp glow),
- *  fade state initialized, GPU warm draw queued, mixer created, bounds
- *  measured. Runs ONCE per pooled record — reuses skip all of it. */
 const createClone = (key: string, gltf: any, quantization: number | undefined): PooledModelClone => {
   const { scene, animations, skinnedMeshes } = cloneModelWithAnimations(gltf);
 
@@ -274,9 +202,6 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
           mat.opacity = 0;
           (mat as any).fog = false;
 
-          // ALL shared actor material logic in one call — quantization, lamp
-          // glow, world curvature (see actors/Actor.tsx). A new world-wide
-          // effect is added there, never here.
           prepareActorMaterial(mat, {
             quantization,
             skipQuantization: child.userData?.skipQuantization,
@@ -286,32 +211,19 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
         mesh.frustumCulled = true;
         mesh.castShadow = false;
         mesh.receiveShadow = false;
-        // Warm the GPU at creation: force one real draw so this model type's
-        // shader programs link and its textures/buffers upload NOW (creation
-        // is staggered by spawn batches) instead of inside gl.render the
-        // frame the player first LOOKS at one — measured as 50-90ms
-        // render-internal spikes. ModelActor's warm frames keep the group
-        // visible long enough for that draw to actually happen.
+        // Deferring program link + uploads to the first LOOK was a 50-90ms render spike.
         uploadOnFirstDraw(mesh);
       }
     }
   });
 
-  // Bind-pose bounds, measured once (the scene is detached and untransformed
-  // here, so this is the model's own extent — instances scale it). This also
-  // populates each skinned mesh's cached local boundingBox, since Box3
-  // computes and keeps one per mesh.
   const bbox = new THREE.Box3().setFromObject(scene);
   const size = new THREE.Vector3();
   bbox.getSize(size);
 
-  // FREEZE the skinned meshes' own culling/raycast bounds here, in rest pose
-  // while the clone still sits at the origin. three otherwise computes them
-  // LAZILY at the first frustum test — i.e. once the actor is already out at
-  // its spawn coordinates — and caches the result for the clone's whole life
-  // (pool reuse included), so a stale, world-sized sphere would keep culling
-  // the mesh at the wrong place. Padded because the rest pose is not the
-  // widest pose an animation reaches.
+  // three computes skinned bounds LAZILY at the first frustum test — out at
+  // the spawn coordinates — and caches them for the clone's whole pooled life.
+  // Freeze them here, in rest pose at the origin.
   for (const node of skinnedMeshes) {
     if (node.boundingBox === null) node.computeBoundingBox();
     if (node.boundingSphere === null) node.boundingSphere = new THREE.Sphere();
@@ -335,7 +247,6 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
   };
 };
 
-/** Per-instance GPU resources — only ever run on pool-overflow eviction. */
 const disposeClone = (clone: PooledModelClone): void => {
   for (const mat of clone.materials) mat.dispose();
   for (const skeleton of clone.skeletons) skeleton.dispose();
@@ -345,13 +256,10 @@ const disposeClone = (clone: PooledModelClone): void => {
 const poolKey = (model: string, quantization: number | undefined): string =>
   `${model}|${quantization ?? "global"}`;
 
-/** A PARKED clone only — null on a pool miss. The cheap path a mount can take
- *  synchronously during render; a miss falls back to the (heavy, queued)
- *  acquireModelClone. Reused clones come back with their fade state reset. */
+/** Cheap enough to call synchronously in render; null on a pool miss. */
 export const acquirePooledModelClone = (model: string, quantization: number | undefined): PooledModelClone | null => {
   const clone = pools.get(poolKey(model, quantization))?.pop();
   if (!clone) return null;
-  // Reset shared state for the new life: the object fades in from zero.
   for (const mat of clone.materials) {
     mat.opacity = 0;
     mat.transparent = true;
@@ -359,10 +267,7 @@ export const acquirePooledModelClone = (model: string, quantization: number | un
   return clone;
 };
 
-/** Get a prepared clone — pooled if one is parked, freshly created otherwise.
- *  Creation is the heavy path (scene deep-clone, material clones + shader
- *  patches, skeleton rebind, bounds measure): callers run it from a task
- *  queue, never inside a React render. */
+/** Heavy on a miss (deep clone + patches + rebind): run from a task queue, never in render. */
 export const acquireModelClone = (
   model: string,
   gltf: any,
@@ -370,9 +275,7 @@ export const acquireModelClone = (
 ): PooledModelClone =>
   acquirePooledModelClone(model, quantization) ?? createClone(poolKey(model, quantization), gltf, quantization);
 
-/** Cancel a pending deferred release — called from the owning component's
- *  effect setup so a StrictMode remount keeps its clone. No-op when nothing
- *  is pending. */
+/** Cancels a pending release so a StrictMode remount keeps its clone. */
 export const reclaimModelClone = (clone: PooledModelClone): void => {
   if (clone.releaseTimer !== null) {
     clearTimeout(clone.releaseTimer);
@@ -380,7 +283,9 @@ export const reclaimModelClone = (clone: PooledModelClone): void => {
   }
 };
 
-/** Return a clone to the pool (deferred one macrotask — see module doc). */
+/** Deferred one macrotask: React 18 StrictMode re-runs cleanup + setup
+ *  synchronously, and an immediate release let another component adopt a
+ *  scene still mounted in this one's tree. */
 export const releaseModelClone = (clone: PooledModelClone): void => {
   if (clone.releaseTimer !== null) return;
   clone.releaseTimer = setTimeout(() => {

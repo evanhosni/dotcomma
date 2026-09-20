@@ -1,16 +1,9 @@
 import type * as THREE from "three";
 
-/**
- * The beeble "ascend" visual: every mesh morphs toward a sphere while the
- * group scales up. Shared by the local state machine (stateMachine.ts) and
- * the networked beeble (Beeble.tsx, clip "ascend" from the server).
- *
- * The model's geometry is SHARED with the source GLTF (and the clone itself
- * is POOLED — see modelClonePool). Every mesh gets a private clone to morph,
- * and dispose() puts the shared geometry back and frees the clones: without
- * it every ascended beeble leaked its vertex buffers AND handed a
- * sphere-morphed body to the next beeble that reused its pooled clone.
- */
+// The "ascend" sphere morph. Geometry is SHARED with the source GLTF and the
+// clone is POOLED, so each mesh morphs a private clone and dispose() must
+// restore the original — otherwise the next beeble reusing the clone
+// inherited a sphere-morphed body, and the buffers leaked.
 
 interface MorphTarget {
   posAttr: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
@@ -19,9 +12,7 @@ interface MorphTarget {
 }
 
 export interface Inflate {
-  /** Advance the morph. Saturates at t = 1 and then writes nothing. */
   update(dt: number): void;
-  /** Restore shared geometry, free clones, reset scale. */
   dispose(): void;
 }
 
@@ -67,8 +58,7 @@ export const beginInflate = (group: THREE.Object3D): Inflate => {
     update(dt) {
       if (done) return;
       t = Math.min(t + dt * INFLATE_RATE, 1);
-      // The morph saturates at t=1 — ONE final write there, then stop (this
-      // used to rewrite + re-upload every vertex buffer every frame forever).
+      // One final write at t=1, then stop — this used to re-upload every buffer every frame forever.
       for (const m of targets) {
         const arr = m.posAttr.array as Float32Array;
         for (let i = 0; i < arr.length; i++) arr[i] = m.original[i] + (m.sphere[i] - m.original[i]) * t;

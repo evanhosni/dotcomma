@@ -17,7 +17,6 @@ function getOrCreateCursor(): HTMLDivElement {
     backgroundColor: "#0f0",
     pointerEvents: "none",
     zIndex: "1000",
-    // Hidden until the canvas is focused (pointer lock) — see initCursor.
     display: "none",
   });
   document.body.appendChild(el);
@@ -29,8 +28,7 @@ let visibilityBound = false;
 export const initCursor = (): void => {
   const el = getOrCreateCursor();
 
-  // The crosshair only means anything while mouse-look is engaged — hide it
-  // whenever the canvas doesn't hold pointer lock (menus, before clicking in).
+  // The crosshair only means anything while pointer lock is held.
   if (!visibilityBound) {
     visibilityBound = true;
     const sync = () => {

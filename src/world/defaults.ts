@@ -41,6 +41,4 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
   },
 };
 
-/** Scene background when a <Domain> sets no `background` (the terrain
- *  domains show sky, so this is rarely visible). */
 export const DEFAULT_SCENE_BACKGROUND = "#555555";

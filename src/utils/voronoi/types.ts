@@ -11,16 +11,12 @@ export enum VORONOI_FUNCTION {
   GET_DISTANCE_TO_WALL = "get-distance-to-wall",
 }
 
-/** One jittered voronoi site on the horizontal (x/z) world plane and the
- *  element (region / biome) it was assigned. */
 export interface VoronoiGrid {
   point: PointXZ;
   element: any;
 }
 
-/** A voronoi cell wall: a segment on the horizontal plane between two
- *  circumcenters. Same shape as the inlined pipeline's Wall
- *  (utils/workers/vertexCompute.ts). */
+/** Same shape as vertexCompute's Wall. */
 export interface VoronoiWall {
   sx: number;
   sz: number;
@@ -51,7 +47,6 @@ export interface VoronoiGetDistanceToWallParams {
 
 interface VoronoiCreateParamsBase {
   seed: string;
-  /** Horizontal world position to classify (x/z — NOT a screen/plane x/y). */
   currentVertex: PointXZ;
   gridSize: number;
 }

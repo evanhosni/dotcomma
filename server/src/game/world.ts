@@ -4,51 +4,39 @@ import type { PhysicsWorld } from "./physics/world.js";
 import type { DomainId, MoveIntent, PlayerSnapshot, ServerMessage } from "../protocol.js";
 
 /**
- * THE GAME STATE — transport-agnostic. Nothing in here knows about sockets:
- * the transport (transport/ws.ts) calls these methods and hands in an
- * `Outbox` that delivers the resulting messages to session ids. This boundary
- * exists for ONE reason — so the transport could be swapped (e.g. for
- * Colyseus) without touching game logic — so it is kept exactly this thin.
+ * THE GAME STATE, transport-agnostic: the transport calls these methods and
+ * hands in an `Outbox`. The Outbox is the ONLY abstraction (so the transport
+ * could be swapped for e.g. Colyseus) — do not widen it.
  *
- * Sessions are EPHEMERAL presence: they live and die with the connection.
- * Persisted player data is a separate concern keyed by `identity`: loaded
- * once at connect (row created if missing), carried on the session as an
- * opaque blob, and written back under the WRITE POLICY below.
+ * WRITE POLICY — never on the tick: on disconnect if dirty, otherwise at most
+ * once per SAVE_INTERVAL_MS per player if dirty. Two tabs on one identity share
+ * a row: last write wins.
  *
- * WRITE POLICY — never on the tick:
- *   - on disconnect, if the blob changed since the last save;
- *   - otherwise at most once per SAVE_INTERVAL_MS per player, and only if it
- *     changed (flushDirty, driven by a coarse timer in index.ts).
- * Two sessions on one identity (two tabs) share a row: last write wins.
- *
- * Domains are ROOMS. A session is in exactly one; every broadcast is scoped
- * to a room. Moving between domains is a leave + a join, never a filter.
+ * Domains are ROOMS: every broadcast is scoped to one; a domain change is a
+ * leave + a join, never a filter.
  */
 
 export interface Session extends PlayerSnapshot {
-  /** Persistent anonymous identity (localStorage uuid) — NOT broadcast. */
+  /** NOT broadcast. */
   identity: string;
   domain: DomainId;
-  /** Server time of the last accepted move (for future authority/anti-teleport). */
+  /** For future authority / anti-teleport checks. */
   lastMoveAt: number;
-  /** Persisted blob (opaque). Mutate via setPlayerData/updatePlayerData so it is marked dirty. */
+  /** Mutate via setPlayerData/updatePlayerData so it is marked dirty. */
   data: PlayerData;
   dataDirty: boolean;
   dataSavedAt: number;
 }
 
-/** What the World needs from a transport: deliver to one, or to many. */
 export interface Outbox {
   send(sessionId: string, msg: ServerMessage): void;
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage, exceptSessionId?: string): void;
 }
 
 const GOLDEN_ANGLE_DEG = 137.508;
-/** Minimum gap between periodic saves of one player's blob. */
 export const SAVE_INTERVAL_MS = 30_000;
 const SPAWN_RING_RADIUS = 3;
 
-/** hsl → "#rrggbb" so clients receive a plain CSS color. */
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
   const lig = l / 100;
@@ -78,9 +66,8 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
 export class World {
   private readonly sessions = new Map<string, Session>();
   private readonly rooms = new Map<DomainId, Set<string>>();
-  /** Monotonic join counter — drives color and spawn-slot assignment. */
+  /** Monotonic; drives color and spawn-slot assignment. */
   private joinCount = 0;
-  /** Synced entities (NPCs, doors) — see entities/manager.ts. */
   readonly entities: EntityManager;
 
   constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
@@ -100,7 +87,6 @@ export class World {
     }
   }
 
-  /** The world tick (index.ts, TICK_HZ): the server-side actor simulation. */
   tick(now = Date.now()): void {
     this.entities.tick(now);
   }
@@ -143,7 +129,7 @@ export class World {
     this.out.sendMany(room, { t: "leave", id: s.id });
   }
 
-  /** Spawn slot: golden-angle ring so simultaneous joiners never stack. */
+  /** Golden-angle ring so simultaneous joiners never stack. */
   private nextSpawn(): { x: number; z: number } {
     const a = (this.joinCount * GOLDEN_ANGLE_DEG * Math.PI) / 180;
     const r = SPAWN_RING_RADIUS * (1 + (this.joinCount % 3) * 0.5);
@@ -152,7 +138,7 @@ export class World {
 
   addSession(id: string, identity: string, domain: DomainId): Session {
     const spawn = this.nextSpawn();
-    const record = loadPlayer(identity); // creates the row on first ever connect
+    const record = loadPlayer(identity);
     const s: Session = {
       id,
       identity,
@@ -185,15 +171,12 @@ export class World {
     if (s.dataDirty) this.persist(s);
   }
 
-  // ── persistence ──────────────────────────────────────────────────────────
-
   private persist(s: Session): void {
     savePlayerData(s.identity, s.data);
     s.dataDirty = false;
     s.dataSavedAt = Date.now();
   }
 
-  /** Replace a player's blob wholesale (marks dirty; saved per the write policy). */
   setPlayerData(id: string, data: PlayerData): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -201,7 +184,6 @@ export class World {
     s.dataDirty = true;
   }
 
-  /** Shallow-merge into a player's blob (marks dirty). */
   updatePlayerData(id: string, patch: PlayerData): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -209,7 +191,7 @@ export class World {
     s.dataDirty = true;
   }
 
-  /** Periodic save sweep — call from a coarse timer, never from a tick. */
+  /** Call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
     let n = 0;
     for (const s of this.sessions.values()) {
@@ -221,7 +203,7 @@ export class World {
     return n;
   }
 
-  /** Shutdown: save everything that changed, regardless of interval. */
+  /** Shutdown: ignores the interval. */
   saveAll(): number {
     let n = 0;
     for (const s of this.sessions.values()) {
@@ -233,9 +215,8 @@ export class World {
     return n;
   }
 
-  /** NOT authoritative (yet): the client's intent is accepted and relayed.
-   *  Authority slots in here — validate against lastMoveAt/speed, then relay
-   *  the CORRECTED state instead of the claimed one. */
+  /** NOT authoritative (yet): the claimed intent is relayed as-is. Authority would
+   *  slot in here (validate against lastMoveAt/speed, relay the corrected state). */
   move(id: string, m: MoveIntent): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -253,8 +234,6 @@ export class World {
   changeDomain(id: string, domain: DomainId): void {
     const s = this.sessions.get(id);
     if (!s || s.domain === domain) return;
-    // Everything it was rendering belongs to the old domain; the client
-    // re-registers what it mounts in the new one.
     this.entities.removeSession(id);
     this.leaveRoom(s);
     s.domain = domain;

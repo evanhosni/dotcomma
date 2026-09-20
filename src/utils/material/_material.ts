@@ -5,12 +5,8 @@ import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
 import { Biome } from "../../world/types";
 import commonShader from "../../world/shaders/common.glsl";
 
-/**
- * EXPERIMENT: let real scene point lights (CityLights beacons, indoor rig)
- * shade the otherwise-unlit terrain. Adds a NUM_POINT_LIGHTS lambert loop per
- * terrain fragment — flip to false to restore the fully unlit terrain if the
- * frame cost isn't worth it.
- */
+/** EXPERIMENT: scene point lights shade the otherwise-unlit terrain (a per-fragment
+ *  NUM_POINT_LIGHTS lambert loop). Flip off if the frame cost isn't worth it. */
 export const TERRAIN_POINT_LIGHTS = true;
 
 export namespace _material {
@@ -52,32 +48,24 @@ export namespace _material {
       riverTexture?: THREE.Texture;
       biomeTexture?: THREE.Texture;
       varyingDeclarations?: string[];
-      /** Preprocessor defines for both shaders (values as GLSL literals). */
       defines?: Record<string, string>;
     } = {},
   ): Promise<THREE.ShaderMaterial> => {
     const { riverTexture, biomeTexture, varyingDeclarations = [], defines = {} } = options;
-    // Collect all uniforms and fragment shaders from biomes
-    // uNightBlend / the lamp-grid uniforms are SHARED objects — updated by
-    // the day/night cycle and StreetLampPool, so every terrain material
-    // dims and catches lamp light in lockstep.
+    // uNightBlend and the lamp-grid uniforms are SHARED objects so every terrain material dims in lockstep.
     const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS };
 
-    // Scene-light uniforms (pointLights[], ambient, etc.) — the renderer
-    // writes light state into these each frame when material.lights is true.
-    // They are struct/array uniforms, so they must NOT go through the scalar
-    // uniform-declaration generator below (see LIGHTS_UNIFORM_KEYS filter).
+    // Scene-light uniforms are struct/array uniforms the renderer writes (material.lights);
+    // they must NOT go through the scalar declaration generator below.
     if (TERRAIN_POINT_LIGHTS) {
       Object.assign(combinedUniforms, THREE.UniformsUtils.clone(THREE.UniformsLib.lights));
     }
     const LIGHTS_UNIFORM_KEYS = new Set(Object.keys(THREE.UniformsLib.lights));
 
-    // Add river texture if provided (between regions)
     if (riverTexture) {
       combinedUniforms.rivertexture = { value: riverTexture };
     }
 
-    // Add biome boundary texture if provided (between biomes within a region)
     if (biomeTexture) {
       combinedUniforms.biometexture = { value: biomeTexture };
     }
@@ -88,26 +76,19 @@ export namespace _material {
       if (biome.getMaterial) {
         const biomeMaterial = await biome.getMaterial();
 
-        // Merge uniforms
         Object.assign(combinedUniforms, biomeMaterial.uniforms);
 
-        // Strip out all declarations (varying, uniform)
-        let cleanShader = biomeMaterial.fragmentShader
-          // Remove varying declarations
+        let strippedFragmentShader = biomeMaterial.fragmentShader
           .replace(/varying\s+\w+\s+\w+;/g, "")
-          // Remove uniform declarations (any type)
           .replace(/uniform\s+\w+\s+\w+;/g, "")
-          // Remove extra whitespace/newlines
           .replace(/^\s*[\r\n]/gm, "");
 
-        // Extract the main function body and rename it to biome_frag
-        const fragmentBody = cleanShader.replace(/void main\(\) \{/, `void ${biome.name}_frag() {`).trim();
+        const fragmentBody = strippedFragmentShader.replace(/void main\(\) \{/, `void ${biome.name}_frag() {`).trim();
 
         fragmentFunctions.push(fragmentBody);
       }
     }
 
-    // Build the combined fragment shader
     const fragmentShader = `
     ${varyingDeclarations.join("\n    ")}
 
@@ -143,7 +124,6 @@ export namespace _material {
         })
         .join("\n      ")}
 
-      // Global river blending
       if (vDistanceToRiverCenter < 50.0) {
         vec2 riverUV = fract(vWorldUv);
         vec4 riverColor = texture2D(rivertexture, riverUV);
@@ -151,38 +131,26 @@ export namespace _material {
         gl_FragColor = mix(riverColor, gl_FragColor, riverBlend);
       }
 
-      // Day/night: terrain is unlit, so scene-light dimming can't reach it —
-      // darken directly by the shared night blend.
       ${nightDimGLSL("gl_FragColor.rgb")}
 
-      // Street-lamp glow: real gradient pools of light on the road (added
-      // AFTER the night dim so lamps genuinely brighten the ground). Uses the
-      // ABSOLUTE world position — lamp positions in the grid are absolute,
-      // and the wrapped vWorldPos aliased the glow onto the wrong chunks.
+      // Lamp glow after the night dim so lamps brighten the ground; ABSOLUTE
+      // position — the wrapped one aliased the glow onto the wrong chunks.
       ${lampGlowAccumGLSL("vWorldPosAbs")}
       gl_FragColor.rgb += lampGlowSum * 0.25;
 
       ${
         TERRAIN_POINT_LIGHTS
-          ? `// EXPERIMENT (TERRAIN_POINT_LIGHTS): scene point lights shade the
-      // terrain — lambert with three's physical distance attenuation.
-      // pointLights[i].position is VIEW-space, color is premultiplied by
-      // intensity; parked pool lights have intensity 0 and contribute nothing.
-      // vWorldPosAbs, not vWorldPos: the view matrix expects an ABSOLUTE
-      // world position, and the wrapped one lit the wrong chunks.
-      // Gated on the night blend: every scene point light (city beacons)
-      // follows the night ramp, so by day the whole block — including the
-      // two mat4 transforms + normalize that ran BEFORE the per-light
-      // zero-color skip — is dead work on every terrain fragment.
+          ? `// EXPERIMENT (TERRAIN_POINT_LIGHTS): lambert from the scene point lights.
+      // pointLights[i].position is VIEW-space, color premultiplied by intensity.
+      // ABSOLUTE position (wrapped lit the wrong chunks); gated on the night
+      // blend because every scene point light follows it — by day this is dead work.
       #if NUM_POINT_LIGHTS > 0
       if (uNightBlend > 0.001) {
         vec3 plViewPos = (viewMatrix * vec4(vWorldPosAbs, 1.0)).xyz;
         vec3 plViewNormal = normalize((viewMatrix * vec4(vWorldNormal, 0.0)).xyz);
         vec3 pointLightSum = vec3(0.0);
         for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
-          // Parked pool lights (intensity 0 → premultiplied color 0) skip the
-          // whole falloff math — a uniform-coherent branch, so the usual
-          // 5-7 dead lights cost ~nothing per fragment.
+          // Parked pool lights have color 0 — uniform-coherent skip.
           vec3 lCol = pointLights[i].color;
           if (dot(lCol, lCol) < 1e-6) continue;
           vec3 lVec = pointLights[i].position - plViewPos;
@@ -201,17 +169,13 @@ export namespace _material {
           : ""
       }
 
-      // Screen-space hash dither — the night dim and point-light falloff are
-      // slow gradients that band into visible rings at 8 bits.
+      // Slow gradients band into rings at 8 bits without the dither.
       ${ditherGLSL("gl_FragColor.rgb")}
     }
   `;
 
     return new THREE.ShaderMaterial({
-      // wireframe: true,
       uniforms: combinedUniforms,
-      // `#define`s prepended to BOTH shaders by three (WORLD_WRAP, the city
-      // band widths) — see world/terrain/material.ts.
       defines,
       vertexShader,
       fragmentShader,

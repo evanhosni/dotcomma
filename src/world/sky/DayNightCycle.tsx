@@ -5,24 +5,8 @@ import * as THREE from "three";
 import { isMainRenderFrame } from "../../vfx/frameCap";
 import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, MOON_DIRECTION, NIGHT_DURATION_MS, setNightBlend, SUN_DIRECTION, tickWindowLights } from "../../lighting/dayNight";
 
-/**
- * Day/night cycle: a jittery low-poly sun parked in one spot of the sky, a
- * crescent moon on the opposite side, and stars that fade in at night.
- *
- * The sun sits still through the day, then over `transitionMs` it shrinks and
- * degrades (coarser vertex quantization → even lower poly) until it's gone,
- * while the moon does the reverse; at sunrise the roles swap. Sky colors ride
- * the same blend (SkyboxSystem mixes toward the night palette).
- *
- * Sun and moon are flat billboarded silhouettes (matching the reference orb):
- * an irregular ~11-gon disc and a crescent, whose vertices jitter
- * INDEPENDENTLY on a fixed tick with exaggerated quantization — they wobble
- * even while the player stands still. The whole celestial group follows the
- * camera every frame, so nothing ever leaves render distance.
- */
-
 const SUN_DISTANCE = 5000;
-const SUN_SIZE = 1000; // silhouette radius in world units
+const SUN_SIZE = 1000; // silhouette radius, world units
 const SUN_ROUNDNESS = 0.75; // 1 = perfect circle, 0 = very irregular blob
 const SUN_VERTICES_COUNT = 10; // rim vertices — fewer = chunkier
 const MOON_DISTANCE = 5000;
@@ -35,21 +19,18 @@ const STAR_COUNT = 550;
 const SUN_DIR = SUN_DIRECTION;
 const MOON_DIR = MOON_DIRECTION;
 
-const JITTER_INTERVAL_S = 0.09; // vertex re-jitter tick
+const JITTER_INTERVAL_S = 0.09;
 const JITTER_AMPLITUDE = 0.07; // × radius, per tick, per vertex
-const QUANT_BASE = 0.13; // × radius — the "exaggerated quantization" grid
-const QUANT_DEGRADE = 0.55; // extra grid coarseness at full shrink (even lower poly)
+const QUANT_BASE = 0.13; // × radius — the exaggerated quantization grid
+const QUANT_DEGRADE = 0.55; // extra grid coarseness at full shrink
 
 interface JitterBody {
   geometry: THREE.BufferGeometry;
-  /** Base local position per vertex (the un-jittered silhouette). */
+  /** Un-jittered local positions. */
   base: Float32Array;
   radius: number;
 }
 
-/** Irregular low-poly disc (the sun): center vertex + `rim` vertices with
- *  uneven radii — vaguely round, clearly asymmetrical. `roundness` 1 = a
- *  regular polygon, 0 = heavily uneven radii and angles. */
 const buildDisc = (radius: number, rim: number, roundness: number): JitterBody => {
   const irregularity = 1 - Math.min(Math.max(roundness, 0), 1);
   const positions: number[] = [0, 0, 0];
@@ -66,9 +47,6 @@ const buildDisc = (radius: number, rim: number, roundness: number): JitterBody =
   return { geometry, base: new Float32Array(positions), radius };
 };
 
-/** Low-poly crescent (the moon): outer arc + concave inner arc.
- *  `vertexCount` is the total boundary vertex budget across both arcs;
- *  `roundness` 1 = clean arcs, 0 = heavily uneven arc radii. */
 const buildCrescent = (radius: number, vertexCount: number, roundness: number): JitterBody => {
   const irregularity = 1 - Math.min(Math.max(roundness, 0), 1);
   const wobble = (): number => 1 + (Math.random() - 0.5) * 0.5 * irregularity;
@@ -88,8 +66,7 @@ const buildCrescent = (radius: number, vertexCount: number, roundness: number): 
     else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
   }
   const phi = Math.atan2(iy, ix - innerCx); // tip angle on the inner circle
-  // Inner (concave) edge: from the lower tip back to the upper tip, bulging
-  // through the crescent's middle (angle runs -phi → phi - 2π).
+  // Concave inner edge, lower tip back to upper tip (angle runs -phi → phi - 2π).
   for (let i = 1; i < innerSegs; i++) {
     const a = -phi + ((2 * phi - Math.PI * 2) * i) / innerSegs;
     const r = innerR * wobble();
@@ -100,9 +77,7 @@ const buildCrescent = (radius: number, vertexCount: number, roundness: number): 
   return { geometry, base, radius };
 };
 
-/** Re-jitter every vertex independently and snap to an exaggerated grid.
- *  `degrade` (0..1) coarsens the grid — the shrinking body collapses into
- *  fewer distinct positions, reading as "even more low poly". */
+/** `degrade` (0..1) coarsens the grid so the shrinking body reads as even lower poly. */
 const jitterBody = (body: JitterBody, degrade: number): void => {
   const attr = body.geometry.getAttribute("position") as THREE.BufferAttribute;
   const amp = body.radius * JITTER_AMPLITUDE;
@@ -111,7 +86,6 @@ const jitterBody = (body: JitterBody, degrade: number): void => {
   for (let i = 0; i < arr.length; i += 3) {
     arr[i] = Math.round((body.base[i] + (Math.random() * 2 - 1) * amp) / q) * q;
     arr[i + 1] = Math.round((body.base[i + 1] + (Math.random() * 2 - 1) * amp) / q) * q;
-    // keep a little depth wobble so the silhouette edge catches the quantized look
     arr[i + 2] = Math.round(((Math.random() * 2 - 1) * amp * 0.5) / q) * q;
   }
   attr.needsUpdate = true;
@@ -187,22 +161,10 @@ export const DayNightCycle = ({
     };
   }, [sun, moon, stars, sunMaterial, moonMaterial, starMaterial]);
 
-  // Precompile the night-only shader programs (moon, stars) at MOUNT.
-  // Materials compile lazily on their first visible render, which otherwise
-  // lands at the exact frame the first dusk begins — a synchronous program
-  // compile+link (expensive under Windows/ANGLE) that read as a "large frame
-  // drop right at nightfall". TWO traps, both hit historically:
-  // (1) gl.compile collects the scene LIGHTS only from the object it is
-  //     passed, and light COUNTS are part of three's program cache key —
-  //     compiling just the celestial group found zero lights, so its programs
-  //     never matched the real render. Precompile must see the SCENE.
-  // (2) gl.compile uses traverseVisible (verified in three r157), and the
-  //     moon/stars are `visible = false` all day — every scene-wide compile
-  //     pass silently SKIPPED exactly the materials this exists for. They
-  //     must be flipped visible for the duration of the compile call.
-  // Deferred one frame so the light-owning components (mounted in the same
-  // commit tree) are all in the scene first; the frame loop restores the
-  // real visibility on its next tick regardless.
+  // Precompile the night-only programs at mount (the nightfall hitch, see
+  // CLAUDE.md). Must compile the SCENE (light counts are in the program cache
+  // key), with the day-invisible moon/stars flipped visible (gl.compile uses
+  // traverseVisible), one frame late so the lights are mounted first.
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
       const celestial = [sunRef.current, moonRef.current, starsRef.current];
@@ -215,21 +177,15 @@ export const DayNightCycle = ({
   }, [gl, scene, camera]);
 
   const jitterTimer = useRef(0);
-  // First frames force the night-only objects through a REAL draw: gl.compile
-  // links their programs (effect above) but does NOT upload geometry buffers
-  // or touch lazy driver state — only an actual draw does. It's imperceptible:
-  // at day the moon renders at scale 0.001 and the stars at opacity 0.
+  // gl.compile links programs but only a REAL draw uploads buffers; the warm
+  // draws are imperceptible (moon at scale 0.001, stars at opacity 0).
   const warmFramesRef = useRef(2);
 
   useFrame((_, delta) => {
     const group = groupRef.current;
     if (!group) return;
 
-    // ---- Cycle phase → night blend (0 = day, 1 = night) ----
-    // SHARED WORLD CLOCK: the cycle is a function of server time (the
-    // connection's offset-corrected estimate, ±~50ms), so every player sees
-    // the same time of day. Until the first init it runs off local time and
-    // snaps to the server's at connect.
+    // Server clock, so every player sees the same time of day.
     const cycleMs = dayDurationMs + transitionMs + nightDurationMs + transitionMs;
     const t = getServerTime() % cycleMs;
     let blend: number;
@@ -243,7 +199,6 @@ export const DayNightCycle = ({
     const sunPresence = 1 - blend;
     const moonPresence = blend;
 
-    // ---- Follow the camera so the sky never leaves render distance ----
     group.position.copy(camera.position);
 
     const sunMesh = sunRef.current;
@@ -251,7 +206,7 @@ export const DayNightCycle = ({
     if (sunMesh) {
       sunMesh.visible = sunPresence > 0.02;
       sunMesh.scale.setScalar(Math.max(sunPresence, 0.001));
-      sunMesh.quaternion.copy(camera.quaternion); // flat silhouette faces the player
+      sunMesh.quaternion.copy(camera.quaternion);
     }
     if (moonMesh) {
       moonMesh.visible = moonPresence > 0.02;
@@ -263,10 +218,7 @@ export const DayNightCycle = ({
       starsRef.current.visible = blend > 0.01;
     }
 
-    // Warm-up draw (see warmFramesRef): keep everything visible for the first
-    // couple PRESENTED frames so buffers upload during load, not at first
-    // dusk. Counted against isMainRenderFrame — with an FPS cap active, a
-    // skipped tick draws nothing and must not consume a warm frame.
+    // Counted in PRESENTED frames: under an FPS cap a skipped tick draws nothing.
     if (warmFramesRef.current > 0) {
       if (isMainRenderFrame()) warmFramesRef.current--;
       if (sunMesh) sunMesh.visible = true;
@@ -274,7 +226,6 @@ export const DayNightCycle = ({
       if (starsRef.current) starsRef.current.visible = true;
     }
 
-    // ---- Independent vertex jitter on a fixed tick ----
     jitterTimer.current += delta;
     if (jitterTimer.current >= JITTER_INTERVAL_S) {
       jitterTimer.current = 0;

@@ -5,20 +5,13 @@ import { prepareActorMaterial } from "../objects/actors/Actor";
 import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./remotePlayerStore";
 
 /**
- * Renders every remote player in our domain as a capsule in their assigned
- * color, and drives ALL of them from ONE useFrame that mutates Object3Ds
- * directly. React state is touched only by the roster (join/leave).
- *
- * Motion model per player per frame:
- *   target  = lastPos + lastVel · min(age, MAX_EXTRAPOLATION)   (intent extrapolation)
- *   display += (target − display) · (1 − e^(−SMOOTH_RATE·dt))   (frame-rate-independent ease)
- * A stop intent carries v = 0, so extrapolation halts on its own; the age cap
- * bounds the damage of a lost/late correction. Yaw eases along the shortest
- * arc. The ONLY snaps: the first frame after spawn, and a target further than
- * TELEPORT_DISTANCE away (a respawn — easing across the map would look worse).
+ * ONE useFrame drives every remote capsule (React state only on join/leave):
+ *   target  = lastPos + lastVel · min(age, MAX_EXTRAPOLATION)
+ *   display += (target − display) · (1 − e^(−SMOOTH_RATE·dt))
+ * Never snap, except the first frame and a TELEPORT_DISTANCE jump (a respawn).
  */
 
-// The local player's capsule is height 2, radius 0.5 (Player.tsx) — match it.
+// The local player's capsule (Player.tsx): height 2, radius 0.5.
 const CAPSULE_RADIUS = 0.5;
 const CAPSULE_LENGTH = 1.0; // cylinder section = height − 2·radius
 
@@ -34,8 +27,6 @@ prepareActorMaterial(visorMaterial);
 const RemoteCapsule = ({ player }: { player: RemotePlayer }) => {
   const groupRef = useRef<THREE.Group>(null);
 
-  // One material per remote player (their color) — through the actor material
-  // patcher so curvature/quantization/lamp glow apply like any other actor.
   // Emissive keeps them legible in the home domain, which has no ambient light.
   const material = useMemo(() => {
     const m = new THREE.MeshStandardMaterial({
@@ -57,7 +48,7 @@ const RemoteCapsule = ({ player }: { player: RemotePlayer }) => {
   }, [player]);
 
   return (
-    <group ref={groupRef} position={[player.x, player.y, player.z]} rotation={[0, player.dry, 0]}>
+    <group ref={groupRef} position={[player.x, player.y, player.z]} rotation={[0, player.displayYaw, 0]}>
       <mesh geometry={capsuleGeometry} material={material} />
       {/* eye-line "visor" on the local +Z face so facing direction reads */}
       <mesh geometry={visorGeometry} material={visorMaterial} position={[0, 0.55, CAPSULE_RADIUS - 0.02]} />
@@ -80,17 +71,17 @@ export const RemotePlayers = () => {
       const obj = p.object;
       if (!obj) continue;
 
-      const age = Math.min((now - p.at) / 1000, MAX_EXTRAPOLATION_S);
-      const tx = p.px + p.vx * age;
-      const ty = p.py + p.vy * age;
-      const tz = p.pz + p.vz * age;
+      const age = Math.min((now - p.receivedAt) / 1000, MAX_EXTRAPOLATION_S);
+      const tx = p.targetX + p.vx * age;
+      const ty = p.targetY + p.vy * age;
+      const tz = p.targetZ + p.vz * age;
 
-      if (p.fresh) {
+      if (p.needsInitialPlacement) {
         p.x = tx;
         p.y = ty;
         p.z = tz;
-        p.dry = p.ry;
-        p.fresh = false;
+        p.displayYaw = p.ry;
+        p.needsInitialPlacement = false;
       } else {
         const dx = tx - p.x;
         const dy = ty - p.y;
@@ -104,11 +95,11 @@ export const RemotePlayers = () => {
           p.y += dy * k;
           p.z += dz * k;
         }
-        p.dry += wrapAngle(p.ry - p.dry) * k;
+        p.displayYaw += wrapAngle(p.ry - p.displayYaw) * k;
       }
 
       obj.position.set(p.x, p.y, p.z);
-      obj.rotation.y = p.dry;
+      obj.rotation.y = p.displayYaw;
     }
   });
 

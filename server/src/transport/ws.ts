@@ -12,19 +12,13 @@ import {
 } from "../protocol.js";
 
 /**
- * WebSocket transport. Owns the sockets and NOTHING about the game: it parses
- * frames, validates their shape, forwards them to the World, and implements
- * the World's Outbox over its socket map. The wire protocol itself is
- * documented in ../protocol.ts.
- *
- * HEARTBEAT (not optional): a socket whose peer vanished — laptop lid closed,
- * wifi dropped — often never fires `close`. Every HEARTBEAT_MS each socket is
- * protocol-pinged; one that has not ponged by the next sweep is terminated,
- * which DOES fire `close` and so removes the ghost from the world.
+ * Sockets and NOTHING about the game: validates frame shape, forwards to the
+ * World, implements its Outbox. Protocol in ../protocol.ts.
  */
 
+/** A vanished peer (lid closed, wifi dropped) often never fires `close`; a
+ *  socket that hasn't ponged by the next sweep is terminated, which does. */
 const HEARTBEAT_MS = 30_000;
-/** Dev-only: lets the client overwrite its persisted blob (plumbing tests). */
 const DEBUG_DATA_WRITES = process.env.DEBUG_DATA_WRITES === "1";
 const MAX_PAYLOAD_BYTES = 64 * 1024; // a registration batch of ~64 actors is ~6KB; headroom for state blobs
 const MAX_ENTITIES_PER_MESSAGE = 256;
@@ -32,7 +26,7 @@ const MAX_ID_LENGTH = 128;
 
 interface Conn {
   ws: WebSocket;
-  /** Session id once `hello` has been accepted; null before. */
+  /** null until `hello` has been accepted. */
   sessionId: string | null;
   isAlive: boolean;
 }
@@ -59,7 +53,7 @@ const parseMove = (raw: Record<string, unknown>): MoveIntent | null => {
   return { x, y, z, vx, vy, vz, ry };
 };
 
-/** Shape-validate an inbound frame. Anything odd → null → ignored. */
+/** Anything odd → null → ignored. */
 const parseClientMessage = (data: unknown): ClientMessage | null => {
   if (typeof data !== "object" || data === null) return null;
   const raw = data as Record<string, unknown>;
@@ -107,7 +101,6 @@ class SocketOutbox implements Outbox {
   }
 
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage, exceptSessionId?: string): void {
-    // Serialize once per broadcast, not once per recipient.
     let payload: string | null = null;
     for (const id of sessionIds) {
       if (id === exceptSessionId) continue;
@@ -122,7 +115,7 @@ class SocketOutbox implements Outbox {
 export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWorld) => {
   const wss = new WebSocketServer({ server, maxPayload: MAX_PAYLOAD_BYTES });
   const bySession = new Map<string, Conn>();
-  const all = new Set<Conn>(); // every open socket, hello'd or not — for the heartbeat sweep
+  const all = new Set<Conn>(); // hello'd or not — the heartbeat sweep
   const world = new World(new SocketOutbox(bySession), physics);
 
   wss.on("connection", (ws) => {
@@ -145,7 +138,6 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
       if (!msg) return;
 
       if (conn.sessionId === null) {
-        // The ONLY message accepted before hello is hello.
         if (msg.t !== "hello") return;
         const id = randomUUID();
         conn.sessionId = id;
@@ -157,7 +149,7 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
 
       switch (msg.t) {
         case "hello":
-          return; // duplicate hello → ignore
+          return;
         case "move":
           world.move(conn.sessionId, msg);
           return;

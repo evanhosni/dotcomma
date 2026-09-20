@@ -4,7 +4,6 @@ import { getMaterial } from "./material";
 import { DUST_BIOME_ID } from "../../../../../../constants";
 export { DUST_BIOME_ID };
 
-/** Desert biome: dusty dunes. */
 export const DustBiome = () => (
   <Biome name="dust" id={DUST_BIOME_ID} joinable blendable>
     <Terrain

@@ -15,41 +15,17 @@ varying vec2 vWorldUv;
 varying float vSlopeAngle;
 varying float vHeight;
 varying vec3 vWorldNormal;
-varying vec3 vWorldPos;
+varying vec3 vWorldPosWrapped;
 varying vec3 vWorldPosAbs;
 
-// quantizeWorldPos() and curveViewPos() (world curvature — "walking on a
-// globe", see vfx/curvature.ts; applied to the VIEW-space position only, so
-// vWorldPos/vWorldNormal and every distance varying stay FLAT) are PREPENDED
-// by world/terrain/material.ts from their single sources
-// (_quantization.QUANTIZE_GLSL, _curvature.CURVE_GLSL) — the same chunks every
-// patched material and the foliage shader use. WORLD_WRAP arrives as a
-// material define (world/shaders/constants.ts).
-
-// ── Distance-from-origin precision ───────────────────────────────────────
-// NOTHING in this shader may form an ABSOLUTE world coordinate. GLSL is
-// float32: its resolution is ~0.008u at 100k units from the world origin and
-// ~0.06u at 1M. That is enough to (a) swamp the 0.025u quantization grid, so
-// vertices flip lattice cells every frame and the terrain visibly swims,
-// (b) stair-step world-space texture UVs, and (c) blow up the city shader's
-// fwidth() seam guards, which compare a varying's gradient against the
-// world-space gradient of vWorldPos. Past ~420k units `worldPos / 0.025`
-// leaves float32's exact-integer range entirely and the quantization
-// collapses into garbage geometry.
+// quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
+// by world/terrain/material.ts.
 //
-// So world position is built as (WRAPPED chunk origin + offset from that
-// origin). mat3() drops the translation, so the offset is chunk-sized and
-// exact wherever the chunk is, and modelViewMatrix[3] gives the chunk origin
-// in VIEW space already resolved on the CPU in float64.
-//
-// WORLD_WRAP is a common multiple of every world-space period downstream —
-// the 26.25u texture tile (×160), the 75u sidewalk tile (×56), the 200u fbm
-// cell (×21) — and of both quantization grids (0.025 ×168000, 0.2 ×21000),
-// so the wrap is INVISIBLE: fract()/tiling land on identical values and the
-// quantization lattice keeps its world phase. Chunk centers are always
-// multiples of 210 (=WORLD_WRAP/20), which makes the mod() below exact.
-// Anything new that reads vWorldPos with a world-space period must divide
-// WORLD_WRAP, or it will seam every 4200 units.
+// PRECISION (see CLAUDE.md, Coordinate Precision): NEVER form an absolute
+// world coordinate here — float32 swims the quantization grid past ~100k
+// units. World position = WRAPPED chunk origin + chunk-local offset, projected
+// through the CPU-resolved view-space origin. Any new world-space period read
+// from vWorldPosWrapped must divide WORLD_WRAP or it seams every 4200 units.
 
 void main() {
   vDistanceToBiomeBoundaryCenter = distanceToBiomeBoundaryCenter;
@@ -61,22 +37,16 @@ void main() {
   vUv = uv;
 
   vec3 chunkOrigin = modelMatrix[3].xyz;
-  // Y is terrain height — already near 0, so it is left unwrapped and exact.
   vec3 wrapOrigin = vec3(mod(chunkOrigin.x, WORLD_WRAP), chunkOrigin.y, mod(chunkOrigin.z, WORLD_WRAP));
   vec3 localWorld = mat3(modelMatrix) * position;
 
   vec3 worldPos = quantizeWorldPos(wrapOrigin + localWorld);
 
   vWorldUv = worldPos.xz / 26.25;
-  vWorldPos = worldPos;
+  vWorldPosWrapped = worldPos;
 
-  // TRUE (unwrapped) world position — ONLY for consumers that compare against
-  // absolute positions computed on the CPU: the lamp-glow grid and the scene
-  // point-light loop (comparing those against the WRAPPED vWorldPos aliased
-  // the lighting onto the wrong chunks — lit/unlit tiles per wrap cell).
-  // Float32 absolute error (~0.06u at 1M units) is far below any lighting
-  // falloff scale. NEVER use this for tiling, quantization, or fwidth()
-  // guards — that's what the wrapped vWorldPos above is for.
+  // Unwrapped: ONLY for comparing against CPU-side absolute positions (lamp
+  // grid, point lights). Never for tiling, quantization or fwidth() guards.
   vWorldPosAbs = chunkOrigin + localWorld;
 
   vec3 worldNormal = normalize(mat3(modelMatrix) * normal);

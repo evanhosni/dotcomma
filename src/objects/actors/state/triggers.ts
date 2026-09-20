@@ -64,8 +64,6 @@ export function always(id: string = "always"): TriggerDef {
   };
 }
 
-// ─── Mouse Triggers ───
-
 function mouseTrigger(id: string, flagKey: string, defaultDistance: number) {
   return (distance: number = defaultDistance): TriggerDef => {
     const distanceSq = distance * distance;

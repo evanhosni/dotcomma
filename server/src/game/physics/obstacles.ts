@@ -10,25 +10,13 @@ import { GLITCH_CITY_DOMAIN_CONFIG } from "./domainConfig.js";
 import type { PhysicsWorld } from "./world.js";
 
 /**
- * DRESSING OBSTACLES on the server — street lamps, traffic signals, utility
- * poles — as the SAME cuboid colliders the client mounts near the camera
- * (Dressing.tsx DressingPartColliders: one fixed body per point carrying the
- * instance yaw, one cuboid per part), placed by the SAME enumerators the
- * dressing worker runs (generateDensityPoints / getCityTrafficLightPoints /
- * getCityFreewaySidePoints) with the SAME spec defaults (lampSpec / signalSpec /
- * poleSpec). So an NPC that walks around a lamp post on the server walks
- * around the lamp post every client draws.
- *
- * Built per DRESSING_CHUNK_SIZE (256u) chunk, refcounted by the NPCs standing
- * near them (PhysicsWorld holds the chunk lifecycle; this file only knows how
- * to build one chunk). Chunk size MUST stay the client's: the belt-freeway
- * pole coverage depends on the query center's wall set (vertexCompute note).
- *
- * The CITY biome's mounts use every spec default (`<TrafficLights chance={0.45}/>`
- * equals SIGNAL_DEFAULT_CHANCE) — if a mount ever overrides a knob, mirror it
- * in SERVER_DRESSING below.
+ * Street lamps / signals / utility poles as the client's exact cuboid colliders
+ * (Dressing.tsx DressingPartColliders), placed by the client's enumerators with
+ * the spec defaults. Chunk size MUST stay DRESSING_CHUNK_SIZE: belt-freeway pole
+ * coverage depends on the query center's wall set.
  */
 
+/** The city biome's mounts use every spec default — if a mount ever overrides a knob, mirror it here. */
 export const SERVER_DRESSING = {
   lamps: LAMP_PLACEMENT,
   signals: { chance: SIGNAL_DEFAULT_CHANCE },
@@ -43,14 +31,12 @@ export interface ObstaclePoint {
   parts: DressingColliderPart[];
 }
 
-/** Mirror of the dressing worker's probe: a chunk with no city in it has no
- *  dressing, so skip the enumerators entirely. */
+/** Mirror of the dressing worker's probe. */
 const probeEmpty = (minX: number, minZ: number, maxX: number, maxZ: number): boolean => {
   const vd = computeVertexData((minX + maxX) / 2, (minZ + maxZ) / 2);
   return vd.biomeId !== CITY_BIOME_ID && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
 };
 
-/** Every dressing collider body in the chunk at dressing-grid index (gx, gz). */
 export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {
   const cs = DRESSING_CHUNK_SIZE;
   const minX = gx * cs;
@@ -73,8 +59,7 @@ export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {
   return out;
 };
 
-/** One fixed body per point, yaw about Y, a cuboid per part — exactly
- *  <RigidBody position rotation={[0, yaw, 0]}><CuboidCollider args={[w/2,h/2,d/2]} position={[x, y, 0]}/></RigidBody>. */
+/** Exactly the client's <RigidBody rotation={[0, yaw, 0]}><CuboidCollider args={[w/2,h/2,d/2]} position={[x, y, 0]}/>. */
 export const createObstacleBodies = (pw: PhysicsWorld, points: ObstaclePoint[]): RAPIER.RigidBody[] => {
   const bodies: RAPIER.RigidBody[] = [];
   for (const p of points) {

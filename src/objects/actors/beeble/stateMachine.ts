@@ -31,8 +31,6 @@ const SIGHT_ANGLE = 50 * (Math.PI / 180); // 50° — FOV half-angle for alert t
 const TURN_THRESHOLD = Math.PI / 2; // 90° — start turning body
 const TURN_DONE_THRESHOLD = Math.PI / 9; // 20° — stop turning, head tracking takes over
 
-// ─── Helpers ───
-
 function lerpAngle(a: number, b: number, t: number): number {
   let diff = b - a;
   while (diff > Math.PI) diff -= Math.PI * 2;
@@ -92,8 +90,6 @@ function updateHeadTracking(ctx: BehaviorContext): void {
   bone.rotation.y = lerpAngle(bone.rotation.y, relAngle, HEAD_LERP_SPEED * ctx.delta);
 }
 
-// ─── State Machine ───
-
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",
   triggers: [
@@ -129,7 +125,6 @@ export const BEEBLE_SM: StateMachineConfig = {
     onMouseMiddleClick(),
   ],
   states: [
-    // ─── Idle: Walking ───
     {
       id: "idle-walk",
       animation: { clipName: "walk" },
@@ -146,7 +141,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       onUpdate: (ctx) => {
         const bb = ctx.blackboard;
 
-        // Direction change timer
         bb.__dir_elapsed += ctx.delta;
         if (bb.__dir_elapsed >= bb.__dir_timer) {
           bb.__dir_target = randomAngle();
@@ -154,16 +148,13 @@ export const BEEBLE_SM: StateMachineConfig = {
           bb.__dir_elapsed = 0;
         }
 
-        // Smooth lerp toward target direction
         bb.__dir_angle = lerpAngle(bb.__dir_angle, bb.__dir_target, DIR_LERP_SPEED * ctx.delta);
 
-        // Write velocity for physics body (Beeble.tsx applies it)
         const angle = bb.__dir_angle;
         bb.__vel_x = BEEBLE_SPEED * Math.sin(angle);
         bb.__vel_z = BEEBLE_SPEED * Math.cos(angle);
         bb.__vel_y = undefined;
 
-        // Facing is an OUTPUT (the framework applies it to the model)
         bb.__yaw = angle;
       },
       transitions: [
@@ -172,7 +163,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       ],
     },
 
-    // ─── Idle: Looking at Hands ───
     {
       id: "idle-look",
       animation: {
@@ -194,7 +184,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       ],
     },
 
-    // ─── Alert: Standing ───
     {
       id: "alert",
       animation: { clipName: "idle" },
@@ -215,7 +204,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       ],
     },
 
-    // ─── Alert: Turning toward player ───
     {
       id: "alert-turning",
       animation: { clipName: "walk" },
@@ -228,7 +216,6 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__vel_z = 0;
         bb.__vel_y = undefined;
 
-        // Smoothly rotate body toward player
         const targetAngle = angleToPlayer(ctx);
         bb.__body_angle = lerpAngle(bb.__body_angle ?? 0, targetAngle, DIR_LERP_SPEED * ctx.delta);
 
@@ -241,7 +228,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       ],
     },
 
-    // ─── Ascending ───
     {
       id: "ascending",
       animation: { clipName: "ascend" },
@@ -251,7 +237,6 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__ascend_elapsed = 0;
         const group = ctx.groupRef.current;
         if (!group) return;
-        // Sphere morph + scale-up, shared with the networked beeble (inflate.ts).
         const inflate = beginInflate(group);
         bb.__inflate = inflate;
         return () => {

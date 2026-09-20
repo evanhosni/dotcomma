@@ -1,40 +1,25 @@
 import type { AnimationControl, BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
 
 /**
- * STATE MACHINE RUNNER — the Three-free core of an actor's behavior.
+ * Three-free state machine core, run by the SERVER (the authority) and by the
+ * client (ticking for local actors, MIRRORING the server's state id for synced
+ * ones so state-keyed visuals still happen). See NPC_TRACKING.md.
  *
- * The same runner (and the same StateMachineConfig files, e.g.
- * beeble/stateMachine.ts) executes in TWO places:
- *   - on the SERVER (server/src/game/entities/manager.ts), which is the ONE
- *     authority for every synced actor: it ticks transitions and behaviors,
- *     reads the machine's OUTPUTS from the blackboard and publishes them;
- *   - on the CLIENT (useStateMachine.ts): for `serverSynced={false}` actors it
- *     ticks exactly like the server; for synced actors it MIRRORS the server's
- *     state id (entering states as the server does) so that state-keyed
- *     VISUALS — head tracking, the sphere-inflate — run where there is a scene,
- *     while every logic output is ignored in favor of the server's.
- *
- * THE CONTRACT for a StateMachineConfig, which is what makes this possible:
- *   - behaviors write their OUTPUTS to the blackboard — velocity `__vel_x/_z`
- *     (`__vel_y` for vertical, undefined = gravity), facing `__yaw`, and
- *     animation through `state.animation` — and never touch the scene for
- *     those. The framework applies them (kinematic mover, base, ModelActor).
- *   - anything that needs the scene (bones, geometry, materials) must guard on
- *     `ctx.groupRef.current` being present: it is null on the server.
- *   - no Three.js at RUNTIME in a config file (types only, via `import type`);
- *     Node has no scene. Loop modes come from LOOP_ONCE / LOOP_REPEAT in types.ts.
+ * THE CONTRACT for a StateMachineConfig:
+ *   - OUTPUTS go to the blackboard — `__vel_x/_z` (`__vel_y`, undefined =
+ *     gravity), `__yaw`, animation via `state.animation` — never to the scene;
+ *   - anything scene-bound guards on `ctx.groupRef.current` (null on the server);
+ *   - no Three at RUNTIME (`import type` only; loop modes from types.ts);
  *   - `Math.random` is fine: the server is the single source of truth.
  */
 
-/** Anything with x/y/z — THREE.Vector3 on the client, a plain object on the server. */
+/** THREE.Vector3 on the client, a plain object on the server. */
 export interface Vec3Like {
   x: number;
   y: number;
   z: number;
 }
 
-// One-shot mouse flags written by useMouseEvents (client) or raised by the
-// server from a forwarded click. Cleared each frame something was raised.
 const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_hover_enter",
   "__mouse_hover_leave",
@@ -51,8 +36,6 @@ const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_middle_click",
 ] as const;
 
-// State/trigger lookup maps are pure functions of the (module-constant)
-// config — build them once per config, not once per instance.
 const configMapsCache = new WeakMap<
   StateMachineConfig,
   { stateMap: Map<string, StateDef>; triggerMap: Map<string, TriggerDef> }
@@ -79,7 +62,6 @@ export class StateMachineRunner {
   private stateEnteredAt = 0;
   private exitCleanup: (() => void) | null = null;
   private entered = false;
-  /** ONE context object per instance, fields mutated per tick — no allocation. */
   private readonly ctx: BehaviorContext;
 
   constructor(
@@ -139,7 +121,7 @@ export class StateMachineRunner {
     c.stateElapsed = elapsed - this.stateEnteredAt;
   }
 
-  /** AUTHORITATIVE step: transitions, then the current behavior. */
+  /** AUTHORITATIVE step. */
   tick(elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
     this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
     const bb = this.blackboard;
@@ -176,16 +158,13 @@ export class StateMachineRunner {
     this.clearMouseFlags();
   }
 
-  /** FOLLOWER step (synced client): adopt the server's state id — running
-   *  onEnter/cleanup exactly as the server did — and run the behavior for its
-   *  visual side effects. Logic outputs written meanwhile are ignored by the
-   *  framework in favor of the server's. */
-  mirror(stateId: string, elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
+  /** FOLLOWER step: adopt the server's state id (onEnter/cleanup run as the
+   *  server's did) and run the behavior for its visual side effects only. */
+  followServerState(stateId: string, elapsed: number, delta: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
     this.prepare(elapsed, delta, playerPosition, playerDistanceSq);
     if (!this.entered || this.stateId !== stateId) {
       this.entered = true;
       this.enterState(stateId, elapsed);
-      // A mirrored client never plays local animation commands.
       this.animationControl.pendingCommand = null;
       this.animationControl.dirty = false;
     }
@@ -200,7 +179,6 @@ export class StateMachineRunner {
     for (let i = 0; i < MOUSE_ONE_SHOT_FLAGS.length; i++) bb[MOUSE_ONE_SHOT_FLAGS[i]] = false;
   }
 
-  /** Raise a one-shot flag (a forwarded click on the server). */
   raise(flag: string): void {
     this.blackboard[flag] = true;
     this.blackboard.__mouse_dirty = true;

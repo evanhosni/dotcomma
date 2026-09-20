@@ -5,29 +5,20 @@ import type { BuildingAttributes } from "../../../../src/objects/actors/building
 import type { PhysicsWorld } from "./world.js";
 
 /**
- * BUILDING COLLIDERS on the server: the SAME convex silhouette hull the client
- * uses as a building's far-range collider (objects/actors/building/
- * proxyCollider.ts — Andrew's monotone chain over the shell's 2D silhouette,
- * extruded bottom-to-top), built from the SAME plan (generateBuildingPlan,
- * seeded by the building's rounded spawn coordinates, shaped by the variant's
- * attributes from variants.ts) — so an NPC the server keeps out of a wall is
- * kept out of the wall every client draws. Convex = SEALED (no door): NPCs
- * never enter buildings, which is what the client's proxy already enforced
- * at range.
- *
- * The plan is the client's full interior-first generator (~1ms per seed here)
- * and is cached per seed|attributes; the hull is ~14 points.
+ * The client's far-range proxy hull (building/proxyCollider.ts) from the
+ * client's plan, so the server keeps an NPC out of exactly the wall every
+ * client draws. Convex = sealed: NPCs never enter buildings.
  */
 
 export interface BuildingKindSpec {
-  /** Plan-shaping attributes of this building kind (variants.ts). */
   attrs: BuildingAttributes;
 }
 
+/** The plan generator costs ~1ms per seed. */
 const hullCache = new Map<string, Float32Array>();
 const MAX_HULL_CACHE = 4096;
 
-/** Seed rule from Building.tsx: `${round(x)}_${round(z)}` unless a `seed` prop is set (none of the descriptors set one). */
+/** Must match Building.tsx's default seed rule. */
 export const buildingSeed = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
 export const hullVerticesFor = (seed: string, spec: BuildingKindSpec): Float32Array => {
@@ -35,7 +26,6 @@ export const hullVerticesFor = (seed: string, spec: BuildingKindSpec): Float32Ar
   let v = hullCache.get(key);
   if (!v) {
     if (hullCache.size >= MAX_HULL_CACHE) {
-      // Drop the oldest half (insertion order ≈ recency).
       let n = hullCache.size >> 1;
       for (const k of hullCache.keys()) {
         if (n-- <= 0) break;
@@ -48,7 +38,6 @@ export const hullVerticesFor = (seed: string, spec: BuildingKindSpec): Float32Ar
   return v;
 };
 
-/** The building's sealed hull at its spawn origin (feet at ground height y). */
 export const createBuildingCollider = (
   pw: PhysicsWorld,
   spec: BuildingKindSpec,

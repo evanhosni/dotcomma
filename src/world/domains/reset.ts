@@ -4,25 +4,10 @@ import { resetSpawnWorker } from "../../objects/actors/spawning/spawnWorker";
 import { resetTerrainSystem } from "../terrain/TerrainRenderer";
 import { resetActiveDomain } from "./utils";
 
-/**
- * Tear down every module-level system between client-side domain switches.
- * Called by index.tsx in the gap where NO domain is mounted inside the
- * persistent canvas (two-phase switch: unmount old → reset → mount new), so
- * nothing is using the workers or the active-domain accessors while they
- * reset. The canvas, GL context, physics world and Player are NOT reset —
- * they outlive domains by design.
- *
- * Workers are terminated (their in-worker caches die with them) and their
- * client caches cleared; the active domain unpublishes so whenDomainReady()
- * callers block until the incoming domain commits. NOT reset, deliberately:
- *  - main-thread vertexCompute: world/terrain/vertexData.ts re-runs
- *    initCompute when the committed config object changes identity, and
- *    initCompute clears the flatten/city caches itself
- *  - the voronoi worker: stateless per call (params carry regions/seed)
- *  - the collider worker: domain-agnostic geometry → collider transform
- *  - geometry/texture/building-asset caches: keyed by domain-independent or
- *    seed-exact keys, safe (and correct) to reuse
- */
+/** Domain-switch teardown; runs while NO domain is mounted. Deliberately NOT
+ *  reset: main-thread vertexCompute (re-inits on config identity change), the
+ *  voronoi worker (stateless per call), the collider worker and the
+ *  geometry/texture/building-asset caches (domain-independent keys). */
 export const resetDomainSystems = () => {
   resetTerrainSystem();
   resetSpawnWorker();

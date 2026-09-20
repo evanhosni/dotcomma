@@ -1,16 +1,9 @@
 import { useEffect } from "react";
 
-/**
- * Pointer-lock gate — a real HTML overlay (not an in-canvas object): a
- * transparent full-page backdrop that swallows every click, so the canvas
- * CANNOT be clicked (or pointer-locked) until the player clicks the
- * "- click to enter -" text itself. The whole gate disappears for good the
- * first time pointer lock engages; after that (e.g. re-locking after Esc)
- * the canvas is clickable as normal.
- */
+/** HTML pointer-lock gate: a full-page backdrop swallows every click until the
+ *  "- click to enter -" text is clicked; gone for good once lock first engages. */
 export const ClickToEnter = () => {
   useEffect(() => {
-    // Full-page backdrop: invisible, but intercepts every pointer event
     const backdrop = document.createElement("div");
     Object.assign(backdrop.style, {
       position: "fixed",
@@ -21,9 +14,7 @@ export const ClickToEnter = () => {
       background: "transparent",
       zIndex: "1000",
     });
-    // Covering the canvas is not enough: drei's PointerLockControls listens
-    // for clicks on DOCUMENT, so a click anywhere would bubble up and lock.
-    // Kill the bubble at the backdrop — only the link's own handler locks.
+    // drei's PointerLockControls listens on DOCUMENT — covering the canvas isn't enough.
     backdrop.onclick = (e) => e.stopPropagation();
 
     const link = document.createElement("div");
@@ -40,15 +31,11 @@ export const ClickToEnter = () => {
     link.onmouseleave = () => (link.style.color = "#ffffff");
     link.onclick = (e) => {
       e.stopPropagation();
-      // Don't requestPointerLock ourselves — drei's PointerLockControls is
-      // connected to `events.connected || gl.domElement` (in practice R3F's
-      // event-source element, NOT the canvas), and three-stdlib only flips
-      // isLocked when pointerLockElement === ITS element. Locking any element
-      // we pick here can therefore engage the browser lock while mouse-look
-      // stays dead. Instead, fire the exact path a real canvas click takes:
-      // drei's own click handler on `document` → controls.lock() on the
-      // element it connected. The synthetic event runs inside this real
-      // click's user activation, so the browser permits the lock.
+      // Never requestPointerLock ourselves: three-stdlib only flips isLocked
+      // when the locked element is the one drei connected (events.connected),
+      // so locking any element we pick engages the browser lock with dead
+      // mouse-look. The synthetic click runs drei's own document handler
+      // inside this click's user activation.
       document.dispatchEvent(new MouseEvent("click"));
     };
     backdrop.appendChild(link);

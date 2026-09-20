@@ -3,30 +3,18 @@ import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
 import type { ClientMessage, DomainId, PlayerData, ServerMessage } from "./protocol";
 
 /**
- * THE game connection — one module-level singleton over the browser's native
- * WebSocket. Owns: URL resolution, the anonymous identity, connect + exponential
- * backoff reconnect, the hello/init handshake, the domain-change relay, an
- * app-level ping (liveness watchdog + server clock offset), and fan-out of
- * inbound messages to subscribers. It knows nothing about players or meshes —
- * remotePlayerStore.ts subscribes to it.
- *
- * React reads it through useSyncExternalStore hooks (UI-cadence only: status,
- * self id). Per-frame consumers read the module-level getters directly.
+ * THE game connection singleton. Knows nothing about players or meshes —
+ * remotePlayerStore.ts subscribes to it. React reads status through
+ * useSyncExternalStore; per-frame consumers read the module getters directly.
  */
 
-// ── URL — the ONE place the server address is resolved ─────────────────────
-
-/** Same host as the page by default; REACT_APP_WS_URL overrides (dev: CRA's
- *  dev server is :3000 while the game server is :8080 — see .env.development).
- *  Inlined at build time by CRA, so a production override means a rebuild. */
+/** REACT_APP_WS_URL is inlined at build time by CRA — a production override means a rebuild. */
 export const getWebSocketUrl = (): string => {
   const explicit = process.env.REACT_APP_WS_URL;
   if (explicit) return explicit;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}`;
 };
-
-// ── Identity — anonymous, persistent, per browser ──────────────────────────
 
 const IDENTITY_KEY = "dotcomma.identity";
 
@@ -39,8 +27,7 @@ const randomUuid = (): string => {
   });
 };
 
-/** The player's anonymous uuid (Phase 3's persistence key). Created once and
- *  kept in localStorage; two tabs share it (they become two SESSIONS). */
+/** The persistence key (protocol.ts IDS). Two tabs share it and become two sessions. */
 export const getIdentity = (): string => {
   try {
     const existing = window.localStorage.getItem(IDENTITY_KEY);
@@ -55,18 +42,14 @@ export const getIdentity = (): string => {
 };
 let sessionIdentity: string | null = null;
 
-// ── State ──────────────────────────────────────────────────────────────────
-
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "offline";
 
 interface ConnectionState {
   status: ConnectionStatus;
-  /** Our SESSION id (server-assigned) — null until init. */
+  /** Server-assigned session id; null until init. */
   selfId: string | null;
   color: string | null;
-  /** Server-assigned spawn offset from the domain spawn (latest init). */
   spawnOffset: { x: number; z: number } | null;
-  /** OUR persisted blob as of the last init (opaque — shape TBD). */
   data: PlayerData | null;
   /** Consecutive failed connection attempts (drives backoff). */
   attempts: number;
@@ -88,7 +71,6 @@ const setState = (patch: Partial<ConnectionState>) => {
 
 export const getConnectionState = (): ConnectionState => state;
 export const getSelfId = (): string | null => state.selfId;
-/** Read by the Player while it holds at spawn — no React needed. */
 export const getAssignedSpawnOffset = (): { x: number; z: number } | null => state.spawnOffset;
 
 const subscribeState = (l: () => void) => {
@@ -99,19 +81,14 @@ const subscribeState = (l: () => void) => {
 };
 export const useConnectionState = (): ConnectionState => useSyncExternalStore(subscribeState, getConnectionState);
 
-// ── Inbound fan-out ────────────────────────────────────────────────────────
-
 type MessageHandler = (msg: ServerMessage) => void;
 const messageHandlers = new Set<MessageHandler>();
-/** Subscribe to every inbound server message. Returns an unsubscribe. */
 export const onServerMessage = (fn: MessageHandler): (() => void) => {
   messageHandlers.add(fn);
   return () => {
     messageHandlers.delete(fn);
   };
 };
-
-// ── Clock — server time estimate for deterministic content (Phase 6) ───────
 
 let clockOffsetMs = 0; // serverTime − localTime
 let bestRttMs = Infinity;
@@ -136,10 +113,8 @@ const sampleClock = (t0: number, serverTime: number) => {
   }
 };
 
-/** Best estimate of the server's Date.now(). ±50ms is the target. */
+/** Best estimate of the server's Date.now(); ±50ms is the target. */
 export const getServerTime = (): number => Date.now() + clockOffsetMs;
-
-// ── Socket lifecycle ───────────────────────────────────────────────────────
 
 const PING_INTERVAL_MS = 15_000;
 /** No pong for this long → the socket is dead even if the browser thinks otherwise. */
@@ -155,8 +130,7 @@ let lastPongAt = 0;
 let helloSentAt = 0;
 let manuallyClosed = false;
 
-/** Send if the socket is open; silently drop otherwise (intent is re-sent
- *  after every init, so nothing is lost that matters). */
+/** Drops silently when not open: intent is re-sent after every init, so nothing that matters is lost. */
 export const send = (msg: ClientMessage): boolean => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify(msg));
@@ -221,7 +195,6 @@ const open = () => {
 
     switch (msg.t) {
       case "init":
-        // A successful handshake resets the backoff.
         setState({
           status: "connected",
           selfId: msg.id,
@@ -231,10 +204,8 @@ const open = () => {
           attempts: 0,
         });
         lastPongAt = Date.now();
-        // First clock sample from the hello→init round trip, so the shared
-        // world clock (day/night, deterministic entities) is right from the
-        // first frame instead of after the first 15s ping; then ping at once
-        // for a tighter one.
+        // hello→init is the first clock sample so day/night is right from the first
+        // frame, not after the first 15s ping.
         if (helloSentAt) sampleClock(helloSentAt, msg.serverTime);
         send({ t: "ping", t0: Date.now() });
         break;
@@ -258,28 +229,24 @@ const open = () => {
   };
 
   socket.onerror = () => {
-    // onclose always follows onerror; nothing to do here but log once.
+    // onclose always follows onerror.
     if (ws === socket && state.status === "connecting") console.warn("[net] connection failed:", getWebSocketUrl());
   };
 };
 
-/** DEV ONLY — replace our persisted blob (server must run with
- *  DEBUG_DATA_WRITES=1, otherwise it ignores this). Exists to verify the
- *  persistence plumbing from the console before there is game logic. */
+/** DEV ONLY: the server ignores it unless DEBUG_DATA_WRITES=1. */
 export const debugSetData = (data: PlayerData): boolean => {
   const ok = send({ t: "debug:setData", data });
   if (ok) setState({ data });
   return ok;
 };
 
-/** Boot the connection. Idempotent; called once from index.tsx. */
 export const startConnection = () => {
   if (started) return;
   started = true;
   manuallyClosed = false;
   open();
 
-  // Console access: __net.state, __net.setData({...}), __net.serverTime()
   (window as unknown as { __net: unknown }).__net = {
     get state() {
       return state;
@@ -290,24 +257,21 @@ export const startConnection = () => {
     identity: getIdentity,
   };
 
-  // World switch: the server treats it as leave(old) + join(new) and re-inits us.
   onDomainChange((domain: DomainId) => {
     send({ t: "domain", domain });
   });
 
-  // A tab coming back from sleep: the browser may not have noticed the socket
-  // died. Poke the watchdog so a dead socket is detected within one ping.
+  // A tab back from sleep may not have noticed the socket died; the ping makes
+  // the watchdog notice within one interval.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && ws && ws.readyState === WebSocket.OPEN) {
       send({ t: "ping", t0: Date.now() });
     }
   });
 
-  // Leaving the page (reload, typed URL, tab close, bfcache entry): close the
-  // socket OURSELVES. MEASURED in Chrome: a navigated-away page's socket stayed
-  // open on the server for the whole heartbeat window, so the other tabs saw a
-  // ghost for up to 60s. pagehide fires for every kind of leave; a bfcache
-  // restore then fires pageshow(persisted) and we reconnect.
+  // Close OURSELVES on leave. MEASURED in Chrome: a navigated-away page's socket
+  // stayed open server-side for the whole heartbeat window, so other tabs saw a
+  // ghost for up to 60s. A bfcache restore fires pageshow(persisted) → reconnect.
   window.addEventListener("pagehide", () => {
     const socket = ws;
     ws = null; // onclose sees ws !== socket → no reconnect scheduled
@@ -320,7 +284,6 @@ export const startConnection = () => {
   });
 };
 
-/** Dev/console escape hatch. */
 export const stopConnection = () => {
   manuallyClosed = true;
   clearTimers();

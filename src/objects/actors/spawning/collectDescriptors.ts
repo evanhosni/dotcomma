@@ -1,10 +1,7 @@
 import { Region } from "../../../world/types";
 import { AnyActorDescriptor } from "./types";
 
-/**
- * Walks regions → biomes to aggregate all ActorDescriptors.
- * Deduplicates by descriptor id (last-registered wins).
- */
+/** Deduplicates by descriptor id (last-registered wins). */
 export const collectDescriptors = (regions: Region[]): AnyActorDescriptor[] => {
   const byId = new Map<string, AnyActorDescriptor>();
 

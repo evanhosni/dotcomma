@@ -3,29 +3,13 @@ import { CITY_BIOME_ID, DUST_BIOME_ID, GRASS_BIOME_ID } from "../../../../src/wo
 import { DEFAULT_TERRAIN_PARAMS } from "../../../../src/world/defaults";
 
 /**
- * The glitch-city DomainConfig, HAND-ASSEMBLED for the server.
- *
- * On the client this object is produced by `buildDomainConfig(regions,
- * params)` from the JSX registrations at <Domain> commit time. The server has
- * no JSX, so until a shared Three-free per-domain config module exists this
- * file transcribes:
- *
- *   src/world/domains/glitch-city/domain.tsx            <Terrain seed="123"/> (= defaults)
- *   .../regions/city/region.tsx                           region "city" id 3: CityBiome, CityGrassBiome
- *   .../regions/desert/region.tsx                         region "desert" id 2: DustBiome
- *   .../regions/city/biomes/city/biome.tsx                city id 1, joinable, blendable=false, blendWidth 3
- *                                                           BuildingActor + SkyscraperActor (biomeIds [1])
- *   .../regions/city/biomes/grass/biome.tsx               grass id 3, joinable, blendable, perlin 3/1/1/1 h100 s100
- *                                                           BuildingActor id="grass-building" density 25 (biomeIds [3])
- *   .../regions/desert/biomes/dust/biome.tsx              dust id 2, joinable, blendable, perlin 3/1/1/1 h150 s200,
- *                                                           absNeg, offset 50
- *   src/objects/actors/building/actor.tsx + skyscraper.tsx flatten descriptors (footprint 30 / 36, etc.)
- *
- * REGION AND BIOME ORDER IS THE VORONOI ORDER — it must match the JSX exactly
- * or every biome lands somewhere else. Flatten descriptors keep the JSX
- * registration order too (building, skyscraper, grass-building) and their
- * radius/skirt use buildDomainConfig's defaults (footprint × 0.45 / × 0.35).
- * The GrassRegion exists in code but is NOT mounted by the domain.
+ * HAND-ASSEMBLED transcription of what `buildDomainConfig` produces from the
+ * glitch-city JSX (domain.tsx → each region.tsx → each biome.tsx + the
+ * building/skyscraper descriptors). KEEP IN SYNC BY HAND: region/biome
+ * order IS the voronoi order (a mismatch lands every biome somewhere else),
+ * flatten descriptors keep JSX registration order, radius/skirt are
+ * buildDomainConfig's defaults (footprint × 0.45 / × 0.35). GrassRegion exists
+ * in code but is NOT mounted by the domain.
  */
 
 const flatten = (

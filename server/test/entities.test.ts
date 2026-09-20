@@ -5,9 +5,7 @@ import { EntityManager, TICK_MS, type PlayerView } from "../src/game/entities/ma
 import { PhysicsWorld } from "../src/game/physics/world.js";
 import type { ServerMessage } from "../src/protocol.js";
 
-/** ONE physics world for the suite (WASM init once); every manager here runs
- *  its walkers on it with an unbounded generation budget so chunks build on
- *  the first tick instead of streaming in over several. */
+/** One physics world for the suite; unbounded budget so chunks build on the first tick. */
 let pw: PhysicsWorld;
 const live: EntityManager[] = [];
 const manager = (h: ReturnType<typeof makeHost>) => {
@@ -16,7 +14,6 @@ const manager = (h: ReturnType<typeof makeHost>) => {
   return m;
 };
 
-/** Fake transport + player roster. */
 const makeHost = () => {
   const players = new Map<string, PlayerView>();
   const sent: { to: string; msg: ServerMessage }[] = [];
@@ -44,8 +41,7 @@ describe("EntityManager (server authority)", () => {
   before(async () => {
     pw = await PhysicsWorld.create();
   });
-  // Every test's bodies leave the shared world with it — an abandoned capsule
-  // at the common spawn point boxed the next test's beeble in (measured).
+  // MEASURED: an abandoned capsule at the common spawn point boxed the next test's beeble in.
   afterEach(() => {
     for (const m of live) m.disposeAll();
     live.length = 0;
@@ -82,8 +78,7 @@ describe("EntityManager (server authority)", () => {
     assert.ok(ua.length > 0 && ub.length > 0, "both registrants receive updates");
     assert.ok(ua.some((u: any) => u.clip === "walk" && typeof u.clipT0 === "number"), "clip published with start time");
     assert.ok(ua.some((u: any) => u.sm === "idle-walk"), "machine state id published");
-    // y is AUTHORITATIVE now: every published y sits on the server's terrain
-    // (the registration's y=3 was only a hint — the ground here is ~1.9).
+    // The registration's y=3 is only a hint; the ground here is ~1.9.
     const groundAt = (x: number, z: number) => computeVertexData(x, z).height;
     for (const u of ua) {
       if (u.y === undefined) continue;
@@ -92,14 +87,11 @@ describe("EntityManager (server authority)", () => {
       assert.ok(Math.abs(u.y - groundAt(gx, gz)) < 0.6, `published y ${u.y.toFixed(2)} vs ground ${groundAt(gx, gz).toFixed(2)}`);
     }
     assert.ok(Math.abs(e.y - groundAt(e.x, e.z)) < 0.6, "record y follows the terrain");
-    // Every positional update is a server-time-stamped SNAPSHOT (the client
-    // interpolates on that clock), stamped in tick order.
     const stamped = ua.filter((u: any) => u.x !== undefined);
     assert.ok(stamped.length > 5, "position published every moving tick");
     assert.ok(stamped.every((u: any) => typeof u.st === "number"), "every positional update carries st");
     for (let i = 1; i < stamped.length; i++) assert.ok(stamped[i].st >= stamped[i - 1].st, "st is non-decreasing");
-    // A wander near a chunk edge requests the neighbor and un-readies the
-    // walker until the next tick builds it — settle before asserting.
+    // A wander near a chunk edge un-readies the walker until the next tick builds the neighbor.
     for (let i = 0; i < 3 && !e.npc!.ready; i++) ticks(m, 1, t0 + 2000 + i * TICK_MS);
     assert.ok(e.npc!.ready, "its chunks were built (unbounded budget)");
   });
@@ -109,11 +101,10 @@ describe("EntityManager (server authority)", () => {
     const m = manager(h);
     regBeeble(m, "A");
     regBeeble(m, "B");
-    h.setPlayer("A", 500, 500); // A far away
+    h.setPlayer("A", 500, 500);
     const t0 = Date.now();
     ticks(m, 3, t0);
     const e = m.get(ID)!;
-    // Put B 5u directly in front of the beeble's current facing.
     const yaw = e.ry;
     h.setPlayer("B", e.x + Math.sin(yaw) * 5, e.z + Math.cos(yaw) * 5);
     ticks(m, 3, t0 + 300);
@@ -143,7 +134,6 @@ describe("EntityManager (server authority)", () => {
     assert.equal(typeof e.once, "boolean", "loop mode published with the clip");
     assert.ok(e.vy > 0, "rising");
     assert.ok(e.y > y0 + 0.2, `y rises off the ground while vy is driven (${y0.toFixed(2)} → ${e.y.toFixed(2)})`);
-    // A click from far away is ignored.
     const h2 = makeHost();
     const m2 = manager(h2);
     regBeeble(m2, "A");
@@ -168,7 +158,6 @@ describe("EntityManager (server authority)", () => {
     assert.equal(m.get(B)!.state.doors[2], true);
     m.interact("A", B, "door:2", m.playersFor("glitch-city"));
     assert.equal(m.get(B)!.state.doors[2], false);
-    // Late joiner gets the doors in the registration answer.
     h.clear();
     m.register("D", "glitch-city", [{ id: B, kind: "building", x: 0, y: 0, z: 0 }]);
     assert.deepEqual(h.to("D")[0].state.doors[2], false);
@@ -178,8 +167,7 @@ describe("EntityManager (server authority)", () => {
     const h = makeHost();
     const m = manager(h);
     const t0 = Date.now();
-    // The physics world is shared by the suite: drain generation jobs earlier
-    // tests left queued (their building hulls) before taking the baseline.
+    // Drain jobs earlier tests left queued before taking the baseline.
     ticks(m, 1, t0);
     const before = pw.stats();
     regBeeble(m, "A", "700_-600_beeble", 700, -600); // a spot no earlier test holds chunks at

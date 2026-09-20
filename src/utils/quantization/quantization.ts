@@ -1,14 +1,11 @@
 import * as THREE from "three";
 
 export namespace _quantization {
-  /** Shared uniform — single object reference used by all materials. */
   export const uniforms = {
     uGridSize: { value: 0.0 } as THREE.IUniform<number>,
   };
 
-  /** Uniform declaration + `quantizeWorldPos`, injected before main() in
-   *  standard material vertex shaders — and interpolated into the custom
-   *  shaders (terrain, foliage) so the function exists exactly once. */
+  /** Injected before main() in patched materials and interpolated into the custom terrain/foliage shaders, so the function exists once. */
   export const QUANTIZE_GLSL = /* glsl */ `
     uniform float uGridSize;
 
@@ -19,37 +16,20 @@ export namespace _quantization {
   `;
 
   /**
-   * Replacement for #include <project_vertex> — quantizes on a WORLD-ALIGNED
-   * lattice, but never forms an absolute world coordinate to do it.
-   *
-   * GLSL is float32: at 100k units from the world origin its resolution is
-   * ~0.008u, a THIRD of the 0.025u grid. Quantizing `modelMatrix * position`
-   * directly therefore made the lattice flicker under the camera (vertices
-   * flipping cells frame to frame = swimming geometry) instead of holding
-   * still, getting worse the further the player travelled — and past ~420k
-   * units `worldPos / 0.025` leaves float32's exact-integer range and the
-   * result collapses outright.
-   *
-   * Instead the offset from the object's OWN origin is quantized:
-   * mat3() drops the translation so that offset stays object-sized and exact,
-   * and modelViewMatrix[3] is the object origin in view space, already
-   * resolved on the CPU in float64. `qPhase` re-anchors the lattice to the
-   * world so the wobble doesn't slide along with the object; its own accuracy
-   * is limited by the float32 model matrix, but it is CONSTANT per object, so
-   * it shows up as a fixed sub-cell offset rather than as flicker.
+   * Replacement for #include <project_vertex>: quantizes on a WORLD-ALIGNED lattice
+   * without ever forming an absolute world coordinate (float32 made the lattice
+   * swim past ~100k units and collapse past ~420k). The offset from the object's
+   * own origin is quantized; `qPhase` re-anchors the lattice to the world and is
+   * constant per object. See CLAUDE.md "Coordinate Precision".
    */
   const PROJECT_VERTEX_REPLACEMENT = /* glsl */ `
     vec4 mvPosition = vec4( transformed, 1.0 );
 
     #ifdef USE_INSTANCING
 
-      // Instanced quantized materials keep the original absolute-space math.
-      // (Dressing chunks rebase their instance translations to a chunk-local
-      // origin with the chunk translation on modelMatrix — see
-      // finalizeInstancedChunk — so modelMatrix * instanceMatrix is still the
-      // correct absolute world position here; quantizing it would just
-      // reintroduce float32 absolute precision. No instanced material is
-      // quantized today.)
+      // Absolute-space math kept: modelMatrix * instanceMatrix is already the
+      // true world position under the dressing rebase (finalizeInstancedChunk).
+      // No instanced material is quantized today.
       mvPosition = instanceMatrix * mvPosition;
       vec4 qWorldPos = modelMatrix * mvPosition;
       qWorldPos.xyz = quantizeWorldPos( qWorldPos.xyz );
@@ -81,14 +61,8 @@ export namespace _quantization {
     #endif
   `;
 
-  /**
-   * Patch a standard Three.js material to quantize vertices in world space.
-   * Safe to call multiple times on the same material (idempotent).
-   *
-   * `gridSize` overrides the global grid size for this material (fixed at
-   * first patch; later calls can only update the value of an existing
-   * override). Omit it to follow the shared global uniform.
-   */
+  /** Idempotent. `gridSize` overrides the global grid for this material (fixed at
+   *  first patch; later calls only update an existing override). */
   export const patchMaterial = (material: THREE.Material, gridSize?: number): void => {
     const existing = (material as any).__quantizationUniform as THREE.IUniform<number> | undefined;
     if (existing) {
@@ -102,27 +76,22 @@ export namespace _quantization {
     const originalCacheKey = material.customProgramCacheKey?.bind(material);
     material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + "_quantized";
 
-    // Chain after any pre-existing onBeforeCompile (same pattern as
-    // lampGlow's patch) — assigning directly silently discarded another
-    // patch's shader edits when quantization was applied second.
+    // Chain, don't assign: assigning discarded lampGlow's shader edits when quantization was applied second.
     const prevOnBeforeCompile = material.onBeforeCompile;
     material.onBeforeCompile = (shader, renderer) => {
       prevOnBeforeCompile?.call(material, shader, renderer);
       shader.uniforms.uGridSize = uniform;
 
-      // Inject quantize function before main()
       shader.vertexShader = shader.vertexShader.replace(
         "void main() {",
         QUANTIZE_GLSL + "\nvoid main() {",
       );
 
-      // Replace project_vertex to quantize clip-space output
       shader.vertexShader = shader.vertexShader.replace(
         "#include <project_vertex>",
         PROJECT_VERTEX_REPLACEMENT,
       );
 
-      // Replace worldpos_vertex for shadow/envmap consistency
       shader.vertexShader = shader.vertexShader.replace(
         "#include <worldpos_vertex>",
         WORLDPOS_VERTEX_REPLACEMENT,

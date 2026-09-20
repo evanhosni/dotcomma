@@ -24,15 +24,9 @@ export interface MouseEventDistances {
 export interface UseMouseEventsOptions {
   distances?: MouseEventDistances;
   shouldGrowCursor?: boolean;
-  /** Seed for the every-3-frames raycast throttle — pass a per-instance
-   *  value (hash of spawn coords) so batch-mounted actors don't all raycast
-   *  on the same frame. */
+  /** Per-instance phase for the every-3-frames raycast throttle. */
   framePhase?: number;
-  /** The owner calls the returned `tick(camera, distanceSq)` from its actor
-   *  `onFrame` instead of this hook subscribing its own useFrame (see
-   *  useStateMachine's option of the same name). `distanceSq` is the actor
-   *  base's 2D squared camera distance — a lower bound on the 3D one, so it
-   *  gates the raycast for free. */
+  /** The owner calls `tick` from its actor onFrame instead of this hook owning a useFrame. */
   externallyDriven?: boolean;
 }
 
@@ -40,8 +34,7 @@ export interface MouseEventsHandle {
   tick: (camera: THREE.Camera, distanceSq?: number) => void;
 }
 
-/** Raise a one-shot mouse flag on a blackboard. The dirty bit lets the state
- *  machine clear the one-shot set only on frames where something was raised. */
+/** The dirty bit lets the machine clear the one-shot set only on frames something was raised. */
 const raise = (bb: Record<string, any>, flag: string): void => {
   bb[flag] = true;
   bb.__mouse_dirty = true;
@@ -49,22 +42,16 @@ const raise = (bb: Record<string, any>, flag: string): void => {
 
 const DEFAULT_DISTANCE = 5;
 
-// Angular pre-test: the manual raycast below does per-triangle CPU-skinned
-// tests, and the bounding-sphere reject is inflated ×3 for animation so it
-// rarely rejects — a miss used to scan every triangle of every mesh. The
-// screen-center ray only ever hits an actor roughly IN FRONT of the camera,
-// so reject outright unless the actor center is within ~18° of the view ray.
-// Skipped when the actor is very close (it then spans a wide angle and the
-// normalized direction is unstable).
+// Angular pre-test: the ×3-inflated sphere reject rarely rejects, and a miss
+// scanned every CPU-skinned triangle of every mesh. Skipped very close, where
+// the actor spans a wide angle.
 const VIEW_CONE_COS = Math.cos((18 * Math.PI) / 180);
-const VIEW_CONE_MIN_DIST_SQ = 16; // within 4u, run the full test regardless
+const VIEW_CONE_SKIP_WITHIN_SQ = 16; // within 4u, run the full test regardless
 const _toActor = new THREE.Vector3();
 
-// Own raycaster — same approach as R3F: setFromCamera(center, camera) + intersectObject
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 
-// Scratch objects for the custom SkinnedMesh triangle test
 const _worldSphere = new THREE.Sphere();
 const _invMatrix = new THREE.Matrix4();
 const _localRay = new THREE.Ray();
@@ -83,7 +70,7 @@ export function useMouseEvents(
   const activeHoverRef = useRef(false);
   const hitDistRef = useRef(Infinity);
 
-  const d = useMemo(
+  const distances = useMemo(
     () => ({
       hoverEnter: options.distances?.onMouseHoverEnter ?? DEFAULT_DISTANCE,
       leftClick: options.distances?.onMouseLeftClick ?? DEFAULT_DISTANCE,
@@ -106,22 +93,19 @@ export function useMouseEvents(
 
   const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
 
-  // Max distance at which any mouse event fires — nothing to do beyond this
   const maxEventDist = useMemo(
     () =>
       Math.max(
-        d.hoverEnter, d.leftClick, d.rightClick, d.leftClickDown, d.rightClickDown,
-        d.leftClickUp, d.rightClickUp, d.doubleClick, d.middleClick,
-        d.scroll, d.scrollUp, d.scrollDown,
+        distances.hoverEnter, distances.leftClick, distances.rightClick, distances.leftClickDown, distances.rightClickDown,
+        distances.leftClickUp, distances.rightClickUp, distances.doubleClick, distances.middleClick,
+        distances.scroll, distances.scrollUp, distances.scrollDown,
       ),
-    [d],
+    [distances],
   );
 
-  // Raycast from screen center, throttled to every 3 frames
   const tick = (camera: THREE.Camera, distanceSq2D = 0): void => {
     frameCountRef.current++;
 
-    // Only raycast every 3 frames; reuse last result on skip frames
     if (frameCountRef.current % 3 !== 0) {
       return;
     }
@@ -129,10 +113,7 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      // Cheap distance pre-check — skip all geometry work if the player is
-      // too far for any event to fire. The caller's 2D squared distance (when
-      // driven by the actor base) rejects first without touching the group.
-      // Add padding for object height/radius.
+      // The 2D squared distance is a lower bound on the 3D one, so it rejects first for free.
       const threshold = maxEventDist + 3;
       const thresholdSq = threshold * threshold;
       const dist3DSq =
@@ -143,20 +124,15 @@ export function useMouseEvents(
       } else {
         _raycaster.setFromCamera(_center, camera);
 
-        // Angular pre-test (see VIEW_CONE_COS above): the screen-center ray
-        // can only hit an actor near the view direction — skip all
-        // per-triangle work when it's off to the side or behind.
         _toActor.subVectors(groupRef.current.position, _raycaster.ray.origin);
         const outsideViewCone =
-          dist3DSq > VIEW_CONE_MIN_DIST_SQ &&
+          dist3DSq > VIEW_CONE_SKIP_WITHIN_SQ &&
           _toActor.normalize().dot(_raycaster.ray.direction) < VIEW_CONE_COS;
 
         if (outsideViewCone) {
           hitDistRef.current = Infinity;
         } else {
-          // Cache SkinnedMesh references on first use, sorted largest-first
-          // so the body mesh (most likely to hit) is tested before tiny face
-          // meshes, maximising early-exit probability.
+          // Largest-first so the body mesh is tested before tiny face meshes.
           if (cachedMeshesRef.current.length === 0) {
             groupRef.current.traverse((child) => {
               if ((child as THREE.SkinnedMesh).isSkinnedMesh)
@@ -167,12 +143,9 @@ export function useMouseEvents(
             );
           }
 
-          // Custom SkinnedMesh ray-triangle test. Three.js's built-in
-          // intersectObject silently drops valid hits for SkinnedMesh instances
-          // that mount after the initial batch (cause unknown — the geometry,
-          // bones, and matrices are all correct). This manual test uses the
-          // same data (getVertexPosition with bone transforms, local-space ray)
-          // and reliably produces hits that intersectObject misses.
+          // Manual SkinnedMesh triangle test: three's intersectObject silently
+          // drops valid hits for SkinnedMeshes mounted after the initial batch
+          // (cause unknown); this uses the same data and reliably hits.
           let hitDist = Infinity;
           const meshes = cachedMeshesRef.current;
 
@@ -181,13 +154,11 @@ export function useMouseEvents(
             const geo = sm.geometry;
             if (!geo.index) continue;
 
-            // Quick bounding-sphere rejection in world space
             if (!geo.boundingSphere) geo.computeBoundingSphere();
             _worldSphere.copy(geo.boundingSphere!).applyMatrix4(sm.matrixWorld);
             _worldSphere.radius *= 3; // inflate for animation
             if (!_raycaster.ray.intersectsSphere(_worldSphere)) continue;
 
-            // Build local-space ray
             _invMatrix.copy(sm.matrixWorld).invert();
             _localRay.copy(_raycaster.ray).applyMatrix4(_invMatrix);
 
@@ -199,12 +170,12 @@ export function useMouseEvents(
               if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
                 _hitPt.applyMatrix4(sm.matrixWorld);
                 hitDist = _raycaster.ray.origin.distanceTo(_hitPt);
-                break; // first hit is enough
+                break;
               }
             }
           }
           hitDistRef.current = hitDist;
-          if (hitDist <= d.hoverEnter) {
+          if (hitDist <= distances.hoverEnter) {
             isHovering = true;
           }
         }
@@ -221,8 +192,7 @@ export function useMouseEvents(
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
       raise(bb, "__mouse_hover_leave");
-      // Write false instead of delete — deleting keys forces the blackboard
-      // into dictionary mode; truthiness semantics are identical
+      // false, not delete: deleting keys forces the blackboard into dictionary mode.
       bb.__mouse_hover_active = false;
       if (growCursor) hideCursor();
     }
@@ -235,64 +205,58 @@ export function useMouseEvents(
     if (!externallyDriven) tickRef.current(camera);
   });
 
-  // DOM event listeners — use our manual raycast hit distance instead of
-  // R3F's internal intersectObject (which has the same SkinnedMesh bug).
   useEffect(() => {
     const dist = () => hitDistRef.current;
 
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if (dist() > d.leftClick) return;
+      if (dist() > distances.leftClick) return;
       raise(bb, "__mouse_left_click");
-      // Multiplayer: the SERVER runs this actor's machine (the actor base
-      // hangs its sync handle on the group). Forward the click — the server
-      // raises the same flag there; the machine's own distance trigger
-      // decides. Left click only: it is the input the machines branch on;
-      // hover stays local (cosmetic).
+      // Forwarded to the server's machine (left click only; hover stays local).
       const h = groupRef.current?.userData.sync as SyncHandle | undefined;
       if (h && h.known) h.interact("mouse-left-click");
     };
 
     const handleContextMenu = () => {
-      if (dist() > d.rightClick) return;
+      if (dist() > distances.rightClick) return;
       raise(bb, "__mouse_right_click");
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (dist() > d.leftClickDown) return;
+        if (dist() > distances.leftClickDown) return;
         raise(bb, "__mouse_left_click_down");
       } else if (e.button === 1) {
-        if (dist() > d.middleClick) return;
+        if (dist() > distances.middleClick) return;
         raise(bb, "__mouse_middle_click");
       } else if (e.button === 2) {
-        if (dist() > d.rightClickDown) return;
+        if (dist() > distances.rightClickDown) return;
         raise(bb, "__mouse_right_click_down");
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (dist() > d.leftClickUp) return;
+        if (dist() > distances.leftClickUp) return;
         raise(bb, "__mouse_left_click_up");
       } else if (e.button === 2) {
-        if (dist() > d.rightClickUp) return;
+        if (dist() > distances.rightClickUp) return;
         raise(bb, "__mouse_right_click");
         raise(bb, "__mouse_right_click_up");
       }
     };
 
     const handleDblClick = () => {
-      if (dist() > d.doubleClick) return;
+      if (dist() > distances.doubleClick) return;
       raise(bb, "__mouse_double_click");
     };
 
     const handleWheel = (e: WheelEvent) => {
-      if (dist() > d.scroll) return;
+      if (dist() > distances.scroll) return;
       raise(bb, "__mouse_scroll");
-      if (e.deltaY < 0 && dist() <= d.scrollUp) {
+      if (e.deltaY < 0 && dist() <= distances.scrollUp) {
         raise(bb, "__mouse_scroll_up");
-      } else if (e.deltaY > 0 && dist() <= d.scrollDown) {
+      } else if (e.deltaY > 0 && dist() <= distances.scrollDown) {
         raise(bb, "__mouse_scroll_down");
       }
     };
@@ -312,12 +276,10 @@ export function useMouseEvents(
       window.removeEventListener("dblclick", handleDblClick);
       window.removeEventListener("wheel", handleWheel);
     };
-  }, [bb, d]);
+  }, [bb, distances]);
 
-  // All events are handled via the DOM listeners + manual raycast above.
-  // Deliberately NOTHING is attached to the R3F group — returning even no-op
-  // pointer handlers registered every actor in R3F's interaction list,
-  // triggering a recursive raycast (full CPU-skinned triangle tests) per
-  // actor on every pointermove. The handle only exposes the frame tick.
+  // Deliberately NOTHING is attached to the R3F group: even no-op pointer
+  // handlers put every actor in R3F's interaction list — a recursive
+  // CPU-skinned raycast per actor on every pointermove.
   return useMemo<MouseEventsHandle>(() => ({ tick: (camera, distanceSq) => tickRef.current(camera, distanceSq) }), []);
 }

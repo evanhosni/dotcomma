@@ -3,26 +3,18 @@ import { _material } from "../../utils/material/_material";
 import { MaterialData, RegionMaterialData } from "../types";
 import { BiomeContext, RegionContext, useDomainStore } from "./context";
 
+/** Scope-aware: under <Domain> = river texture (between regions), under
+ *  <Region> = biome-boundary texture, under <Biome> = the fragment shader. */
 export interface MaterialConfigProps {
-  /** Domain scope: texture filename (public/textures/) blended near region boundaries (rivers). */
+  /** Filename under public/textures/. */
   riverTexture?: string;
-  /** Region scope: texture filename blended near biome boundaries within the region. */
+  /** Filename under public/textures/. */
   texture?: string;
-  /** Region scope alternative to `texture`: custom async loader. */
+  /** Region scope alternative to `texture`. */
   getRegionMaterial?: () => Promise<RegionMaterialData>;
-  /** Biome scope: returns the biome's fragment shader + uniforms. */
   getMaterial?: () => Promise<MaterialData>;
 }
 
-/**
- * Scope-aware material config. Where it's mounted decides what it configures:
- *
- * - Inside <Domain>:  the river texture blended between regions.
- * - Inside <Region>: the biome-boundary texture for that region.
- * - Inside <Biome>:  the biome's terrain fragment shader (`getMaterial`).
- *
- * Renders nothing — pure registration.
- */
 export const Material = ({ riverTexture, texture, getRegionMaterial, getMaterial }: MaterialConfigProps) => {
   const store = useDomainStore("Material");
   const biome = useContext(BiomeContext);

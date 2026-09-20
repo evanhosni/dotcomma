@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useDevMode } from "../../context/DevContext";
+import { useDevContext } from "../../context/DevContext";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 
 const FONT = "'Kode Mono','Courier New',Courier,monospace";
@@ -19,7 +19,6 @@ function createCheckbox(
     "appearance:none;width:12px;height:12px;border:1px solid #0f0;border-radius:2px;" +
     "background:transparent;cursor:pointer;position:relative;flex-shrink:0;";
 
-  // Checked state styling via change event
   const updateStyle = () => {
     input.style.background = input.checked ? "#0f0" : "transparent";
   };
@@ -40,12 +39,11 @@ function createCheckbox(
 }
 
 export const DevOverlay = () => {
-  const { devMode, noclip, physicsDebug, setNoclip, setPhysicsDebug } = useDevMode();
+  const { devMode, noclip, physicsDebug, setNoclip, setPhysicsDebug } = useDevContext();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const noclipInputRef = useRef<HTMLInputElement | null>(null);
   const physicsInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Build DOM once
   useEffect(() => {
     const column = getOrCreateLeftColumn();
 
@@ -77,14 +75,13 @@ export const DevOverlay = () => {
     };
   }, []);
 
-  // Sync visibility with devMode
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.style.display = devMode ? "block" : "none";
     }
   }, [devMode]);
 
-  // Sync checkbox state when toggled externally (e.g. devmode turned off resets them)
+  // Devmode turning off resets the toggles externally.
   useEffect(() => {
     if (noclipInputRef.current && noclipInputRef.current.checked !== noclip) {
       noclipInputRef.current.checked = noclip;

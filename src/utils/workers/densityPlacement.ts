@@ -1,17 +1,8 @@
 /**
- * Density-grid placement — the ONE implementation of "density cell → seeded
- * roll → seeded jitter → placement filters".
- *
- * Three systems place objects on this scheme and MUST agree to the bit: the
- * spawn worker (actors), the flatten-pad engine inside the height function
- * (which replays a flattenGround actor's candidates so every instance sits on
- * a pad) and the dressing worker's stateless density placement (street
- * lamps). They used to be three hand-kept copies of the same seeds and
- * filters; a divergence would have desynced pads from buildings without any
- * error. Each caller keeps only its own spacing rule (stateful hash / greedy
- * / Matérn rounds).
- *
- * Worker-safe: no THREE, no DOM.
+ * THE density-grid placement: cell → seeded roll → seeded jitter → filters. The
+ * spawn worker, the flatten-pad engine and the dressing worker's DENSITY_POINTS
+ * must agree to the BIT (pads under buildings), so there is exactly one copy;
+ * each caller keeps only its own spacing rule. Worker-safe: no THREE, no DOM.
  */
 
 import { seedRand } from "../math/_math";
@@ -36,13 +27,7 @@ export interface DensityCandidate {
   z: number;
 }
 
-/**
- * Roll one density cell. Returns the jittered candidate position, or null when
- * the cell rolls empty (probability or clustering gate). Seeds are
- * `${id}_${gx}_${gz}` (+ "_x"/"_z" for the jitter, `cluster_` prefix for the
- * gate) — the exact strings every consumer has always used, so worlds are
- * unchanged.
- */
+/** Seeds are `${id}_${gx}_${gz}` (+ "_x"/"_z" jitter, `cluster_` gate) — the strings every consumer has always used. */
 export const rollDensityCell = (
   id: string,
   gx: number,
@@ -60,9 +45,7 @@ export const rollDensityCell = (
   };
 };
 
-/** The shared placement filters (objects/types.ts GameObjectAttributes) against a
- *  computed vertex. Slope is not part of the vertex result — the spawn worker
- *  and foliage worker evaluate slopeRange themselves. */
+/** Slope is not in VertexResult — the spawn and foliage workers evaluate slopeRange themselves. */
 export const passesPlacementFilters = (
   vd: Pick<VertexResult, "biomeId" | "height" | "distanceToRoadCenter">,
   f: Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange">,
@@ -77,8 +60,7 @@ export const passesPlacementFilters = (
   return true;
 };
 
-/** Parameters of the dressing worker's stateless density placement
- *  (DENSITY_POINTS) — shared by the client (dressingWorker.ts) and the worker. */
+/** DENSITY_POINTS params — shared by dressingWorker.ts and the worker. */
 export interface DensityPointParams extends Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange"> {
   /** Seed namespace — distinct from spawn-system descriptor ids. */
   seedTag: string;

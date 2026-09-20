@@ -23,18 +23,15 @@ import { useKinematicMover, type ColliderSpec, type MoveIntent } from "./kinemat
 
 export { MAX_COLLIDER_RENDER_DISTANCE };
 
-// Animation LOD: mixers pause while frustum-culled and run at half rate past
-// this fraction of the render distance. Skipped time accumulates (capped) so
-// looping animations stay continuous when the object reappears.
+// Animation LOD: mixers run at half rate past this fraction of renderDistance;
+// skipped time accumulates (capped) so loops stay continuous.
 const ANIM_HALF_RATE_FRACTION = 0.4;
 const MAX_ANIM_CATCHUP = 0.5;
 
 const taskQueue = new TaskQueue();
 
-// Debug "E = toggle animations" (only for instances NOT driven by a state
-// machine): ONE shared window listener + flag instead of a keydown listener
-// per instance — hundreds of mounted spawns each registering their own
-// listener made every keypress O(spawns) even when nothing used the feature.
+// Debug "E = toggle animations" for instances without a state machine. ONE
+// shared listener — one per instance made every keypress O(spawns).
 let manualAnimationsPlaying = false;
 const manualAnimationSubscribers = new Set<() => void>();
 let manualAnimationListenerAttached = false;
@@ -50,48 +47,29 @@ const ensureManualAnimationListener = (): void => {
 
 useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
-/** The GLTF ACTOR: a model at a spawn point. Extends the actor base (see
- *  ./Actor.tsx) — fade, hard-kill, frustum culling, collider gating, warm-up
- *  and the shared frame driver all come from useActorLifecycle; this component
- *  adds only what is GLTF-specific: the pooled model clone, its colliders, and
- *  the animation mixer + LOD. Base attribute types live in objects/types.ts. */
-/** Attributes of GLTF-model actors — settable on the descriptor, forwarded to
- *  every instance. */
 export interface ModelActorAttributes extends ActorAttributes {
-  /** GLTF path (also preloaded by the pool). */
   model: string;
-  /** Render scale, default [1,1,1]. */
   scale?: THREE.Vector3Tuple;
-  /** Colliders never move (default true; movers like the beeble pass false). */
-  isStatic?: boolean;
+  /** Colliders never move (default true; movers pass false). */
+  collidersNeverMove?: boolean;
   /** One trimesh over the whole model instead of per-node colliders. */
   wholeTrimesh?: boolean;
-  /** GLTF node names to skip when building colliders. */
   excludeColliderNames?: string[];
-  /** How this model exists in the physics world (kinematicMover.tsx):
-   *  "fixed" (default) — colliders from the GLTF, never moves;
-   *  "kinematic" — a body ModelActor moves from the owner's ctx.move intent
-   *  (synced: parked at the server's pose — the server simulates it);
-   *  "none" — no colliders at all. */
+  /** "fixed" (default) = GLTF colliders, never moves; "kinematic" = moved by
+   *  the owner's ctx.move intent (synced: parked at the server's pose). */
   body?: "none" | "fixed" | "kinematic";
   /** Kinematic body shape (default capsule r0.5 h2). */
   collider?: ColliderSpec;
-  /** Kinematic: "ground" (gravity, snap, slopes — walkers) or "free" (flyers). */
+  /** Kinematic: "ground" = walkers (gravity, snap, slopes), "free" = flyers. */
   movement?: "ground" | "free";
 }
 
 export interface ModelActorProps extends ActorProps<ModelActorAttributes> {
-  /** Body CENTER position: for body "kinematic" ModelActor WRITES it every
-   *  frame (state machines read it); otherwise the actor is static at
-   *  `coordinates` and this is unused. */
+  /** Body CENTER; written every frame by a kinematic ModelActor, unused otherwise. */
   positionRef?: React.MutableRefObject<THREE.Vector3>;
-  /** Receive the model group (state machines rotate it / look up bones). */
   groupRef?: React.MutableRefObject<THREE.Group | null>;
   animationControl?: AnimationControl;
-  /** Owner's per-frame work (physics step, state machine, mouse events),
-   *  run inside the shared actor driver AFTER the animation LOD — the one
-   *  place an actor built on <ModelActor> gets a frame callback. Never add a
-   *  useFrame in the owning component instead. */
+  /** The one frame callback an owner gets — never add a useFrame in the owner. */
   onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
 }
 
@@ -120,26 +98,19 @@ export const ModelActor = ({
   frustumPadding,
   onDestroy,
   animationControl,
-  isStatic = true,
+  collidersNeverMove = true,
   wholeTrimesh = false,
   excludeColliderNames,
   quantization,
   onFrame,
 }: ModelActorProps) => {
-  // No owner moving us → static at the spawn point (own ref + own placement).
   const staticPositionRef = useRef(new THREE.Vector3(...coordinates));
   const positionRef = ownerPositionRef ?? staticPositionRef;
   const selfPositioned = !ownerPositionRef;
   const gltf = useGLTF(model);
 
-  // Prepared clone from the pool — despawn/respawn churn reuses parked clones
-  // (materials already patched, mixer bound, bounds measured) instead of
-  // re-running the whole clone pipeline per mount. A POOL HIT is taken
-  // synchronously during render (the common steady-state case); a MISS —
-  // the first N simultaneous mounts of a model — renders null and builds the
-  // clone through the shared task queue, the same peek-then-queue pattern as
-  // <Building>: a spawn batch of 20 fresh beebles used to run 20 full
-  // scene-clone + material-patch + bounds pipelines inside one React commit.
+  // Pool HIT is taken synchronously in render; a MISS renders null and builds
+  // on the task queue (20 fresh clones in one React commit was a hitch).
   const [pooled, setPooled] = useState<PooledModelClone | null>(() =>
     acquirePooledModelClone(model, quantization),
   );
@@ -156,19 +127,13 @@ export const ModelActor = ({
   }, [pooled, model, gltf, quantization]);
 
   const animDeltaRef = useRef(0);
-  // Half-rate parity is PHASE-OFFSET per instance: starting every actor at
-  // `false` made a whole spawn batch run (and skip) its mixer updates on the
-  // same frames — the lockstep the codebase's phase-offset rule exists for.
+  // Phase-offset per instance, or a whole spawn batch skips mixer updates on the same frames.
   const animFrameParityRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 2) === 1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ColliderState | null>(null);
 
-  // Actions are created LAZILY by clip name: beeble.glb carries 14 clips
-  // (298 tracks) of which the state machine ever plays 4 — eagerly binding
-  // every clip put all the unused tracks through the mixer's property-binding
-  // graph for every instance. Nothing binds a clip until something plays it.
-  // The actions map lives on the pooled record, so a reused clone keeps its
-  // already-bound actions.
+  // Lazy binding: beeble.glb carries 14 clips (298 tracks) of which 4 ever
+  // play; eager binding pushed every unused track through the mixer per instance.
   const getOrCreateAction = (clipName: string): THREE.AnimationAction | null => {
     const mixer = pooled?.mixer;
     if (!pooled || !mixer) return null;
@@ -182,8 +147,6 @@ export const ModelActor = ({
     return action;
   };
 
-  // Whether this instance has colliders at all is known from the (cached)
-  // collider result; collider-less models (beeble) skip the gate entirely.
   const hasColliders =
     colliders !== null &&
     colliders.capsuleColliders.length +
@@ -192,9 +155,7 @@ export const ModelActor = ({
       colliders.trimeshColliders.length >
       0;
 
-  // Synced clip → mixer: animation is STATE (clip + server start time), so
-  // every client plays the same clip in phase. Owned here, next to the mixer,
-  // for EVERY model actor — no actor writes this itself.
+  // Synced animation is STATE (clip + server start time): every client plays it in phase.
   const syncAnimRef = useRef<AnimationControl>({ pendingCommand: null, dirty: false });
   const syncClipRef = useRef<string | null>(null);
   const syncClipT0Ref = useRef(0);
@@ -211,7 +172,6 @@ export const ModelActor = ({
     despawnDistance,
     onDestroy,
     frustumPadding,
-    // Until the clone lands nothing renders, so the frustum test is moot.
     boundsRadius: pooled ? pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]) : undefined,
     applyFade: (opacity) => {
       if (!pooled) return;
@@ -221,38 +181,28 @@ export const ModelActor = ({
         mats[i].transparent = opacity < 1;
       }
     },
-    // Colliders gate on DISTANCE only — physics must not depend on where the
-    // camera points (gating on the frustum result unmounted and rebuilt the
-    // Rapier colliders every time the player turned around).
+    // Distance only — gating on the frustum rebuilt the Rapier colliders every time the player turned around.
     colliderDistance: hasColliders
       ? Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2)
       : undefined,
     onFrame: (state, delta, ctx) => {
-      // Owner's work first (state machine → velocities → physics), so the
-      // animation command it may raise this frame is applied right below.
-      // The component's logic runs on every client (mouse raycasts, mirrored
-      // visuals); when the SERVER simulates this actor its outputs — move
-      // intent, animation commands, transform — are overridden below, so no
-      // component ever branches on it.
+      // The owner's logic runs on every client; when the server simulates this
+      // actor its outputs (intent, animation, transform) are overridden below.
       moveIntent.vx = 0;
       moveIntent.vz = 0;
       moveIntent.vy = null;
       ctx.move = moveIntent;
       onFrame?.(state, delta, ctx);
-      const puppet = !!ctx.sync && ctx.sync.known;
-      mover.step(delta, ctx, moveIntent, puppet);
+      const serverDriven = !!ctx.sync && ctx.sync.known;
+      mover.step(delta, ctx, moveIntent, serverDriven);
 
       if (!pooled) return;
 
-      // Animation. Synced: the server's clip, started in phase (server time).
-      // Local: the state machine's command stream.
       let control: AnimationControl | undefined = animationControl;
-      if (puppet) {
+      if (serverDriven) {
         if (animationControl) animationControl.dirty = false; // consume, never apply
-        // The clip switches on the same DELAYED server clock the pose is
-        // drawn on (snapshot interpolation), so a beeble's idle clip starts
-        // exactly as its interpolated body reaches the spot the server
-        // stopped it — not INTERP_DELAY_MS earlier.
+        // Clip switches on the same DELAYED clock the pose is drawn on, so the
+        // idle clip starts exactly as the interpolated body reaches the stop.
         const r = ctx.sync!.entity?.remote;
         const renderTime = getServerTime() - INTERP_DELAY_MS;
         if (
@@ -276,16 +226,13 @@ export const ModelActor = ({
         syncClipRef.current = null;
       }
 
-      // Animation commands (cheap — always processed so state changes apply
-      // even while the mixer itself is LOD-skipped)
+      // Commands are processed even while the mixer itself is LOD-skipped.
       if (control && pooled.mixer && control.dirty) {
         control.dirty = false;
         const cmd = control.pendingCommand;
         if (cmd) {
           const targetAction = getOrCreateAction(cmd.clipName);
           if (targetAction) {
-            // Stop the materialized actions to clear the mixer (clips nothing
-            // ever played were never bound — there's nothing else to stop)
             pooled.actions.forEach((action) => {
               action.stop();
             });
@@ -305,9 +252,6 @@ export const ModelActor = ({
         }
       }
 
-      // Animation LOD: skinned/keyframe updates are the per-frame CPU cost of
-      // animated spawns. Skip entirely while frustum-culled; halve the rate at
-      // distance. Delta accumulates so loops stay continuous on reappear.
       const mixer = pooled.mixer;
       if (mixer && (control || isPlaying)) {
         animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
@@ -323,9 +267,6 @@ export const ModelActor = ({
     },
   });
 
-  // The kinematic body (body: "kinematic"): owner intent → movement, puppet →
-  // parked at the server's pose (the base places the model). Renders nothing
-  // when not kinematic.
   const mover = useKinematicMover({
     enabled: isKinematic,
     collider,
@@ -335,17 +276,11 @@ export const ModelActor = ({
     groupRef: lifecycle.groupRef,
   });
 
-  // Ownership + per-life reset. Creation-time work (material patching, GPU
-  // warm draw, bounds measure) happened in the pool; here we only reset the
-  // shared state this life mutates. reclaim/release are StrictMode-safe: the
-  // dev remount's cleanup schedules a DEFERRED release that the immediate
-  // re-setup cancels, so the clone never changes owner mid-remount.
   useEffect(() => {
     if (!pooled) return;
     reclaimModelClone(pooled);
 
-    // Fade starts invisible each life (also covers the StrictMode reclaim
-    // path, where no acquire ran to reset the pooled materials).
+    // Also covers the StrictMode reclaim path, where no acquire reset the materials.
     for (const mat of pooled.materials) {
       mat.opacity = 0;
       mat.transparent = true;
@@ -355,16 +290,12 @@ export const ModelActor = ({
     return () => releaseModelClone(pooled);
   }, [pooled]);
 
-  // E-key animation toggle (only when not driven by a state machine) —
-  // subscribes to the ONE shared module-level keydown listener.
   useEffect(() => {
     if (animationControl || !pooled) return;
 
     const apply = () => {
       setIsPlaying(manualAnimationsPlaying);
       if (manualAnimationsPlaying) {
-        // Materialize + play every clip (original behavior: all clips run
-        // together while the debug toggle is on)
         for (const clip of pooled.animations ?? []) {
           const action = getOrCreateAction(clip.name);
           if (action) {
@@ -397,9 +328,9 @@ export const ModelActor = ({
     };
 
     taskQueue.addTask(task);
-  }, [gltf]); // scale/rotation omitted: stable per instance, only used for collider creation
+  }, [gltf]); // scale/rotation are stable per instance
 
-  if (!pooled) return null; // clone still building on the queue
+  if (!pooled) return null;
 
   const setGroup = (el: THREE.Group | null) => {
     (lifecycle.groupRef as React.MutableRefObject<THREE.Group | null>).current = el;
@@ -415,16 +346,16 @@ export const ModelActor = ({
       {body !== "kinematic" && body !== "none" && lifecycle.collidersActive && colliders && (
         <>
           {colliders.capsuleColliders.map((collider, index) => (
-            <CapsuleCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
+            <CapsuleCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
           ))}
           {colliders.sphereColliders.map((collider, index) => (
-            <SphereCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
+            <SphereCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
           ))}
           {colliders.boxColliders.map((collider, index) => (
-            <BoxCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
+            <BoxCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
           ))}
           {colliders.trimeshColliders.map((collider, index) => (
-            <TrimeshCollider key={index} {...collider} positionRef={positionRef} isStatic={isStatic} />
+            <TrimeshCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
           ))}
         </>
       )}

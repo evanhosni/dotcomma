@@ -1,26 +1,13 @@
 import * as THREE from "three";
 import { createFoliage } from "../Foliage";
 
-/**
- * GRASS — the first foliage type. Everything that makes a field work (chunk
- * streaming, the instanced billboard mesh, the sway/billboard/fade shader, the
- * distance LOD, world curvature, quantization) lives in the FOLIAGE base
- * (../Foliage.tsx); a plant type is only its art and its defaults, and every
- * knob stays overridable at the mount:
- *
- *   <Foliage renderDistance={1000}>
- *     <GrassField density={8_000_000} color="#6fff00" height={1.3} sway={0.5} />
- *   </Foliage>
- *
- * A shrub, a fern, a wheat field: copy this file, draw a different billboard,
- * pick a different seed. There is no pipeline to duplicate.
- */
+// A plant type is only its art and its defaults; the pipeline is ../Foliage.tsx. Copy this
+// file for a shrub or fern — different billboard, different seed.
 
 let bladeTexture: THREE.CanvasTexture | null = null;
 
-/** Procedurally drawn tapered grass blade — near-white so `color` defines the
- *  tint. Module-level and cached: the base keys its material on this
- *  function's identity, and every grass field shares the one texture. */
+/** Near-white so `color` defines the tint. Module-level: the base keys its material on this
+ *  function's identity. */
 const getBladeTexture = (): THREE.CanvasTexture => {
   if (bladeTexture) return bladeTexture;
 
@@ -46,9 +33,7 @@ const getBladeTexture = (): THREE.CanvasTexture => {
 };
 
 export const GrassField = createFoliage({
-  // "grass" is this type's placement seed — changing it moves every blade in
-  // the world, and no other plant type may reuse it (same seed + density =
-  // same points, so the two fields would grow through each other).
+  // No other plant type may reuse this seed (same seed + density = same points).
   seed: "grass",
   texture: getBladeTexture,
   color: "#6a9c45",

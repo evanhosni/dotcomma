@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useDevMode } from "../../context/DevContext";
+import { useDevContext } from "../../context/DevContext";
 
 const EXPIRE_MS = 30_000;
 const CHECK_INTERVAL_MS = 1_000;
@@ -29,7 +29,7 @@ interface LogEntry {
 }
 
 export const LogsOverlay = () => {
-  const { devMode } = useDevMode();
+  const { devMode } = useDevContext();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const entriesRef = useRef<LogEntry[]>([]);
   const activeRef = useRef(devMode);

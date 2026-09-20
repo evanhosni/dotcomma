@@ -3,42 +3,34 @@ import type { EntityRegisterItem, EntityUpdateFields, ServerMessage } from "../p
 import { pushSnapshot, type Snapshot } from "./interpolation";
 
 /**
- * Client ENTITY STORE — every synced actor this client is rendering and the
- * SERVER's last published fields for it (merged). The server is the only
- * authority; this client, like every other, is a puppet. Plain module state
- * read by the actor base every frame; React-facing code subscribes per id for
- * the UI-cadence events (replicated state, clip, machine state id).
- *
- * Registration is batched: a spawn commit mounts many actors at once, so
- * register/unregister calls are collected and sent as one message on the
- * next macrotask. After every `init` (connect, reconnect, domain switch) the
- * whole live set is re-registered — the server forgot us.
+ * Every synced actor this client renders + the server's last published fields
+ * (merged). Module state read by the actor base per frame; React subscribes
+ * per id for UI-cadence events only. Register/unregister are batched onto the
+ * next macrotask (a spawn commit mounts many actors at once).
  */
 
 export interface RemoteFields extends EntityUpdateFields {
-  /** performance.now() when x/y/z last arrived (extrapolation base). */
-  at: number;
+  /** performance.now() when x/y/z last arrived. */
+  receivedAt: number;
 }
 
 export interface ClientEntity {
   id: string;
   kind: string;
   origin: { x: number; y: number; z: number };
-  /** Merged fields as last received from the server; null until acknowledged. */
+  /** null until the server has acknowledged the registration. */
   remote: RemoteFields | null;
-  /** The published TRACK: every positional update as a server-time-stamped
-   *  snapshot, oldest first (interpolation.ts — the actor base samples it). */
+  /** Server-time-stamped positional track, oldest first (interpolation.ts). */
   snapshots: Snapshot[];
   listeners: Set<(e: ClientEntity) => void>;
 }
 
 const entities = new Map<string, ClientEntity>();
 
-// ── batching ───────────────────────────────────────────────────────────────
-
 const MAX_PER_MESSAGE = 64; // ~100 bytes per item → ~6KB frames, well under the server cap
-/** A single update moving an entity farther than this is a server-side relocation (see onMessage). */
-const SERVER_JUMP_WARN = 5;
+/** Consecutive walker updates are ≤ ~0.5u apart (5u/s at 10Hz); a bigger jump is a
+ *  server-side relocation (restart, backstop) — logged so a "teleport" report can be attributed. */
+const SERVER_RELOCATION_WARN_DIST = 5;
 let pendingRegister: EntityRegisterItem[] = [];
 let pendingUnregister: string[] = [];
 let flushScheduled = false;
@@ -62,8 +54,6 @@ const scheduleFlush = () => {
   flushScheduled = true;
   setTimeout(flush, 0);
 };
-
-// ── public API ─────────────────────────────────────────────────────────────
 
 export const getEntity = (id: string): ClientEntity | undefined => entities.get(id);
 
@@ -90,10 +80,9 @@ export const unregisterEntity = (id: string): void => {
   scheduleFlush();
 };
 
-/** Client → server: an input on this entity ("mouse-left-click", "door:2"). */
 export const interactEntity = (id: string, action: string): boolean => send({ t: "entity:interact", id, action });
 
-/** UI-cadence subscription: state blob, clip, machine state id. */
+/** Fires on state / clip / machine-state changes only, never on movement. */
 export const subscribeEntity = (id: string, fn: (e: ClientEntity) => void): (() => void) => {
   const e = entities.get(id);
   if (!e) return () => {};
@@ -105,15 +94,11 @@ export const subscribeEntity = (id: string, fn: (e: ClientEntity) => void): (() 
 
 const notify = (e: ClientEntity) => e.listeners.forEach((l) => l(e));
 
-// ── wire → store ───────────────────────────────────────────────────────────
-
 const onMessage = (msg: ServerMessage) => {
   switch (msg.t) {
     case "init": {
-      // Fresh session: re-register everything still mounted (last known
-      // fields are kept so nothing pops while the server answers). If the
-      // SERVER restarted, its answers put every NPC back at its spawn point —
-      // a mass teleport that is a dev-loop artifact (tsx watch), not sync.
+      // The server forgot us: re-register everything mounted, keeping the last
+      // known fields so nothing pops while it answers.
       if (entities.size) console.warn(`[sync] session reset — re-registering ${entities.size} entities (a server restart resets NPCs to spawn)`);
       for (const e of entities.values()) {
         pendingRegister.push({ id: e.id, kind: e.kind, x: e.origin.x, y: e.origin.y, z: e.origin.z });
@@ -125,22 +110,17 @@ const onMessage = (msg: ServerMessage) => {
       const e = entities.get(msg.id);
       if (!e) break;
       const { t: _t, id: _id, ...fields } = msg;
-      const next: RemoteFields = { ...(e.remote ?? { at: 0 }), ...fields };
+      const next: RemoteFields = { ...(e.remote ?? { receivedAt: 0 }), ...fields };
       if (fields.x !== undefined || fields.z !== undefined || fields.y !== undefined) {
-        // Diagnostic: the SERVER's own track jumped. Consecutive updates of a
-        // walker are ≤ ~0.5u apart (5u/s at 10Hz); anything larger is a
-        // server-side relocation (restart → spawn, backstop/stuck lift), never
-        // client rendering. Lets a "beeble teleported" report be attributed.
         const r = e.remote;
         if (r && r.x !== undefined && r.z !== undefined && fields.x !== undefined && fields.z !== undefined) {
           const jump = Math.hypot(fields.x - r.x, fields.z - r.z, (fields.y ?? r.y ?? 0) - (r.y ?? 0));
-          if (jump > SERVER_JUMP_WARN) {
+          if (jump > SERVER_RELOCATION_WARN_DIST) {
             console.warn(`[sync] server moved ${e.id} by ${jump.toFixed(1)}u in one update (${r.x.toFixed(1)},${r.z.toFixed(1)} → ${fields.x.toFixed(1)},${fields.z.toFixed(1)})`);
           }
         }
-        next.at = performance.now();
-        // Snapshot for interpolation: the tick's server time with the MERGED
-        // pose (an update may carry only the changed axes).
+        next.receivedAt = performance.now();
+        // The MERGED pose: an update may carry only the changed axes.
         pushSnapshot(e.snapshots, {
           st: next.st ?? (e.snapshots[e.snapshots.length - 1]?.st ?? 0) + 100,
           x: next.x ?? 0,
@@ -153,7 +133,6 @@ const onMessage = (msg: ServerMessage) => {
         });
       }
       e.remote = next;
-      // Transforms are consumed by the frame loop; only UI-relevant fields notify.
       if (fields.state !== undefined || fields.clip !== undefined || fields.sm !== undefined) notify(e);
       break;
     }
@@ -162,7 +141,6 @@ const onMessage = (msg: ServerMessage) => {
 
 onServerMessage(onMessage);
 
-// Console access: __entities.size, __entities.list(), __entities.get(id)
 (window as unknown as { __entities: unknown }).__entities = {
   get size() {
     return entities.size;

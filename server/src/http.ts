@@ -3,15 +3,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/**
- * Static serving of the built CRA client. The server's ONLY HTTP job — assets
- * (models, textures, audio) come from the public R2 bucket, fetched by the
- * browser directly, never through here.
- *
- * Resolved relative to this file so it works from `server/dist` (prod) and
- * from `server/src` under tsx (dev) alike: both are one level below `server/`,
- * and the client build is at `<repo>/build`.
- */
+// Relative to this file: server/dist (prod) and server/src (tsx dev) are both one
+// level below server/, and the client build is at <repo>/build.
 const CLIENT_BUILD_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../build");
 
 const ONE_YEAR_S = 60 * 60 * 24 * 365;
@@ -24,9 +17,8 @@ export const createApp = (): Express => {
     console.warn(`[http] no client build at ${CLIENT_BUILD_DIR} — run \`npm run build\` at the repo root`);
   }
 
-  // CRA content-hashes everything under build/static, so it is safe to cache
-  // forever. index.html is NOT hashed and must never be cached, or a deploy
-  // would keep serving an index that points at chunks that no longer exist.
+  // build/static is content-hashed → immutable. index.html is NOT, and a cached
+  // index would point at chunks a deploy removed.
   app.use(
     "/static",
     express.static(path.join(CLIENT_BUILD_DIR, "static"), {
@@ -44,9 +36,7 @@ export const createApp = (): Express => {
     }),
   );
 
-  // Catch-all: the client's domain paths (/, /glitch-city) are client-side
-  // pushState routes, so every unknown GET gets index.html and the client
-  // boots whichever domain the path names.
+  // Domain paths (/, /glitch-city) are client-side pushState routes.
   app.get("*", (req, res, next) => {
     if (req.method !== "GET" || req.path.includes(".")) return next();
     res.setHeader("Cache-Control", "no-cache");

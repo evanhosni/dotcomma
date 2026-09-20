@@ -13,20 +13,16 @@ import {
   VoronoiWall,
 } from "./types";
 
-// Everything in this worker is 2D on the HORIZONTAL world plane: points are
-// { x, z } (PointXZ), never THREE.Vector2 — the world is y-up and `y` is
-// height everywhere in the codebase. This is the low-rate main-thread lookup
-// (Skybox / stats overlay); the terrain pipeline runs the same algorithm
-// inlined in utils/workers/vertexCompute.ts, and the two MUST roll identical
-// seeds (`${seed} - ${ix}X${iz}` / `${seed} - ${ix}Z${iz}`) to agree on the
-// biome at a point.
+// The low-rate main-thread biome lookup (Skybox / stats overlay). The terrain
+// pipeline runs the same algorithm inlined in utils/workers/vertexCompute.ts;
+// the two MUST roll identical jitter seeds (`${seed} - ${ix}X${iz}` / `${ix}Z${iz}`).
 
 interface MessageData {
   type: VORONOI_FUNCTION;
   params: VoronoiCreateParams | VoronoiCreateParams[] | VoronoiGetDistanceToWallParams;
 }
 
-const caches: any = {};
+const gridCachesBySeed: any = {};
 const taskQueue = new TaskQueue();
 
 self.onmessage = function (event: MessageEvent<MessageData>) {
@@ -36,7 +32,7 @@ self.onmessage = function (event: MessageEvent<MessageData>) {
 async function handleTask(task: MessageData) {
   const { type, params } = task;
 
-  const create = (params: VoronoiCreateParams) => {
+  const classifyPoint = (params: VoronoiCreateParams) => {
     const { seed, currentVertex, regionGridSize, regions, gridSize, biomes } = params as VoronoiCreateParams;
     const vertex: PointXZ = { x: currentVertex.x, z: currentVertex.z };
 
@@ -88,7 +84,6 @@ async function handleTask(task: MessageData) {
     const biome = getCurrentBiome(vertex, grid);
     const biomeSite = getCurrentBiomeSite(vertex, grid);
 
-    // Get walls with river boundary information
     const { biomeWalls, riverWalls } = getWalls({
       seed: `${seed} - walls`,
       currentVertex: vertex,
@@ -117,8 +112,8 @@ async function handleTask(task: MessageData) {
     const x = Math.floor(currentVertex.x / gridSize);
     const z = Math.floor(currentVertex.z / gridSize);
 
-    if (!caches[seed]) caches[seed] = {};
-    const cache = caches[seed];
+    if (!gridCachesBySeed[seed]) gridCachesBySeed[seed] = {};
+    const cache = gridCachesBySeed[seed];
 
     const gridKey = `${x},${z}`;
     let grid: VoronoiGrid[] = cache[gridKey];
@@ -171,7 +166,6 @@ async function handleTask(task: MessageData) {
     return getNearestEntry(point, regionGrid).point;
   };
 
-  // Cache Delaunay triangulation + circumcenters keyed by grid identity
   const delaunayCache = new WeakMap<VoronoiGrid[], { delaunay: Delaunator<ArrayLike<number>>; circumcenters: number[] }>();
 
   const getDelaunayData = (grid: VoronoiGrid[]) => {
@@ -185,7 +179,6 @@ async function handleTask(task: MessageData) {
     }
     const delaunay = new Delaunator(coords);
 
-    // Pre-compute circumcenters as flat [x, z, x, z, ...] array
     const circumcenters: number[] = [];
     for (let i = 0; i < delaunay.triangles.length; i += 3) {
       const ai = delaunay.triangles[i];
@@ -210,7 +203,6 @@ async function handleTask(task: MessageData) {
     return cached;
   };
 
-  /** Find the two nearest grid entries to a point (by squared distance). */
   const getTwoNearest = (px: number, pz: number, grid: VoronoiGrid[]) => {
     let min1 = Infinity, min2 = Infinity;
     let idx1 = 0, idx2 = 1;
@@ -232,8 +224,8 @@ async function handleTask(task: MessageData) {
     const x = Math.floor(currentVertex.x / gridSize);
     const z = Math.floor(currentVertex.z / gridSize);
 
-    if (!caches[seed]) caches[seed] = {};
-    const cache = caches[seed];
+    if (!gridCachesBySeed[seed]) gridCachesBySeed[seed] = {};
+    const cache = gridCachesBySeed[seed];
 
     const { delaunay, circumcenters } = getDelaunayData(grid);
 
@@ -256,7 +248,6 @@ async function handleTask(task: MessageData) {
         if (cache[label] === undefined) {
           const [nearest1, nearest2] = getTwoNearest(midX, midZ, grid);
 
-          // Find which region each biome belongs to
           const region1 = getNearestEntry(nearest1.point, regionGrid)?.element;
           const region2 = getNearestEntry(nearest2.point, regionGrid)?.element;
 
@@ -304,7 +295,6 @@ async function handleTask(task: MessageData) {
       const ax = wall.sx, az = wall.sz;
       const bx = wall.ex, bz = wall.ez;
 
-      // Inline closest-point-on-segment distance on the horizontal plane
       const dx = bx - ax, dz = bz - az;
       const lenSq = dx * dx + dz * dz;
       let t = lenSq > 0 ? ((px - ax) * dx + (pz - az) * dz) / lenSq : 0;
@@ -320,7 +310,7 @@ async function handleTask(task: MessageData) {
   };
 
   if (type === VORONOI_FUNCTION.CREATE) {
-    const voronoiData = create(params as VoronoiCreateParams);
+    const voronoiData = classifyPoint(params as VoronoiCreateParams);
     self.postMessage(voronoiData);
   }
 

@@ -2,11 +2,7 @@ import { existsSync } from "node:fs";
 import { openDatabase, resolveDatabasePath } from "../data/db.js";
 import { getSchemaVersion, MIGRATIONS } from "../data/migrations.js";
 
-/**
- * `npm run db:inspect [-- --id <identity>] [-- --limit N]` — look at the
- * database without touching it: file, schema version, row count, and the
- * most recently updated player rows (or one row by id).
- */
+/** `npm run db:inspect [-- --id <identity>] [-- --limit N]` — read-only. */
 const argv = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name);
@@ -31,8 +27,7 @@ if (version !== MIGRATIONS.length) {
   process.exit(0);
 }
 
-// The data layer asserts a current schema at import, hence the dynamic import
-// after the version check above.
+// players.ts asserts a current schema at import — hence dynamic, after the check.
 const { countPlayers, findPlayer, listPlayers } = await import("../data/players.js");
 const fmt = (ms: number) => new Date(ms).toISOString();
 

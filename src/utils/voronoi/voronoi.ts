@@ -1,12 +1,8 @@
 import { getAllBiomes } from "../utils";
 import { VORONOI_FUNCTION, VoronoiCreateParams, VoronoiQueue } from "./types";
 
-// ONE worker, created LAZILY on the first lookup: the only voronoi.create
-// callers are Skybox.tsx and Overlay.tsx (low-rate biome lookups), so an eager
-// module-import Worker sat idle on the home page. Terrain-side voronoi runs
-// inlined inside the terrain/spawn/grass workers (utils/workers/vertexCompute.ts).
-// The worker is stateless per call (params carry regions/seed), so it is not
-// reset on domain switches.
+// Created LAZILY: the only callers (Skybox, Overlay) are low-rate, and an eager
+// Worker sat idle on the home page. Stateless per call, so never reset on domain switches.
 let voronoiWorker: Worker | null = null;
 const getWorker = (): Worker =>
   (voronoiWorker ??= new Worker(new URL("./voronoi.worker.ts", import.meta.url), { type: "module" }));

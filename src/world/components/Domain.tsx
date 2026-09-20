@@ -11,53 +11,28 @@ import { Biome, Region, TerrainParams } from "../types";
 import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
 import { SkyboxSystem } from "../sky/Skybox";
 
-/**
- * Root of the declarative domain tree (the top of the DOMAIN → REGION →
- * BIOME hierarchy).
- *
- * Children (<Region> → <Biome> → <Terrain>/<Material>/<Actor>/<Skybox>/
- * visual components) register themselves into the domain store during their
- * layout effects; this component's own layout effect runs last (parent after
- * children), assembles the same Region[]/DomainConfig data the workers have
- * always consumed, and publishes it to the module-level active-domain
- * accessors (domains/utils.ts).
- *
- * Once the first commit lands, the global systems mount: the terrain chunk
- * system, the spawn system, and the skybox system. Workers are initialized
- * once with the committed config — registrations added after the first commit
- * update the accessors but do not re-init already-running workers.
- */
+/** Root of the declarative DOMAIN → REGION → BIOME tree: children register into
+ *  the store during their layout effects, this component commits the assembled
+ *  Region[]/DomainConfig to the active-domain accessors, then mounts the global
+ *  systems. Workers init once from the first commit (see CLAUDE.md). */
 interface DomainProps extends React.PropsWithChildren {
-  /** Mount the streaming chunk terrain system (default). Domains whose ground
-   *  is a single static mesh (HomeDomain's flat plane) pass false and mount
-   *  their own ground — they must then set terrain_loaded/progress themselves
-   *  (the Player is gated on it) and provide their own ground collider. The
-   *  domain config still commits, so the analytic height pipeline
-   *  (getVertexData — Player backstop/respawn) keeps working. */
+  /** false = the domain mounts its own static ground and must set
+   *  terrainLoaded/progress itself (the Player is gated on them). */
   terrain?: boolean;
-  /** Scene background color (default DEFAULT_SCENE_BACKGROUND; the home page
-   *  is black). The canvas persists across domain switches, so this is a
-   *  domain attribute, not a canvas prop. */
+  /** Per-domain because the canvas persists across domain switches. */
   background?: string;
-  /** Where the player's FEET spawn (ground-level). Unset = the default sky
-   *  drop onto the terrain. Home page: [0, 0, 0]. */
+  /** FEET position. Unset = the default sky drop onto the terrain. */
   playerSpawn?: [number, number, number];
 }
 
 export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, playerSpawn, children }: DomainProps) => {
-  const [version, setVersion] = useState(0);
+  const [registrationVersion, setRegistrationVersion] = useState(0);
   const [ready, setReady] = useState(false);
   const { scene } = useThree();
   const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
 
-  // The canvas, physics world, Player and GameContext all OUTLIVE a domain
-  // (index.tsx swaps domains inside ONE persistent <CustomCanvas>, so a
-  // switch never loses the GL context or recompiles shaders). Per-domain
-  // scene state therefore lives here: background, player spawn, and — on
-  // unmount ONLY — the terrain gate reset, so the Player holds at the next
-  // domain's spawn until its ground exists. Not on mount: child effects run
-  // BEFORE this one, and HomeGround/TerrainRenderer set terrain_loaded from
-  // theirs — resetting here afterwards would clobber them.
+  // The terrain gate resets on UNMOUNT only: child effects run before this one,
+  // so a mount-time reset would clobber HomeGround's/TerrainRenderer's.
   useLayoutEffect(() => {
     scene.background = new THREE.Color(background);
     return () => {
@@ -75,17 +50,17 @@ export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, 
 
   const storeRef = useRef<DomainStore | null>(null);
   if (!storeRef.current) {
-    storeRef.current = createDomainStore(() => setVersion((v) => v + 1));
+    storeRef.current = createDomainStore(() => setRegistrationVersion((v) => v + 1));
   }
   const store = storeRef.current;
 
-  // Runs after all child registrations (layout effects fire child-first).
+  // Layout effects fire child-first, so every registration has landed.
   useLayoutEffect(() => {
     commitDomain(store);
     setReady(true);
-  }, [store, version]);
+  }, [store, registrationVersion]);
 
-  const data = useMemo(() => ({ version, ready }), [version, ready]);
+  const data = useMemo(() => ({ registrationVersion, ready }), [registrationVersion, ready]);
 
   return (
     <DomainStoreContext.Provider value={store}>
@@ -103,16 +78,13 @@ export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, 
   );
 };
 
-/** Assembles Region[]/DomainConfig from the store and publishes it as the active domain. */
 const commitDomain = (store: DomainStore) => {
   const params: TerrainParams = {
     ...DEFAULT_TERRAIN_PARAMS,
     ...(store.domainTerrain ?? {}),
   };
 
-  // A biome definition may be mounted under several regions — aggregate all
-  // its registrations into ONE shared data object (getAllBiomes dedupes by
-  // identity, so sharing preserves today's behavior).
+  // A biome mounted under several regions becomes ONE shared object (getAllBiomes dedupes by identity).
   const biomeById = new Map<number, Biome>();
   const ensureBiome = (record: BiomeRecord): Biome => {
     let data = biomeById.get(record.id);
@@ -146,7 +118,7 @@ const commitDomain = (store: DomainStore) => {
     if (!data.actors!.some((d) => d.id === descriptor.id)) data.actors!.push(descriptor);
   }
 
-  // Regions in JSX order; each region's biomes in JSX order.
+  // JSX order — voronoi assignment depends on it.
   const regions: Region[] = [];
   for (const record of store.regions.values()) {
     const biomes: Biome[] = [];
@@ -159,7 +131,7 @@ const commitDomain = (store: DomainStore) => {
       name: record.name,
       id: record.id,
       biomes,
-      getMaterial: store.regionMaterials.get(record.id),
+      getBoundaryMaterial: store.regionMaterials.get(record.id),
     });
   }
 

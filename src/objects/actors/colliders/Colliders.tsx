@@ -10,13 +10,9 @@ import {
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 
-// NOTE: The RigidBody `position` prop is in LOCAL space (affected by parent
-// Three.js group transforms). Since these colliders are rendered inside a
-// `<group position={coordinates}>`, we use only the worker-computed offset
-// for the position prop. The `setNextKinematicTranslation` API uses WORLD
-// coordinates, so kinematic updates add positionRef (= world position).
+// The RigidBody `position` prop is LOCAL (these mount inside a positioned
+// group) but setNextKinematicTranslation is WORLD, so kinematic updates add positionRef.
 
-// Shared component for kinematic position updates — only mounted for non-static colliders
 const KinematicUpdater = ({
   rigidBodyRef,
   positionRef,
@@ -29,8 +25,6 @@ const KinematicUpdater = ({
   const lastX = useRef(NaN);
   const lastY = useRef(NaN);
   const lastZ = useRef(NaN);
-  // Per-instance scratch — setNextKinematicTranslation copies the values, so
-  // reusing one object avoids an {x,y,z} allocation per moving collider per frame
   const scratch = useRef({ x: 0, y: 0, z: 0 }).current;
 
   useFrame(() => {
@@ -56,25 +50,25 @@ export const CapsuleCollider = ({
   height,
   position,
   positionRef,
-  isStatic = true,
+  collidersNeverMove = true,
 }: {
   radius: number;
   height: number;
   position: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  isStatic?: boolean;
+  collidersNeverMove?: boolean;
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   return (
     <RigidBody
       ref={rigidBodyRef}
-      type={isStatic ? "fixed" : "kinematicPosition"}
+      type={collidersNeverMove ? "fixed" : "kinematicPosition"}
       position={[position[0], position[1], position[2]]}
       colliders={false}
     >
       <RapierCapsule args={[height / 2, radius]} />
-      {!isStatic && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
+      {!collidersNeverMove && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
     </RigidBody>
   );
 };
@@ -83,24 +77,24 @@ export const SphereCollider = ({
   radius,
   position,
   positionRef,
-  isStatic = true,
+  collidersNeverMove = true,
 }: {
   radius: number;
   position: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  isStatic?: boolean;
+  collidersNeverMove?: boolean;
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   return (
     <RigidBody
       ref={rigidBodyRef}
-      type={isStatic ? "fixed" : "kinematicPosition"}
+      type={collidersNeverMove ? "fixed" : "kinematicPosition"}
       position={[position[0], position[1], position[2]]}
       colliders={false}
     >
       <BallCollider args={[radius]} />
-      {!isStatic && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
+      {!collidersNeverMove && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
     </RigidBody>
   );
 };
@@ -110,26 +104,26 @@ export const BoxCollider = ({
   position,
   rotation,
   positionRef,
-  isStatic = true,
+  collidersNeverMove = true,
 }: {
   size: THREE.Vector3Tuple;
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  isStatic?: boolean;
+  collidersNeverMove?: boolean;
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
   return (
     <RigidBody
       ref={rigidBodyRef}
-      type={isStatic ? "fixed" : "kinematicPosition"}
+      type={collidersNeverMove ? "fixed" : "kinematicPosition"}
       position={[position[0], position[1], position[2]]}
       rotation={rotation}
       colliders={false}
     >
       <CuboidCollider args={[size[0] / 2, size[1] / 2, size[2] / 2]} />
-      {!isStatic && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
+      {!collidersNeverMove && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
     </RigidBody>
   );
 };
@@ -140,33 +134,30 @@ export const TrimeshCollider = ({
   position,
   rotation,
   positionRef,
-  isStatic = true,
+  collidersNeverMove = true,
 }: {
   vertices: Float32Array;
   indices: Uint32Array;
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  isStatic?: boolean;
+  collidersNeverMove?: boolean;
 }) => {
   const rigidBodyRef = useRef<RapierRigidBody>(null);
 
-  // Stable args: react-three-rapier spreads `args` into the deps that own the
-  // Rapier shape, so a FRESH array per render removed and recreated the
-  // trimesh collider (full QBVH rebuild) on every parent re-render. The
-  // worker already delivers the exact typed arrays Rapier wants — no copy.
+  // r-t-r keys the Rapier shape on `args`: a fresh array per render rebuilt the trimesh (full QBVH) on every parent re-render.
   const args = useMemo<[Float32Array, Uint32Array]>(() => [vertices, indices], [vertices, indices]);
 
   return (
     <RigidBody
       ref={rigidBodyRef}
-      type={isStatic ? "fixed" : "kinematicPosition"}
+      type={collidersNeverMove ? "fixed" : "kinematicPosition"}
       position={[position[0], position[1], position[2]]}
       rotation={rotation}
       colliders={false}
     >
       <RapierTrimesh args={args} />
-      {!isStatic && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
+      {!collidersNeverMove && <KinematicUpdater rigidBodyRef={rigidBodyRef} positionRef={positionRef} position={position} />}
     </RigidBody>
   );
 };

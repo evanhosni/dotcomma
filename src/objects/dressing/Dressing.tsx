@@ -10,55 +10,22 @@ import { DressingAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
 
 /**
- * DRESSING — the instanced class of the game-object hierarchy (see
- * objects/types.ts for the class overview and the shared base attributes).
- *
- * Dressing is mass, stateless, identical scenery (street lamps, road
- * markers, traffic lights, power lines): no per-object React
- * components, no per-object state. Placement is enumerated OFF-THREAD in
- * utils/workers/dressing.worker.ts (via dressingWorker.ts) and rendered
- * as one InstancedMesh (or a few) per chunk. Objects with their own identity,
- * state, or interaction are ACTORS (objects/actors/); mass GPU vegetation at
- * thousands-per-chunk scale is FOLIAGE (objects/foliage/Foliage.tsx) — it
- * deliberately does not build on this chunk base.
- *
- * A dressing feature component is expected to contain ONLY its unique
- * logic: which points to fetch, its geometry/materials, and (rarely) a
- * per-frame animation. Everything shared lives here:
- *   - <Dressing>            group providing shared default props
- *   - useDressingChunks     camera-following chunk lifecycle
- *   - useDressingAssets     geometry/material creation + disposal
- *   - instancedFromPoints   standard point-list → InstancedMesh assembly
- *   - useChunkRegistry      per-chunk side-state with unmount cleanup
+ * THE DRESSING BASE (CLAUDE.md → "The three game-object classes"): a feature
+ * component holds only its own placement query, geometry/materials and optional
+ * animation; everything shared — chunk lifecycle, asset prep (curvature),
+ * instanced assembly + rebase, chunk side-state, distance-gated colliders —
+ * lives here so a new feature cannot miss a world-wide effect.
  */
 
 export { DRESSING_CHUNK_SIZE } from "./types";
 const UPDATE_INTERVAL_FRAMES = 31;
 
-// ONE shared budgeted queue across all dressing features: the worker does the
-// heavy enumeration; this only serializes requests and yields between mesh
-// builds so a ring of fresh chunks can't stack assembly work into one frame.
+// One budgeted queue across ALL dressing features so a ring of fresh chunks
+// can't stack mesh assembly into one frame.
 const dressingQueue = new TaskQueue();
 
-// ── <Dressing> group ──
-
-/** Shared defaults for a biome's dressing features (base game-object
- *  attributes; features fall back to their own defaults when neither prop
- *  nor group sets one). */
-/** The DressingAttributes a <Dressing> group can default for its children —
- *  the ones every feature resolves through useDressingDefault. */
 export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance">;
 
-/**
- * Groups a biome's dressing features, mirroring <Actors>/<Foliage>: props set
- * here act as shared defaults for the children — a child's own props always
- * win (shared group pattern: objects/utils.tsx).
- *
- *   <Dressing renderDistance={400}>
- *     <StreetLamps />
- *     <RoadMarkers />
- *   </Dressing>
- */
 const DressingGroup = createDefaultsGroup<DressingDefaults>();
 export const Dressing = DressingGroup.Group;
 
@@ -72,28 +39,12 @@ export const useDressingDefault = <K extends keyof DressingDefaults>(
   return (own ?? ctx[key] ?? featureDefault) as NonNullable<DressingDefaults[K]>;
 };
 
-// ── Shared assets ──
-
-/**
- * ALL shared material logic for the dressing class. A feature creates its
- * materials however it likes; every one of them passes through here, so a new
- * dressing feature cannot forget a world-wide effect (and none of them has to
- * know one exists).
- *
- *  - WORLD CURVATURE (vfx/curvature.ts): instanced scenery sinks with the
- *    ground it stands on. Without it, lamps and markers float over a curved
- *    horizon.
- *
- * Quantization is deliberately NOT applied: dressing renders instanced, and
- * the quantization patch's instanced branch works in absolute space (see
- * utils/quantization) — no instanced material is quantized today.
- */
+/** The ONE place dressing materials are patched with world-wide effects. Quantization is
+ *  deliberately absent: its instanced branch works in absolute space (utils/quantization). */
 export const prepareDressingMaterial = (material: THREE.Material): void => {
   _curvature.patchMaterial(material);
 };
 
-/** Create geometries/materials once, prepare every material through
- *  prepareDressingMaterial, and dispose them all on unmount. */
 export const useDressingAssets = <T extends Record<string, { dispose: () => void }>>(
   create: () => T
 ): T => {
@@ -114,10 +65,7 @@ export const useDressingAssets = <T extends Record<string, { dispose: () => void
   return assets;
 };
 
-// ── Instancing helpers ──
-
-// The collider-part type and the yaw helper live in ./types (Three-free) so
-// the SERVER can build the same collider boxes; re-exported for the features.
+// Three-free in ./types so the SERVER builds the same collider boxes.
 export { yawFromDir } from "./types";
 export type { DressingColliderPart } from "./types";
 
@@ -128,17 +76,7 @@ export interface InstancePlacement {
   yaw?: number;
 }
 
-/**
- * Standard chunk assembly: one InstancedMesh from a point list. `place` maps
- * each point to a position + yaw (local +X faces along yaw). Frustum culling
- * stays ON: instanced bounds don't auto-fit scattered instances (three would
- * have to walk every matrix), but the placements are known right here, so an
- * explicit bounding sphere is computed from their min/max — padded by the
- * geometry's own bounds so tall poles / long arms survive any per-instance
- * yaw. Matrices are composed with ABSOLUTE positions and then REBASED to a
- * chunk-local origin by finalizeInstancedChunk (float32 far-from-origin —
- * see its doc).
- */
+/** One InstancedMesh from a point list; local +X faces along `yaw`. */
 export const instancedFromPoints = <P,>(
   geometry: THREE.BufferGeometry,
   material: THREE.Material,
@@ -170,33 +108,16 @@ export const instancedFromPoints = <P,>(
   if (points.length > 0) {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
     const gbs = geometry.boundingSphere!;
-    // A yaw rotation about the instance origin can swing the geometry's
-    // sphere center anywhere on a circle of radius |center| — pad by both.
+    // Any per-instance yaw can swing the geometry's sphere center around a circle of radius |center|.
     finalizeInstancedChunk(mesh, minX, minY, minZ, maxX, maxY, maxZ, gbs.center.length() + gbs.radius);
   }
   return mesh;
 };
 
-/** Shared tail of every instanced-chunk build — far-from-origin REBASE +
- *  culling bounds + GPU warm-up.
- *
- *  Instance matrices arrive filled with ABSOLUTE world translations. Rendered
- *  that way (mesh at the world origin), the GPU multiplies a huge instance
- *  translation against the view matrix's huge opposite translation in
- *  float32 — the classic far-from-origin cancellation, and dressing visibly
- *  jittered past ~100k units (the exact failure mode the coordinate-precision
- *  rules exist for — see CLAUDE.md). So the mesh is parked AT the extents
- *  center and every instance translation is made RELATIVE to it: the
- *  chunk→camera translation then resolves on the CPU in float64
- *  (modelViewMatrix) and everything the GPU touches stays chunk-sized.
- *  Subtracting after the float32 compose leaves only a CONSTANT sub-ULP
- *  placement offset (~0.06u at 1M units — invisible), never per-frame jitter.
- *
- *  The explicit bounding sphere keeps frustum culling ON (instanced bounds
- *  don't auto-fit scattered instances); it is LOCAL to the mesh — three
- *  applies matrixWorld when culling. The warm draw pays the buffer upload at
- *  (budget-staggered) chunk build time, not when the player first turns
- *  toward the chunk. */
+/** REBASES the absolute instance translations onto the extents center (meshes at the world
+ *  origin visibly jittered past ~100k units — CLAUDE.md → Coordinate Precision), sets the
+ *  explicit LOCAL culling sphere (instanced bounds never auto-fit) and warms the GPU upload.
+ *  Every instanced chunk must end here. */
 export const finalizeInstancedChunk = (
   mesh: THREE.InstancedMesh,
   minX: number,
@@ -205,7 +126,7 @@ export const finalizeInstancedChunk = (
   maxX: number,
   maxY: number,
   maxZ: number,
-  pad: number
+  boundsPad: number
 ): void => {
   const originX = (minX + maxX) / 2;
   const originY = (minY + maxY) / 2;
@@ -221,14 +142,12 @@ export const finalizeInstancedChunk = (
   mesh.position.set(originX, originY, originZ);
   mesh.boundingSphere = new THREE.Sphere(
     new THREE.Vector3(0, 0, 0),
-    Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + pad
+    Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + boundsPad
   );
   uploadOnFirstDraw(mesh);
 };
 
-/** Low-level per-instance write for non-standard transforms (scaled wire
- *  segments, etc.). Set mesh.instanceMatrix.needsUpdate = true after the
- *  last write. */
+/** Caller sets mesh.instanceMatrix.needsUpdate after the last write. */
 const scratchMatrix = new THREE.Matrix4();
 export const setInstanceTransform = (
   mesh: THREE.InstancedMesh,
@@ -241,24 +160,14 @@ export const setInstanceTransform = (
   mesh.setMatrixAt(index, scratchMatrix);
 };
 
-// ── Per-chunk side-state registry ──
-
 export interface ChunkRegistryEntry {
-  /** The chunk's wrapper object — its parent goes null when the chunk
-   *  lifecycle unmounts it, which is the prune signal. */
+  /** parent === null once the chunk lifecycle unmounts it — the prune signal. */
   group: THREE.Object3D;
 }
 
-/**
- * Side-state tied to chunk lifetime (animation clocks, lamp-head
- * registrations, collider point lists). `forEachAlive` iterates live entries
- * and lazily prunes unmounted ones, invoking `onRemove` — call it from the
- * feature's own useFrame; no extra frame loop is added. On component unmount
- * `onRemove` runs for every remaining entry: the lazy prune only fires from
- * the feature's frame loop, so without this, external registrations (lamp
- * heads in the lampGlow grid) would leak as phantom lights across world
- * switches / HMR.
- */
+/** Per-chunk side-state pruned lazily from the feature's own frame loop (forEachAlive) and
+ *  flushed on unmount — without the unmount flush, external registrations (lamp heads in
+ *  the glow grid) leaked as phantom lights across domain switches / HMR. */
 export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
   const onRemoveRef = useRef(onRemove);
   onRemoveRef.current = onRemove;
@@ -296,12 +205,7 @@ export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry
   return registryRef.current;
 };
 
-// ── Distance-gated colliders ──
-
-/** A collider site: where one piece of dressing stands, and which way it faces.
- *  `yaw` is carried through from the placement point because a collider that
- *  isn't square in plan (a power-line crossarm) has to match the instance's
- *  rotation — the same yaw instancedFromPoints applied to the visual. */
+/** `yaw` must match what instancedFromPoints drew — a crossarm's collider is not square in plan. */
 export interface DressingColliderPoint {
   key: string;
   x: number;
@@ -310,24 +214,14 @@ export interface DressingColliderPoint {
   yaw: number;
 }
 
-/** Registry entry shape the collider scan needs: the chunk's placement points. */
 export interface ChunkWithPoints extends ChunkRegistryEntry {
   points: { x: number; y: number; z: number; yaw?: number }[];
 }
 
-/** Default camera distance inside which a dressing feature mounts real
- *  colliders (see useDressingColliders). Thin street furniture only needs
- *  to be solid where the player can actually reach it. */
+/** Thin street furniture only needs to be solid where the player can reach it. */
 export const DRESSING_COLLIDER_DISTANCE = 90;
 
 
-/**
- * Real colliders for the in-range pieces of a dressing feature: one fixed
- * body per point (carrying the instance's yaw so off-axis parts line up
- * with what's drawn) with a cuboid per part. Street lamps, traffic signals
- * and power poles all mount exactly this — it used to be three copies of the
- * same JSX.
- */
 export const DressingPartColliders = ({
   colliders,
   parts,
@@ -346,30 +240,14 @@ export const DressingPartColliders = ({
   </>
 );
 
-/**
- * The handful of dressing pieces close enough to the camera to be worth a real
- * collider. Instanced scenery can't carry colliders per instance — thousands of
- * Rapier shapes would cost far more than the draw calls the instancing saved —
- * so each feature mounts real colliders ONLY within `distance` and lets the rest
- * be scenery you walk through at range (nothing is there to touch them).
- *
- * This lives in the base because it is identical for every feature that wants
- * it, and the cheap version of it is wrong in two ways worth stating:
- *   - the registry sweep must run EVERY interval even when the scan is skipped —
- *     `forEachAlive` is what prunes unmounted chunks and fires their `onRemove`
- *     (lamp heads leaving the glow grid);
- *   - change detection is NUMERIC (count + coordinate hash), not a joined key
- *     string, and the whole scan is skipped while the camera has barely moved
- *     and the alive chunk set is unchanged — nothing can have entered or left
- *     range, and this runs across every mounted chunk of the feature.
- *
- * Returns the in-range points; render one <RigidBody> per entry, keyed by `key`.
- */
+/** Real colliders only within `colliderDistance` (thousands of Rapier shapes would cost more than the
+ *  instancing saved). The registry sweep must run every interval even when the scan is skipped:
+ *  forEachAlive is what prunes unmounted chunks and fires their onRemove. */
 export const useDressingColliders = <T extends ChunkWithPoints>(
   registry: { forEachAlive: (cb: (entry: T) => void) => void },
-  options: { distance?: number; scanIntervalFrames?: number } = {},
+  options: { colliderDistance?: number; scanIntervalFrames?: number } = {},
 ): DressingColliderPoint[] => {
-  const { distance = DRESSING_COLLIDER_DISTANCE, scanIntervalFrames = 10 } = options;
+  const { colliderDistance = DRESSING_COLLIDER_DISTANCE, scanIntervalFrames = 10 } = options;
   const [colliders, setColliders] = React.useState<DressingColliderPoint[]>([]);
   const frameCount = useRef(0);
   const aliveScratch = useRef<T[]>([]);
@@ -406,7 +284,7 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
 
     const near: DressingColliderPoint[] = [];
     let hash = 0;
-    const maxDistSq = distance * distance;
+    const maxDistSq = colliderDistance * colliderDistance;
     for (const chunk of alive) {
       for (const p of chunk.points) {
         const dx = p.x - camera.position.x;
@@ -418,8 +296,7 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
       }
     }
     alive.length = 0;
-    // Coordinates are deterministic, so an equal count + hash means the same
-    // set — no re-render unless something actually entered or left range.
+    // Positions are deterministic, so equal count + hash = the same set.
     if (near.length !== last.colliderCount || hash !== last.colliderHash) {
       last.colliderCount = near.length;
       last.colliderHash = hash;
@@ -430,8 +307,6 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
   return colliders;
 };
 
-// ── Chunk lifecycle ──
-
 export interface DressingChunkBounds {
   minX: number;
   minZ: number;
@@ -441,42 +316,30 @@ export interface DressingChunkBounds {
 
 interface DressingChunk {
   object: THREE.Object3D | null;
-  disposed: boolean;
-  // Domain-space chunk center, stored so the prune pass never parses it back
-  // out of the map key.
+  dropped: boolean;
   centerX: number;
   centerZ: number;
 }
 
-/** Release per-chunk GPU buffers (instance attributes). Shared geometries /
- *  materials belong to the feature component and are NOT disposed here. */
+/** Instance buffers only — shared geometries/materials belong to the feature component. */
 const disposeChunkObject = (object: THREE.Object3D): void => {
   object.traverse((o) => {
     if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
   });
 };
 
-/**
- * Camera-following chunk lifecycle: every DRESSING_CHUNK_SIZE world units
- * gets one `build` call (inside the shared budgeted queue; the placement
- * worker runs the biome probe + enumeration off-thread) whose returned
- * object is mounted until the camera leaves `renderDistance × 1.3`
- * (hysteresis so borders don't thrash). Returns the group ref to render:
- * `<group ref={groupRef} />`.
- */
+/** Camera-following chunk lifecycle; render the returned ref as `<group ref={groupRef} />`. */
 export const useDressingChunks = ({
   renderDistance,
   build,
 }: {
   renderDistance: number;
-  /** Build the chunk's content, or null when the chunk is empty. Must be
-   *  deterministic per bounds (chunks rebuild identically on revisit). */
+  /** null = empty chunk. Must be deterministic per bounds. */
   build: (bounds: DressingChunkBounds) => Promise<THREE.Object3D | null>;
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const chunks = useRef(new Map<string, DressingChunk>()).current;
-  // Random stagger so multiple feature components don't all scan on the
-  // same frame.
+  // Random phase so the feature components don't all scan on the same frame.
   const frameCount = useRef(Math.floor(Math.random() * UPDATE_INTERVAL_FRAMES));
   const buildRef = useRef(build);
   buildRef.current = build;
@@ -485,7 +348,7 @@ export const useDressingChunks = ({
     const group = groupRef.current;
     return () => {
       chunks.forEach((chunk) => {
-        chunk.disposed = true;
+        chunk.dropped = true;
         if (chunk.object) {
           if (group) group.remove(chunk.object);
           disposeChunkObject(chunk.object);
@@ -506,10 +369,8 @@ export const useDressingChunks = ({
     const ccx = Math.floor(camX / DRESSING_CHUNK_SIZE);
     const ccz = Math.floor(camZ / DRESSING_CHUNK_SIZE);
 
-    // Build chunks entering range — collected first, then enqueued
-    // nearest-first (the shared queue serializes ALL dressing features, so
-    // raw scan order made a fresh ring build its far corner before the
-    // ground under the camera).
+    // Enqueued nearest-first: the shared queue serializes all features, and raw scan
+    // order built a fresh ring's far corner before the ground under the camera.
     const candidates: { cx: number; cz: number; centerX: number; centerZ: number; distSq: number }[] = [];
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dz = -radius; dz <= radius; dz++) {
@@ -525,11 +386,11 @@ export const useDressingChunks = ({
     }
     candidates.sort((a, b) => a.distSq - b.distSq);
     for (const { cx, cz, centerX, centerZ } of candidates) {
-      const entry: DressingChunk = { object: null, disposed: false, centerX, centerZ };
+      const entry: DressingChunk = { object: null, dropped: false, centerX, centerZ };
       chunks.set(`${cx}_${cz}`, entry);
 
       dressingQueue.addTask(async () => {
-        if (entry.disposed) return;
+        if (entry.dropped) return;
         const object = await buildRef.current({
           minX: cx * DRESSING_CHUNK_SIZE,
           minZ: cz * DRESSING_CHUNK_SIZE,
@@ -537,7 +398,7 @@ export const useDressingChunks = ({
           maxZ: (cz + 1) * DRESSING_CHUNK_SIZE,
         });
         if (!object) return;
-        if (entry.disposed || !groupRef.current) {
+        if (entry.dropped || !groupRef.current) {
           disposeChunkObject(object);
           return;
         }
@@ -546,13 +407,13 @@ export const useDressingChunks = ({
       });
     }
 
-    // Drop chunks leaving range (hysteresis so borders don't thrash)
+    // 1.3× hysteresis so chunk borders don't thrash.
     const dropDistSq = renderDistance * 1.3 * (renderDistance * 1.3);
     chunks.forEach((entry, key) => {
       const ddx = camX - entry.centerX;
       const ddz = camZ - entry.centerZ;
       if (ddx * ddx + ddz * ddz > dropDistSq) {
-        entry.disposed = true;
+        entry.dropped = true;
         if (entry.object) {
           group.remove(entry.object);
           disposeChunkObject(entry.object);
