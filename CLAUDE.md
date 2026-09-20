@@ -139,13 +139,13 @@ src/
                        #   bb.__mouse_dirty when it raises a flag; the machine clears
                        #   the one-shot set only on those frames
       beeble/          # Actor implementations — kept OUTSIDE biome folders because one
-      big-beeble/      #   actor may exist in multiple biomes. Each folder has actor.tsx:
-      xl-element/      #   an ActorDescriptor<ModelActorAttributes | BuildingAttributes>
-      xxl-element/     #   + `export const XxxActor = createActor(XxxDescriptor)` (props
-      apartment/       #   at the mount site are overrides). A plain model actor's
-                       #   `component` is ModelActor itself (big-beeble, xl/xxl-element,
-                       #   apartment have NO component file — model/scale/wholeTrimesh
-                       #   are descriptor attributes); only actors with behavior own a
+                       #   actor may exist in multiple biomes. Each folder has actor.tsx:
+                       #   an ActorDescriptor<ModelActorAttributes | BuildingAttributes>
+                       #   + `export const XxxActor = createActor(XxxDescriptor)` (props
+                       #   at the mount site are overrides). A plain model actor needs
+                       #   NO component file — its `component` is ModelActor itself and
+                       #   model/scale/wholeTrimesh are descriptor attributes; only
+                       #   actors with behavior own a
                        #   component (beeble/Beeble.tsx + stateMachine.ts). Variants
                        #   EXTEND a base descriptor by spreading it (building/skyscraper.tsx
                        #   is a descriptor only — stories/shellHeightRange/… are

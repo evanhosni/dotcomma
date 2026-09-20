@@ -32,9 +32,6 @@ export const CityBiome = () => (
 
     <Actors>
       <BeebleActor />
-      {/* <BigBeebleActor />
-      <XLElementActor />
-      <XXLElementActor /> */}
       <BuildingActor biomeIds={[CITY_BIOME_ID]} />
       <SkyscraperActor biomeIds={[CITY_BIOME_ID]} />
     </Actors>
