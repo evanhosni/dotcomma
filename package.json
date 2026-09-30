@@ -31,12 +31,6 @@
     "deploy": "node scripts/deploy.mjs",
     "deploy:dry": "node scripts/deploy.mjs --dry-run"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
   "jest": {
     "transformIgnorePatterns": [
       "node_modules/(?!(delaunator|robust-predicates|noise-ts)/)"

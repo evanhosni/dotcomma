@@ -1,4 +1,10 @@
 {
+  "extends": ["react-app", "react-app/jest"],
+  "rules": {
+    "react-hooks/exhaustive-deps": "off",
+    "no-loop-func": "off",
+    "no-mixed-operators": "off"
+  },
   "overrides": [
     {
       "files": ["*.worker.ts", "*.worker.js"],
