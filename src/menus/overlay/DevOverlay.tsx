@@ -96,7 +96,7 @@ export const DevOverlay = () => {
       input.checked = flags[i];
       paintCheckbox(input);
     });
-  }, flags); // eslint-disable-line react-hooks/exhaustive-deps
+  }, flags);
 
   return null;
 };

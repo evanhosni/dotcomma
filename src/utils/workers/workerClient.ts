@@ -16,7 +16,7 @@ export interface WorkerClientOptions<TInit> {
   onMessage?: (data: any) => void;
 }
 
-export interface WorkerClient<TInit = unknown> {
+export interface WorkerClient {
   /** Idempotent; resolves once INIT_DONE arrived. */
   ensure: () => Promise<void>;
   isReady: () => boolean;
@@ -29,7 +29,7 @@ export interface WorkerClient<TInit = unknown> {
   reset: () => void;
 }
 
-export const createWorkerClient = <TInit = unknown>(options: WorkerClientOptions<TInit>): WorkerClient<TInit> => {
+export const createWorkerClient = <TInit = unknown>(options: WorkerClientOptions<TInit>): WorkerClient => {
   let worker: Worker | null = null;
   let ready = false;
   let initPromise: Promise<void> | null = null;
