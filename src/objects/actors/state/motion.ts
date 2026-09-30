@@ -1,31 +1,22 @@
 /**
- * MOTION — how a state machine moves and turns its actor.
+ * How a state machine moves and turns its actor: a behavior describes what it
+ * wants through `ctx.motion` and the framework applies it (the server's character
+ * resolver, or the client's kinematic mover for local actors). No Three.js.
  *
- * A behavior never writes a transform. It describes what it WANTS through
- * `ctx.motion` — a horizontal velocity, an optional driven vertical velocity,
- * a facing — and the framework applies it: on the SERVER the shared character
- * resolver moves the body and publishes the result; on a LOCAL
- * (`serverSynced={false}`) actor the kinematic mover does the same thing on
- * the client. No Three.js here: this runs in Node.
- *
- * Velocities are world units per second. `vy === null` means "let the body
- * fall/stand on the ground" (ground movers); a number DRIVES the vertical
- * (ascending, flying). For `movement: "free"` actors null simply means 0.
- * Facing (`yaw`) is three.js `rotation.y`: local +Z faces the view direction,
- * so a heading angle θ moves along (sin θ, cos θ) — `heading()` and `face()`
- * use the same convention, which is why `faceHeading()` is a plain copy.
+ * Velocities are world units per second. `vy === null` = "stand on the ground"
+ * (a number DRIVES the vertical; for `movement: "free"` null means 0). `yaw` is
+ * three.js `rotation.y`: local +Z faces the view direction, so a heading θ moves
+ * along (sin θ, cos θ) — the same convention as facing.
  */
 
 export interface MotionOutput {
   vx: number;
-  /** Driven vertical velocity, or null = gravity / ground following. */
   vy: number | null;
   vz: number;
-  /** Facing, radians (three.js rotation.y). */
   yaw: number;
 }
 
-/** Anything with x/y/z — THREE.Vector3 on the client, a plain object on the server. */
+/** THREE.Vector3 on the client, a plain object on the server. */
 export interface Vec3Like {
   x: number;
   y: number;
@@ -49,10 +40,9 @@ export const wrapAngle = (a: number): number => {
   return d;
 };
 
-/** Absolute shortest-arc difference between two angles. */
 export const angleDiffAbs = (a: number, b: number): number => Math.abs(wrapAngle(b - a));
 
-/** Shortest-arc interpolation; `t` is clamped to [0, 1]. */
+/** Shortest-arc interpolation; `t` clamped to [0, 1]. */
 export const lerpAngle = (a: number, b: number, t: number): number => a + wrapAngle(b - a) * Math.min(Math.max(t, 0), 1);
 
 /** Step from `a` toward `b` by at most `maxStep` radians along the shortest arc. */
@@ -62,27 +52,23 @@ export const stepAngle = (a: number, b: number, maxStep: number): number => {
 };
 
 export class Motion {
-  /** The outputs the framework applies. Read by the mover/publisher; behaviors
-   *  use the methods instead of writing these directly. */
+  /** Read by the mover/publisher; behaviors use the methods. */
   readonly out: MotionOutput = createMotionOutput();
 
   constructor(private readonly position: { current: Vec3Like }) {}
 
-  // ── movement ──────────────────────────────────────────────────────────────
-
-  /** Horizontal velocity (u/s). The vertical channel is left as it was. */
+  /** Horizontal velocity; the vertical channel is left as it was. */
   move(vx: number, vz: number): this {
     this.out.vx = vx;
     this.out.vz = vz;
     return this;
   }
 
-  /** Move along a heading angle (radians, same convention as facing) at `speed`. */
   heading(angle: number, speed: number): this {
     return this.move(speed * Math.sin(angle), speed * Math.cos(angle));
   }
 
-  /** Move toward a world (x, z) at `speed`; stops if already within `arrive`. */
+  /** Stops if already within `arrive`. */
   toward(x: number, z: number, speed: number, arrive = 0): this {
     const dx = x - this.position.current.x;
     const dz = z - this.position.current.z;
@@ -91,7 +77,7 @@ export class Motion {
     return this.move((dx / d) * speed, (dz / d) * speed);
   }
 
-  /** Drive the vertical velocity (ascend, fly); null = gravity / ground. */
+  /** Drive the vertical velocity; null = gravity / ground. */
   fly(vy: number | null): this {
     this.out.vy = vy;
     return this;
@@ -105,14 +91,12 @@ export class Motion {
     return this;
   }
 
-  // ── facing ────────────────────────────────────────────────────────────────
-
   face(yaw: number): this {
     this.out.yaw = yaw;
     return this;
   }
 
-  /** Face the direction of travel (no-op while not moving horizontally). */
+  /** No-op while not moving horizontally. */
   faceHeading(): this {
     const { vx, vz } = this.out;
     if (vx * vx + vz * vz > 1e-8) this.out.yaw = Math.atan2(vx, vz);
@@ -123,7 +107,7 @@ export class Motion {
     return this.face(this.angleTo(x, z));
   }
 
-  /** Turn toward `yaw` by at most `maxStep` radians (call per tick with rate × dt). */
+  /** Call per tick with rate × dt. */
   turnTo(yaw: number, maxStep: number): this {
     this.out.yaw = stepAngle(this.out.yaw, yaw, maxStep);
     return this;
@@ -133,14 +117,10 @@ export class Motion {
     return this.turnTo(this.angleTo(x, z), maxStep);
   }
 
-  // ── queries ───────────────────────────────────────────────────────────────
-
-  /** Heading angle from the actor to a world (x, z). */
   angleTo(x: number, z: number): number {
     return Math.atan2(x - this.position.current.x, z - this.position.current.z);
   }
 
-  /** How far (shortest arc) the actor's facing is from pointing at (x, z). */
   facingErrorTo(x: number, z: number): number {
     return angleDiffAbs(this.out.yaw, this.angleTo(x, z));
   }
@@ -149,7 +129,6 @@ export class Motion {
     return this.out.yaw;
   }
 
-  /** Horizontal speed (u/s). */
   get speed(): number {
     return Math.hypot(this.out.vx, this.out.vz);
   }

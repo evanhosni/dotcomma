@@ -1,24 +1,10 @@
 #!/usr/bin/env node
 /**
- * `npm run deploy` — cut a release and push it. Railway deploys on push (GitHub
- * integration); this script only decides the version, tags it, and pushes.
- *
- *   1. Refuse on a dirty working tree, a non-main branch, or a branch behind origin.
- *   2. Read `version` from the root package.json.
- *   3. If tag v{version} does NOT exist (locally or on origin): the version was
- *      set by hand → use it as-is.
- *   4. If it DOES exist: already shipped → bump the patch segment in package.json
- *      and package-lock.json. If THAT tag exists too, stop — never guess further.
- *   5. Commit the bump (if any), create annotated tag v{version}, push the
- *      branch and the tag.
- *
- * Flags: --dry-run (print the plan, change nothing), --branch <name> (default main).
- *
- * Migrations are NOT run here. Order of operations for a schema change:
- * `npm run db:migrate` on the live database first, then `npm run deploy`.
- *
- * Everything git-related goes through run() so the whole flow is testable
- * against a throwaway repo: the script operates on process.cwd().
+ * `npm run deploy [--dry-run] [--branch <name>]` — decide the version, tag, push;
+ * Railway deploys on push. A hand-set unreleased version is used as-is; an
+ * already-tagged one bumps the patch (and stops if THAT tag exists too).
+ * Migrations are NOT run here: `npm run db:migrate` on the live database first.
+ * Operates on process.cwd() so the flow is testable against a throwaway repo.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -59,10 +45,8 @@ export const readVersion = (cwd) => {
   return pkg.version;
 };
 
-/** Write the version into package.json (textual replace, so formatting is
- *  untouched) and package-lock.json (root `version` + `packages[""].version`,
- *  the two places npm keeps it). Done by hand instead of `npm version` so the
- *  script has no dependency beyond git — and no .cmd spawning quirks on Windows. */
+/** Textual replace in package.json (formatting untouched) + both places npm keeps it in the
+ *  lock. By hand instead of `npm version`: no dependency beyond git, no .cmd quirks on Windows. */
 export const writeVersion = (cwd, version) => {
   const pkgPath = path.join(cwd, "package.json");
   const pkgText = readFileSync(pkgPath, "utf8");
@@ -77,7 +61,7 @@ export const writeVersion = (cwd, version) => {
   writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
 };
 
-/** True if the tag exists locally OR on origin (both count as "shipped"). */
+/** Locally OR on origin — both count as shipped. */
 export const tagExists = (cwd, tag) => {
   const local = run("git", ["tag", "--list", tag], { cwd });
   if (local === tag) return true;
@@ -98,7 +82,6 @@ export const assertCleanAndReady = (cwd, branch) => {
   if (Number(behind) > 0) throw new DeployError(`branch is ${behind} commit(s) behind origin/${branch} — pull first`);
 };
 
-/** Decide what to do. Pure given the git facts; returns a plan. */
 export const planRelease = (cwd) => {
   const current = readVersion(cwd);
   if (!tagExists(cwd, tagFor(current))) {
@@ -148,7 +131,6 @@ export const deploy = ({ cwd = process.cwd(), branch = "main", dryRun = false, l
   return { ...plan, tag, pushed: true };
 };
 
-// ── CLI ────────────────────────────────────────────────────────────────────
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const argv = process.argv.slice(2);

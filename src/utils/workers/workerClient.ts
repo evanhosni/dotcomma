@@ -1,55 +1,31 @@
 /**
- * Shared worker-client base.
- *
- * Every generation worker (terrain, spawn, foliage, dressing, collider) talks
- * to the main thread the same way: lazily construct the Worker, send ONE
- * `INIT` message and wait for `INIT_DONE`, then correlate request/response
- * pairs by a numeric `id`. Each client used to hand-roll the pending-resolve
- * map, the id counter, the init handshake and the domain-switch teardown —
- * five copies that had to be kept in step. This is the one implementation;
- * a client module is now just its typed request wrappers.
- *
- * Webpack needs the `new Worker(new URL("./x.worker.ts", import.meta.url))`
- * literal at the call site to bundle the worker, which is why the client takes
- * a `create` factory instead of a URL.
+ * THE worker-client base: lazy Worker, one INIT/INIT_DONE handshake, id-correlated
+ * request/response, domain-switch reset(). A client module is just typed wrappers.
+ * Webpack needs the literal `new Worker(new URL("./x.worker.ts", import.meta.url))`
+ * at the call site to bundle the worker — hence the `create` factory.
  */
 
 export interface WorkerClientOptions<TInit> {
   /** Construct the Worker — must be the literal `new Worker(new URL(...))`. */
   create: () => Worker;
-  /** Build the INIT payload (sent as `{ type: "INIT", ...payload }`). Called
-   *  once per worker lifetime, at ensure() time — may be async (e.g. await
-   *  the active domain). Omit for workers that need no init handshake. */
+  /** INIT payload (sent as `{ type: "INIT", ...payload }`); may be async. Omit for handshake-free workers. */
   init?: () => TInit | Promise<TInit>;
-  /** Message `type` field a request result arrives with. Any message of this
-   *  type carrying an `id` resolves the matching request; other message types
-   *  are forwarded to `onMessage`. Defaults to accepting any message with an
-   *  `id` that has a pending request. */
+  /** Message `type` a request result arrives with (other types go to onMessage). Default: any message carrying a pending `id`. */
   resultType?: string;
   /** Fire-and-forget messages that aren't request results. */
   onMessage?: (data: any) => void;
 }
 
 export interface WorkerClient<TInit = unknown> {
-  /** Lazily create + init the worker (idempotent; concurrent callers share the
-   *  same promise). Resolves once INIT_DONE arrived (or immediately when the
-   *  client has no init step). */
+  /** Idempotent; resolves once INIT_DONE arrived. */
   ensure: () => Promise<void>;
-  /** True once the worker exists and has completed its handshake. */
   isReady: () => boolean;
-  /** True while a worker instance exists (ready or still initializing). */
   exists: () => boolean;
-  /** Send a request and resolve with the worker's reply payload. `message`
-   *  gets an `id` field appended; the worker must echo it in its result. The
-   *  request is queued behind ensure(). `transfer` lists ArrayBuffers to move
-   *  instead of copy. */
+  /** An `id` is appended to the message and must be echoed in the reply; queued behind ensure(). */
   request: <T = any>(message: Record<string, unknown>, transfer?: Transferable[]) => Promise<T>;
-  /** Fire-and-forget message (no reply expected). No-op when the worker does
-   *  not exist yet — callers that need the worker should ensure() first. */
+  /** No-op until the worker exists — ensure() first if the message must arrive. */
   post: (message: Record<string, unknown>, transfer?: Transferable[]) => void;
-  /** Terminate the worker and forget every in-flight request (they never
-   *  resolve — a domain switch unmounted their callers). The next ensure()
-   *  boots a fresh worker and re-runs `init`. */
+  /** Terminate and drop every in-flight request (a domain switch unmounted their callers). */
   reset: () => void;
 }
 

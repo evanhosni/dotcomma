@@ -3,8 +3,7 @@ import { GLTF } from "three/examples/jsm/loaders/GLTFLoader";
 import { createWorkerClient } from "../../../utils/workers/workerClient";
 import { COLLIDER_TYPE, ColliderWorkerMessage, WholeTrimeshWorkerMessage } from "./types";
 
-// Domain-agnostic (geometry → collider transform), so it is never reset on a
-// domain switch; no INIT handshake. Plumbing from the shared worker-client base.
+// Domain-agnostic, so never reset on a domain switch; no INIT handshake.
 const colliderClient = createWorkerClient({
   create: () => new Worker(new URL("./collider.worker.ts", import.meta.url), { type: "module" }),
 });
@@ -16,7 +15,6 @@ interface ColliderState {
   trimeshColliders: any[];
 }
 
-// Cache collider results by model+scale+rotation+wholeTrimesh to avoid redundant worker computations
 const colliderCache = new Map<string, Promise<ColliderState>>();
 
 function buildCacheKey(
@@ -31,9 +29,6 @@ function buildCacheKey(
   return `${modelUrl}|${scale[0]},${scale[1]},${scale[2]}|${rotation[0]},${rotation[1]},${rotation[2]}|${wholeTrimesh}|${excludeStr}`;
 }
 
-/** Every typed array in the message is TRANSFERRED (they are private copies —
- *  see getPositionArray), so the geometry crosses to the worker without a
- *  structured clone. */
 const collectTransferables = (msg: ColliderWorkerMessage | WholeTrimeshWorkerMessage): Transferable[] => {
   const out: Transferable[] = [];
   const add = (m: { positions: Float32Array; index: Uint32Array | null }) => {
@@ -48,12 +43,7 @@ const collectTransferables = (msg: ColliderWorkerMessage | WholeTrimeshWorkerMes
 const postToWorker = (msg: ColliderWorkerMessage | WholeTrimeshWorkerMessage): Promise<any> =>
   colliderClient.request<{ data: any }>(msg as any, collectTransferables(msg)).then((r) => r.data);
 
-/**
- * A PRIVATE Float32Array copy of a geometry's positions (handles
- * InterleavedBufferAttribute). A copy, not the live buffer: the original is
- * shared with every rendered clone of the GLTF, and transferring it to the
- * worker would detach it from the renderer.
- */
+/** A COPY, never the live buffer: transferring the shared GLTF buffer would detach it from the renderer. */
 function getPositionArray(geometry: THREE.BufferGeometry): Float32Array {
   const attr = geometry.attributes.position;
   if (attr instanceof THREE.InterleavedBufferAttribute) {
@@ -68,22 +58,11 @@ function getPositionArray(geometry: THREE.BufferGeometry): Float32Array {
   return new Float32Array(attr.array as ArrayLike<number>);
 }
 
-/** A private Uint32Array copy of the index (any source integer width). */
 const getIndexArray = (geometry: THREE.BufferGeometry): Uint32Array | null =>
   geometry.index ? new Uint32Array(geometry.index.array as ArrayLike<number>) : null;
 
-/**
- * Build the combined transform matrix for a GLTF child mesh.
- * Maps geometry-local vertices to spawn-local coordinates (offset from positionRef).
- *
- * The visual rendering chain is:
- *   <group position={coordinates}>
- *     <primitive object={scene} scale={spawnScale} rotation={spawnRotation}>
- *       ...child meshes (potentially nested)...
- *
- * <primitive> overwrites the scene's own transforms, so we strip the scene's
- * world matrix and replace it with the spawn transforms.
- */
+/** Geometry-local → spawn-local. <primitive> overwrites the scene root's own
+ *  transform, so it is stripped here and replaced by the spawn scale/rotation. */
 function buildCombinedMatrix(
   child: THREE.Object3D,
   sceneWorldInverse: THREE.Matrix4,
@@ -96,9 +75,6 @@ function buildCombinedMatrix(
     new THREE.Vector3(spawnScale[0], spawnScale[1], spawnScale[2])
   );
 
-  // child.matrixWorld includes the scene root's own transform + all parent
-  // transforms down to this child. Premultiplying by sceneWorldInverse strips
-  // the scene's transform, leaving only the child-to-scene-root chain.
   const childRelative = child.matrixWorld.clone().premultiply(sceneWorldInverse);
 
   return spawnMatrix.multiply(childRelative);
@@ -125,12 +101,10 @@ export const createColliders = async (
     const boxColliders: any[] = [];
     const trimeshColliders: any[] = [];
 
-    // Force-compute world matrices so we can get child-to-scene transforms
     gltf.scene.updateMatrixWorld(true);
     const sceneWorldInverse = gltf.scene.matrixWorld.clone().invert();
 
     if (wholeTrimesh) {
-      // Collect all mesh geometry into a single trimesh collider
       const meshes: WholeTrimeshWorkerMessage["meshes"] = [];
       const excludeSet = excludeNames ? new Set(excludeNames) : null;
 
@@ -142,7 +116,7 @@ export const createColliders = async (
         meshes.push({
           positions: getPositionArray(child.geometry),
           index: getIndexArray(child.geometry),
-          matrix: Array.from(matrix.elements),
+          matrixElements: Array.from(matrix.elements),
         });
       });
 
@@ -157,7 +131,6 @@ export const createColliders = async (
       return { capsuleColliders, sphereColliders, boxColliders, trimeshColliders };
     }
 
-    // Per-child colliders based on userData flags
     for (const child of gltf.scene.children) {
       if (!(child instanceof THREE.Mesh) || !child.geometry) continue;
 
@@ -176,7 +149,7 @@ export const createColliders = async (
         type,
         positions,
         index,
-        matrix: Array.from(matrix.elements),
+        matrixElements: Array.from(matrix.elements),
       };
 
       const result = await postToWorker(msg);

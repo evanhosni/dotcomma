@@ -1,24 +1,61 @@
-/**
- * Dressing types and helpers with NO Three/React — importable by the server
- * (server/src/game/physics/obstacles.ts builds the same collider boxes the
- * client mounts, from the same spec files).
- */
+/** NO Three/React here — the server (physics/obstacles.ts) imports this to build the same colliders. */
 
-/** A solid box of a dressing piece in INSTANCE-LOCAL space (+X along the
- *  arm/crossarm, y up): the same numbers its geometry is built from, so the
- *  collider can never drift from the art. `x`/`y` are the box CENTER. */
+import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./enumerators";
+
+/** A box in instance-local space (+X along the arm, y up); `x`/`y`/`z` are the box center (z defaults to 0)
+ *  and `yaw` turns it about the local y axis (a bridge parapet segment runs along its wall, not its chord). */
 export interface DressingColliderPart {
   w: number;
   h: number;
   d: number;
   x: number;
   y: number;
+  z?: number;
+  yaw?: number;
+}
+
+/** A triangle mesh in body-local space (xyz triples, three indices per triangle): what a bridge chord's
+ *  drawn slab and walls are, exactly. */
+export interface DressingColliderMesh {
+  vertices: Float32Array;
+  indices: Uint32Array;
+}
+
+/** One fixed body: rotation = yaw about y after `pitch` about local Z (Euler XYZ [0, yaw, pitch]).
+ *  `parts` overrides the feature's shared boxes (bridge chords differ per body); `mesh`, when present,
+ *  is one more collider of the body. */
+export interface DressingColliderBody {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch?: number;
+  parts?: DressingColliderPart[];
+  mesh?: DressingColliderMesh;
+}
+
+/** A dressing feature with colliders, as data the client component AND the server read — listed in
+ *  catalog.ts. `placement` is the mount's prop defaults and the ONLY placement the server knows. */
+export interface DressingColliderSpec<K extends DressingEnumeratorName = DressingEnumeratorName> {
+  /** The feature's component name (dev warnings). */
+  id: string;
+  enumerator: K;
+  placement: EnumeratorArgs<K>;
+  /** Boxes every body shares, unless the body carries its own. */
+  colliderParts: DressingColliderPart[];
+  /** A placed point → its bodies; the yaw must match the drawn instance. */
+  bodiesOf(point: EnumeratorPoint<K>): DressingColliderBody[];
+}
+
+export interface DressingBounds {
+  minX: number;
+  minZ: number;
+  maxX: number;
+  maxZ: number;
 }
 
 /** rotateY(θ) maps +X to (cosθ, 0, −sinθ) — the yaw aligning local +X with a direction. */
 export const yawFromDir = (dirX: number, dirZ: number): number => Math.atan2(-dirZ, dirX);
 
-/** World units per dressing chunk (one build call). Here, not in Dressing.tsx,
- *  because the SERVER enumerates the same chunks (belt-freeway coverage depends
- *  on the query center's wall set, so both sides must use one size). */
+/** Client and server MUST chunk identically: belt-freeway coverage depends on the query center's wall set. */
 export const DRESSING_CHUNK_SIZE = 256;

@@ -4,13 +4,7 @@ import type { AnimationChannel, AnimationSpec } from "./animation";
 import type { Input } from "./input";
 import type { Motion } from "./motion";
 
-/**
- * STATE MACHINE TYPES. A config is plain data + functions with NO Three.js at
- * runtime (types only) — it runs on the server as-is. Read runner.ts for the
- * contract; motion.ts and animation.ts for the two output channels.
- */
-
-// ─── Triggers ───
+// A config is plain data + functions with NO Three.js at runtime — it runs on the server as-is.
 
 export type TriggerFn = (ctx: TriggerContext) => boolean;
 
@@ -20,44 +14,39 @@ export interface TriggerDef {
 }
 
 export interface TriggerContext {
-  /** The actor's position (body CENTER for movers). */
+  /** Body CENTER for movers. */
   positionRef: MutableRefObject<THREE.Vector3>;
-  /** The NEAREST player — on the server whoever is closest; no client is special. */
+  /** The NEAREST player — no client is special. */
   playerPosition: THREE.Vector3;
   playerDistanceSq: number;
-  /** Seconds since the last tick. */
+  /** Seconds. */
   delta: number;
   /** Seconds since the machine started. */
   elapsed: number;
   /** Seconds since the current state was entered. */
   stateElapsed: number;
-  /** Per-instance memory. Anything the behavior needs between ticks goes here. */
+  /** Per-instance memory between ticks. */
   blackboard: Record<string, any>;
-  /** OUTPUT: where to go and where to face (motion.ts). */
   motion: Motion;
-  /** OUTPUT: what clip to play (animation.ts). */
   animation: AnimationChannel;
-  /** INPUT: this tick's mouse flags (input.ts). On the server: any player's;
-   *  on a client mirror: only THIS player's — the per-player hook. */
+  /** On the server: any player's input; on a client mirror: only THIS player's. */
   input: Input;
 }
-
-// ─── Behaviors ───
 
 export type BehaviorFn = (ctx: BehaviorContext) => void;
 
 export interface BehaviorContext extends TriggerContext {
-  /** The model group — null on the SERVER. Guard every scene access on it. */
+  /** Null on the SERVER — guard every scene access on it. */
   groupRef: MutableRefObject<THREE.Group | null>;
 }
 
 /** May return a cleanup, run when the state is left (or the machine disposed). */
 export type StateEnterFn = (ctx: BehaviorContext) => void | (() => void);
 
-// ─── State Machine ───
-
 export interface TransitionDef {
-  trigger: string;
+  /** A trigger object (the runner collects it — nothing else to list), or the id of one in
+   *  `StateMachineConfig.triggers`. An unknown id throws when the machine is built (outside production). */
+  trigger: TriggerDef | string;
   target: string;
   guard?: (ctx: TriggerContext) => boolean;
 }
@@ -74,5 +63,6 @@ export interface StateDef {
 export interface StateMachineConfig {
   initialState: string;
   states: StateDef[];
-  triggers: TriggerDef[];
+  /** Only for triggers a transition names by id; transitions may hold the trigger objects directly. */
+  triggers?: TriggerDef[];
 }

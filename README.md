@@ -6,7 +6,8 @@
 The game is one Railway service: `server/` (Node 24, Express + `ws`) serves the
 built CRA client from `build/` and runs the WebSocket game loop on the same
 port. Player data lives in SQLite (`node:sqlite`, no ORM) on a Railway volume.
-Assets are NOT served by it — they come from a public Cloudflare R2 bucket.
+Assets ship in `public/` and are served from `build/` like the rest of the client; the
+Cloudflare R2 CDN is deferred (`REACT_APP_CDN_URL` in `.env.example` is reserved for it).
 
 ### Local
 

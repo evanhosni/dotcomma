@@ -1,3 +1,5 @@
+import { HUD_Z_INDEX } from "./styles";
+
 /** Shared fixed container for bottom-left overlay panels. */
 export function getOrCreateLeftColumn(): HTMLDivElement {
   let el = document.getElementById("overlay-left-column") as HTMLDivElement | null;
@@ -6,7 +8,7 @@ export function getOrCreateLeftColumn(): HTMLDivElement {
     el = document.createElement("div");
     el.id = "overlay-left-column";
     el.style.cssText =
-      "position:fixed;bottom:12px;left:12px;z-index:1000;" +
+      `position:fixed;bottom:12px;left:12px;z-index:${HUD_Z_INDEX};` +
       "display:flex;flex-direction:column;gap:8px;pointer-events:none;";
     target?.appendChild(el);
   }

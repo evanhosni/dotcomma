@@ -13,25 +13,20 @@ import type { PhysicsWorld } from "../game/physics/physicsWorld.js";
 import { World, type Outbox } from "../game/world.js";
 
 /**
- * WebSocket transport. Owns the sockets and NOTHING about the game: it parses
- * frames, validates their shape, forwards them to the World, and implements
- * the World's Outbox over its socket map. The wire protocol itself is
- * documented in src/net/protocol.ts (the one shared copy).
- *
- * HEARTBEAT (not optional): a socket whose peer vanished — laptop lid closed,
- * wifi dropped — often never fires `close`. Every HEARTBEAT_MS each socket is
- * protocol-pinged; one that has not ponged by the next sweep is terminated,
- * which DOES fire `close` and so removes the ghost from the world.
+ * Owns the sockets and nothing about the game: validates frame shapes, forwards to the
+ * World, implements its Outbox. HEARTBEAT is not optional: a vanished peer (lid closed,
+ * wifi dropped) often never fires `close`; a socket that hasn't ponged by the next sweep
+ * is terminated, which DOES fire `close` and removes the ghost.
  */
 
 const HEARTBEAT_MS = 30_000;
-const MAX_PAYLOAD_BYTES = 64 * 1024; // a registration batch of ~64 actors is ~6KB; headroom for state blobs
+const MAX_PAYLOAD_BYTES = 64 * 1024; // a 64-actor registration batch is ~6KB; headroom for state blobs
 const MAX_ENTITIES_PER_MESSAGE = 256;
 const MAX_ID_LENGTH = 128;
 
 interface Conn {
   ws: WebSocket;
-  /** Session id once `hello` has been accepted; null before. */
+  /** null until `hello` is accepted. */
   sessionId: string | null;
   isAlive: boolean;
 }
@@ -59,7 +54,7 @@ const parseMove = (raw: Record<string, unknown>): MoveIntent | null => {
   return { x, y, z, vx, vy, vz, ry };
 };
 
-/** Shape-validate an inbound frame. Anything odd → null → ignored. */
+/** Anything odd → null → ignored. */
 const parseClientMessage = (data: unknown): ClientMessage | null => {
   if (typeof data !== "object" || data === null) return null;
   const raw = data as Record<string, unknown>;
@@ -77,7 +72,6 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
     case "ping":
       return isFiniteNumber(raw.t0) ? { t: "ping", t0: raw.t0 } : null;
     case "data:patch": {
-      // Shape only; the size of the MERGED blob is persistence's call.
       const patch = raw.patch;
       if (!isPlainObject(patch) || JSON.stringify(patch).length > PLAYER_DATA_MAX_BYTES) return null;
       return { t: "data:patch", patch };
@@ -122,7 +116,7 @@ class SocketOutbox implements Outbox {
 export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWorld) => {
   const wss = new WebSocketServer({ server, maxPayload: MAX_PAYLOAD_BYTES });
   const bySession = new Map<string, Conn>();
-  const all = new Set<Conn>(); // every open socket, hello'd or not — for the heartbeat sweep
+  const all = new Set<Conn>(); // hello'd or not — for the heartbeat sweep
   const world = new World(new SocketOutbox(bySession), physics);
 
   wss.on("connection", (ws) => {
@@ -145,7 +139,6 @@ export const attachWebSocketTransport = (server: http.Server, physics: PhysicsWo
       if (!msg) return;
 
       if (conn.sessionId === null) {
-        // The ONLY message accepted before hello is hello.
         if (msg.t !== "hello") return;
         const id = randomUUID();
         conn.sessionId = id;

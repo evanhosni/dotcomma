@@ -1,50 +1,30 @@
-// ── Terrain Tuning Constants ─────────────────────────────────────────────────
-// Adjust these to tweak terrain quality, performance, and draw distance.
-
-/** Domain-space size of the base terrain chunk (width & depth). */
 export const CHUNK_SIZE = 420;
 
-/** Per-LOD chunk sizes (must be integer multiples of CHUNK_SIZE). */
+// Integer multiples of CHUNK_SIZE.
 export const LOD3_CHUNK_SIZE = CHUNK_SIZE * 2; // 840
 export const LOD4_CHUNK_SIZE = CHUNK_SIZE * 4; // 1680
 export const LOD5_CHUNK_SIZE = CHUNK_SIZE * 8; // 3360
 
-/** Mesh segment counts per LOD level (higher = more detail).
- *  LOD2 is 24 (17.5u spacing): with LOD1 confined to the innermost ring the
- *  old 12 (35u) made an 8× density cliff right at the player's doorstep. */
+// LOD2 = 24 (17.5u): 12 made an 8× density cliff right at the LOD1 ring's edge.
 export const LOD1_SEGMENTS = 96;
 export const LOD2_SEGMENTS = 24;
 export const LOD3_SEGMENTS = 4;
 export const LOD4_SEGMENTS = 2;
 export const LOD5_SEGMENTS = 1;
 
-/** Max distance from the player at which each LOD level is used.
- *  LOD1 (4.375u spacing) used to reach CHUNK_SIZE*2 and carried 92% of ALL
- *  terrain triangles; nothing needs that density past the immediate ring —
- *  flatten pads are 13-24u features and the city's fine detail (roads, curbs)
- *  is painted by the FRAGMENT shader from distance attributes, not resolved
- *  by geometry. The player always stands on LOD1, so the slope-slide tuning
- *  (measured at LOD1 collider resolution) is unaffected. */
+// LOD1 (4.375u) once reached CHUNK_SIZE*2 and carried 92% of ALL terrain
+// triangles. The player always stands on LOD1, so the slope-slide tuning
+// (measured at LOD1 resolution) is unaffected by the ring sizes.
 export const LOD1_MAX_DISTANCE = CHUNK_SIZE;
 export const LOD2_MAX_DISTANCE = CHUNK_SIZE * 4;
 export const LOD3_MAX_DISTANCE = CHUNK_SIZE * 8;
-/** The outer rings are bounded by the camera far plane (Player.tsx
- *  CAMERA_FAR = 7200): terrain past it is clipped by the projection and can
- *  never be seen. LOD5 used to reach 20160u — ~100 chunks per root scan that
- *  were generated in the worker, given pooled geometry and kept forever
- *  without ever producing a pixel, on the same worker that streams the
- *  chunks the player stands on. One LOD5 chunk of slack past the far plane
- *  keeps the horizon edge solid through the world curvature. */
+// Bounded by CAMERA_FAR (7200, player/constants.ts): chunks past it are generated and
+// kept without ever producing a pixel. One LOD5 chunk of slack keeps the
+// horizon solid through the world curvature.
 export const LOD4_MAX_DISTANCE = CHUNK_SIZE * 16; // 6720
 export const LOD5_MAX_DISTANCE = CHUNK_SIZE * 20; // 8400 (> CAMERA_FAR)
 
-/** Vertical depth of skirt geometry added around chunk edges to hide LOD seams. */
-export const SKIRT_DEPTH = 30;
-
-/** Absolute maximum terrain render distance (matches coarsest LOD). */
 export const MAX_RENDER_DISTANCE = LOD5_MAX_DISTANCE;
-
-// ── LOD Level Definitions ────────────────────────────────────────────────────
 
 export interface LODLevel {
   level: number;
@@ -52,12 +32,31 @@ export interface LODLevel {
   segments: number;
   maxDistance: number;
   hasCollider: boolean;
+  /** Vertical skirt around the chunk edge hiding the seam to a coarser neighbor. The FINER
+   *  chunk's skirt must exceed the worst height its coarser neighbor's straight segment
+   *  misses by, and that grows with vertex spacing — MEASURED along four map-spanning
+   *  lines of the overworld: LOD1→2 3u, LOD2→3 55u, LOD3→4 113u, LOD4→5 175u; after the mountain domes (peaks ~900u) the worst gaps rose to 192u / 398u / 849u (LOD2|3, LOD3|4, LOD4|5), hence 230 / 460 / 1000, and 450 for LOD5 (380u above LOD4). A single
+   *  30u skirt covers only the LOD1→2 boundary. */
+  skirtDepth: number;
+  /** Whether the chunk evaluates the river field (channel, river water, bed paint, city quay). The
+   *  farthest visual-only LODs (840u / 3360u spacing) do not: a river there drew under 0.5% of its
+   *  true water as isolated specks while building the per-cell river lists cost ~90% of their build
+   *  time. LOD3 (210u) keeps it — it still draws a wide river near the ocean (MEASURED, CLAUDE.md). */
+  carvesRivers: boolean;
+  /** Clamp the biome blend fields to where the shader saturates (sdf ±1, presence 0..1) before
+   *  upload — exact at every vertex, and it makes them interpolate as a plain cross-fade. Unclamped,
+   *  a slot reads ±BIOME_SDF_FAR where no wall is in reach and ±(distance / feather half) elsewhere,
+   *  so across a coarse triangle spanning three zones (or a far and a near value) EVERY slot
+   *  interpolates below -1: zero weight, a BLACK pixel (MEASURED: the black horizon patches). Only on
+   *  LODs whose vertex spacing already cannot resolve a feather; the near LODs keep the true
+   *  distances, which put a 1u city edge exactly where it belongs on a 4.375u quad. */
+  clampBlendFields: boolean;
 }
 
 export const LOD_LEVELS: LODLevel[] = [
-  { level: 1, chunkSize: CHUNK_SIZE, segments: LOD1_SEGMENTS, maxDistance: LOD1_MAX_DISTANCE, hasCollider: true },
-  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true },
-  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false },
-  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false },
-  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false },
+  { level: 1, chunkSize: CHUNK_SIZE, segments: LOD1_SEGMENTS, maxDistance: LOD1_MAX_DISTANCE, hasCollider: true, skirtDepth: 30, carvesRivers: true, clampBlendFields: false },
+  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true, skirtDepth: 230, carvesRivers: true, clampBlendFields: false },
+  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false, skirtDepth: 460, carvesRivers: true, clampBlendFields: true },
+  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false, skirtDepth: 1000, carvesRivers: false, clampBlendFields: true },
+  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false, skirtDepth: 450, carvesRivers: false, clampBlendFields: true },
 ];

@@ -1,10 +1,5 @@
 import { Region } from "../../../../components";
 import { WireBiome } from "./biomes/wire/biome";
+import { HOME_REGION } from "./spec";
 
-/** Home-page region: a single flat wireframe biome. Only mounted by
- *  HomeDomain (route "/"), never alongside the game regions. */
-export const HomeRegion = () => (
-  <Region name="home" id={4}>
-    <WireBiome />
-  </Region>
-);
+export const HomeRegion = () => <Region spec={HOME_REGION} biomes={{ wire: WireBiome }} />;

@@ -4,19 +4,9 @@ import type { StateMachineRunner } from "../../../../src/objects/actors/state/ru
 import type { Pose } from "../physics/npcBody.js";
 
 /**
- * PUBLISHING — turns one tick's results into the fields that changed.
- *
- * `Published` is the last state every registrant has seen. `publishTick`
- * applies the resolved pose and the machine's outputs to it and returns only
- * the changed fields — or null when nothing changed, so a resting entity
- * costs no bytes.
- *
- * Any positional change (position, velocity or yaw) goes out as a complete
- * SNAPSHOT stamped with the tick's server time (`st`): the client's snapshot
- * interpolation (src/net/entities/interpolation.ts) plays those back on the
- * server clock, so a snapshot must always be self-contained. The animation
- * channel's state goes out whole whenever it changed (its clocks are server
- * time too — the runner is ticked with `now`).
+ * `Published` is what every registrant last saw; `publishTick` diffs a tick against
+ * it. Any positional change goes out as a COMPLETE snapshot stamped with server time
+ * (`st`) — the client interpolates on that clock, so a snapshot must be self-contained.
  */
 
 export interface Published {
@@ -28,9 +18,7 @@ export interface Published {
   vy: number;
   vz: number;
   ry: number;
-  /** The animation channel's state as last published (null = never). */
   anim: AnimationState | null;
-  /** The channel version that state came from. */
   animVersion: number;
   sm: string | undefined;
   state: Record<string, unknown>;
@@ -70,7 +58,7 @@ const snapshot = (p: Published, f: EntityUpdateFields, now: number): void => {
   f.ry = p.ry;
 };
 
-/** Apply this tick's pose (null = a static entity) and machine outputs; the changed fields, or null. */
+/** The changed fields, or null when nothing changed (a resting entity costs no bytes). */
 export const publishTick = (p: Published, pose: Pose | null, runner: StateMachineRunner, now: number): EntityUpdateFields | null => {
   const f: EntityUpdateFields = {};
   let changed = false;

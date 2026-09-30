@@ -4,31 +4,18 @@ import { PlayerPersistence } from "./persistence.js";
 import type { PhysicsWorld } from "./physics/physicsWorld.js";
 
 /**
- * THE GAME WORLD — sessions, rooms, and the two systems hanging off them
- * (entities, persistence). Transport-agnostic: nothing in here knows about
- * sockets. The transport (transport/ws.ts) calls these methods and hands in an
- * `Outbox` that delivers the resulting messages to session ids. This boundary
- * exists for ONE reason — so the transport could be swapped (e.g. for
- * Colyseus) without touching game logic — so it is kept exactly this thin.
- *
- * Sessions are EPHEMERAL presence: they live and die with the connection.
- * Persisted player data is a separate concern keyed by `identity`
- * (persistence.ts): attached at connect, patched by the client through
- * `data:patch`, written back under the write policy there.
- *
- * Domains are ROOMS. A session is in exactly one; every broadcast is scoped
- * to a room. Moving between domains is a leave + a join, never a filter.
+ * Sessions (ephemeral presence), rooms (one per domain — every broadcast is room-scoped,
+ * a domain change is leave + join), entities and persistence. Transport-agnostic: the
+ * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
 
 export interface Session extends PlayerSnapshot {
-  /** Persistent anonymous identity (localStorage uuid) — NOT broadcast. */
+  /** Persistence key — NOT broadcast. */
   identity: string;
   domain: DomainId;
-  /** Server time of the last accepted move (for future authority/anti-teleport). */
   lastMoveAt: number;
 }
 
-/** What the World needs from a transport: deliver to one, or to many. */
 export interface Outbox {
   send(sessionId: string, msg: ServerMessage): void;
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage, exceptSessionId?: string): void;
@@ -37,7 +24,6 @@ export interface Outbox {
 const GOLDEN_ANGLE_DEG = 137.508;
 const SPAWN_RING_RADIUS = 3;
 
-/** hsl → "#rrggbb" so clients receive a plain CSS color. */
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
   const lig = l / 100;
@@ -67,11 +53,9 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
 export class World {
   private readonly sessions = new Map<string, Session>();
   private readonly rooms = new Map<DomainId, Set<string>>();
-  /** Monotonic join counter — drives color and spawn-slot assignment. */
+  /** Drives color and spawn-slot assignment. */
   private joinCount = 0;
-  /** Synced entities (NPCs, doors) — see entities/manager.ts. */
   readonly entities: EntityManager;
-  /** Persisted player blobs, by identity — see persistence.ts. */
   readonly persistence = new PlayerPersistence();
 
   constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
@@ -91,7 +75,6 @@ export class World {
     }
   }
 
-  /** The world tick (index.ts, TICK_HZ): the server-side actor simulation. */
   tick(now = Date.now()): void {
     this.entities.tick(now);
   }
@@ -134,7 +117,7 @@ export class World {
     this.out.sendMany(room, { t: "leave", id: s.id });
   }
 
-  /** Spawn slot: golden-angle ring so simultaneous joiners never stack. */
+  /** Golden-angle ring so simultaneous joiners never stack. */
   private nextSpawn(): { x: number; z: number } {
     const a = (this.joinCount * GOLDEN_ANGLE_DEG * Math.PI) / 180;
     const r = SPAWN_RING_RADIUS * (1 + (this.joinCount % 3) * 0.5);
@@ -173,10 +156,7 @@ export class World {
     this.persistence.detach(s.identity);
   }
 
-  // ── player data ──────────────────────────────────────────────────────────
-
-  /** A client's `data:patch`: merge into its identity's blob (validated by
-   *  persistence) and echo the result to EVERY session of that identity. */
+  /** Merge a client's patch into its identity's blob and echo it to every session of that identity. */
   patchPlayerData(id: string, patch: unknown): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -185,7 +165,6 @@ export class World {
     this.broadcastPlayerData(s.identity, merged);
   }
 
-  /** Server-side game logic replacing a blob (progress written by the world). */
   setPlayerData(identity: string, data: PlayerData): void {
     this.persistence.set(identity, data);
     this.broadcastPlayerData(identity, data);
@@ -197,21 +176,17 @@ export class World {
     }
   }
 
-  /** Periodic save sweep — call from a coarse timer, never from a tick. */
+  /** Call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
     return this.persistence.flushDirty(now);
   }
 
-  /** Shutdown: save everything that changed, regardless of interval. */
   saveAll(): number {
     return this.persistence.saveAll();
   }
 
-  // ── movement / rooms ─────────────────────────────────────────────────────
-
-  /** NOT authoritative (yet): the client's intent is accepted and relayed.
-   *  Authority slots in here — validate against lastMoveAt/speed, then relay
-   *  the CORRECTED state instead of the claimed one. */
+  /** NOT authoritative yet: the intent is relayed as claimed. Validation against
+   *  lastMoveAt/speed would slot in here. */
   move(id: string, m: MoveIntent): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -229,8 +204,6 @@ export class World {
   changeDomain(id: string, domain: DomainId): void {
     const s = this.sessions.get(id);
     if (!s || s.domain === domain) return;
-    // Everything it was rendering belongs to the old domain; the client
-    // re-registers what it mounts in the new one.
     this.entities.removeSession(id);
     this.leaveRoom(s);
     s.domain = domain;

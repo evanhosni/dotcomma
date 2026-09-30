@@ -1,20 +1,12 @@
 #!/usr/bin/env node
 /**
- * npm run dev — start the game SERVER (server/, tsx watch on :8080) and the
- * CLIENT (craco dev server on :3000) together in one terminal, output
- * prefixed, both killed when either exits or on Ctrl+C.
- *
- * .env.development points the client at ws://localhost:8080, so this is the
- * standard local multiplayer setup (open two tabs of :3000).
- *
- * First run: installs server/ deps if missing and creates + migrates the
- * local SQLite (server/data/dotcomma.sqlite) — the server refuses to boot on
- * a missing/stale schema by design.
+ * npm run dev — server (tsx watch :8080) + client (craco :3000) in one terminal;
+ * either exiting, or Ctrl+C, kills both. First run installs server/ deps and
+ * creates + migrates the local SQLite.
  *
  *   node scripts/dev.mjs [--no-open] [--server-only] [--client-only]
  *
- * No dependencies (concurrently was considered and skipped: a dev tool for
- * two processes isn't worth a package).
+ * No dependencies: `concurrently` was considered and skipped.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -28,21 +20,17 @@ const withServer = !args.has("--client-only");
 const withClient = !args.has("--server-only");
 const isWin = process.platform === "win32";
 
-// Each child gets its OWN PROCESS GROUP (detached) so shutdown can kill the
-// whole tree: killing just the `npm` process left the webpack dev server it
-// spawned listening on :3000 (measured). But the tree is signalled in TWO
-// steps — the direct child first, so npm → tsx → server forward SIGTERM in
-// order and the server finishes its shutdown flush (signalling the whole group
-// at once made tsx force-kill the server mid-flush, also measured); then, after
-// a grace period, whatever is still alive in the group. Windows has no groups —
-// taskkill /T.
-const npm = (cwd, npmArgs, extraEnv = {}) =>
+// Own process group per child (detached): MEASURED, killing just `npm` left the
+// webpack dev server listening on :3000. Shutdown signals the direct child FIRST
+// so npm → tsx → server forward SIGTERM in order and the server finishes its
+// flush (signalling the whole group at once force-killed it mid-flush, also
+// measured), then the rest of the group after a grace period. Windows has no
+// groups — taskkill /T.
+const spawnNpm = (cwd, npmArgs, extraEnv = {}) =>
   spawn("npm", npmArgs, { cwd, env: { ...process.env, ...extraEnv }, stdio: "pipe", shell: isWin, detached: !isWin });
 
 const KILL_GRACE_MS = 3000;
-/** SIGTERM the rest of a child's process group (no-op once it is empty). The
- *  group id outlives its leader, so this also reaps grandchildren an already-
- *  exited npm left behind — the webpack dev server, measured. */
+/** The group id outlives its leader, so this also reaps grandchildren an exited npm left behind. */
 const killGroup = (child) => {
   if (isWin) return;
   try {
@@ -64,7 +52,7 @@ const killTree = (child) => {
 const color = (c) => (s) => `\x1b[${c}m${s}\x1b[0m`;
 const tag = { server: color(36)("[server]"), client: color(35)("[client]") };
 
-const pipe = (child, name) => {
+const forwardOutput = (child, name) => {
   const forward = (stream) => {
     let buf = "";
     stream.on("data", (chunk) => {
@@ -82,10 +70,8 @@ const pipe = (child, name) => {
   forward(child.stderr);
 };
 
-// ── pre-flight: ports ──────────────────────────────────────────────────────
-// A stale server/dev-server (a watcher left over from an earlier session)
-// surfaces as a cryptic EADDRINUSE deep in the server log; say what holds the
-// port instead. (macOS/Linux — Windows skips the check.)
+// A stale watcher surfaces as a cryptic EADDRINUSE deep in the server log; say
+// what holds the port instead. macOS/Linux only.
 const listenerOn = (port) => {
   if (isWin) return null;
   const r = spawnSync("lsof", ["-tiTCP:" + port, "-sTCP:LISTEN"], { encoding: "utf8" });
@@ -102,7 +88,6 @@ for (const [name, port] of [withServer && ["server", 8080], withClient && ["clie
   }
 }
 
-// ── first-run setup ────────────────────────────────────────────────────────
 if (withServer) {
   if (!existsSync(resolve(serverDir, "node_modules"))) {
     console.log(`${tag.server} installing server dependencies…`);
@@ -117,7 +102,6 @@ if (withServer) {
   }
 }
 
-// ── run both ───────────────────────────────────────────────────────────────
 const children = new Map();
 let shuttingDown = false;
 
@@ -135,18 +119,18 @@ const shutdown = (code) => {
 
 const start = (name, child) => {
   children.set(name, child);
-  pipe(child, name);
+  forwardOutput(child, name);
   child.on("exit", (code, signal) => {
     process.stdout.write(`${tag[name]} exited (${signal ?? code})\n`);
-    killGroup(child); // anything it spawned and abandoned goes with it
+    killGroup(child);
     children.delete(name);
     if (!shuttingDown) shutdown(code ?? 0);
     else if (children.size === 0) process.exit(code ?? 0);
   });
 };
 
-if (withServer) start("server", npm(serverDir, ["run", "dev"]));
-if (withClient) start("client", npm(root, ["start"], args.has("--no-open") ? { BROWSER: "none" } : {}));
+if (withServer) start("server", spawnNpm(serverDir, ["run", "dev"]));
+if (withClient) start("client", spawnNpm(root, ["start"], args.has("--no-open") ? { BROWSER: "none" } : {}));
 
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));

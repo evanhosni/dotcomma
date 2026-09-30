@@ -1,25 +1,25 @@
 import * as THREE from "three";
+import type { PointXZ } from "../../utils/math/types";
+import type { SwapChunk } from "./lodSwaps";
 export interface TerrainProps {
   group: THREE.Group;
-  chunks: { [key: string]: { position: number[]; chunk: Chunk } };
-  active_chunk: Chunk | null;
-  queued_to_build: Chunk[];
-  queued_to_destroy: Set<string>;
+  chunks: Map<string, Chunk>;
+  activeChunk: Chunk | null;
+  queuedToBuild: Chunk[];
 }
 
-export interface Chunk {
-  /** Canonical `${lod.level}/${gx}/${gz}` key — cached at queue time so the
-   *  per-frame passes never rebuild strings from float math. */
+/** A terrain chunk; its swap state (built, drawn, fade range) is lodSwaps.ts's `SwapChunk`. */
+export interface Chunk extends SwapChunk {
+  /** `${lod.level}/${gx}/${gz}`, cached so per-frame passes never rebuild it from float math. */
   key: string;
-  offset: THREE.Vector2;
+  /** World-space chunk center. */
+  offset: PointXZ;
   plane: THREE.Mesh;
+  /** The WATER surface over this chunk (a child of `plane`, so it shows/hides/moves with it);
+   *  null for chunks with no lake or river. Same pooled geometry family as the terrain. */
+  water: THREE.Mesh | null;
   rebuildIterator: AsyncIterator<any> | null;
-  /** The chunk's Rapier heightfield body — built IMPERATIVELY (rapier-side
-   *  only, never a React <RigidBody>): r-t-r walks every React-registered
-   *  body every frame (getRigidBody + isSleeping wasm calls, and fixed bodies
-   *  never report sleeping, so also translation/rotation → compose/decompose
-   *  → lerp/slerp), and ~64 terrain bodies were the bulk of that list. Owned
-   *  by the chunk; removed in destroyChunk. */
+  /** Imperative Rapier body, never a React <RigidBody> (see CLAUDE.md). */
   colliderBody: import("@dimforge/rapier3d-compat").RigidBody | null;
   lod: import("./lodConfig").LODLevel;
 }

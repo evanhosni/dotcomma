@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useDevMode } from "../../context/DevContext";
+import { useDevContext } from "../../context/DevContext";
+import { FONT_CSS, HUD_COLOR, HUD_Z_INDEX, PANEL_BACKGROUND } from "./styles";
 
 const EXPIRE_MS = 30_000;
 const CHECK_INTERVAL_MS = 1_000;
@@ -7,7 +8,7 @@ const CHECK_INTERVAL_MS = 1_000;
 type LogLevel = "log" | "error" | "warn";
 
 const LOG_COLORS: Record<LogLevel, string> = {
-  log: "#0f0",
+  log: HUD_COLOR,
   error: "#f44",
   warn: "#fa0",
 };
@@ -29,7 +30,7 @@ interface LogEntry {
 }
 
 export const LogsOverlay = () => {
-  const { devMode } = useDevMode();
+  const { devMode } = useDevContext();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const entriesRef = useRef<LogEntry[]>([]);
   const activeRef = useRef(devMode);
@@ -42,10 +43,10 @@ export const LogsOverlay = () => {
 
     const wrapper = document.createElement("div");
     wrapper.style.cssText =
-      "position:fixed;bottom:12px;right:12px;z-index:1000;" +
+      `position:fixed;bottom:12px;right:12px;z-index:${HUD_Z_INDEX};` +
       "max-height:50vh;display:flex;flex-direction:column;" +
       "pointer-events:auto;user-select:text;" +
-      "font-family:'Kode Mono','Courier New',Courier,monospace;font-size:12px;line-height:1.5;" +
+      FONT_CSS +
       "max-width:500px;";
     wrapper.addEventListener("mousedown", (e) => e.stopPropagation());
     wrapper.addEventListener("click", (e) => e.stopPropagation());
@@ -56,7 +57,7 @@ export const LogsOverlay = () => {
       "display:none;justify-content:flex-end;gap:4px;margin-bottom:4px;";
 
     const btnStyle =
-      "background:rgba(0,0,0,0.6);color:#0f0;border:1px solid #0f0;border-radius:4px;" +
+      `background:${PANEL_BACKGROUND};color:${HUD_COLOR};border:1px solid ${HUD_COLOR};border-radius:4px;` +
       "padding:2px 8px;cursor:pointer;font:inherit;font-size:11px;";
 
     const copyAllBtn = document.createElement("button");
@@ -121,7 +122,7 @@ export const LogsOverlay = () => {
 
       const el = document.createElement("div");
       el.style.cssText =
-        `background:rgba(0,0,0,0.6);color:${LOG_COLORS[type]};padding:4px 8px;border-radius:4px;` +
+        `background:${PANEL_BACKGROUND};color:${LOG_COLORS[type]};padding:4px 8px;border-radius:4px;` +
         "margin-top:2px;word-break:break-all;white-space:pre-wrap;display:flex;align-items:flex-start;gap:6px;";
 
       const copyBtn = document.createElement("button");

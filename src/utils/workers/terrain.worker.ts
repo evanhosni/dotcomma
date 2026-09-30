@@ -1,23 +1,17 @@
 /**
- * Terrain chunk computation worker.
+ * Terrain chunk worker: heights + shader attributes (the shared vertex pipeline),
+ * vertex normals, the water surface and the Rapier column-major collider heights —
+ * the main thread only writes buffers.
  *
- * Receives a chunk descriptor (the local vertex grid is a pure function of
- * chunkSize/segments, so it is generated HERE rather than built and
- * transferred by the main thread every build), computes heights + shader
- * attributes using the inlined vertex pipeline (noise, voronoi, biome
- * heights, city grid), plus the vertex normals and the Rapier column-major
- * collider heights — everything the main thread used to do per chunk except
- * the final buffer writes.
- *
- * Messages:
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "BUILD_CHUNK", id, segments, chunkSize, offsetX, offsetZ, skipPads, needCollider }
+ *   IN:  { type: "BUILD_CHUNK", id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, needCollider }
  *   OUT: { type: "INIT_DONE" }
- *   OUT: { type: "CHUNK_BUILT", id, heights, biomeIds, distBiome, distRegion, distRoad,
- *          distFreeway, freewayAlong, normals, colliderHeights? }
+ *   OUT: { type: "CHUNK_BUILT", id, heights, biomeSdf, biomePresence (count × slots, interleaved),
+ *          slots, riverBed, distRoad, distFreeway, freewayAlong, normals,
+ *          waterHeights (NaN = none) | null when the chunk has no water, colliderHeights? }
  */
 
-import { DomainConfig, initCompute, computeVertexData, computeVertexDataRaw } from "./vertexCompute";
+import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, getBiomeSlots, setDeckCutSpacing } from "./vertexCompute";
 
 let initialized = false;
 
@@ -37,17 +31,21 @@ self.onmessage = (e: MessageEvent) => {
       return;
     }
 
-    const { id, segments, chunkSize, offsetX, offsetZ, skipPads, needCollider } = e.data;
+    const { id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, needCollider } = e.data;
     const n: number = segments + 1;
     const count = n * n;
     const half = chunkSize / 2;
-    // Far visual-only LODs skip flatten pads (sub-vertex-spacing features;
-    // computing their tiles exploded far city chunk builds).
-    const compute = skipPads ? computeVertexDataRaw : computeVertexData;
+    // Far visual-only LODs skip flatten pads and the freeway runs, the farthest the river field too
+    // (computeVertexDataFar, LODLevel.carvesRivers, CLAUDE.md). A collider LOD always carves.
+    const compute = visualOnly
+      ? (x: number, z: number) => computeVertexDataFar(x, z, carvesRivers !== false)
+      : computeVertexData;
+    const slots = getBiomeSlots().length;
+    // The ground under decks is cut as far beside them as this chunk's triangles reach.
+    setDeckCutSpacing(chunkSize / segments);
 
-    // Local plane-frame grid (same layout as the pooled geometry: PlaneGeometry
-    // convention, y flipped vs world Z). fround matches the float32 positions
-    // the main thread used to transfer, so heights stay bit-identical.
+    // PlaneGeometry local frame (y flipped vs world Z); fround keeps heights
+    // bit-identical to the float32 positions.
     const localX = new Float64Array(n);
     const localY = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -56,12 +54,14 @@ self.onmessage = (e: MessageEvent) => {
     }
 
     const heights = new Float32Array(count);
-    const biomeIds = new Float32Array(count);
-    const distBiome = new Float32Array(count);
-    const distRegion = new Float32Array(count);
+    const biomeSdf = new Float32Array(count * slots);
+    const biomePresence = new Float32Array(count * slots);
+    const riverBed = new Float32Array(count);
     const distRoad = new Float32Array(count);
     const distFreeway = new Float32Array(count);
     const freewayAlong = new Float32Array(count);
+    const waterHeights = new Float32Array(count);
+    let hasWater = false;
 
     for (let iz = 0; iz < n; iz++) {
       const wz = -localY[iz] + offsetZ;
@@ -69,22 +69,21 @@ self.onmessage = (e: MessageEvent) => {
         const i = iz * n + ix;
         const result = compute(localX[ix] + offsetX, wz);
         heights[i] = result.height;
-        biomeIds[i] = result.biomeId;
-        distBiome[i] = result.distanceToBiomeBoundaryCenter;
-        distRegion[i] = result.distanceToRiverCenter;
+        for (let s = 0; s < slots; s++) {
+          biomeSdf[i * slots + s] = result.biomeSdf[s];
+          biomePresence[i * slots + s] = result.biomePresence[s];
+        }
+        riverBed[i] = result.riverBedDistance;
         distRoad[i] = result.distanceToRoadCenter;
         distFreeway[i] = result.distanceToFreewayCenter;
         freewayAlong[i] = result.freewayAlong;
+        waterHeights[i] = result.waterHeight;
+        if (!Number.isNaN(result.waterHeight) && result.waterHeight > result.height) hasWater = true;
       }
     }
 
-    // Vertex normals in the local plane frame (positions = (x, y, height)),
-    // replicating THREE's computeVertexNormals exactly: per-triangle
-    // cross(c-b, a-b) accumulated area-weighted, then normalized. Only the
-    // main grid — skirt triangles never touch main-grid vertices, and skirt
-    // normals are edge copies the main thread applies afterwards. This used
-    // to run on the MAIN thread over the full index buffer (including 768
-    // skirt triangles whose results were then overwritten).
+    // THREE.computeVertexNormals replicated exactly, main grid only (skirt
+    // normals are edge copies the main thread applies afterwards).
     const normals = new Float32Array(count * 3);
     for (let iz = 0; iz < segments; iz++) {
       for (let ix = 0; ix < segments; ix++) {
@@ -92,8 +91,7 @@ self.onmessage = (e: MessageEvent) => {
         const b = a + 1;
         const d = (iz + 1) * n + ix;
         const c = d + 1;
-        // Two triangles per quad, same winding as the geometry's index
-        // buffer: (a, d, b) and (d, c, b)
+        // Same winding as the index buffer: (a, d, b) and (d, c, b)
         for (let t = 0; t < 2; t++) {
           const iA = t === 0 ? a : d;
           const iB = t === 0 ? d : c;
@@ -122,9 +120,7 @@ self.onmessage = (e: MessageEvent) => {
       }
     }
 
-    // Rapier heightfield wants COLUMN-MAJOR heights (col = X axis = ix,
-    // row = Z axis = iz) — emit it here so the main thread skips the
-    // per-collider transpose loop + allocation.
+    // Rapier wants COLUMN-MAJOR heights (col = X = ix, row = Z = iz).
     let colliderHeights: Float32Array | null = null;
     if (needCollider) {
       colliderHeights = new Float32Array(count);
@@ -137,27 +133,30 @@ self.onmessage = (e: MessageEvent) => {
 
     const transfer: Transferable[] = [
       heights.buffer,
-      biomeIds.buffer,
-      distBiome.buffer,
-      distRegion.buffer,
+      biomeSdf.buffer,
+      biomePresence.buffer,
+      riverBed.buffer,
       distRoad.buffer,
       distFreeway.buffer,
       freewayAlong.buffer,
       normals.buffer,
     ];
+    if (hasWater) transfer.push(waterHeights.buffer);
     if (colliderHeights) transfer.push(colliderHeights.buffer);
     (self as any).postMessage(
       {
         type: "CHUNK_BUILT",
         id,
         heights,
-        biomeIds,
-        distBiome,
-        distRegion,
+        biomeSdf,
+        biomePresence,
+        slots,
+        riverBed,
         distRoad,
         distFreeway,
         freewayAlong,
         normals,
+        waterHeights: hasWater ? waterHeights : null,
         colliderHeights,
       },
       transfer

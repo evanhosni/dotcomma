@@ -8,20 +8,9 @@ import {
 } from "./state/animation";
 
 /**
- * ANIMATION PLAYER — applies an AnimationChannel STATE (state/animation.ts,
- * Three-free) to a Three.js mixer. The one place clip state becomes actions,
- * for every model actor:
- *
- *   - a SYNCED actor applies the SERVER's published state, evaluated on its
- *     delayed render clock (server time − INTERP_DELAY_MS), so every client
- *     plays the same clip frame as the interpolated body reaches the spot
- *     where the server switched it;
- *   - a LOCAL actor applies its own runner's channel on the local frame clock.
- *
- * Idempotent: a state equal to the one already applied does nothing, so the
- * per-frame call is a cheap compare. Actions bind LAZILY by clip name (a model
- * may ship many clips its machine never plays) and live on the pooled clone,
- * so a reused clone keeps its bound actions.
+ * Applies an AnimationChannel STATE to a Three.js mixer — the one place clip state
+ * becomes actions. Idempotent (an equal state is a cheap compare). Actions bind
+ * LAZILY by clip name and live on the pooled clone, so a reused clone keeps them.
  */
 
 export interface AnimationTarget {
@@ -47,13 +36,11 @@ export class AnimationPlayer {
   private readonly applied: AnimationState = createAnimationState();
   private hasApplied = false;
 
-  /** Forget what was applied (a fresh pooled clone, a new life). */
   reset(): void {
     this.hasApplied = false;
   }
 
-  /** Apply `state` unless it is exactly what is already playing. `nowMs` is
-   *  the clock the state's times are expressed in. */
+  /** `nowMs` is the clock the state's times are expressed in. */
   apply(target: AnimationTarget, state: AnimationState, nowMs: number): void {
     if (this.hasApplied && animationStatesEqual(this.applied, state)) return;
     copyAnimationState(state, this.applied);
@@ -69,8 +56,6 @@ export class AnimationPlayer {
       console.error(`animation "${state.clip}" does not exist`);
       return;
     }
-    // Stop the materialized actions to clear the mixer (clips nothing ever
-    // played were never bound — there's nothing else to stop).
     target.actions.forEach((a) => {
       if (a !== action) a.stop();
     });

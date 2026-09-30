@@ -1,26 +1,14 @@
-import { PLAYER_DATA_MAX_BYTES, type PlayerData } from "../../../src/net/protocol";
+import { PLAYER_DATA_MAX_BYTES, playerDataBytes, type PlayerData } from "../../../src/net/protocol";
 import { loadPlayer, savePlayerData } from "../data/players.js";
 
 /**
- * PLAYER PERSISTENCE — the in-memory side of the `players` table: one record
- * per connected IDENTITY (two tabs = two sessions, ONE record), loaded on the
- * first session's connect, patched by the game, written back under the
- * WRITE POLICY, dropped when the last session leaves.
- *
- * WRITE POLICY — never on the tick:
- *   - when the identity's LAST session disconnects, if the blob changed since
- *     the last save;
- *   - otherwise at most once per SAVE_INTERVAL_MS per identity, and only if it
- *     changed (flushDirty, driven by a coarse timer in index.ts);
- *   - saveAll() on shutdown flushes everything that changed.
- *
- * The blob's SHAPE is still open (PlayerData in src/net/protocol.ts). Reads
- * and writes here are shape-agnostic; when named keys arrive, `validatePatch`
- * is where a key gets checked, clamped or refused, and typed accessors go
- * next to it. All SQL stays in data/players.ts.
+ * In-memory side of the `players` table: one record per connected IDENTITY (two
+ * tabs = one record). WRITE POLICY, never on the tick: save when the last session
+ * leaves if dirty, else at most once per SAVE_INTERVAL_MS if dirty, plus saveAll()
+ * on shutdown. When named keys arrive, `validatePatch` is where they get checked.
+ * All SQL stays in data/players.ts.
  */
 
-/** Minimum gap between periodic saves of one identity's blob. */
 export const SAVE_INTERVAL_MS = 30_000;
 
 export interface PersistedPlayer {
@@ -34,11 +22,7 @@ export interface PersistedPlayer {
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Serialized size of a blob (the cap the client also enforces). */
-export const playerDataBytes = (d: PlayerData): number => Buffer.byteLength(JSON.stringify(d), "utf8");
-
-/** The merged blob if `patch` is acceptable, else null. Shape-agnostic today:
- *  a plain object whose merge fits the size cap. */
+/** The merged blob when `patch` is a plain object whose merge fits the cap, else null. */
 export const validatePatch = (current: PlayerData, patch: unknown): PlayerData | null => {
   if (!isPlainObject(patch)) return null;
   const merged = { ...current, ...patch };
@@ -49,11 +33,10 @@ export const validatePatch = (current: PlayerData, patch: unknown): PlayerData |
 export class PlayerPersistence {
   private readonly byIdentity = new Map<string, PersistedPlayer>();
 
-  /** A session connected: load the row on the identity's first session. */
   attach(identity: string, now = Date.now()): PersistedPlayer {
     let p = this.byIdentity.get(identity);
     if (!p) {
-      const record = loadPlayer(identity); // creates the row on first ever connect
+      const record = loadPlayer(identity);
       p = { identity, data: record.data, sessions: 0, dirty: false, savedAt: now };
       this.byIdentity.set(identity, p);
     }
@@ -61,7 +44,6 @@ export class PlayerPersistence {
     return p;
   }
 
-  /** A session left: the identity's last session out saves if dirty and drops the record. */
   detach(identity: string): void {
     const p = this.byIdentity.get(identity);
     if (!p) return;
@@ -74,7 +56,7 @@ export class PlayerPersistence {
     return this.byIdentity.get(identity);
   }
 
-  /** Shallow-merge a validated patch; the merged blob, or null when refused/unknown. */
+  /** The merged blob, or null when refused or the identity is unknown. */
   patch(identity: string, patch: unknown): PlayerData | null {
     const p = this.byIdentity.get(identity);
     if (!p) return null;
@@ -85,7 +67,6 @@ export class PlayerPersistence {
     return merged;
   }
 
-  /** Replace an identity's blob wholesale (server-side game logic). */
   set(identity: string, data: PlayerData): void {
     const p = this.byIdentity.get(identity);
     if (!p) return;
@@ -99,7 +80,6 @@ export class PlayerPersistence {
     p.savedAt = now;
   }
 
-  /** Periodic save sweep — call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
     let n = 0;
     for (const p of this.byIdentity.values()) {
@@ -111,7 +91,6 @@ export class PlayerPersistence {
     return n;
   }
 
-  /** Shutdown: save everything that changed, regardless of interval. */
   saveAll(): number {
     let n = 0;
     for (const p of this.byIdentity.values()) {

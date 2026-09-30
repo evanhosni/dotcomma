@@ -17,10 +17,10 @@ describe("snapshot interpolation", () => {
   test("interpolates linearly between the two bracketing snapshots", () => {
     const s = [snap(1000, 0, 0, 5, 0), snap(1100, 0.5, 0, 5, 0), snap(1200, 1.0, 0, 5, 0)];
     const out = pose();
-    expect(sampleSnapshots(s, 1050, out)).toBe("interp");
+    expect(sampleSnapshots(s, 1050, out)).toBe("interpolated");
     expect(out.x).toBeCloseTo(0.25);
     expect(out.vx).toBeCloseTo(5);
-    expect(sampleSnapshots(s, 1150, out)).toBe("interp");
+    expect(sampleSnapshots(s, 1150, out)).toBe("interpolated");
     expect(out.x).toBeCloseTo(0.75);
   });
 
@@ -63,7 +63,7 @@ describe("snapshot interpolation", () => {
       expect(sampleSnapshots(s, t, out)).toBe("hold");
       expect(out.x).toBe(10);
     }
-    expect(sampleSnapshots(s, 6000 - PUBLISH_INTERVAL_MS / 2, out)).toBe("interp");
+    expect(sampleSnapshots(s, 6000 - PUBLISH_INTERVAL_MS / 2, out)).toBe("interpolated");
     expect(out.x).toBeCloseTo(10.25);
     expect(out.vx).toBeCloseTo(5);
     // The frame the moving snapshot ARRIVES (render clock ~200ms behind 6000)
@@ -75,7 +75,7 @@ describe("snapshot interpolation", () => {
   test("past the newest snapshot: brief extrapolation, then hold", () => {
     const s = [snap(1000, 0, 0, 5, 0)];
     const out = pose();
-    expect(sampleSnapshots(s, 1100, out)).toBe("extrap");
+    expect(sampleSnapshots(s, 1100, out)).toBe("extrapolated");
     expect(out.x).toBeCloseTo(0.5);
     expect(sampleSnapshots(s, 1000 + MAX_EXTRAPOLATION_MS + 1000, out)).toBe("hold");
     expect(out.x).toBeCloseTo((5 * MAX_EXTRAPOLATION_MS) / 1000);

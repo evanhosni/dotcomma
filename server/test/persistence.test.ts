@@ -5,11 +5,8 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { PLAYER_DATA_MAX_BYTES } from "../../src/net/protocol";
 
-/**
- * Player persistence on a throwaway SQLite file: the data layer prepares its
- * statements at import against DATABASE_PATH, so the env is set BEFORE the
- * modules load (dynamic imports below) and DB_AUTO_MIGRATE creates the schema.
- */
+// The data layer prepares statements at import against DATABASE_PATH, so the env
+// is set BEFORE the dynamic imports below.
 let dir: string;
 let persistence: typeof import("../src/game/persistence.js");
 let players: typeof import("../src/data/players.js");

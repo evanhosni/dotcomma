@@ -1,25 +1,45 @@
+import type { ActorAttributes } from "../../types";
 import type { ActorSpec } from "../spec";
 import type { BuildingAttributes } from "./types";
 
-/**
- * BUILDING SPECS — the plan-shaping attributes of each building kind, with no
- * React: describeActor spreads a spec's `hull` into the descriptor, and the
- * SERVER (physics/buildings.ts) generates the SAME plan from it to build a
- * building's sealed convex hull collider. A variant's shape is defined here
- * once. (Formerly variants.ts.)
- *
- * PLACEMENT constants live here too because the server's domain config
- * (world/domains/glitch-city/config.ts) replicates the flatten pads the
- * terrain levels under every building — from these same numbers.
- */
+// The server (physics/buildings.ts) generates the SAME plan from a spec's `hull` to build the
+// sealed collider, and its domain config derives the flatten pads from the placement here — a
+// building kind's shape and placement are defined once, in its spec.
 
-/** A plain building: every knob at its seeded default. */
+/** Every generation attribute (BuildingAttributes minus the shared actor ones) — the keys a mount
+ *  must not override (spec.ts `mountOverridesOf`). The Record makes a new attribute a compile error
+ *  until it is listed. */
+const HULL_KEY_SET: Record<Exclude<keyof BuildingAttributes, keyof ActorAttributes>, true> = {
+  exteriorSize: true,
+  numberOfSides: true,
+  palette: true,
+  accentColors: true,
+  accentChance: true,
+  windowShapes: true,
+  windowCount: true,
+  windowSize: true,
+  maxLean: true,
+  shellHeightRange: true,
+  stories: true,
+  roomCount: true,
+  doorCount: true,
+  doorSize: true,
+  ceilingHeight: true,
+  windowLightChance: true,
+  windowLightIntensity: true,
+  interiorColors: true,
+};
+export const BUILDING_HULL_KEYS = Object.keys(HULL_KEY_SET) as readonly (keyof BuildingAttributes)[];
+
 export const BUILDING_ATTRS: BuildingAttributes = {};
 
-/** Skyscraper: max floors under a much taller shell (the mass above the top
- *  floor reads as mechanical levels), a gentler lean so tall neighbors don't
- *  collide, and most windows lit at night so towers read as busy from across
- *  the city. */
+/** Farthest ray distance (eye → leaf) a door can be hovered/clicked from. The server measures a door
+ *  click from the DOOR's position in the seeded plan, plus INTERACT_REACH_SLACK (a building's origin is
+ *  its center, and facade doors sit 9–16u from it — measured over 200 seeds). */
+export const DOOR_INTERACT_REACH = 6;
+
+/** Max floors under a much taller shell (mechanical levels), a gentler lean so tall
+ *  neighbors don't collide, most windows lit so towers read as busy from afar. */
 export const SKYSCRAPER_ATTRS: BuildingAttributes = {
   stories: 6,
   roomCount: [3, 4, 5, 6],
@@ -28,36 +48,34 @@ export const SKYSCRAPER_ATTRS: BuildingAttributes = {
   windowLightChance: 0.8,
 };
 
-export const BUILDING_SPEC: ActorSpec = { id: "building", hull: BUILDING_ATTRS };
-export const SKYSCRAPER_SPEC: ActorSpec = { id: "skyscraper", hull: SKYSCRAPER_ATTRS };
-/** The grass biomes mount BuildingActor under this id (descriptors dedupe by
- *  id and "building" belongs to the city registration) — same shape. */
-export const GRASS_BUILDING_SPEC: ActorSpec = { id: "grass-building", hull: BUILDING_ATTRS };
-
-/** How buildings place — shared with the server's flatten-pad config.
- *  Buildings only place inside block interiors (off roads/sidewalks/ramps),
- *  so density is set high to keep blocks packed — footprint spacing is the
- *  real limiter, and the flatten engine's iterated spacing rounds convert the
- *  oversupply into greedy-level packing. (Halving to 1900 was tried for
- *  flatten-tile cost and REVERTED: combined with single-round spacing it
- *  visibly thinned the city.) `flattenGround`: the city rides the regional
- *  base noise — without the pad, sloped block interiors clip through floors. */
-export const BUILDING_PLACEMENT = {
+/** Buildings only place inside block interiors, so density is high to keep blocks
+ *  packed — footprint spacing is the real limiter (1900 was tried and REVERTED: it
+ *  visibly thinned the city). flattenGround: sloped block interiors otherwise clip floors. */
+export const BUILDING_SPEC: ActorSpec = {
+  id: "building",
+  component: "building",
+  renderDistance: 625,
+  frustumPadding: 3.25,
   footprint: 30,
   density: 3800,
   clustering: 0,
   priority: 55,
-  roadDistanceRange: [23, 99999] as [number, number],
+  roadDistanceRange: [23, 99999],
   flattenGround: true,
+  hull: BUILDING_ATTRS,
 };
 
-/** Skyscrapers are restricted to deep block interiors (roadDistanceRange), so
- *  density is raised to keep the skyline as populated as before the road
- *  filter. flattenGround is inherited — a larger, footprint-derived pad. */
-export const SKYSCRAPER_PLACEMENT = {
-  ...BUILDING_PLACEMENT,
+/** Deep block interiors only, so density is raised to keep the skyline populated. */
+export const SKYSCRAPER_SPEC: ActorSpec = {
+  ...BUILDING_SPEC,
+  id: "skyscraper",
   footprint: 36,
   density: 240,
   priority: 45,
-  roadDistanceRange: [28, 99999] as [number, number],
+  roadDistanceRange: [28, 99999],
+  hull: SKYSCRAPER_ATTRS,
 };
+
+/** The grassland's scattered buildings: the city building's kind under its own id (descriptors
+ *  dedupe by id, and "building" is the city's); the grass biome's mount sets its density. */
+export const GRASS_BUILDING_SPEC: ActorSpec = { ...BUILDING_SPEC, id: "grass-building" };

@@ -1,43 +1,29 @@
 /**
- * ANIMATION CHANNEL — play / pause / resume / stop / speed for an actor's
- * animation clips, with NO Three.js so it runs on the server.
- *
- * A behavior calls `ctx.animation.play("walk")` (or declares
- * `animation: { clip: "walk" }` on a state, which does the same on enter).
- * The channel keeps a small, fully self-describing STATE: which clip, how it
- * loops, its speed, whether it is paused, and the clock times that let any
- * reader compute the exact clip time — so the server can publish the state
- * and every client plays the same frame of the same clip:
+ * Three-free animation channel: a self-describing STATE the server can publish so
+ * every client plays the same frame of the same clip.
  *
  *   clip time (s) = (now − t0) / 1000 × speed          while playing
  *                 = (pausedAt − t0) / 1000 × speed     while paused
  *
- * `now` is whatever clock the owner feeds `setClock`: server time on the
- * server, the local frame clock on a purely local actor. The client applies
- * a published state on its delayed render clock (snapshot interpolation), so a
- * clip switch lands exactly as the interpolated body reaches the spot where
- * the server switched it. Resume/speed changes rewrite `t0` so the clip time
- * stays continuous. A "once" clip holds its last frame.
+ * `now` is whatever clock `setClock` feeds (server time on the server, the local
+ * frame clock on a local actor). Resume/speed changes rewrite `t0` so the clip
+ * time stays continuous.
  */
 
 export type AnimationLoop = "repeat" | "once";
 
-/** What a state declares (or a behavior passes to `play`). */
 export interface AnimationSpec {
-  /** Clip name in the GLTF. */
   clip: string;
   /** Default "repeat". "once" plays through and holds the last frame. */
   loop?: AnimationLoop;
-  /** Playback rate multiplier, default 1. */
+  /** Default 1. */
   speed?: number;
-  /** Restart from time 0 even if this clip is already playing. Default: false
-   *  for "repeat" (re-entering a walking state keeps the stride in phase),
-   *  true for "once" (a one-shot is a one-shot). */
+  /** Default: false for "repeat" (re-entering a walking state keeps the stride in phase), true for "once". */
   restart?: boolean;
 }
 
 export interface AnimationState {
-  /** null = nothing playing (stopped). */
+  /** null = stopped. */
   clip: string | null;
   loop: AnimationLoop;
   speed: number;
@@ -46,8 +32,7 @@ export interface AnimationState {
   t0: number;
   /** Channel-clock ms of pause() (meaningful while paused). */
   pausedAt: number;
-  /** Channel-clock ms of the last change — readers on a delayed clock apply
-   *  the state once their clock reaches this. */
+  /** Channel-clock ms of the last change — readers on a delayed clock apply the state once they reach it. */
   changedAt: number;
 }
 
@@ -80,8 +65,7 @@ export const animationStatesEqual = (a: AnimationState, b: AnimationState): bool
   a.pausedAt === b.pausedAt &&
   a.changedAt === b.changedAt;
 
-/** Clip time in SECONDS at channel-clock `nowMs` (unwrapped; the player wraps
- *  looping clips by duration and clamps one-shots). */
+/** Unwrapped clip time in SECONDS; the player wraps loops by duration and clamps one-shots. */
 export const animationClipTime = (s: AnimationState, nowMs: number): number => {
   const at = s.paused ? s.pausedAt : nowMs;
   return Math.max(0, ((at - s.t0) / 1000) * s.speed);
@@ -93,7 +77,6 @@ export class AnimationChannel {
   version = 0;
   private now = 0;
 
-  /** The channel clock, set by the runner before behaviors run. */
   setClock(nowMs: number): void {
     this.now = nowMs;
   }
@@ -106,8 +89,7 @@ export class AnimationChannel {
     return this.state.clip !== null && !this.state.paused;
   }
 
-  /** Play a clip. Same clip already playing → keeps its phase unless `restart`
-   *  (or the clip is a one-shot). Changing loop/speed re-applies in place. */
+  /** Same clip already playing keeps its phase unless `restart` (or a one-shot). */
   play(clip: string, spec: Omit<AnimationSpec, "clip"> = {}): void {
     const s = this.state;
     const loop = spec.loop ?? "repeat";
@@ -158,15 +140,13 @@ export class AnimationChannel {
   resume(): void {
     const s = this.state;
     if (s.clip === null || !s.paused) return;
-    // Shift the origin by the paused duration so the clip time is continuous.
     s.t0 += this.now - s.pausedAt;
     s.paused = false;
     s.pausedAt = 0;
     this.touch();
   }
 
-  /** Change playback rate without a visible jump: the elapsed clip time is
-   *  preserved by re-anchoring t0. */
+  /** Re-anchors t0 so the elapsed clip time is preserved (no visible jump). */
   setSpeed(speed: number): void {
     const s = this.state;
     if (s.clip === null || s.speed === speed) return;

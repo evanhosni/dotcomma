@@ -1,11 +1,13 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useRef, useEffect } from "react";
-import * as THREE from "three";
-import { voronoi } from "../../utils/voronoi/voronoi";
+import { getPlaceInfo } from "../../objects/dressing/dressingWorker";
 import { useGameContext } from "../../context/GameContext";
-import { useDevMode } from "../../context/DevContext";
-import { getActiveRegions, getTerrainParams } from "../../world/domains/utils";
+import { useDevContext } from "../../context/DevContext";
+import { getAllBiomes } from "../../utils/utils";
+import { getActiveRegions } from "../../world/domains/utils";
 import { getOrCreateLeftColumn } from "./overlayContainer";
+import { PANEL_CSS } from "./styles";
+
 const BIOME_POLL_INTERVAL = 1; // seconds
 
 const GRAPH_WIDTH = 120;
@@ -14,14 +16,9 @@ const GRAPH_HISTORY = GRAPH_WIDTH; // one sample per pixel
 /** Frames between DOM/canvas redraws (sampling itself runs every frame). */
 const UI_REDRAW_INTERVAL = 4;
 
-// Low/high spikes are held indefinitely — the readout is the worst thing that
-// happened since the last reset, and BACKSPACE clears both back to "--".
 const SPIKE_RESET_KEY = "Backspace";
 
-// Every numeric readout is padded to a fixed character width so that a value
-// gaining or losing a digit never shifts what sits to its right (the font is
-// monospace and the container is white-space:pre, so columns line up exactly).
-// Values wider than their column simply push out rather than being truncated.
+// Fixed column widths (monospace + white-space:pre) so a changing digit count never shifts the row.
 const W_FPS = 3;
 const W_FPS_AVG = 5;
 const W_MS = 6; // fits a 1000ms+ hitch
@@ -36,7 +33,6 @@ const pad = (value: string | number, width: number) => String(value).padStart(wi
 
 const LABELS = ["FPS:     ", "MS:      ", "Mem:     ", "Pos:     ", "Biome:   ", "Render:  ", "Terrain: "];
 
-// indices into spans array
 const I_FPS = 0;
 const I_MS = 1;
 const I_MEM = 2;
@@ -45,9 +41,7 @@ const I_BIOME = 4;
 const I_RENDER = 5;
 const I_TERRAIN = 6;
 
-// Graph indices (FPS, MS, Mem). Mem graphs the live geometry count against an
-// auto-scaling ceiling — the pooled terrain chunks should hold steady, so an
-// upward drift here is a geometry leak.
+// Mem graphs the live geometry count: pooled terrain chunks hold steady, so an upward drift is a leak.
 const GRAPH_COLORS = ["#0f0", "#0ff", "#f0f"];
 const GRAPH_MAX_DEFAULTS = [120, 33, 64]; // FPS caps at 120, MS at 33ms (~30fps), Mem auto-grows from 64
 
@@ -79,7 +73,7 @@ function drawGraph(ctx: CanvasRenderingContext2D, history: number[], maxVal: num
 
 const OverlayHUD = () => {
   const { gl, camera } = useThree();
-  const { progress, terrain_loaded } = useGameContext();
+  const { progress, terrainLoaded } = useGameContext();
 
   const spans = useRef<HTMLSpanElement[]>([]);
   const avgSpans = useRef<HTMLSpanElement[]>([]);
@@ -93,35 +87,26 @@ const OverlayHUD = () => {
   const biomePoll = useRef(0);
   const currentBiome = useRef("...");
 
-  // Running averages — accumulate only after terrain loads (load-phase stutter
-  // would skew benchmarks) and only while this tab is visible AND focused
-  // (background tabs throttle rAF, producing faulty samples)
   const avgFrames = useRef(0);
   const avgTime = useRef(0);
   const wasActive = useRef(false);
   const uiFrame = useRef(0);
 
-  // Worst-case spikes over the same sampling window as the averages, held until
-  // BACKSPACE clears them. FPS tracks the worst 0.5s window (a sustained dip);
-  // MS tracks the worst SINGLE frame (a one-frame hitch), so the two are not
-  // reciprocals of each other.
+  // Held until Backspace. FPS = worst 0.5s window, MS = worst SINGLE frame — not reciprocals.
   const minFps = useRef(Infinity);
   const maxMs = useRef(0);
   const fpsWindowClean = useRef(false);
 
-  // Peak resource counts, and the auto-scaling ceiling for the memory graph
   const peakGeometries = useRef(0);
   const peakTextures = useRef(0);
   const memGraphMax = useRef(GRAPH_MAX_DEFAULTS[I_MEM]);
 
-  // Disable per-render auto-reset so gl.info accumulates stats across all
-  // render passes. We manually reset once per frame below.
+  // gl.info must accumulate across all render passes; reset manually once per frame below.
   useEffect(() => {
     gl.info.autoReset = false;
     return () => { gl.info.autoReset = true; };
   }, [gl]);
 
-  // Backspace clears the held low/high records (there is no expiry timer)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== SPIKE_RESET_KEY) return;
@@ -132,15 +117,11 @@ const OverlayHUD = () => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Build the DOM overlay imperatively (outside R3F's reconciler)
   useEffect(() => {
     const column = getOrCreateLeftColumn();
 
     const container = document.createElement("div");
-    container.style.cssText =
-      "order:1;background:rgba(0,0,0,0.6);" +
-      "color:#0f0;font-family:'Kode Mono','Courier New',Courier,monospace;font-size:12px;" +
-      "line-height:1.5;padding:8px 12px;border-radius:4px;pointer-events:none;white-space:pre;";
+    container.style.cssText = "order:1;" + PANEL_CSS;
 
     const createdSpans: HTMLSpanElement[] = [];
     const createdAvgSpans: HTMLSpanElement[] = [];
@@ -154,7 +135,6 @@ const OverlayHUD = () => {
       container.appendChild(span);
       createdSpans.push(span);
 
-      // Secondary readout to the right of the FPS, MS, Mem counters
       if (i <= I_MEM) {
         const avg = document.createElement("span");
         avg.style.color = "rgba(0,255,0,0.55)";
@@ -162,7 +142,6 @@ const OverlayHUD = () => {
         createdAvgSpans.push(avg);
       }
 
-      // Worst-case spike in red (FPS and MS only)
       if (i <= I_MS) {
         const spike = document.createElement("span");
         spike.style.color = "#f44";
@@ -170,7 +149,6 @@ const OverlayHUD = () => {
         createdSpikeSpans.push(spike);
       }
 
-      // Add graph canvas after FPS, MS, Mem rows
       if (i <= I_MEM) {
         const g = createGraph();
         container.appendChild(g.canvas);
@@ -190,8 +168,6 @@ const OverlayHUD = () => {
   }, []);
 
   useFrame((_, delta) => {
-    // Capture accumulated render stats from all previous frame's render passes
-    // then reset for the next frame's accumulation.
     const renderCalls = gl.info.render.calls;
     const renderTris = gl.info.render.triangles;
     gl.info.reset();
@@ -203,14 +179,11 @@ const OverlayHUD = () => {
     const ms = delta * 1000;
     lastMs.current = ms;
 
-    // Sampling gate, shared by the averages and the spikes: the world must be
-    // loaded and the tab active, and the previous frame must have been active
-    // too (the frame right after regaining focus has a delta spanning the whole
-    // inactive period)
+    // Sampling gate: loaded, tab active, AND the previous frame active too (the
+    // frame after regaining focus has a delta spanning the whole inactive period).
     const isActive = document.visibilityState === "visible" && document.hasFocus();
-    const sampling = terrain_loaded && isActive && wasActive.current;
+    const sampling = terrainLoaded && isActive && wasActive.current;
 
-    // FPS (rolling average over 0.5s)
     frames.current++;
     elapsed.current += delta;
     if (!sampling) fpsWindowClean.current = false;
@@ -226,8 +199,6 @@ const OverlayHUD = () => {
     }
     if (sampling && ms > maxMs.current) maxMs.current = ms;
 
-    // Renderer resources — works in every browser, and unlike the JS heap these
-    // actually track where a Three.js scene spends its memory
     const geometries = gl.info.memory.geometries;
     const textures = gl.info.memory.textures;
     const programs = gl.info.programs?.length ?? 0;
@@ -235,39 +206,31 @@ const OverlayHUD = () => {
     if (textures > peakTextures.current) peakTextures.current = textures;
     if (geometries > memGraphMax.current) memGraphMax.current = geometries;
 
-    // Biome polling
     biomePoll.current += delta;
     if (biomePoll.current >= BIOME_POLL_INTERVAL) {
       biomePoll.current = 0;
       const pos = camera.position;
       const regions = getActiveRegions();
       if (regions.length > 0) {
-        const params = getTerrainParams();
-        voronoi
-          .create({
-            seed: params.seed,
-            currentVertex: new THREE.Vector2(pos.x, pos.z),
-            gridSize: params.gridSize,
-            regionGridSize: params.regionGridSize,
-            regions,
+        getPlaceInfo(pos.x, pos.z)
+          .then((place) => {
+            if (!place) return;
+            const active = getActiveRegions();
+            const biome = getAllBiomes(active).find((b) => b.id === place.biomeId);
+            const region = active.find((r) => r.id === place.regionId);
+            currentBiome.current = `${region?.name ?? "?"}/${biome?.name ?? "???"}`;
           })
-          .then((result: any) => {
-            currentBiome.current = result.biome?.name ?? "???";
-          });
+          .catch(() => undefined);
       }
     }
 
-    // Running averages, over the same sampling window as the spikes above
     if (sampling) {
       avgFrames.current++;
       avgTime.current += delta;
     }
     wasActive.current = isActive;
 
-    // DOM + canvas writes are throttled: the sampling above stays per-frame
-    // (spikes/min/max must not miss a frame), but 14 textContent writes and
-    // three 120-segment canvas strokes every frame were measurable in the very
-    // numbers this overlay reports. Graphs advance one column per redraw.
+    // Sampling stays per-frame; the DOM/canvas writes were measurable in the numbers they report.
     if (uiFrame.current++ % UI_REDRAW_INTERVAL !== 0) return;
 
     const a = avgSpans.current;
@@ -290,7 +253,6 @@ const OverlayHUD = () => {
       sp[I_MS].textContent = `   high ${pad(maxMs.current > 0 ? maxMs.current.toFixed(1) : "--", W_MS)}`;
     }
 
-    // Update text
     s[I_FPS].textContent = pad(lastFps.current, W_FPS);
     s[I_MS].textContent = pad(ms.toFixed(1), W_MS);
     s[I_MEM].textContent =
@@ -300,9 +262,8 @@ const OverlayHUD = () => {
       `${pad(p.x.toFixed(1), W_POS)},${pad(p.y.toFixed(1), W_POS)},${pad(p.z.toFixed(1), W_POS)}`;
     s[I_BIOME].textContent = currentBiome.current;
     s[I_RENDER].textContent = `${pad(renderCalls, W_DRAWS)} draws,${pad(renderTris, W_TRIS)} tris`;
-    s[I_TERRAIN].textContent = terrain_loaded ? "loaded" : `${Math.round(progress * 100)}%`;
+    s[I_TERRAIN].textContent = terrainLoaded ? "loaded" : `${Math.round(progress * 100)}%`;
 
-    // Update graphs
     if (g.length >= 3) {
       const values = [lastFps.current, ms, geometries];
       const maxes = [GRAPH_MAX_DEFAULTS[I_FPS], GRAPH_MAX_DEFAULTS[I_MS], memGraphMax.current];
@@ -319,7 +280,7 @@ const OverlayHUD = () => {
 };
 
 export const Overlay = () => {
-  const { devMode } = useDevMode();
+  const { devMode } = useDevContext();
   if (!devMode) return null;
   return <OverlayHUD />;
 };

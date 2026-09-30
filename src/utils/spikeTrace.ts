@@ -1,12 +1,7 @@
 /**
- * Lightweight main-thread work tracer for lag-spike attribution.
- *
- * Hot systems wrap their potentially-heavy synchronous work in traceSpan (or
- * call traceEvent for instants); entries land in a fixed ring buffer exposed
- * as window.__spikeTrace. A frame-delta recorder (run from the console / the
- * browser extension) can then match a long frame's timestamp against exactly
- * what ran inside it. Overhead is one performance.now() pair + an array write
- * per traced call — safe to leave on permanently.
+ * Lag-spike attribution ring buffer (window.__spikeTrace): match a long frame's
+ * timestamps against what ran inside it. One performance.now() pair per traced
+ * call — safe to leave on permanently. See CLAUDE.md Performance Notes.
  */
 
 export interface TraceEntry {
@@ -31,7 +26,6 @@ const push = (t: number, name: string, ms: number): void => {
   }
 };
 
-/** Record a synchronous span of work. Returns fn's result. */
 export const traceSpan = <T>(name: string, fn: () => T): T => {
   const t0 = performance.now();
   const result = fn();
@@ -40,14 +34,11 @@ export const traceSpan = <T>(name: string, fn: () => T): T => {
   return result;
 };
 
-/** Record an instant (something happened; duration unknown or elsewhere). */
 export const traceEvent = (name: string, ms = 0): void => {
   push(performance.now(), name, ms);
 };
 
-/** All entries whose end time falls in [from, to], oldest first. */
 export const traceWindow = (from: number, to: number): TraceEntry[] =>
   entries.filter((e) => e.t >= from && e.t <= to).sort((a, b) => a.t - b.t);
 
-// Console / extension access
 (window as any).__spikeTrace = { entries, traceWindow };

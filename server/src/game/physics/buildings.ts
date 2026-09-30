@@ -5,46 +5,55 @@ import type { BuildingAttributes } from "../../../../src/objects/actors/building
 import type { PhysicsWorld } from "./physicsWorld.js";
 
 /**
- * BUILDING COLLIDERS on the server: the SAME convex silhouette hull the client
- * uses as a building's far-range collider (objects/actors/building/
- * proxyCollider.ts — Andrew's monotone chain over the shell's 2D silhouette,
- * extruded bottom-to-top), built from the SAME plan (generateBuildingPlan,
- * seeded by the building's rounded spawn coordinates, shaped by the kind's
- * hull attributes from building/spec.ts) — so an NPC the server keeps out of a wall is
- * kept out of the wall every client draws. Convex = SEALED (no door): NPCs
- * never enter buildings, which is what the client's proxy already enforced
- * at range.
- *
- * The plan is the client's full interior-first generator (~1ms per seed here)
- * and is cached per seed|attributes; the hull is ~14 points.
+ * The client's own sealed silhouette hull (building/proxyCollider.ts) over the client's
+ * own plan, so an NPC the server keeps out of a wall is kept out of the wall every
+ * client draws. Convex = no door: NPCs never enter buildings. The same plan gives the
+ * door positions the interact gate measures a door click from. The plan costs ~1ms per
+ * seed; what the server keeps of it is cached per seed|attributes.
  */
 
-const hullCache = new Map<string, Float32Array>();
-const MAX_HULL_CACHE = 4096;
+interface PlanFacts {
+  hull: Float32Array;
+  /** Each door's position relative to the building origin, x/z interleaved, in plan order (= `door:<i>`). */
+  doorsXZ: Float64Array;
+}
 
-/** Seed rule from Building.tsx: `${round(x)}_${round(z)}` unless a `seed` prop is set (none of the descriptors set one). */
+const planCache = new Map<string, PlanFacts>();
+const MAX_PLAN_CACHE = 4096;
+
+/** Building.tsx's seed rule (no descriptor sets an explicit seed). */
 export const buildingSeed = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
-export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => {
+const planFactsFor = (seed: string, attrs: BuildingAttributes): PlanFacts => {
   const key = `${seed}|${JSON.stringify(attrs)}`;
-  let v = hullCache.get(key);
-  if (!v) {
-    if (hullCache.size >= MAX_HULL_CACHE) {
-      // Drop the oldest half (insertion order ≈ recency).
-      let n = hullCache.size >> 1;
-      for (const k of hullCache.keys()) {
+  let facts = planCache.get(key);
+  if (!facts) {
+    if (planCache.size >= MAX_PLAN_CACHE) {
+      let n = planCache.size >> 1;
+      for (const k of planCache.keys()) {
         if (n-- <= 0) break;
-        hullCache.delete(k);
+        planCache.delete(k);
       }
     }
-    v = buildProxyHullVertices(generateBuildingPlan(seed, attrs));
-    hullCache.set(key, v);
+    const plan = generateBuildingPlan(seed, attrs);
+    const doorsXZ = new Float64Array(plan.doors.length * 2);
+    plan.doors.forEach((d, i) => {
+      doorsXZ[i * 2] = d.position[0];
+      doorsXZ[i * 2 + 1] = d.position[2];
+    });
+    facts = { hull: buildProxyHullVertices(plan), doorsXZ };
+    planCache.set(key, facts);
   }
-  return v;
+  return facts;
 };
 
-/** The building's sealed hull at its spawn origin (feet at ground height y);
- *  `attrs` = the kind's plan-shaping attributes (the actor spec's `hull`). */
+export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => planFactsFor(seed, attrs).hull;
+
+/** Door offsets from the building at (x, z) — the leaves Building.tsx places from the same plan. */
+export const doorOffsetsFor = (attrs: BuildingAttributes, x: number, z: number): Float64Array =>
+  planFactsFor(buildingSeed(x, z), attrs).doorsXZ;
+
+/** `attrs` = the actor spec's `hull` (plan-shaping attributes); y = ground height. */
 export const createBuildingCollider = (
   pw: PhysicsWorld,
   attrs: BuildingAttributes,

@@ -2,8 +2,8 @@ import { DressingAttributes } from "../../types";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import { getActiveDomainConfig, whenDomainReady } from "../../../world/domains/utils";
 import {
+  type ChunkWithPoints,
   DressingPartColliders,
   finalizeInstancedChunk,
   instancedFromPoints,
@@ -14,42 +14,41 @@ import {
   useDressingColliders,
   DRESSING_COLLIDER_DISTANCE,
   useDressingDefault,
+  useServerPlacementCheck,
   yawFromDir,
 } from "../Dressing";
-import { CityFreewaySidePoint, getFreewaySidePoints } from "../dressingWorker";
+import { enumerateDressing } from "../dressingWorker";
+import type { CityFreewaySidePoint } from "../../../utils/workers/vertexCompute";
 
-import { ARM_DEPTH, ARM_HALF, ARM_THICKNESS, ARM_Y, POLE_COLLIDER_PARTS, POLE_HEIGHT, POLE_PLACEMENT } from "./poleSpec";
+import {
+  CROSSARM_DEPTH,
+  CROSSARM_HALF_LENGTH,
+  CROSSARM_THICKNESS,
+  CROSSARM_Y,
+  POWER_LINES_SPEC,
+  UTILITY_POLE_HEIGHT,
+} from "./poleSpec";
+
+const DEFAULTS = POWER_LINES_SPEC.placement;
 
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
-// Local attach points (y up the pole, z across it): crossarm ends + top.
-const ATTACH: [number, number][] = [
-  [POLE_HEIGHT - 0.72, ARM_HALF - 0.25],
-  [POLE_HEIGHT - 0.72, -(ARM_HALF - 0.25)],
-  [POLE_HEIGHT - 0.05, 0],
+// Wire attach points as [y up the pole, z across it]: crossarm ends + top.
+const WIRE_ATTACH_POINTS: [number, number][] = [
+  [UTILITY_POLE_HEIGHT - 0.72, CROSSARM_HALF_LENGTH - 0.25],
+  [UTILITY_POLE_HEIGHT - 0.72, -(CROSSARM_HALF_LENGTH - 0.25)],
+  [UTILITY_POLE_HEIGHT - 0.05, 0],
 ];
 
-interface PoleChunk {
-  group: THREE.Group;
-  /** Pole bases — the collider scan's input (see useDressingColliders). */
-  points: { x: number; y: number; z: number }[];
-}
-
 export interface PowerLinesProps extends DressingAttributes {
-  /** Pole spacing along the freeway (world units). */
   spacing?: number;
-  /** Pole line offset past the freeway edge — default lands on the sidewalk band. */
+  /** Past the freeway edge. */
   lateralMargin?: number;
   /** Runs stop this close to interchanges. */
   junctionClear?: number;
 }
 
-/** Fill a wire InstancedMesh with the 3 wires × 3 sagging segments from each
- *  pole to its successor. Both ends' crossarm offsets use the POLE's frame —
- *  the next pole's tangent differs by at most a few degrees of wiggle,
- *  invisible at pole height. The span extents feed finalizeInstancedChunk,
- *  which rebases the absolute translations to a chunk-local origin and sets
- *  the explicit bounding sphere so frustum culling stays ON (the
- *  auto-computed instanced bounds only cover the unit wire geometry). */
+/** Both ends' crossarm offsets use the starting pole's frame — the next pole's tangent differs
+ *  by a few degrees of wiggle at most, invisible at pole height. */
 const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]): void => {
   const xAxis = new THREE.Vector3(1, 0, 0);
   const a = new THREE.Vector3();
@@ -60,12 +59,12 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
   const scale = new THREE.Vector3();
   const min = new THREE.Vector3(Infinity, Infinity, Infinity);
   const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-  let w = 0;
+  let instanceIndex = 0;
   for (const p of spans) {
     const n = p.next!;
-    const offX = -p.dirZ; // local +Z rotated into the world
+    const offX = -p.dirZ; // local +Z in world
     const offZ = p.dirX;
-    for (const [ay, az] of ATTACH) {
+    for (const [ay, az] of WIRE_ATTACH_POINTS) {
       a.set(p.x + offX * az, p.y + ay, p.z + offZ * az);
       b.set(n.x + offX * az, n.y + ay, n.z + offZ * az);
       const span = a.distanceTo(b);
@@ -77,78 +76,51 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
         pos.y -= sag * 4 * t0 * (1 - t0);
         seg.lerpVectors(a, b, t1);
         seg.y -= sag * 4 * t1 * (1 - t1);
-        // The rendered wire is the straight piece between the sampled points,
-        // so the sampled points themselves ARE the geometry's extremes.
         min.min(pos).min(seg);
         max.max(pos).max(seg);
         seg.sub(pos);
         const len = seg.length();
         q.setFromUnitVectors(xAxis, seg.normalize());
         scale.set(len, 1, 1);
-        setInstanceTransform(wires, w++, pos, q, scale);
+        setInstanceTransform(wires, instanceIndex++, pos, q, scale);
       }
     }
   }
   wires.instanceMatrix.needsUpdate = true;
-  if (w > 0) {
-    // +0.1 pad for the 0.06u wire cross-section
-    finalizeInstancedChunk(wires, min.x, min.y, min.z, max.x, max.y, max.z, 0.1);
+  if (instanceIndex > 0) {
+    finalizeInstancedChunk(wires, min.x, min.y, min.z, max.x, max.y, max.z, 0.1); // 0.06u wire cross-section
   }
 };
 
-/**
- * DRESSING: utility poles with sagging wires along ONE side of every city
- * freeway (arterials + the belt ring). Each enumerated point carries its
- * successor's position, so every pole owns the wire span to the NEXT pole
- * and runs stay continuous across chunk borders; runs break naturally at
- * interchanges and street mouths.
- *
- * The POST and its CROSSARM are solid within DRESSING_COLLIDER_DISTANCE (real cuboid
- * colliders for the handful near the player — the same distance-gated pattern
- * the street lamps use, useDressingColliders); poles further out are scenery,
- * with nothing near them to collide. The WIRES are never solid: they are strung
- * between poles at crossarm height, so a collider there is an invisible wall
- * across the freeway.
- */
+/** Each pole owns the wire span to its `next` point, so runs stay continuous across chunk borders. */
 export const PowerLines = ({
   renderDistance,
   colliderDistance,
-  spacing = POLE_PLACEMENT.spacing,
-  lateralMargin = POLE_PLACEMENT.lateralMargin,
-  junctionClear = POLE_PLACEMENT.junctionClear,
+  spacing = DEFAULTS.spacing,
+  lateralMargin = DEFAULTS.lateralMargin,
+  junctionClear = DEFAULTS.junctionClear,
 }: PowerLinesProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 420);
-  const registry = useChunkRegistry<PoleChunk>();
+  const placement = { ...DEFAULTS, spacing, lateralMargin, junctionClear };
+  useServerPlacementCheck(POWER_LINES_SPEC, placement);
+  const registry = useChunkRegistry<ChunkWithPoints>();
 
   const assets = useDressingAssets(() => ({
     poleGeometry: mergeGeometries([
-      new THREE.BoxGeometry(0.3, POLE_HEIGHT, 0.3).translate(0, POLE_HEIGHT / 2, 0), // pole
-      new THREE.BoxGeometry(ARM_THICKNESS, ARM_DEPTH, ARM_HALF * 2).translate(0, ARM_Y, 0), // crossarm
+      new THREE.BoxGeometry(0.3, UTILITY_POLE_HEIGHT, 0.3).translate(0, UTILITY_POLE_HEIGHT / 2, 0),
+      new THREE.BoxGeometry(CROSSARM_THICKNESS, CROSSARM_DEPTH, CROSSARM_HALF_LENGTH * 2).translate(0, CROSSARM_Y, 0),
     ]),
-    // Unit wire piece spanning 0..1 along +X — scaled per segment.
+    // Unit piece along +X, scaled per segment.
     wireGeometry: new THREE.BoxGeometry(1, 0.06, 0.06).translate(0.5, 0, 0),
     poleMaterial: new THREE.MeshStandardMaterial({ color: 0x4a4038, roughness: 1, metalness: 0 }),
-    // Unlit near-black: wires read as silhouettes against the sky, day or night.
+    // Unlit so wires read as silhouettes against the sky.
     wireMaterial: new THREE.MeshBasicMaterial({ color: 0x0e0e10 }),
   }));
 
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      await whenDomainReady();
-      const lateral = getActiveDomainConfig().cityConfig.freewayWidth + lateralMargin;
-      const points = (
-        await getFreewaySidePoints(
-          bounds.minX,
-          bounds.minZ,
-          bounds.maxX,
-          bounds.maxZ,
-          spacing,
-          lateral,
-          junctionClear,
-          true
-        )
-      ).filter((p) => p.side === POLE_PLACEMENT.side); // one side of each freeway only
+      const points = await enumerateDressing(POWER_LINES_SPEC.enumerator, bounds, { ...placement, withNext: true });
       if (points.length === 0) return null;
 
       const poles = instancedFromPoints(assets.poleGeometry, assets.poleMaterial, points, (p) => ({
@@ -165,35 +137,29 @@ export const PowerLines = ({
         const wires = new THREE.InstancedMesh(
           assets.wireGeometry,
           assets.wireMaterial,
-          spans.length * ATTACH.length * WIRE_SEGMENTS
+          spans.length * WIRE_ATTACH_POINTS.length * WIRE_SEGMENTS
         );
         fillWireSpans(wires, spans);
         group.add(wires);
       }
       registry.add({
         group,
-        // yaw travels with the point: the crossarm collider must face the same
-        // way the instanced pole does.
-        points: points.map((p) => ({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ) })),
+        points: points.flatMap(POWER_LINES_SPEC.bodiesOf),
       });
       return group;
     },
   });
 
-  // Real pole colliders for the posts near the player (base hook). This also
-  // owns the registry's prune sweep — PowerLines has no other frame loop.
+  // Also owns the registry's prune sweep — PowerLines has no other frame loop.
   const colliders = useDressingColliders(registry, {
-    distance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
+    colliderDistance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
   });
 
   return (
     <>
       <group ref={groupRef} />
-      {/* Post + crossarm, both solid (base component; the body carries the
-          instance's yaw so the crossarm lies along the drawn axis). The WIRES
-          get nothing: they span between poles at crossarm height, and a
-          collider there is an invisible wall across the freeway. */}
-      <DressingPartColliders colliders={colliders} parts={POLE_COLLIDER_PARTS} />
+      {/* Post + crossarm only; wires are deliberately not solid (poleSpec.ts). */}
+      <DressingPartColliders colliders={colliders} parts={POWER_LINES_SPEC.colliderParts} />
     </>
   );
 };

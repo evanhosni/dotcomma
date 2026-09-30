@@ -1,14 +1,15 @@
 import { TerrainParams } from "./types";
 
-export const DEFAULT_RIVER_TEXTURE = "blue_mud.jpg";
+export const DEFAULT_RIVER_TEXTURE = "potato_sack.jpg"; // the desert's sand: riverbeds and banks are sandy
 
 export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
   seed: "123",
   gridSize: 500,
-  regionGridSize: 2500,
-  boundaryWidth: 14, //NOTE was 12 - width of biome boundary blend offset
-  riverWidth: 30, // height suppression zone near region boundaries (rivers)
-  defaultBlendWidth: 200, //TODO add noise to blendwidth and make biome dependent
+  // ~6 biome cells across a region.
+  regionGridSize: 3000,
+  // Wide, soft cross-fades unless a level narrows them (the city biome sets 2).
+  defaultBlendWidth: 300,
+  defaultHeightBlendWidth: 300,
   roadNoise: {
     type: "perlin",
     octaves: 2,
@@ -27,6 +28,13 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
     height: 500,
     scale: 5000,
   },
+  river: {
+    // A factor-1 river; each river scales it by its width factor (~0.75–2.4, wider toward the ocean).
+    halfWidth: 40,
+    depth: 9,
+    bank: 36,
+    defaultProbability: 0.45,
+  },
   cityConfig: {
     seed: "city1",
     gridSize: 95,
@@ -41,6 +49,4 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
   },
 };
 
-/** Scene background when a <Domain> sets no `background` (the terrain
- *  domains show sky, so this is rarely visible). */
 export const DEFAULT_SCENE_BACKGROUND = "#555555";

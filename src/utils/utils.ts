@@ -11,17 +11,12 @@ export const getAllBiomes = (regions: Region[]): Biome[] => {
   );
 };
 
-/** Squared 2D distance — use wherever the result is only COMPARED against a
- *  threshold (compare vs threshold²) so hot per-frame paths skip the sqrt. */
 export const getDistance2DSq = (pos1: THREE.Vector3, pos2: THREE.Vector3): number => {
   const dx = pos1.x - pos2.x;
   const dz = pos1.z - pos2.z;
   return dx * dx + dz * dz;
 };
 
-/** Deterministic per-instance frame phase from a spawn position, so a batch
- *  of objects mounted together doesn't do its every-Nth-frame work (throttled
- *  distance checks, physics, raycasts) all on the same frame — phase-offset
- *  throttling is a codebase rule (see CLAUDE.md Performance Notes). */
+/** Phase-offsets an object's every-Nth-frame work so a spawn batch doesn't all fire on the same frame (CLAUDE.md Performance Notes). */
 export const framePhaseFromCoords = (x: number, z: number, interval: number): number =>
   Math.abs(Math.floor(x * 7.13 + z * 3.71)) % interval;

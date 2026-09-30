@@ -1,29 +1,13 @@
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { glslFloat } from "../world/shaders/constants";
 import { getWindowLightsProgress } from "./dayNight";
 
 /**
- * Street-lamp glow channel — "poor man's point lights" for the shaders we
- * control, backed by a GRID DATA TEXTURE so EVERY mounted lamp lights the
- * world (if a lamp is rendered, its light is rendered):
- *
- * Domain space is binned into LAMP_CELL_SIZE cells; each texel of a
- * LAMP_GRID_SIZE² float texture holds one lamp head (xyz = position,
- * w = color index + 1; 0 = empty — warm lamp glow, or a traffic-signal
- * red/yellow/green). Because the falloff radius equals the cell size, a fragment
- * only ever needs its own cell plus neighbors — 9 texture reads per
- * fragment, CONSTANT cost regardless of lamp count (a uniform-array loop
- * would need ~600 slots to cover the lamp render distance and exceed GPU
- * uniform limits). StreetLampPool rewrites the grid every few frames and
- * drives the global intensity (the dusk/dawn ramp) every frame.
- *
- * Compared to real THREE point lights this costs a few texture reads in
- * exactly the shaders that opt in (instead of full PBR in every lit
- * material), has no near-pole blowout, and — crucially — lights the UNLIT
- * terrain, which real lights can't reach. A tiny real point-light pool
- * remains for GLTF NPCs.
- *
- * Limitation: one lamp per 24u cell — when two lamps share a cell (rare at
- * spawn spacing), only the first casts light.
+ * The lamp-glow GRID DATA TEXTURE (CLAUDE.md → lighting/lampGlow.ts): one glow head per
+ * LAMP_CELL_SIZE cell (texel = xyz + color index + 1, 0 = empty). Shaders read their 3×3
+ * neighborhood — 9 reads per fragment, constant for any lamp count, and it lights the UNLIT
+ * terrain that real point lights can't reach. Limitation: two heads in one cell → first wins.
  */
 
 export const LAMP_GLOW_RADIUS = 24; // world units of falloff reach
@@ -31,15 +15,24 @@ export const LAMP_GLOW_RADIUS = 24; // world units of falloff reach
 export const LAMP_CELL_SIZE = 24;
 export const LAMP_GRID_SIZE = 64; // cells per side → 1536u of coverage
 
-/** Glow color indexes (stored in the texel's w channel as index + 1). Keep
- *  in sync with the GLSL selection chain in lampGlowAccumGLSL. */
-export const LAMP_COLOR_WARM = 0; // street lamps
-export const LAMP_COLOR_RED = 1; // traffic signals
-export const LAMP_COLOR_YELLOW = 2;
-export const LAMP_COLOR_GREEN = 3;
+/** Every glow color. A head's `color` is an index into this list (stored as index + 1 in the
+ *  texel's w), and the shader's color selection is generated from it — add a color here. */
+export const LAMP_COLORS = [
+  { name: "warm", rgb: [1.0, 0.82, 0.45] }, // street lamps
+  { name: "red", rgb: [1.0, 0.16, 0.1] },
+  { name: "yellow", rgb: [1.0, 0.72, 0.1] },
+  { name: "green", rgb: [0.15, 1.0, 0.4] },
+] as const;
 
-/** A registered glow source: mutate `color` in place and the next grid
- *  rewrite picks it up (traffic signals change color mid-flight). */
+export type LampColorName = (typeof LAMP_COLORS)[number]["name"];
+export const lampColorIndex = (name: LampColorName): number => LAMP_COLORS.findIndex((c) => c.name === name);
+
+export const LAMP_COLOR_WARM = lampColorIndex("warm");
+export const LAMP_COLOR_RED = lampColorIndex("red");
+export const LAMP_COLOR_YELLOW = lampColorIndex("yellow");
+export const LAMP_COLOR_GREEN = lampColorIndex("green");
+
+/** Recolor through setLampHeadColor, which marks the grid dirty. */
 export interface LampHead {
   position: THREE.Vector3;
   color: number;
@@ -51,60 +44,43 @@ gridTexture.magFilter = THREE.NearestFilter;
 gridTexture.minFilter = THREE.NearestFilter;
 gridTexture.needsUpdate = true;
 
-/** Shared uniform objects — every consumer shader references these. */
 export const LAMP_GRID_UNIFORMS = {
   uLampGrid: { value: gridTexture },
   uLampGridOrigin: { value: new THREE.Vector2(0, 0) }, // cell coords of texel (0,0)
   uLampGlowIntensity: { value: 0 }, // global dusk/dawn ramp
 };
 
-// Rewrite gate: the periodic driver calls updateLampGrid unconditionally, but
-// a fill(0) over 16k floats + a full 64KB texImage2D upload is pure waste
-// when nothing changed. Registration/unregistration and traffic-signal color
-// flips mark the grid dirty; a camera-driven origin-cell change forces a
-// rewrite too (the texels are origin-relative).
 let gridDirty = true;
 let lastOriginX = Number.NaN;
 let lastOriginZ = Number.NaN;
 let lastHeadCount = -1;
 
-/** Call whenever the glow-source set changes (a head registered/removed) or
- *  an existing head's `color` is mutated — the next periodic updateLampGrid
- *  call then actually rewrites instead of early-outing. */
+/** MUST be called by anything that adds/removes/recolors a head, or the 64KB grid re-upload
+ *  skips the change (the head-count check below is only a backstop and misses same-count swaps). */
 export const markLampGridDirty = (): void => {
   gridDirty = true;
 };
 
-// Reused buffer for the incoming heads — callers pass Map.values(), a
-// single-pass iterator, so it must be materialized before the clean check
-// can count it without consuming what the rewrite loop needs.
-const headScratch: LampHead[] = [];
+const headBuffer: LampHead[] = [];
 
-/** Rewrite the grid from the mounted lamp heads, centered on the camera.
- *  Called every few frames by the street-lamp driver; skipped entirely while
- *  clean and the origin cell is unchanged. */
 export const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: number, cameraZ: number): void => {
   const originX = Math.floor(cameraX / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
   const originZ = Math.floor(cameraZ / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
-  // The head-count comparison is a backstop for registration paths that
-  // mutate activeLampHeads directly without marking dirty. Checked BEFORE
-  // touching the heads, so a clean skip costs a few comparisons rather than
-  // an O(heads) walk.
   if (!gridDirty && originX === lastOriginX && originZ === lastOriginZ && heads.size === lastHeadCount) {
     return;
   }
-  headScratch.length = 0;
-  for (const head of heads.values()) headScratch.push(head);
+  headBuffer.length = 0;
+  for (const head of heads.values()) headBuffer.push(head);
 
   gridData.fill(0);
   LAMP_GRID_UNIFORMS.uLampGridOrigin.value.set(originX, originZ);
-  for (const head of headScratch) {
+  for (const head of headBuffer) {
     const p = head.position;
     const cx = Math.floor(p.x / LAMP_CELL_SIZE) - originX;
     const cz = Math.floor(p.z / LAMP_CELL_SIZE) - originZ;
     if (cx < 0 || cx >= LAMP_GRID_SIZE || cz < 0 || cz >= LAMP_GRID_SIZE) continue;
     const idx = (cz * LAMP_GRID_SIZE + cx) * 4;
-    if (gridData[idx + 3] > 0) continue; // cell already occupied — first lamp wins
+    if (gridData[idx + 3] > 0) continue; // first head in a cell wins
     gridData[idx] = p.x;
     gridData[idx + 1] = p.y;
     gridData[idx + 2] = p.z;
@@ -114,40 +90,53 @@ export const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: nu
   gridDirty = false;
   lastOriginX = originX;
   lastOriginZ = originZ;
-  lastHeadCount = headScratch.length;
-  headScratch.length = 0;
+  lastHeadCount = headBuffer.length;
+  headBuffer.length = 0;
 };
 
 export const setLampGlowIntensity = (value: number): void => {
   LAMP_GRID_UNIFORMS.uLampGlowIntensity.value = value;
 };
 
-// ── Glow-source registry + driver ───────────────────────────────────────────
-// Lives here, with the grid it feeds, rather than inside any one game object:
-// street lamps (dressing) and traffic signals (dressing) both register heads,
-// and a future actor could too. Nothing that registers a head should have to
-// own the machinery that renders it.
-
-/** Domain-space glow sources of every mounted light — street-lamp heads and
- *  traffic-signal lamps (which mutate their head's `color` as they switch). */
+/** Every mounted glow source. Insertion order decides which head wins a shared cell. */
 export const activeLampHeads = new Map<string, LampHead>();
 
-/** Lamp glow at full night — windows sit around 1.4, street lights burn much
- *  brighter. Scales a lamp material's emissiveIntensity. */
+/** Lit windows sit around 1.4; street lights burn much brighter. */
 export const LAMP_EMISSIVE_STRENGTH = 12;
 
-/** Unregister a chunk's glow heads (dressing chunk teardown) — marks the grid
- *  dirty so the next rewrite drops them, and clears it when the last head is
- *  gone. Street lamps and traffic signals both wire their useChunkRegistry
- *  teardown to this. */
+let registrationCount = 0;
+
+/**
+ * THE way to add glow sources: registers `heads` under generated keys (they can never collide
+ * with another feature's, or with a rebuilt chunk's), marks the grid dirty, and returns the
+ * disposer that removes them. LampGlowDriver (mounted once in CustomCanvas) drives the grid
+ * whenever any head is registered, so nothing else is needed. `source` only labels the keys.
+ */
+export const registerLampHeads = (source: string, heads: readonly LampHead[]): (() => void) => {
+  const prefix = `${source}#${registrationCount++}:`;
+  const keys = heads.map((head, i) => {
+    const key = prefix + i;
+    activeLampHeads.set(key, head);
+    return key;
+  });
+  markLampGridDirty();
+  return () => unregisterLampHeads(keys);
+};
+
+export const setLampHeadColor = (head: LampHead, color: number): void => {
+  if (head.color === color) return;
+  head.color = color;
+  markLampGridDirty();
+};
+
+/** The low-level half of hand-keyed `activeLampHeads` entries; prefer registerLampHeads. */
 export const unregisterLampHeads = (keys: Iterable<string>): void => {
   for (const key of keys) activeLampHeads.delete(key);
   markLampGridDirty();
   clearLampGridIfEmpty();
 };
 
-/** Last head gone → nobody drives the grid anymore; clear it (and the shader
- *  early-out) so no ghost light pools linger on the terrain. */
+/** With no heads nobody drives the grid, so ghost light pools would linger on the terrain. */
 export const clearLampGridIfEmpty = (): void => {
   if (activeLampHeads.size === 0) {
     updateLampGrid(activeLampHeads, 0, 0);
@@ -155,36 +144,45 @@ export const clearLampGridIfEmpty = (): void => {
   }
 };
 
-const GRID_UPDATE_INTERVAL = 20; // frames between grid rewrites
+const GRID_REWRITE_INTERVAL_FRAMES = 20; // frames between grid rewrites
 
-// The FIRST caller each frame does the global work (same module-level time
-// guard as the terrain/building shared-uniform writes), so no separate system
-// component has to be mounted for the lighting to run.
-let lampDriveTime = -1;
-let lampDriveFrame = 0;
+let lastDriveTime = -1;
+let driveFrameCount = 0;
 
-/** Drive the global glow channel: the dusk/dawn intensity ramp every frame,
- *  a grid rewrite every GRID_UPDATE_INTERVAL frames. Safe (and free) to call
- *  from every feature that owns glow sources — it self-dedupes on frame time. */
+/** Time-guarded: the FIRST caller per frame does the work, so extra callers are harmless. */
 export const driveLampLighting = (camera: THREE.Camera, time: number): void => {
-  if (time === lampDriveTime) return;
-  lampDriveTime = time;
+  if (time === lastDriveTime) return;
+  lastDriveTime = time;
   setLampGlowIntensity(getWindowLightsProgress());
-  if (lampDriveFrame++ % GRID_UPDATE_INTERVAL === 0) {
+  if (driveFrameCount++ % GRID_REWRITE_INTERVAL_FRAMES === 0) {
     updateLampGrid(activeLampHeads, camera.position.x, camera.position.z);
   }
 };
 
-/** Uniform declarations for shaders that inject lampGlowAccumGLSL manually
- *  (the terrain material auto-declares from its uniforms map instead). */
-const lampGlowUniformsGLSL = `
+/** Drives the grid every frame while any head is registered. Mounted once, in CustomCanvas. */
+export const LampGlowDriver = (): null => {
+  useFrame((state) => {
+    if (activeLampHeads.size > 0) driveLampLighting(state.camera, state.clock.elapsedTime);
+  });
+  return null;
+};
+
+/** The declarations lampGlowAccumGLSL needs, for a ShaderMaterial that spreads LAMP_GRID_UNIFORMS. */
+export const LAMP_GLOW_UNIFORMS_GLSL = `
 uniform sampler2D uLampGrid;
 uniform vec2 uLampGridOrigin;
 uniform float uLampGlowIntensity;
 `;
 
-/** GLSL statements accumulating the glow at `worldPosExpr` into a local
- *  `vec3 lampGlowSum`. Requires the lampGlow uniforms in scope. */
+const vec3GLSL = (rgb: readonly number[]): string => `vec3(${rgb.map(glslFloat).join(", ")})`;
+
+/** `lampG.w > 3.5 ? green : lampG.w > 2.5 ? yellow : … : warm` (w = color index + 1). */
+const LAMP_COLOR_SELECT_GLSL = LAMP_COLORS.slice(1).reduce(
+  (chain, color, i) => `lampG.w > ${glslFloat(i + 1.5)} ? ${vec3GLSL(color.rgb)} : ${chain}`,
+  vec3GLSL(LAMP_COLORS[0].rgb),
+);
+
+/** Accumulates the glow at `worldPosExpr` into a local `vec3 lampGlowSum`. */
 export const lampGlowAccumGLSL = (worldPosExpr: string): string => `
   vec3 lampGlowSum = vec3(0.0);
   if (uLampGlowIntensity > 0.001) {
@@ -196,11 +194,7 @@ export const lampGlowAccumGLSL = (worldPosExpr: string): string => `
         vec4 lampG = texture2D(uLampGrid, lampTC);
         if (lampG.w > 0.5) {
           float lampFall = clamp(1.0 - distance(${worldPosExpr}, lampG.xyz) / ${LAMP_GLOW_RADIUS.toFixed(1)}, 0.0, 1.0);
-          // w = color index + 1: 1 warm street lamp, 2/3/4 = signal red/yellow/green
-          vec3 lampCol = lampG.w > 3.5 ? vec3(0.15, 1.0, 0.4)
-            : lampG.w > 2.5 ? vec3(1.0, 0.72, 0.1)
-            : lampG.w > 1.5 ? vec3(1.0, 0.16, 0.1)
-            : vec3(1.0, 0.82, 0.45);
+          vec3 lampCol = ${LAMP_COLOR_SELECT_GLSL};
           lampGlowSum += lampCol * (lampFall * lampFall);
         }
       }
@@ -209,16 +203,13 @@ export const lampGlowAccumGLSL = (worldPosExpr: string): string => `
   }
 `;
 
-/** Patch a LIT standard material so lamp glow joins its indirect irradiance
- *  (surfaces near a lamp genuinely brighten in the lamp's color). Chains
- *  after any existing onBeforeCompile; one shader program per template. */
+/** Adds lamp glow to a lit material's indirect irradiance. Chains after any existing onBeforeCompile. */
 export const patchStandardMaterialLampGlow = (material: THREE.Material, strength = 0.5): void => {
   if ((material as any).__lampGlowPatched) return;
   const prev = material.onBeforeCompile;
   const prevKey = material.customProgramCacheKey?.bind(material);
-  // strength is baked into the GLSL below, so two patches with different
-  // strengths are different programs — the key must reflect that or the
-  // second material silently reuses the first one's compiled shader.
+  // strength is baked into the GLSL: a different strength is a different program, and without it
+  // in the key the second material silently reuses the first one's compiled shader.
   material.customProgramCacheKey = () => (prevKey?.() ?? "") + "_lampGlow" + strength.toFixed(2);
   material.onBeforeCompile = (shader, renderer) => {
     prev?.call(material, shader, renderer);
@@ -229,10 +220,10 @@ export const patchStandardMaterialLampGlow = (material: THREE.Material, strength
       .replace("#include <common>", "#include <common>\nvarying vec3 vLampWorldPos;")
       .replace(
         "#include <begin_vertex>",
-        "#include <begin_vertex>\nvLampWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;",
+        "#include <begin_vertex>\nvec4 lampLocal = vec4(transformed, 1.0);\n#ifdef USE_INSTANCING\nlampLocal = instanceMatrix * lampLocal;\n#endif\nvLampWorldPos = (modelMatrix * lampLocal).xyz;",
       );
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", `#include <common>\n${lampGlowUniformsGLSL}\nvarying vec3 vLampWorldPos;`)
+      .replace("#include <common>", `#include <common>\n${LAMP_GLOW_UNIFORMS_GLSL}\nvarying vec3 vLampWorldPos;`)
       .replace(
         "#include <lights_fragment_begin>",
         `#include <lights_fragment_begin>

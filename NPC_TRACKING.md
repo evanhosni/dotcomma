@@ -63,7 +63,7 @@ terrain (the same height function the client uses, bit-identical).
 ## 3. Simulation: the server runs the beeble's own state machine
 
 `src/objects/actors/catalog.ts` lists every actor kind the server simulates,
-by descriptor id:
+by spec id:
 
 ```ts
 [BEEBLE_SPEC.id]: BEEBLE_SPEC,
@@ -292,7 +292,9 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
 
 1. **State machine** — `src/objects/actors/<name>/stateMachine.ts` following
    the contract above.
-2. **Spec** — `src/objects/actors/<name>/spec.ts`, the Three-free half:
+2. **Spec** — `src/objects/actors/<name>/spec.ts`: the WHOLE actor, Three-free —
+   behavior and body (what the server reads) plus the model and spawn knobs
+   (copy `beeble/spec.ts`):
    ```ts
    export const X_SPEC: ActorSpec = {
      id: "x",
@@ -300,27 +302,23 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
      body: "kinematic",
      collider: { shape: "capsule", radius: 0.5, height: 2.4 },
      movement: "ground",          // or "free" for a flyer / swimmer
+     model: "/models/x.glb", scale: [1, 1, 1], collidersNeverMove: false,
+     footprint: 5, density: 200, clustering: 0, renderDistance: 200, priority: 80,
    };
    ```
 3. **Catalog** — one line in `src/objects/actors/catalog.ts`:
-   `[X_SPEC.id]: X_SPEC,`. (Forget it and `describeActor` throws at module
-   load in dev, naming the line; `server/test/catalog.test.ts` catches it
-   headlessly.)
-4. **Descriptor** — `src/objects/actors/<name>/actor.tsx`, the client half:
-   ```ts
-   export const XDescriptor = describeActor<ModelActorAttributes>(X_SPEC, {
-     component: ModelActor, model: "/models/x.glb", scale: [1, 1, 1], isStatic: false,
-     footprint: 5, density: 200, clustering: 0, renderDistance: 200, priority: 80,
-   });
-   export const XActor = createActor(XDescriptor);
-   ```
-   No component: `ModelActor` wires the state machine, the mouse events, the
+   `[X_SPEC.id]: X_SPEC,`. (Forget it and dev throws when a biome places it (`describeActor`),
+   naming the line; `server/test/catalog.test.ts` catches it headlessly.)
+4. **Place it** — one line in a biome spec's `actors`
+   (`src/world/domains/overworld/regions/<region>/biomes/<biome>/spec.ts`):
+   `{ actor: X_SPEC }` — it spawns in exactly the biomes that list it (mount overrides go on the same object).
+   No component and no descriptor file: the client builds the descriptor from
+   the spec, and `ModelActor` wires the state machine, the mouse events, the
    capsule and the animation for every actor whose spec has a `stateMachine`.
-5. Mount it in a biome's `<Actors>`: `<XActor biomeIds={[…]} />`.
 
 That's the whole job. Terrain, buildings, poles, player collision, publishing,
-interpolation and animation sync are all inherited. `serverSynced={false}` at
-a mount runs the very same machine locally instead (same code path).
+interpolation and animation sync are all inherited. `serverSynced: false` on
+the placement runs the very same machine locally instead (same code path).
 
 ### Testing it without a browser
 
@@ -339,8 +337,8 @@ the two output channels.
 | what | where |
 |---|---|
 | beeble behavior (THE file to edit) | `src/objects/actors/beeble/stateMachine.ts` |
-| beeble spec (behavior + body, what the server reads) | `src/objects/actors/beeble/spec.ts` |
-| beeble descriptor (model + spawn) | `src/objects/actors/beeble/actor.tsx` |
+| beeble spec (behavior + body + model + spawn knobs) | `src/objects/actors/beeble/spec.ts` |
+| where the beeble is placed | `actors` of `src/world/domains/overworld/regions/city/biomes/city/spec.ts` |
 | the actor catalog (kinds the server simulates) | `src/objects/actors/catalog.ts` |
 | spec type, body/movement kinds | `src/objects/actors/spec.ts` |
 | state machine core (runs on both sides) | `src/objects/actors/state/runner.ts`, `triggers.ts`, `types.ts` |
@@ -350,7 +348,7 @@ the two output channels.
 | server: what gets sent | `server/src/game/entities/publish.ts` |
 | server: an NPC's body (ground / free) | `server/src/game/physics/npcBody.ts`, `groundBody.ts`, `freeBody.ts` |
 | server: the physics world, terrain, obstacles, hulls | `server/src/game/physics/physicsWorld.ts`, `chunks.ts`, `terrain.ts`, `obstacles.ts`, `buildings.ts` |
-| server: the world it simulates on | `src/world/domains/glitch-city/config.ts` (via `world/domains/configs.ts`) |
+| server: the world it simulates on | `src/world/domains/overworld/config.ts` (via `world/domains/configs.ts`) |
 | client: snapshot buffer | `src/net/entities/entityStore.ts` |
 | client: interpolation (unit-tested) + per-actor playback | `src/net/entities/interpolation.ts`, `posePlayback.ts` |
 | client: draws the pose / registers | `src/objects/actors/Actor.tsx` (`useSyncedEntity`) |

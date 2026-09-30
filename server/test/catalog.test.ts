@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { ACTOR_SPECS } from "../../src/objects/actors/catalog";
 import { specNeedsServer, specsAgree, type ActorSpec } from "../../src/objects/actors/spec";
@@ -15,7 +15,7 @@ import { specNeedsServer, specsAgree, type ActorSpec } from "../../src/objects/a
  * names the line to add.
  */
 
-const actorsDir = resolve(dirname(new URL(import.meta.url).pathname), "../../src/objects/actors");
+const actorsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/objects/actors");
 
 const isActorSpec = (v: unknown): v is ActorSpec =>
   typeof v === "object" && v !== null && typeof (v as ActorSpec).id === "string" && specNeedsServer(v as ActorSpec);
@@ -47,6 +47,7 @@ describe("actor catalog", () => {
         assert.ok(spec.stateMachine.states.some((s) => s.id === spec.stateMachine!.initialState), `${id}: initial state exists`);
       }
       if (spec.body === "kinematic") assert.ok(spec.stateMachine, `${id}: a moving body needs a state machine to move it`);
+      if ((spec.component ?? "model") === "model") assert.ok(spec.model, `${id}: renders as a GLTF model, so its spec needs \`model\``);
     }
   });
 });

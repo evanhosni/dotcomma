@@ -4,133 +4,72 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
+import { chargeFrameWork, isMachineStruggling } from "../../utils/task-queue/TaskQueue";
 import { createWorkerClient } from "../../utils/workers/workerClient";
+import { BIOME_SDF_FAR } from "../../utils/workers/vertexCompute";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import type { PointXZ } from "../../utils/math/types";
 import { getActiveDomainConfig } from "../domains/utils";
-import { getMaterial } from "./material";
-import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
+import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
+import { MAX_BIOME_SLOTS, createLodFadeMaterial, getMaterial } from "./material";
+import { getWaterMaterial, tickWater } from "../water/waterMaterial";
+import { LODLevel } from "./lodConfig";
+import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
+import { FADE_OPAQUE_HI, LodSwapper, SwapHooks } from "./lodSwaps";
 import { Chunk, TerrainProps } from "./types";
-
-/** Check if two chunks' AABBs overlap (works across different chunk sizes). */
-const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
-  const aHalf = a.lod.chunkSize / 2;
-  const bHalf = b.lod.chunkSize / 2;
-  const overlapX = a.offset.x + aHalf > b.offset.x - bHalf && a.offset.x - aHalf < b.offset.x + bHalf;
-  const overlapZ = a.offset.y + aHalf > b.offset.y - bHalf && a.offset.y - aHalf < b.offset.y + bHalf;
-  return overlapX && overlapZ;
-};
-
-// ── Coarse spatial index over chunks ────────────────────────────────────────
-// The swap/prune passes all ask the same question every frame: "does any
-// chunk in set X overlap chunk C?". Answering it by scanning the whole set is
-// O(chunks × queue) — fine when both are small, but a player who outruns
-// terrain generation grows BOTH sides into the hundreds (every chunk left
-// behind waits in queued_to_destroy until its coarse replacement is built,
-// and coarse replacements are the lowest build priority), and the scan alone
-// then costs more than a frame. Bucketing by a fixed grid keeps every query
-// to the handful of chunks that share the queried chunk's tiles.
-//
-// Tile = the largest chunk size, so any chunk spans at most 2×2 tiles.
-const INDEX_TILE = LOD5_CHUNK_SIZE;
-
-class ChunkIndex {
-  /** tileX → tileZ → chunks. Nested maps keep keys numeric (no string
-   *  allocation per query, no packing collisions at extreme coordinates). */
-  private tiles = new Map<number, Map<number, Chunk[]>>();
-  private count = 0;
-
-  clear(): void {
-    if (this.count === 0) return;
-    this.tiles.clear();
-    this.count = 0;
-  }
-
-  get isEmpty(): boolean {
-    return this.count === 0;
-  }
-
-  add(chunk: Chunk): void {
-    const half = chunk.lod.chunkSize / 2;
-    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
-    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
-      let col = this.tiles.get(tx);
-      if (!col) {
-        col = new Map();
-        this.tiles.set(tx, col);
-      }
-      for (let tz = tz0; tz <= tz1; tz++) {
-        const bucket = col.get(tz);
-        if (bucket) bucket.push(chunk);
-        else col.set(tz, [chunk]);
-      }
-    }
-    this.count++;
-  }
-
-  /** True when any indexed chunk other than `exclude` overlaps `chunk`. */
-  overlapsAny(chunk: Chunk, exclude?: Chunk): boolean {
-    if (this.count === 0) return false;
-    const half = chunk.lod.chunkSize / 2;
-    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.y - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.y + half) / INDEX_TILE);
-    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
-      const col = this.tiles.get(tx);
-      if (!col) continue;
-      for (let tz = tz0; tz <= tz1; tz++) {
-        const bucket = col.get(tz);
-        if (!bucket) continue;
-        for (let i = 0; i < bucket.length; i++) {
-          const other = bucket[i];
-          if (other !== exclude && other !== chunk && chunksOverlap(chunk, other)) return true;
-        }
-      }
-    }
-    return false;
-  }
-}
-
-// Reused across frames (cleared + refilled) so the per-frame passes allocate
-// nothing.
-const pendingIndex = new ChunkIndex(); // chunks still waiting to be built
-const pendingSet = new Set<Chunk>(); // same set, for identity tests
-const blockerIndex = new ChunkIndex(); // stale chunks that must stay visible
-const coverIndex = new ChunkIndex(); // stale VISIBLE chunks acting as cover
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
-  chunks: {},
-  active_chunk: null,
-  queued_to_build: [],
-  queued_to_destroy: new Set<string>(),
+  chunks: new Map(),
+  activeChunk: null,
+  queuedToBuild: [],
 };
+
+/** Chunk-set bookkeeping: stale chunks, the LOD cross-fades (lodSwaps.ts). */
+const swapper = new LodSwapper<Chunk>();
+// Dev inspection: the swap state, and `fadeSeconds` for A/B-ing the cross-fade.
+if (process.env.NODE_ENV !== "production") (window as any).__terrainLod = { swapper, chunks: terrain.chunks };
 
 let queueDirty = false;
 
 // ── Steady-state gate ────────────────────────────────────────────────────────
-// The desired chunk set depends only on camera position, so it is recomputed
-// only after the camera moves DESIRED_MOVE_EPS units (negligible against the
-// 420u base chunk), and the whole update pass is skipped once the queues are
-// drained and the last built chunk has been made visible. Without this, the
-// full quadtree descent (~270 leaves, ~800 allocations) ran every frame even
-// standing still.
+// The desired set is recomputed only after DESIRED_MOVE_EPS of camera travel
+// and the whole pass is skipped once queues are drained — the quadtree
+// descent (~270 leaves, ~800 allocations) otherwise ran every parked frame.
 const DESIRED_MOVE_EPS_SQ = 8 * 8;
-let cachedDesired: { [key: string]: { position: number[]; lod: LODLevel } } | null = null;
+let cachedDesired: DesiredChunks | null = null;
 let desiredAtX = Infinity;
 let desiredAtZ = Infinity;
 let terrainDirty = true;
-// Camera position at the last build-queue sort (re-sorted when it drifts)
 let lastSortX = Infinity;
 let lastSortZ = Infinity;
 
-// Reused per-pass collections (cleared, never reallocated)
-const swappableKeys = new Set<string>();
-const cancelledKeys = new Set<string>();
-const pruneKeys: string[] = [];
+// PRIORITY (the same notion as the TaskQueue's, utils/README.md): the build queue is sorted LOD1, then
+// LOD2, each nearest-first, so the collider LODs under and around the player always build first. The
+// visual-only far LODs yield while the machine is struggling: at most one per FAR_BUILD_INTERVAL_MS.
+// Deferring one never opens a hole — an old chunk stays visible until its replacements are built —
+// and the initial load is never throttled (the loading gate waits for every chunk).
+const FAR_BUILD_INTERVAL_MS = 250;
+let lastFarBuildAt = -Infinity;
 
-// Geometry pool keyed by LOD level — recycles BufferGeometry to avoid GC churn
+/** A chunk's dither range into whichever material draws it (the fade variant, or the water): three
+ *  uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
+ *  mesh writes its own range right before its draw. The opaque terrain material has no uLodFade. */
+const syncLodFade =
+  (chunk: Chunk) =>
+  (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, _camera: THREE.Camera, _geometry: THREE.BufferGeometry, material: THREE.Material) => {
+    const uniform = (material as THREE.ShaderMaterial).uniforms?.[LOD_FADE_UNIFORM];
+    if (!uniform) return;
+    const range = uniform.value as THREE.Vector2;
+    if (range.x === chunk.fadeLo && range.y === chunk.fadeHi) return;
+    range.set(chunk.fadeLo, chunk.fadeHi);
+    (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
+  };
+
+/** A zero-area triangle: drawing it links a program and rasterizes nothing. */
+const FADE_WARM_GEOMETRY = new THREE.BufferGeometry();
+FADE_WARM_GEOMETRY.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+
 const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
 
 const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
@@ -138,14 +77,20 @@ const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
   if (pool && pool.length > 0) {
     return pool.pop()!;
   }
-  return createChunkGeometry(lod.chunkSize, lod.segments);
+  return createChunkGeometry(lod.chunkSize, lod.segments, lod.skirtDepth);
+};
+
+/** Drops a chunk's water surface back into the geometry pool (it shares the terrain's LOD family). */
+const releaseWater = (chunk: Chunk) => {
+  if (!chunk.water) return;
+  chunk.plane.remove(chunk.water);
+  releaseGeometry(chunk.lod, chunk.water.geometry);
+  chunk.water = null;
 };
 
 const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
-  // three computes a geometry's bounding sphere lazily on its first frustum
-  // test and caches it for the object's life — a pooled geometry rewritten
-  // for a new chunk otherwise keeps the FIRST chunk's sphere (mis-centered
-  // and undersized wherever heights differ: edge-of-screen popping).
+  // three caches the lazily computed bounds for the geometry's life — a pooled
+  // geometry otherwise keeps its FIRST chunk's sphere (edge-of-screen popping).
   geom.boundingSphere = null;
   geom.boundingBox = null;
   let pool = geometryPool.get(lod.level);
@@ -157,9 +102,6 @@ const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
 };
 
 // ── Terrain Worker ──────────────────────────────────────────────────────────
-// Plumbing (lazy boot, INIT handshake, request ids, teardown) from the shared
-// worker-client base; chunk builds are serialized by the build loop, so at
-// most one request is in flight.
 const terrainClient = createWorkerClient({
   create: () => new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" }),
   init: () => ({ config: getActiveDomainConfig() }),
@@ -167,31 +109,21 @@ const terrainClient = createWorkerClient({
 });
 const ensureTerrainWorker = terrainClient.ensure;
 
-/** Domain switch (resetDomainSystems): the chunk registry, queues, indexes, and
- *  the worker are all MODULE state that survives a <TerrainRenderer> remount —
- *  unmount only detaches terrain.group from the scene. Tear it all down so the
- *  next world starts empty and its worker re-inits with the new config.
- *  (The geometry pool is kept: pooled BufferGeometries are a pure function of
- *  LOD size/segments and get fully rewritten on acquire. Colliders die with
- *  the physics world when the canvas remounts.) */
+/** Domain-switch teardown of the MODULE state that survives a remount. The
+ *  geometry pool is kept: pooled geometries are fully rewritten on acquire. */
 export const resetTerrainSystem = () => {
   terrainClient.reset();
-  for (const key of Object.keys(terrain.chunks)) {
-    const { chunk } = terrain.chunks[key];
+  for (const chunk of terrain.chunks.values()) {
     releaseGeometry(chunk.lod, chunk.plane.geometry);
+    releaseWater(chunk);
     terrain.group.remove(chunk.plane);
-    // Heightfield bodies were already removed from the (persistent) physics
-    // world by TerrainRenderer's unmount cleanup; only the handle remains.
+    // Bodies already left the persistent physics world in the unmount cleanup.
     chunk.colliderBody = null;
-    delete terrain.chunks[key];
   }
-  terrain.active_chunk = null;
-  terrain.queued_to_build.length = 0;
-  terrain.queued_to_destroy.clear();
-  pendingIndex.clear();
-  pendingSet.clear();
-  blockerIndex.clear();
-  coverIndex.clear();
+  terrain.chunks.clear();
+  terrain.activeChunk = null;
+  terrain.queuedToBuild.length = 0;
+  swapper.reset();
   queueDirty = false;
   cachedDesired = null;
   desiredAtX = Infinity;
@@ -199,9 +131,6 @@ export const resetTerrainSystem = () => {
   terrainDirty = true;
   lastSortX = Infinity;
   lastSortZ = Infinity;
-  swappableKeys.clear();
-  cancelledKeys.clear();
-  pruneKeys.length = 0;
 };
 
 const buildChunkInWorker = (
@@ -209,148 +138,63 @@ const buildChunkInWorker = (
   chunkSize: number,
   offsetX: number,
   offsetZ: number,
-  skipPads: boolean,
+  visualOnly: boolean,
+  carvesRivers: boolean,
   needCollider: boolean,
 ): Promise<{
   heights: Float32Array;
-  biomeIds: Float32Array;
-  distBiome: Float32Array;
-  distRegion: Float32Array;
+  /** count × slots, interleaved per vertex (world/terrain/material.ts owns the slot → biome mapping). */
+  biomeSdf: Float32Array;
+  biomePresence: Float32Array;
+  slots: number;
+  riverBed: Float32Array;
   distRoad: Float32Array;
   distFreeway: Float32Array;
   freewayAlong: Float32Array;
   normals: Float32Array;
+  /** Water surface per vertex (NaN = none); null when nothing in the chunk is under water. */
+  waterHeights: Float32Array | null;
   colliderHeights: Float32Array | null;
 }> => {
-  // The local vertex grid is a pure function of (chunkSize, segments) — the
-  // worker regenerates it from these params instead of the main thread
-  // building + transferring two arrays per chunk. Normals and the Rapier
-  // column-major collider heights come back precomputed too.
   return terrainClient.request({
     type: "BUILD_CHUNK",
     segments,
     chunkSize,
     offsetX,
     offsetZ,
-    skipPads,
+    visualOnly,
+    carvesRivers,
     needCollider,
   });
 };
 
-// LOD lookup by chunk size for quadtree subdivision
-const lodBySize: { [size: number]: LODLevel } = {};
-for (const lod of LOD_LEVELS) {
-  lodBySize[lod.chunkSize] = lod;
-}
-
-// Subdivision thresholds: a node of this size subdivides when player is closer than threshold
-const subdivideThreshold: { [size: number]: number } = {
-  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (6720)
-  [LOD5_CHUNK_SIZE / 2]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
-  [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
-};
-
-const computeDesiredChunks = (playerX: number, playerZ: number) => {
-  const desired: { [key: string]: { position: number[]; lod: LODLevel } } = {};
-
-  const visitNode = (ox: number, oz: number, size: number) => {
-    // Distance from player to nearest point on this node's AABB
-    const clampedX = Math.max(ox, Math.min(playerX, ox + size));
-    const clampedZ = Math.max(oz, Math.min(playerZ, oz + size));
-    const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
-
-    // Try to subdivide if this node is larger than the base chunk size
-    if (size > CHUNK_SIZE) {
-      const threshold = subdivideThreshold[size];
-      if (threshold !== undefined && dist < threshold) {
-        const half = size / 2;
-        visitNode(ox, oz, half);
-        visitNode(ox + half, oz, half);
-        visitNode(ox, oz + half, half);
-        visitNode(ox + half, oz + half, half);
-        return;
-      }
-    }
-
-    // Leaf node: determine the LOD to use
-    let lod = lodBySize[size];
-    if (!lod) {
-      // Fallback for base chunk size - should not happen normally
-      lod = LOD_LEVELS[0];
-    }
-
-    // At base chunk size (420), pick LOD1 if close, else LOD2
-    if (size === CHUNK_SIZE) {
-      lod = dist < LOD_LEVELS[0].maxDistance ? LOD_LEVELS[0] : LOD_LEVELS[1];
-    }
-
-    // Store world-space center so mesh covers exactly [ox, ox+size]
-    const cx = ox + lod.chunkSize / 2;
-    const cz = oz + lod.chunkSize / 2;
-    const gx = Math.round(cx / lod.chunkSize);
-    const gz = Math.round(cz / lod.chunkSize);
-    desired[`${lod.level}/${gx}/${gz}`] = {
-      position: [cx, cz],
-      lod,
-    };
-  };
-
-  // Root grid: tiles of LOD5 size covering the render area
-  const rootSize = LOD5_CHUNK_SIZE;
-  const radius = Math.ceil(MAX_RENDER_DISTANCE / rootSize);
-  const rootGX = Math.floor(playerX / rootSize);
-  const rootGZ = Math.floor(playerZ / rootSize);
-
-  for (let dx = -radius; dx <= radius; dx++) {
-    for (let dz = -radius; dz <= radius; dz++) {
-      const ox = (rootGX + dx) * rootSize;
-      const oz = (rootGZ + dz) * rootSize;
-
-      // Cull root tiles entirely outside render distance
-      const clampedX = Math.max(ox, Math.min(playerX, ox + rootSize));
-      const clampedZ = Math.max(oz, Math.min(playerZ, oz + rootSize));
-      const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
-      if (dist > MAX_RENDER_DISTANCE) continue;
-
-      visitNode(ox, oz, rootSize);
-    }
-  }
-
-  return desired;
-};
-
-/** Returns clockwise loop of main-grid edge vertex indices (4×segments total). */
+/** Clockwise loop of main-grid edge vertex indices (4 × segments). */
 const perimeterCache = new Map<number, number[]>();
 const getPerimeterIndices = (segments: number): number[] => {
   let cached = perimeterCache.get(segments);
   if (cached) return cached;
-  const n = segments + 1; // vertices per row/col
+  const n = segments + 1;
   const indices: number[] = [];
-  // Top edge: left to right
   for (let i = 0; i < segments; i++) indices.push(i);
-  // Right edge: top to bottom
   for (let i = 0; i < segments; i++) indices.push(i * n + segments);
-  // Bottom edge: right to left
   for (let i = segments; i > 0; i--) indices.push(segments * n + i);
-  // Left edge: bottom to top
   for (let i = segments; i > 0; i--) indices.push(i * n);
   perimeterCache.set(segments, indices);
   return indices;
 };
 
-/** Creates a BufferGeometry with a standard grid + skirt ring around the perimeter. */
-const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferGeometry => {
+/** Grid + a skirt ring around the perimeter (skirt positions are filled in buildChunk). */
+const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: number): THREE.BufferGeometry => {
   const n = segments + 1;
   const mainVertCount = n * n;
   const perimeterIndices = getPerimeterIndices(segments);
-  const perimCount = perimeterIndices.length; // 4 * segments
-  const totalVerts = mainVertCount + perimCount * 2; // main + skirt top + skirt bottom
+  const perimCount = perimeterIndices.length;
+  const totalVerts = mainVertCount + perimCount * 2;
 
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const uvs = new Float32Array(totalVerts * 2);
 
-  // Main grid vertices (same layout as PlaneGeometry)
   const halfSize = chunkSize / 2;
   for (let iz = 0; iz < n; iz++) {
     for (let ix = 0; ix < n; ix++) {
@@ -366,7 +210,6 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
     }
   }
 
-  // Main grid indices
   const mainIndexCount = segments * segments * 6;
   const skirtIndexCount = perimCount * 6;
   const indexArray = new Uint32Array(mainIndexCount + skirtIndexCount);
@@ -386,29 +229,24 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
     }
   }
 
-  // Skirt top and bottom vertices (placeholders — positions set in BuildChunk)
   const skirtTopStart = mainVertCount;
   const skirtBotStart = mainVertCount + perimCount;
   for (let i = 0; i < perimCount; i++) {
     const srcIdx = perimeterIndices[i];
-    // Copy position from main grid as default
     positions[(skirtTopStart + i) * 3] = positions[srcIdx * 3];
     positions[(skirtTopStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
     positions[(skirtTopStart + i) * 3 + 2] = 0;
     positions[(skirtBotStart + i) * 3] = positions[srcIdx * 3];
     positions[(skirtBotStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
-    positions[(skirtBotStart + i) * 3 + 2] = -SKIRT_DEPTH;
-    // Normals pointing outward (will be recalculated)
+    positions[(skirtBotStart + i) * 3 + 2] = -skirtDepth;
     normals[(skirtTopStart + i) * 3 + 2] = 1;
     normals[(skirtBotStart + i) * 3 + 2] = 1;
-    // UVs from source
     uvs[(skirtTopStart + i) * 2] = uvs[srcIdx * 2];
     uvs[(skirtTopStart + i) * 2 + 1] = uvs[srcIdx * 2 + 1];
     uvs[(skirtBotStart + i) * 2] = uvs[srcIdx * 2];
     uvs[(skirtBotStart + i) * 2 + 1] = uvs[srcIdx * 2 + 1];
   }
 
-  // Skirt indices: 2 triangles per perimeter edge
   for (let i = 0; i < perimCount; i++) {
     const next = (i + 1) % perimCount;
     const t0 = skirtTopStart + i;
@@ -431,28 +269,34 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
   return geom;
 };
 
-/** The terrain chunk system (LOD quadtree, build loop, colliders).
- *  Mounted by <Domain> once the domain tree has committed — region/biome data
- *  and the worker config come from the active-domain accessors. */
 export const TerrainRenderer = () => {
   const { camera, scene } = useThree();
   const { world, rapier } = useRapier();
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
-  const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
-  const { terrain_loaded, setProgress, setTerrainLoaded, terrainHighLODPending } = useGameContext();
+  const [terrainMaterial, setTerrainMaterial] = useState<THREE.ShaderMaterial | null>(null);
+  const { terrainLoaded, setProgress, setTerrainLoaded, playerSpawn } = useGameContext();
   const lastRemainingRef = React.useRef<number>(-1);
   const isUpdatingTerrain = React.useRef(false);
+  /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
+   *  opaque terrain its early depth test), and the mesh that links that program during the load. */
+  const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+  const fadeWarmRef = React.useRef<{ mesh: THREE.Mesh; drawn: boolean } | null>(null);
+
+  // A new spawn (fast travel) restarts the loading gate: the stale remaining=0 would
+  // otherwise flip terrainLoaded back on before the first pass around the new position.
+  useEffect(() => {
+    lastRemainingRef.current = -1;
+    setRemainingChunks(null);
+    terrainDirty = true;
+  }, [playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
 
   useEffect(() => {
     scene.add(terrain.group);
     return () => {
       scene.remove(terrain.group);
-      // The physics world OUTLIVES this domain (one persistent canvas), so
-      // every heightfield body must leave with us — resetDomainSystems runs
-      // afterwards with no world handle and only clears the chunk records.
-      for (const key of Object.keys(terrain.chunks)) {
-        const { chunk } = terrain.chunks[key];
+      // The physics world outlives the domain, so heightfield bodies must leave with this mount.
+      for (const chunk of terrain.chunks.values()) {
         if (chunk.colliderBody !== null) {
           world.removeRigidBody(chunk.colliderBody);
           chunk.colliderBody = null;
@@ -461,108 +305,79 @@ export const TerrainRenderer = () => {
     };
   }, []);
 
-  const destroyChunk = (chunkKey: string) => {
-    const entry = terrain.chunks[chunkKey];
-    if (!entry) return;
-    const chunk = entry.chunk;
+  const destroyChunk = (chunk: Chunk) => {
+    if (terrain.chunks.get(chunk.key) !== chunk) return;
     if (chunk.colliderBody !== null) {
       world.removeRigidBody(chunk.colliderBody); // removes its heightfield too
       chunk.colliderBody = null;
     }
     releaseGeometry(chunk.lod, chunk.plane.geometry);
+    releaseWater(chunk);
     terrain.group.remove(chunk.plane);
-    delete terrain.chunks[chunkKey];
+    terrain.chunks.delete(chunk.key);
+  };
+
+  const swapHooks: SwapHooks<Chunk> = {
+    isDesired: (key) => cachedDesired !== null && cachedDesired[key] !== undefined,
+    destroy: destroyChunk,
+    redraw: (chunk) => {
+      chunk.plane.visible = chunk.drawn;
+      const material = chunk.transition !== null ? fadeMaterialRef.current : terrainMaterial;
+      if (material) chunk.plane.material = material;
+    },
   };
 
   useEffect(() => {
-    if (!terrain_loaded) {
+    if (!terrainLoaded) {
       if (remainingChunks !== null) {
         setProgress(1 - remainingChunks / totalChunks);
       }
       remainingChunks === 0 && setTerrainLoaded(true);
     }
-  }, [remainingChunks, terrain_loaded]);
+  }, [remainingChunks, terrainLoaded]);
 
   useEffect(() => {
-    getMaterial().then(setTerrainMaterial);
+    getMaterial().then((material) => {
+      const fade = createLodFadeMaterial(material);
+      fadeMaterialRef.current = fade;
+      // Links the fade program during the load, under the scene's real lights (they are part of the
+      // program key): otherwise the first swap compiled the whole terrain shader mid-walk.
+      const warm = new THREE.Mesh(FADE_WARM_GEOMETRY, fade);
+      warm.frustumCulled = false;
+      const state = { mesh: warm, drawn: false };
+      warm.onAfterRender = () => {
+        state.drawn = true;
+      };
+      terrain.group.add(warm);
+      fadeWarmRef.current = state;
+      setTerrainMaterial(material);
+    });
   }, []);
 
-  useFrame(() => {
+  useFrame(({ clock }, delta) => {
+    tickWater(clock.elapsedTime);
+    const warm = fadeWarmRef.current;
+    if (warm?.drawn) {
+      terrain.group.remove(warm.mesh);
+      fadeWarmRef.current = null;
+    }
+    // Every frame, even while an update pass is awaiting a build: a fade is timed in frames' delta.
+    swapper.tick(delta, swapHooks);
     if (!terrainMaterial || isUpdatingTerrain.current) return;
-    // Steady-state gate, evaluated SYNCHRONOUSLY: UpdateTerrain is async, so
-    // reaching the same early-out inside it cost a promise chain + microtask
-    // drain every frame with the camera parked.
+    // Synchronous early-out: reaching the same gate inside the async updateTerrain
+    // cost a promise chain + microtask drain every parked frame.
     if (!terrainDirty && cachedDesired !== null) {
       const mdx = camera.position.x - desiredAtX;
       const mdz = camera.position.z - desiredAtZ;
       if (mdx * mdx + mdz * mdz <= DESIRED_MOVE_EPS_SQ) return;
     }
     isUpdatingTerrain.current = true;
-    UpdateTerrain(terrainMaterial).finally(() => {
+    updateTerrain(terrainMaterial).finally(() => {
       isUpdatingTerrain.current = false;
     });
   });
 
-  /** Atomic LOD swap: only show new chunks when ALL replacements for an old chunk
-   *  are built, then hide+destroy the old chunk in the same frame. */
-  const ProcessSwaps = (desiredChunks: { [key: string]: { position: number[]; lod: LODLevel } }) => {
-    // NOTE: this must run even with an empty destroy queue — pass 2 is what
-    // makes freshly built chunks visible at all (nothing to swap on startup).
-
-    // Collect chunks still pending build (queued or actively building) — they
-    // are the ONLY thing that can hold an old chunk back, and they are always
-    // invisible (a chunk is shown in pass 2, after it leaves the queue).
-    pendingIndex.clear();
-    pendingSet.clear();
-    for (const c of terrain.queued_to_build) {
-      if (c.plane.visible) continue;
-      pendingIndex.add(c);
-      pendingSet.add(c);
-    }
-    // (no active-build case: ProcessSwaps runs before the build loop, when
-    // terrain.active_chunk is always null)
-
-    // Pass 1: determine which old chunks have ALL their replacements built
-    const swappable = swappableKeys;
-    const cancelled = cancelledKeys;
-    swappable.clear();
-    cancelled.clear();
-
-    for (const oldKey of terrain.queued_to_destroy) {
-      const entry = terrain.chunks[oldKey];
-      // Gone already, or desired again (player reversed) → cancel destruction
-      if (!entry || desiredChunks[oldKey]) {
-        cancelled.add(oldKey);
-        continue;
-      }
-      if (!pendingIndex.overlapsAny(entry.chunk)) swappable.add(oldKey);
-    }
-
-    // Pass 2: show built-but-invisible chunks only if every old chunk they
-    // overlap is swappable (prevents showing over a still-visible old chunk
-    // whose OTHER replacements aren't ready yet)
-    blockerIndex.clear();
-    for (const oldKey of terrain.queued_to_destroy) {
-      if (swappable.has(oldKey) || cancelled.has(oldKey)) continue;
-      const entry = terrain.chunks[oldKey];
-      if (entry) blockerIndex.add(entry.chunk);
-    }
-
-    for (const key in terrain.chunks) {
-      const chunk = terrain.chunks[key].chunk;
-      if (chunk.plane.visible || pendingSet.has(chunk)) continue;
-      if (!blockerIndex.overlapsAny(chunk)) chunk.plane.visible = true;
-    }
-
-    // Pass 3: destroy swappable old chunks + clean processed/cancelled entries
-    for (const oldKey of swappable) {
-      destroyChunk(oldKey);
-      terrain.queued_to_destroy.delete(oldKey);
-    }
-    for (const k of cancelled) terrain.queued_to_destroy.delete(k);
-  };
-
-  const UpdateTerrain = async (material: THREE.Material) => {
+  const updateTerrain = async (material: THREE.Material) => {
     const playerX = camera.position.x;
     const playerZ = camera.position.z;
 
@@ -570,8 +385,6 @@ export const TerrainRenderer = () => {
     const mdx = playerX - desiredAtX;
     const mdz = playerZ - desiredAtZ;
     const moved = cachedDesired === null || mdx * mdx + mdz * mdz > DESIRED_MOVE_EPS_SQ;
-    // Steady state (queues drained, everything visible, camera parked):
-    // nothing below can change anything — skip the whole pass.
     if (!moved && !terrainDirty) return;
     if (moved) {
       cachedDesired = computeDesiredChunks(playerX, playerZ);
@@ -580,81 +393,33 @@ export const TerrainRenderer = () => {
     }
     const desiredChunks = cachedDesired!;
 
-    // (terrain.active_chunk is only ever non-null DURING step 5's build loop
-    // below — every pass starts with no build in flight, so there is no
-    // "cancel the active build" step; an undesired chunk that finished
-    // building is simply pruned on the next pass.)
-
-    // ── 2. Prune stale chunks ────────────────────────────────────────────
-    // Visible chunks already queued for destruction act as COVER: an
-    // invisible chunk overlapping one of them can't be dropped yet. Indexed
-    // by position and kept up to date as the loop queues more, so the check
-    // stays O(1)-ish instead of scanning the whole destroy queue per chunk.
-    coverIndex.clear();
-    for (const oldKey of terrain.queued_to_destroy) {
-      const oldData = terrain.chunks[oldKey];
-      if (oldData && oldData.chunk.plane.visible) coverIndex.add(oldData.chunk);
-    }
-
-    pruneKeys.length = 0;
-    for (const chunkKey in terrain.chunks) {
-      if (desiredChunks[chunkKey]) continue;
-      const chunk = terrain.chunks[chunkKey].chunk;
-
-      if (chunk.plane.visible) {
-        // Visible — queue for atomic swap via ProcessSwaps
-        if (!terrain.queued_to_destroy.has(chunkKey)) {
-          terrain.queued_to_destroy.add(chunkKey);
-          coverIndex.add(chunk);
-        }
-      } else if (terrain.active_chunk !== chunk && !coverIndex.overlapsAny(chunk)) {
-        // Invisible, not actively building, and nothing depends on it as
-        // cover — safe to remove
-        pruneKeys.push(chunkKey);
-      }
-    }
-    for (const key of pruneKeys) {
-      destroyChunk(key);
-    }
+    // ── 2. Drawn chunks no longer desired go stale; undrawn ones are dropped ──
+    swapper.prune(terrain.chunks.values(), swapHooks.isDesired, terrain.activeChunk, destroyChunk);
 
     // ── 3. Add new desired chunks ────────────────────────────────────────
     for (const chunkKey in desiredChunks) {
-      if (chunkKey in terrain.chunks) continue;
-
+      if (terrain.chunks.has(chunkKey)) continue;
       const { position, lod } = desiredChunks[chunkKey];
-      const [cx, cz] = position;
-      const offset = new THREE.Vector2(cx, cz);
-
-      const chunk = QueueChunk(chunkKey, offset, lod, material);
-      terrain.chunks[chunkKey] = {
-        position: [cx, cz],
-        chunk: chunk,
-      };
+      terrain.chunks.set(chunkKey, queueChunk(chunkKey, { x: position[0], z: position[1] }, lod, material));
     }
 
-    // ── 4. Atomic visibility swaps ───────────────────────────────────────
-    ProcessSwaps(desiredChunks);
+    // ── 4. LOD swaps: start every cross-fade that is ready ───────────────
+    swapper.processSwaps(terrain.chunks.values(), swapHooks);
 
     // ── 5. Build chunks (time budget) ────────────────────────────────────
-    // Wall-clock budgeted, mirroring the spawn worker: per-chunk cost varies
-    // wildly with LOD and terrain (a LOD5 chunk is a 4-vertex roundtrip, a
-    // LOD1 city chunk runs the flatten engine), so a vertex/count budget
-    // either stalls the frame or drains hundreds of chunks in one pass with a
-    // frozen, stale queue order. At least one chunk always builds per pass;
-    // between passes the desired set, prune, and swaps all get to run again.
+    // Wall-clock, not chunk-count: per-chunk cost varies >10× with LOD and
+    // terrain (see CLAUDE.md). At least one chunk builds per pass.
     const BUILD_BUDGET_MS = 5;
     const buildDeadline = performance.now() + BUILD_BUDGET_MS;
 
     let builtThisPass = false;
 
-    // Drop chunks that have been pruned (in place — no per-frame array), sort
-    // by priority only when the queue changed or the camera moved meaningfully
-    // since the last sort (catch-up must keep streaming nearest-first)
+    // Drop pruned chunks in place; re-sort only when the queue changed or the camera moved.
     {
-      const queue = terrain.queued_to_build;
+      const queue = terrain.queuedToBuild;
       let w = 0;
       for (let i = 0; i < queue.length; i++) {
-        if (queue[i].key in terrain.chunks) queue[w++] = queue[i];
+        if (terrain.chunks.get(queue[i].key) === queue[i]) queue[w++] = queue[i];
       }
       if (w !== queue.length) {
         queue.length = w;
@@ -662,92 +427,93 @@ export const TerrainRenderer = () => {
       }
     }
 
-    if (terrain.queued_to_build.length > 0) {
+    if (terrain.queuedToBuild.length > 0) {
       const sdx = playerX - lastSortX;
       const sdz = playerZ - lastSortZ;
       if (queueDirty || sdx * sdx + sdz * sdz > 64 * 64) {
         queueDirty = false;
         lastSortX = playerX;
         lastSortZ = playerZ;
-        terrain.queued_to_build.sort((a, b) => {
+        terrain.queuedToBuild.sort((a, b) => {
           if (a.lod.level !== b.lod.level) return b.lod.level - a.lod.level;
-          const distA = (a.offset.x - playerX) ** 2 + (a.offset.y - playerZ) ** 2;
-          const distB = (b.offset.x - playerX) ** 2 + (b.offset.y - playerZ) ** 2;
+          const distA = (a.offset.x - playerX) ** 2 + (a.offset.z - playerZ) ** 2;
+          const distB = (b.offset.x - playerX) ** 2 + (b.offset.z - playerZ) ** 2;
           return distB - distA;
         });
       }
     }
 
-    // Build until the deadline (last element after sort = highest priority)
-    while (terrain.queued_to_build.length > 0) {
-      const chunk = terrain.queued_to_build.pop()!;
-      terrain.active_chunk = chunk;
-      chunk.rebuildIterator = BuildChunk(chunk, material);
+    while (terrain.queuedToBuild.length > 0) {
+      const next = terrain.queuedToBuild[terrain.queuedToBuild.length - 1];
+      if (terrainLoaded && !next.lod.hasCollider) {
+        const t = performance.now();
+        if (isMachineStruggling() && t - lastFarBuildAt < FAR_BUILD_INTERVAL_MS) break;
+        lastFarBuildAt = t;
+      }
+      const chunk = terrain.queuedToBuild.pop()!;
+      terrain.activeChunk = chunk;
+      chunk.rebuildIterator = buildChunk(chunk, material);
       try {
-        // BuildChunk yields once, after the chunk is fully built
         await chunk.rebuildIterator.next();
         builtThisPass = true;
       } catch (error) {
         console.error("Error updating terrain:", error);
       }
-      terrain.active_chunk = null;
+      terrain.activeChunk = null;
       if (performance.now() > buildDeadline) break;
     }
 
-    // Signal whether high-res (LOD1/2) terrain is still pending
-    const hasHighLOD =
-      terrain.queued_to_build.some((c) => c.lod.level <= 2) ||
-      (terrain.active_chunk !== null && terrain.active_chunk.lod.level <= 2);
-    terrainHighLODPending.current = hasHighLOD;
-
-    // The remaining count only matters for the loading progress bar — after
-    // terrain_loaded, re-rendering the component (and reconciling the whole
-    // collider list) every time the queue length changes is pure waste.
-    const newRemaining = terrain.queued_to_build.length;
-    if (newRemaining !== lastRemainingRef.current && !terrain_loaded) {
+    // Only the loading bar needs this; after terrainLoaded a re-render per queue change is waste.
+    const newRemaining = terrain.queuedToBuild.length;
+    if (newRemaining !== lastRemainingRef.current && !terrainLoaded) {
       lastRemainingRef.current = newRemaining;
       if (remainingChunks === null) setTotalChunks(newRemaining);
       setRemainingChunks(newRemaining);
     }
 
     // Stay "dirty" while anything is still in flight, and for one extra pass
-    // after the last build so ProcessSwaps gets to make it visible.
+    // after the last build so processSwaps gets to draw it.
     terrainDirty =
       builtThisPass ||
-      terrain.queued_to_build.length > 0 ||
-      terrain.active_chunk !== null ||
-      terrain.queued_to_destroy.size > 0;
+      terrain.queuedToBuild.length > 0 ||
+      terrain.activeChunk !== null ||
+      swapper.stale.size > 0 ||
+      swapper.busy;
   };
 
-  const QueueChunk = (chunkKey: string, offset: THREE.Vector2, lod: LODLevel, material: THREE.Material) => {
+  const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: THREE.Material) => {
     const plane = new THREE.Mesh(acquireGeometry(lod), material);
     plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
     plane.castShadow = false;
-    // No shadow maps in the project; leaving receiveShadow on would recompile
-    // every terrain program with USE_SHADOWMAP the day a light casts one.
+    // receiveShadow left on would recompile every terrain program the day a light casts a shadow.
     plane.receiveShadow = false;
     plane.rotation.x = -Math.PI / 2;
-    // Chunks built behind the player otherwise defer their whole buffer
-    // upload to the frame the player first turns toward them.
     uploadOnFirstDraw(plane);
 
     const chunk: Chunk = {
       key: chunkKey,
-      offset: new THREE.Vector2(offset.x, offset.y),
+      offset: { x: offset.x, z: offset.z },
       plane: plane,
+      water: null,
       rebuildIterator: null,
       colliderBody: null,
       lod: lod,
+      built: false,
+      drawn: false,
+      transition: null,
+      fadeLo: 0,
+      fadeHi: FADE_OPAQUE_HI,
     };
+    plane.onBeforeRender = syncLodFade(chunk);
 
     terrain.group.add(plane);
-    terrain.queued_to_build.push(chunk);
+    terrain.queuedToBuild.push(chunk);
     queueDirty = true;
 
     return chunk;
   };
 
-  const BuildChunk = async function* (chunk: Chunk, material: THREE.Material) {
+  const buildChunk = async function* (chunk: Chunk, material: THREE.Material) {
     await ensureTerrainWorker();
 
     const offset = chunk.offset;
@@ -759,54 +525,67 @@ export const TerrainRenderer = () => {
     const perimCount = perimeterIndices.length;
     const posArray = pos.array as Float32Array;
 
-    // One descriptor message per chunk — the worker generates the local grid,
-    // heights, attributes, NORMALS, and (for collider LODs) the column-major
-    // Rapier heights, so the main thread only writes buffers.
-    // Flatten pads (13–24u features) only matter where they can be SEEN and
-    // WALKED ON — collider-bearing LODs. Far visual-only chunks skip them: a
-    // LOD5 chunk spans ~256 pad tiles, and computing their tiles exploded far
-    // city chunk builds ~9× (which stalled terrain, which stalled spawning).
+    // Visual-only LODs skip flatten pads: a LOD5 chunk spans ~256 pad tiles
+    // and computing them exploded far city builds ~9× (stalling spawning too).
     const workerResult = await buildChunkInWorker(
       segments,
       chunk.lod.chunkSize,
       offset.x,
-      offset.y,
+      offset.z,
       !chunk.lod.hasCollider,
+      chunk.lod.carvesRivers,
       chunk.lod.hasCollider
     );
-    const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
+    const { heights, biomeSdf, biomePresence, slots, riverBed, distRoad, distFreeway, freewayAlong, waterHeights } = workerResult;
     const traceT0 = performance.now();
 
-    // Reuse attribute arrays from pooled geometry when available, else allocate
     const totalVerts = pos.count;
     const geom = chunk.plane.geometry;
-    const ensureAttr = (name: string): Float32Array => {
-      const existing = geom.getAttribute(name) as THREE.BufferAttribute | undefined;
-      if (existing && existing.count === totalVerts) return existing.array as Float32Array;
-      const arr = new Float32Array(totalVerts);
-      geom.setAttribute(name, new THREE.BufferAttribute(arr, 1));
+    const ensureAttrOn = (g: THREE.BufferGeometry, name: string, itemSize = 1): Float32Array => {
+      const existing = g.getAttribute(name) as THREE.BufferAttribute | undefined;
+      if (existing && existing.count === totalVerts && existing.itemSize === itemSize) return existing.array as Float32Array;
+      const arr = new Float32Array(totalVerts * itemSize);
+      g.setAttribute(name, new THREE.BufferAttribute(arr, itemSize));
       return arr;
     };
-    const attrBiomeId = ensureAttr("biomeId");
-    const attrDistBiome = ensureAttr("distanceToBiomeBoundaryCenter");
-    const attrDistRegion = ensureAttr("distanceToRiverCenter");
+    const ensureAttr = (name: string, itemSize = 1): Float32Array => ensureAttrOn(geom, name, itemSize);
+    // Biome slots ride in two vec4 attributes each for sdf and presence (≤ 8 biomes per domain; material.ts asserts).
+    const attrSdf0 = ensureAttr("biomeSdf0", 4);
+    const attrSdf1 = ensureAttr("biomeSdf1", 4);
+    const attrPres0 = ensureAttr("biomePresence0", 4);
+    const attrPres1 = ensureAttr("biomePresence1", 4);
+    const attrRiverBed = ensureAttr("riverBedDistance");
     const attrDistRoad = ensureAttr("distanceToRoadCenter");
     const attrDistFreeway = ensureAttr("distanceToFreewayCenter");
     const attrFreewayAlong = ensureAttr("freewayAlong");
+    const clampBlend = chunk.lod.clampBlendFields;
+    const writeSdf = (dst: number, src: number) => {
+      for (let s = 0; s < MAX_BIOME_SLOTS; s++) {
+        let v = s < slots ? biomeSdf[src * slots + s] : -BIOME_SDF_FAR;
+        let p = s < slots ? biomePresence[src * slots + s] : -BIOME_SDF_FAR;
+        if (clampBlend) {
+          v = v < -1 ? -1 : v > 1 ? 1 : v;
+          p = p < 0 ? 0 : p > 1 ? 1 : p;
+        }
+        if (s < 4) {
+          attrSdf0[dst * 4 + s] = v;
+          attrPres0[dst * 4 + s] = p;
+        } else {
+          attrSdf1[dst * 4 + (s - 4)] = v;
+          attrPres1[dst * 4 + (s - 4)] = p;
+        }
+      }
+    };
 
-    // Write main grid heights + attributes via direct array access
-    // (X/Y positions remain from geometry creation; vertX/vertY were transferred to worker)
     for (let i = 0; i < mainVertCount; i++) {
       posArray[i * 3 + 2] = heights[i];
-      attrBiomeId[i] = biomeIds[i];
-      attrDistBiome[i] = distBiome[i];
-      attrDistRegion[i] = distRegion[i];
+      writeSdf(i, i);
+      attrRiverBed[i] = riverBed[i];
       attrDistRoad[i] = distRoad[i];
       attrDistFreeway[i] = distFreeway[i];
       attrFreewayAlong[i] = freewayAlong[i];
     }
 
-    // Update skirt vertices via direct array access
     const skirtTopStart = mainVertCount;
     const skirtBotStart = mainVertCount + perimCount;
     for (let i = 0; i < perimCount; i++) {
@@ -823,14 +602,12 @@ export const TerrainRenderer = () => {
       const bot3 = (skirtBotStart + i) * 3;
       posArray[bot3] = sx;
       posArray[bot3 + 1] = sy;
-      posArray[bot3 + 2] = sh - SKIRT_DEPTH;
+      posArray[bot3 + 2] = sh - chunk.lod.skirtDepth;
 
-      attrBiomeId[skirtTopStart + i] = attrBiomeId[srcIdx];
-      attrBiomeId[skirtBotStart + i] = attrBiomeId[srcIdx];
-      attrDistBiome[skirtTopStart + i] = attrDistBiome[srcIdx];
-      attrDistBiome[skirtBotStart + i] = attrDistBiome[srcIdx];
-      attrDistRegion[skirtTopStart + i] = attrDistRegion[srcIdx];
-      attrDistRegion[skirtBotStart + i] = attrDistRegion[srcIdx];
+      writeSdf(skirtTopStart + i, srcIdx);
+      writeSdf(skirtBotStart + i, srcIdx);
+      attrRiverBed[skirtTopStart + i] = attrRiverBed[srcIdx];
+      attrRiverBed[skirtBotStart + i] = attrRiverBed[srcIdx];
       attrDistRoad[skirtTopStart + i] = attrDistRoad[srcIdx];
       attrDistRoad[skirtBotStart + i] = attrDistRoad[srcIdx];
       attrDistFreeway[skirtTopStart + i] = attrDistFreeway[srcIdx];
@@ -839,24 +616,69 @@ export const TerrainRenderer = () => {
       attrFreewayAlong[skirtBotStart + i] = attrFreewayAlong[srcIdx];
     }
 
-    // Mark reused attributes for GPU upload
-    (geom.getAttribute("biomeId") as THREE.BufferAttribute).needsUpdate = true;
-    (geom.getAttribute("distanceToBiomeBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
-    (geom.getAttribute("distanceToRiverCenter") as THREE.BufferAttribute).needsUpdate = true;
+    // WATER: a second mesh over the same grid, a CHILD of the terrain plane so it shares
+    // its transform, visibility and LOD swaps. Dry vertices dive under the ground (the
+    // fragment shader also discards depth ≤ 0), so the surface simply vanishes there — by
+    // at least the vertex spacing: a river is narrower than a coarse LOD's quads, and a 3u
+    // dive let one wet vertex's surface cover most of the triangles around it (a water sheet
+    // over the banks, hundreds of units wide, until LOD1 arrived). Along an edge the sheet
+    // now ends within ~depth of the wet vertex.
+    const dryDive = Math.max(3, chunk.lod.chunkSize / segments);
+    if (waterHeights) {
+      if (!chunk.water) {
+        const water = new THREE.Mesh(acquireGeometry(chunk.lod), getWaterMaterial());
+        water.castShadow = false;
+        water.receiveShadow = false;
+        water.renderOrder = 10;
+        // Warmed with its plane like every streamed mesh: the first water in view otherwise
+        // compiled the water program and uploaded its buffers at the frame the player turned to it.
+        uploadOnFirstDraw(water);
+        water.onBeforeRender = syncLodFade(chunk);
+        chunk.plane.add(water);
+        chunk.water = water;
+      }
+      const wgeom = chunk.water.geometry;
+      const wpos = wgeom.attributes.position.array as Float32Array;
+      const wdepth = ensureAttrOn(wgeom, "waterDepth");
+      for (let i = 0; i < mainVertCount; i++) {
+        const wh = waterHeights[i];
+        const dry = Number.isNaN(wh) || wh <= heights[i];
+        wpos[i * 3] = posArray[i * 3];
+        wpos[i * 3 + 1] = posArray[i * 3 + 1];
+        wpos[i * 3 + 2] = dry ? heights[i] - dryDive : wh;
+        wdepth[i] = dry ? 0 : wh - heights[i];
+      }
+      for (let i = 0; i < perimCount; i++) {
+        const srcIdx = perimeterIndices[i];
+        for (const dst of [skirtTopStart + i, skirtBotStart + i]) {
+          wpos[dst * 3] = wpos[srcIdx * 3];
+          wpos[dst * 3 + 1] = wpos[srcIdx * 3 + 1];
+          wpos[dst * 3 + 2] = wpos[srcIdx * 3 + 2];
+          wdepth[dst] = 0;
+        }
+      }
+      wgeom.attributes.position.needsUpdate = true;
+      (wgeom.getAttribute("waterDepth") as THREE.BufferAttribute).needsUpdate = true;
+      wgeom.computeBoundingSphere();
+    } else if (chunk.water) {
+      releaseWater(chunk);
+    }
+
+    (geom.getAttribute("biomeSdf0") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomeSdf1") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomePresence0") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomePresence1") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("riverBedDistance") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToRoadCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToFreewayCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("freewayAlong") as THREE.BufferAttribute).needsUpdate = true;
 
-    // Apply material and update geometry immediately. Normals come
-    // precomputed from the worker (main grid only — computeVertexNormals on
-    // the main thread iterated the full index buffer including 768 skirt
-    // triangles whose results were immediately overwritten below).
     chunk.plane.material = material;
     chunk.plane.geometry.attributes.position.needsUpdate = true;
     const normalArray = chunk.plane.geometry.attributes.normal.array as Float32Array;
     normalArray.set(workerResult.normals, 0);
 
-    // Copy terrain edge normals to skirt vertices so they don't trigger triplanar
+    // Skirt normals copy the edge so the skirt never triggers the triplanar branch.
     for (let i = 0; i < perimCount; i++) {
       const srcIdx = perimeterIndices[i];
       const nx = normalArray[srcIdx * 3];
@@ -873,33 +695,29 @@ export const TerrainRenderer = () => {
     }
     (chunk.plane.geometry.attributes.normal as THREE.BufferAttribute).needsUpdate = true;
 
-    chunk.plane.position.set(offset.x, 0, offset.y);
+    chunk.plane.position.set(offset.x, 0, offset.z);
 
     if (chunk.lod.hasCollider && workerResult.colliderHeights) {
-      GenerateColliders(chunk, offset, workerResult.colliderHeights);
+      generateColliders(chunk, offset, workerResult.colliderHeights);
     }
 
-    traceEvent(`terrain:finish L${chunk.lod.level}`, performance.now() - traceT0);
+    const finishMs = performance.now() - traceT0;
+    traceEvent(`terrain:finish L${chunk.lod.level}`, finishMs);
+    chargeFrameWork(finishMs);
+    chunk.built = true;
 
     yield;
   };
 
-  /** heights arrive COLUMN-MAJOR from the worker (col = X axis = ix, row =
-   *  Z axis = iz — the order Rapier's heightfield wants), so no transpose or
-   *  allocation happens here. */
-  /** Builds the chunk's heightfield straight into the Rapier world (same
-   *  desc <HeightfieldCollider args=[nrows, ncols, heights, scale]> produced,
-   *  on a fixed body at the chunk offset). Imperative, like the buildings'
-   *  proxy hulls: a React <RigidBody> per chunk put ~64 bodies through
-   *  r-t-r's per-frame body sync, and every built chunk re-rendered this
-   *  component to reconcile the whole collider list. The desc is created
-   *  before the body so a failure can't leave an empty body behind. */
-  const GenerateColliders = (chunk: Chunk, offset: THREE.Vector2, heights: Float32Array) => {
+  /** Heightfield (column-major heights from the worker) straight into the
+   *  Rapier world — never a React <RigidBody>, see CLAUDE.md. The desc is
+   *  created before the body so a failure can't leave an empty body behind. */
+  const generateColliders = (chunk: Chunk, offset: PointXZ, heights: Float32Array) => {
     const segments = chunk.lod.segments;
     const cs = chunk.lod.chunkSize;
     const t0 = performance.now();
     const desc = rapier.ColliderDesc.heightfield(segments, segments, heights, { x: cs, y: 1, z: cs });
-    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.y));
+    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.z));
     try {
       world.createCollider(desc, body);
     } catch (e) {
@@ -911,7 +729,5 @@ export const TerrainRenderer = () => {
     traceEvent("terrain:collider", performance.now() - t0);
   };
 
-  // No React children: chunks live in terrain.group (added to the scene in
-  // the mount effect) and colliders live in the Rapier world.
   return null;
 };

@@ -1,18 +1,5 @@
-/**
- * Budgeted generation for the physics world.
- *
- * JobQueue: units of work that run inside `work(budgetMs)` each tick, each
- * `step(deadline)` returning true when finished — a job that can't finish in
- * one slice (a terrain chunk: 9409 height samples) keeps its own cursor and
- * returns false. The tick never stalls on generation.
- *
- * ChunkStore<T>: REFCOUNTED keyed resources (terrain heightfields, dressing
- * collider chunks) built by such jobs. `request` bumps the refcount and queues
- * the build on first use; `release` drops it and disposes at zero; `isReady`
- * says whether the build has landed. Nothing is ever built for the whole
- * world — only what something currently holds.
- */
-
+/** A job's `step(deadline)` returns true when finished; one that can't finish in a
+ *  slice (a terrain chunk is 9409 height samples) keeps its own cursor and returns false. */
 export interface Job {
   key: string;
   step: (deadline: number) => boolean;
@@ -21,7 +8,7 @@ export interface Job {
 export class JobQueue {
   private readonly jobs: Job[] = [];
   private readonly keys = new Set<string>();
-  /** Longest single job step seen (ms) — the number to watch for budget overruns. */
+  /** The number to watch for budget overruns. */
   maxStepMs = 0;
 
   enqueue(key: string, step: (deadline: number) => boolean): void {
@@ -30,8 +17,8 @@ export class JobQueue {
     this.jobs.push({ key, step });
   }
 
-  /** Run jobs until `budgetMs` is spent (always ≥ one step). Returns ms used. */
-  work(budgetMs: number): number {
+  /** Always runs ≥ one step. Returns ms used. */
+  workFor(budgetMs: number): number {
     if (this.jobs.length === 0) return 0;
     const t0 = performance.now();
     const deadline = t0 + budgetMs;
@@ -60,7 +47,7 @@ export class JobQueue {
   }
 }
 
-/** A chunk's build: called with the deadline until it returns the value. */
+/** Called with the deadline each work slice until it returns the value. */
 export type ChunkBuilder<T> = (deadline: number) => T | undefined;
 
 interface ChunkRecord<T> {
@@ -68,14 +55,15 @@ interface ChunkRecord<T> {
   value: T | null;
 }
 
+/** REFCOUNTED keyed resources built by queued jobs — nothing is ever built for the
+ *  whole world, only what something currently holds. */
 export class ChunkStore<T> {
   private readonly chunks = new Map<string, ChunkRecord<T>>();
 
   constructor(
     private readonly queue: JobQueue,
     private readonly name: string,
-    /** Start a build for chunk (gx, gz); the returned stepper is called each work slice. */
-    private readonly begin: (gx: number, gz: number) => ChunkBuilder<T>,
+    private readonly startBuild: (gx: number, gz: number) => ChunkBuilder<T>,
     private readonly dispose: (value: T) => void,
   ) {}
 
@@ -83,7 +71,6 @@ export class ChunkStore<T> {
     return `${this.name}:${gx},${gz}`;
   }
 
-  /** Hold chunk (gx, gz); built on the queue if nobody holds it yet. */
   request(gx: number, gz: number): string {
     const key = this.key(gx, gz);
     const rec = this.chunks.get(key);
@@ -93,7 +80,7 @@ export class ChunkStore<T> {
     }
     const fresh: ChunkRecord<T> = { refs: 1, value: null };
     this.chunks.set(key, fresh);
-    const build = this.begin(gx, gz);
+    const build = this.startBuild(gx, gz);
     this.queue.enqueue(key, (deadline) => {
       if (this.chunks.get(key) !== fresh) return true; // released while pending
       const value = build(deadline);
@@ -134,8 +121,7 @@ export class ChunkStore<T> {
   }
 }
 
-/** Chunk indices (grid `size`) a body at (x, z) needs: its own, plus the
- *  neighbor across any edge within `margin` (a 2×2 at a corner). */
+/** The body's own chunk plus the neighbor across any edge within `margin` (a 2×2 at a corner). */
 export const chunkIndicesNear = (x: number, z: number, size: number, margin: number): [number, number][] => {
   const gx = Math.floor(x / size);
   const gz = Math.floor(z / size);

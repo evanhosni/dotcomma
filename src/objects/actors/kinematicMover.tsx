@@ -14,19 +14,12 @@ import { DEFAULT_COLLIDER, type ColliderSpec, type MovementKind } from "./spec";
 import type { MotionOutput } from "./state/motion";
 
 /**
- * KINEMATIC MOVER — the body of a model actor that moves (`body: "kinematic"`
- * on its spec). Owned by ModelActor so that no actor component writes physics.
- *
- * SYNCED actor (the default): the SERVER simulates it and the actor base
- * draws it from the published track (snapshot interpolation). This hook only
- * PARKS the capsule at that pose so the local player collides with the NPC.
- *
- * LOCAL actor (`serverSynced={false}`): the state machine's `ctx.motion`
- * output is resolved here each frame — `movement: "ground"` through THE
- * shared character resolver (physics/characterMovement.ts — the player's and
- * the server's movement code, so a local walker moves exactly like a synced
- * one would); `movement: "free"` integrates it as a 3-axis velocity (flyers,
- * swimmers), exactly as the server's free body does.
+ * The body of a `body: "kinematic"` model actor. Synced (default): the SERVER
+ * simulates it and this only PARKS the capsule at the published pose so the local
+ * player collides with it. Local (`serverSynced={false}`): the machine's motion
+ * output is resolved here through THE shared character resolver
+ * (physics/characterMovement.ts — the player's and the server's code), or
+ * integrated as a free 3-axis velocity for flyers.
  */
 
 const _next = { x: 0, y: 0, z: 0 };
@@ -37,16 +30,14 @@ export interface KinematicMoverOptions {
   collider?: ColliderSpec;
   movement: MovementKind;
   coordinates: THREE.Vector3Tuple;
-  /** Body CENTER position, written every frame (the state machine reads it). */
+  /** Body CENTER, written every frame (the state machine reads it). */
   positionRef: React.MutableRefObject<THREE.Vector3>;
-  /** The model group (feet at the origin) — placed under the body for LOCAL
-   *  actors (the base places it for synced ones). */
+  /** The model group (feet at the origin) — placed under the body for LOCAL actors. */
   groupRef: React.RefObject<THREE.Group>;
 }
 
 export interface KinematicMover {
-  /** Resolve the local motion output, or (puppet) park the body at the server's pose. */
-  step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, puppet: boolean): void;
+  step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void;
   /** The <RigidBody> to render (null when disabled). */
   element: JSX.Element | null;
 }
@@ -75,11 +66,11 @@ export const useKinematicMover = ({
     };
   }, [world, rapier, enabled, movement, collider.height, collider.radius]);
 
-  const step = (delta: number, ctx: ActorFrameContext, motion: MotionOutput, puppet: boolean): void => {
+  const step = (delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void => {
     const rb = rigidBodyRef.current;
     if (!enabled || !rb) return;
 
-    if (puppet) {
+    if (serverDriven) {
       const t = ctx.sync?.target;
       if (!t || !t.valid) return;
       _next.x = t.x;
@@ -107,8 +98,7 @@ export const useKinematicMover = ({
       _input.vyOverride = motion.vy;
       stepCharacter(world, character, rb, shape, pos.x, pos.y, pos.z, _input, dt, result);
     }
-    // The body moves at the physics step; `pos` is still current — place the
-    // model (feet) and expose the center to whoever reads positionRef.
+    // The body moves at the physics step, so `pos` is still current.
     positionRef.current.set(pos.x, pos.y, pos.z);
     groupRef.current?.position.set(pos.x, pos.y - halfHeight, pos.z);
   };

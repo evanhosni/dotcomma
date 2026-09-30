@@ -3,11 +3,6 @@ import { buildProxyHullVertices } from "./proxyCollider";
 import { ringPoints } from "./rings";
 import { BuildingPlan } from "./types";
 
-/** Smoke tests for the coarse convex proxy collider that stands in for a
- *  building's real colliders at range. It only has to be deterministic,
- *  non-degenerate, and never NARROWER than the shell it seals — an
- *  under-covering hull would let NPCs walk into a distant wall, which is the
- *  whole thing it exists to stop. */
 describe("building proxy collider hull", () => {
   const SEEDS = ["0_0", "1240_-880", "-5_617", "99999_99999"];
 
@@ -29,9 +24,7 @@ describe("building proxy collider hull", () => {
     }
   });
 
-  /** A degenerate cloud makes Rapier return a null ColliderDesc, and with the
-   *  hull as the ONLY proxy shape that building would be passable — so
-   *  non-degeneracy is the invariant, not a nicety. */
+  /** A degenerate cloud makes Rapier return null, and that building would be passable. */
   it("produces a non-degenerate point cloud", () => {
     for (const seed of SEEDS) {
       const v = buildProxyHullVertices(generateBuildingPlan(seed, {}));
@@ -45,11 +38,7 @@ describe("building proxy collider hull", () => {
     }
   });
 
-  /** The point count is a PERFORMANCE property, not a detail: Rapier QuickHulls
-   *  this cloud on every proxy mount, and the churn as the player crosses the
-   *  city is continuous. Feeding it every ring corner of every level was ~83
-   *  points (worst 133); the silhouette prism is 2 × the 2D hull. If a change
-   *  here pushes the count back up, that cost returns. */
+  /** Rapier QuickHulls this cloud on every proxy mount; every ring corner was ~83 points (worst 133). */
   it("stays a minimal silhouette prism", () => {
     for (const seed of SEEDS) {
       const plan = generateBuildingPlan(seed, {});
@@ -75,23 +64,14 @@ describe("building proxy collider hull", () => {
       const shadow = hull2D(hull);
       const e = extents(hull);
 
-      // Sunk to the foundation and rising past every floor: nothing that can
-      // stand inside the building is above the hull. (Roof caps and pipes sit
-      // higher on purpose — they are decoration nothing walks on, and letting
-      // them widen the hull would block NPCs further out in the street.)
       expect(e.minY).toBeLessThanOrEqual(-plan.foundationDepth + 1e-3);
       expect(e.maxY).toBeGreaterThanOrEqual(plan.doorBandTop);
 
-      // The guarantee that matters: every corner of EVERY loft — roof caps
-      // included, not just the body lofts the hull is built from — that sits
-      // within the hull's height band also sits inside the hull's ground
-      // shadow. The shell's walls interpolate between these ring corners, so
-      // a hull containing all of them contains the shell; one narrower than
-      // the shell anywhere would let an NPC walk into a wall that isn't
-      // mounted yet.
+      // Walls interpolate between ring corners, so a hull containing every
+      // corner in its height band (roof lofts included) contains the shell.
       let checked = 0;
       for (const { x, y, z } of allRingCorners(plan)) {
-        if (y < e.minY || y > e.maxY) continue; // roof decoration above the hull
+        if (y < e.minY || y > e.maxY) continue;
         checked++;
         expect(insideHull2D(shadow, x, z, 1e-3)).toBe(true);
       }
@@ -100,12 +80,11 @@ describe("building proxy collider hull", () => {
   });
 });
 
-/** Every loft's ring corners — the shell's actual silhouette points. */
 const allRingCorners = (plan: BuildingPlan): Array<{ x: number; y: number; z: number }> => {
   const out: Array<{ x: number; y: number; z: number }> = [];
   for (const loft of plan.lofts) {
     for (const level of loft.levels) {
-      for (const [x, z] of ringPoints(loft.rect, loft.sides, level, loft.phase)) {
+      for (const [x, z] of ringPoints(loft.rect, loft.sides, level, loft.ringRotation)) {
         out.push({ x, y: level.y, z });
       }
     }
@@ -113,9 +92,7 @@ const allRingCorners = (plan: BuildingPlan): Array<{ x: number; y: number; z: nu
   return out;
 };
 
-// ── Test-only convex-hull helpers ──────────────────────────────────────────
-// The runtime never needs these (Rapier hulls the point cloud itself); they
-// exist here to state the covering property independently of Rapier.
+// Test-only: states the covering property independently of Rapier.
 const hull2D = (xyz: Float32Array): number[][] => {
   const pts: number[][] = [];
   for (let i = 0; i < xyz.length; i += 3) pts.push([xyz[i], xyz[i + 2]]);

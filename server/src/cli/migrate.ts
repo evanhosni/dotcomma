@@ -4,15 +4,9 @@ import { openDatabase, resolveDatabasePath } from "../data/db.js";
 import { getSchemaVersion, MIGRATIONS, pendingMigrations, runMigrations } from "../data/migrations.js";
 
 /**
- * `npm run db:migrate` — apply pending migrations to DATABASE_PATH.
- *
- *   --dry-run     show the current version and what WOULD run; change nothing
- *   --no-backup   skip the automatic <file>.<timestamp>.bak copy
- *
- * Run this BEFORE deploying code that expects the new schema (the server
- * refuses to boot against a stale schema). On Railway: `railway ssh` into the
- * service, then `npm run db:migrate` — the volume is only reachable from the
- * running container.
+ * `npm run db:migrate [--dry-run] [--no-backup]`. Run BEFORE deploying code that
+ * expects the new schema. On Railway: `railway ssh` first — the volume is only
+ * reachable from the running container.
  */
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");

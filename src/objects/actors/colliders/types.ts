@@ -7,28 +7,24 @@ export enum COLLIDER_TYPE {
   WHOLE_TRIMESH = "whole_trimesh",
 }
 
-// Worker input: all types send raw positions + a 16-element combined transform
-// matrix. Geometry travels as TYPED ARRAYS (copies of the GLTF buffers — the
-// originals stay with the renderer) so both directions can TRANSFER instead of
-// structured-cloning tens of thousands of boxed numbers.
+// Geometry travels as TYPED-ARRAY COPIES of the GLTF buffers so both directions
+// can transfer them — the originals stay with the renderer.
 export interface ColliderWorkerMessage {
   type: COLLIDER_TYPE;
   positions: Float32Array;
   index: Uint32Array | null;
-  matrix: number[]; // 16-element Matrix4 elements
+  matrixElements: number[]; // 16 Matrix4 elements
 }
 
-// WHOLE_TRIMESH sends an array of meshes
 export interface WholeTrimeshWorkerMessage {
   type: COLLIDER_TYPE.WHOLE_TRIMESH;
   meshes: Array<{
     positions: Float32Array;
     index: Uint32Array | null;
-    matrix: number[];
+    matrixElements: number[];
   }>;
 }
 
-// Worker output types
 export interface CapsuleColliderProps {
   radius: number;
   height: number;
@@ -46,8 +42,7 @@ export interface BoxColliderProps {
   rotation: THREE.Vector3Tuple;
 }
 
-/** Trimesh output — already in the exact array types Rapier's
- *  TrimeshCollider consumes, so the component passes them straight through. */
+/** Already the exact array types Rapier's TrimeshCollider consumes. */
 export interface TrimeshColliderProps {
   vertices: Float32Array;
   indices: Uint32Array;
