@@ -1,6 +1,6 @@
 import { EffectComposer, Pixelation } from "@react-three/postprocessing";
 import { useEffect } from "react";
-import { _quantization } from "../utils/quantization/quantization";
+import { _quantization } from "./quantization";
 import { _curvature } from "./curvature";
 import { setMainRenderFpsCap } from "./frameCap";
 
@@ -22,13 +22,14 @@ export const PostProcessing = ({
   curvatureStart,
   fpsCap,
 }: PostProcessingProps) => {
+  // The uniforms are module-level and survive a domain switch — reset each on unmount, or a
+  // quantized/curved/capped domain leaks its setting into the next one.
   useEffect(() => {
-    if (quantization) {
-      _quantization.setGridSize(quantization);
-    }
+    if (!quantization) return;
+    _quantization.setGridSize(quantization);
+    return () => _quantization.setGridSize(0);
   }, [quantization]);
 
-  // The uniforms are module-level and survive a domain switch — reset, or a curved domain bends the flat one after it.
   useEffect(() => {
     _curvature.setCurvature(curvature, curvatureStart);
     return () => _curvature.setCurvature(0);

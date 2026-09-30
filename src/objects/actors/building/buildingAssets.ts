@@ -30,15 +30,16 @@ export interface ProceduralBuildingAssets {
   /** Body triangles only (windows excluded), so door openings are walkable. */
   exteriorVertices: Float32Array;
   exteriorIndices: Uint32Array;
-  /** Walls, slabs, ramps and light panels as ONE vertex-colored geometry. */
-  interiorGeometry: THREE.BufferGeometry;
-  /** Wall/pillar cuboids; slabs are the trimesh below. */
+  /** Wall/pillar cuboids; slabs are the trimesh below. (The interior MESH is not here: it is built
+   *  only for buildings the player walks up to — ensureBuildingInterior.) */
   interiorColliders: WallBox[];
   rampColliders: RampCollider[];
   interiorSlabVertices: Float32Array;
   interiorSlabIndices: Uint32Array;
   /** Origin = hinge edge, leaf extends +x, so rotating the parent group swings it. */
   doorGeometry: THREE.BufferGeometry;
+  /** The same leaf as a box (hinge-relative center + size + color) for the far-door instances. */
+  doorLeaf: { center: Vec3; size: Vec3; color: number };
   doors: DoorPlacement[];
   /** Plain typed array — nothing to dispose (see proxyCollider.ts). */
   proxyHullVertices: Float32Array;
@@ -285,7 +286,11 @@ const mergeOrThrow = (geos: THREE.BufferGeometry[], label: string): THREE.Buffer
   return merged;
 };
 
-const buildInteriorGeometries = (plan: BuildingPlan) => {
+/** "colliders" = what the building needs from spawn on (the wall cuboids, the ramp and slab colliders,
+ *  the inner shell the exterior trimesh closes with); "render" = the merged interior mesh, built only
+ *  once the player comes close (Building.tsx). Both read the same plan, so the modes cannot disagree. */
+const buildInteriorParts = (plan: BuildingPlan, mode: "colliders" | "render") => {
+  const render = mode === "render";
   const { width, depth, ceilingHeight: ch, stories, storyHeight, wallBoxesPerStory, ramps, lightPanelsPerStory } = plan.interior;
   const { rect, sides, ringRotation: phase } = plan.lofts[0];
   const interiorHalfWidth = width / 2;
@@ -302,8 +307,8 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     const yOff = s * storyHeight;
     for (const b of wallBoxesPerStory[s]) {
       const wb: WallBox = { ...b, cy: b.cy + yOff };
-      parts.push(bakeVertexColor(box(wb).toNonIndexed(), colors.wall));
-      interiorColliders.push(wb);
+      if (render) parts.push(bakeVertexColor(box(wb).toNonIndexed(), colors.wall));
+      else interiorColliders.push(wb);
     }
   }
 
@@ -351,12 +356,14 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     innerSink.quad([o0[0], h, o0[1]], [o1[0], h, o1[1]], [p1[0], h, p1[1]], [p0[0], h, p0[1]]);
     innerSink.quad([p0[0], h, p0[1]], [p1[0], h, p1[1]], [o1[0], h, o1[1]], [o0[0], h, o0[1]]);
   }
-  const innerShellGeometry = new THREE.BufferGeometry();
-  innerShellGeometry.setAttribute("position", new THREE.Float32BufferAttribute(innerSink.positions, 3));
-  innerShellGeometry.setAttribute("color", new THREE.Float32BufferAttribute(innerSink.colors, 3));
-  innerShellGeometry.computeVertexNormals();
-  const innerShellVertices = new Float32Array(innerSink.positions);
-  parts.push(innerShellGeometry);
+  const innerShellVertices = render ? new Float32Array(0) : new Float32Array(innerSink.positions);
+  if (render) {
+    const innerShellGeometry = new THREE.BufferGeometry();
+    innerShellGeometry.setAttribute("position", new THREE.Float32BufferAttribute(innerSink.positions, 3));
+    innerShellGeometry.setAttribute("color", new THREE.Float32BufferAttribute(innerSink.colors, 3));
+    innerShellGeometry.computeVertexNormals();
+    parts.push(innerShellGeometry);
+  }
 
   // Slabs are slightly oversized so their edges tuck into the inner shell.
   const slabPts = ringPoints(rect, sides, { y: 0, cx: 0, cz: 0, halfWidth: interiorHalfWidth + 0.06, halfDepth: interiorHalfDepth + 0.06 }, phase);
@@ -391,20 +398,23 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
   };
 
   // Ground slab: lifted above grade so terrain can't z-fight through, reaching below grade so the sill shows no gap.
-  parts.push(bakeVertexColor(slabGeo(FLOOR_LIFT, SLAB_THICKNESS + FLOOR_LIFT + 0.4, []), colors.floor));
-  slabColliderGeos.push(slabGeo(FLOOR_LIFT, SLAB_THICKNESS, []));
+  if (render) parts.push(bakeVertexColor(slabGeo(FLOOR_LIFT, SLAB_THICKNESS + FLOOR_LIFT + 0.4, []), colors.floor));
+  else slabColliderGeos.push(slabGeo(FLOOR_LIFT, SLAB_THICKNESS, []));
 
   for (let s = 1; s < stories; s++) {
     const yTop = s * storyHeight;
     const holes = ramps.filter((r) => r.story === s - 1).map((r) => r.hole);
-    parts.push(bakeVertexColor(slabGeo(yTop, SLAB_THICKNESS / 2, holes), colors.floor));
-    parts.push(bakeVertexColor(slabGeo(yTop - SLAB_THICKNESS / 2, SLAB_THICKNESS / 2, holes), colors.ceiling));
-    slabColliderGeos.push(slabGeo(yTop, SLAB_THICKNESS, holes));
+    if (render) {
+      parts.push(bakeVertexColor(slabGeo(yTop, SLAB_THICKNESS / 2, holes), colors.floor));
+      parts.push(bakeVertexColor(slabGeo(yTop - SLAB_THICKNESS / 2, SLAB_THICKNESS / 2, holes), colors.ceiling));
+    } else {
+      slabColliderGeos.push(slabGeo(yTop, SLAB_THICKNESS, holes));
+    }
   }
 
   const topY = (stories - 1) * storyHeight + ch;
-  parts.push(bakeVertexColor(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []), colors.ceiling));
-  slabColliderGeos.push(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []));
+  if (render) parts.push(bakeVertexColor(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []), colors.ceiling));
+  else slabColliderGeos.push(slabGeo(topY + SLAB_THICKNESS, SLAB_THICKNESS, []));
 
   // The SAME box is the ramp visual and its collider. Built ascending +x, then yawed.
   for (const r of ramps) {
@@ -417,12 +427,15 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     const cx = r.axis === "x" ? along : lane;
     const cz = r.axis === "x" ? lane : along;
     const cy = r.story * storyHeight + storyHeight / 2 - 0.1; // sunk so the top meets both floors flush
-    parts.push(
-      bakeVertexColor(
-        new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).toNonIndexed().rotateZ(theta).rotateY(yaw).translate(cx, cy, cz),
-        colors.ramp,
-      ),
-    );
+    if (render) {
+      parts.push(
+        bakeVertexColor(
+          new THREE.BoxGeometry(hyp, RAMP_THICKNESS, RAMP_WIDTH).toNonIndexed().rotateZ(theta).rotateY(yaw).translate(cx, cy, cz),
+          colors.ramp,
+        ),
+      );
+      continue;
+    }
     // Euler XYZ applies Z then Y — the same order as the geometry above.
     rampColliders.push({
       position: [cx, cy, cz],
@@ -431,48 +444,53 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
     });
   }
 
-  // Baked wrap-lambert: the interior renders unlit, so this is what makes
-  // same-color planes read as separate. Light panels are added AFTER, full-bright.
-  const L = normalize([0.45, 0.8, 0.3]);
-  for (const g of parts) {
-    const pos = g.getAttribute("position").array as ArrayLike<number>;
-    const col = g.getAttribute("color").array as Float32Array;
-    for (let i = 0; i + 8 < pos.length; i += 9) {
-      const a: Vec3 = [pos[i], pos[i + 1], pos[i + 2]];
-      const b: Vec3 = [pos[i + 3], pos[i + 4], pos[i + 5]];
-      const c: Vec3 = [pos[i + 6], pos[i + 7], pos[i + 8]];
-      const n = normalize(cross(sub(b, a), sub(c, a)));
-      const f = 0.62 + 0.38 * ((n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) * 0.5 + 0.5);
-      for (let k = 0; k < 9; k++) col[i + k] *= f;
+  if (render) {
+    // Baked wrap-lambert: the interior renders unlit, so this is what makes
+    // same-color planes read as separate. Light panels are added AFTER, full-bright.
+    const L = normalize([0.45, 0.8, 0.3]);
+    for (const g of parts) {
+      const pos = g.getAttribute("position").array as ArrayLike<number>;
+      const col = g.getAttribute("color").array as Float32Array;
+      for (let i = 0; i + 8 < pos.length; i += 9) {
+        const a: Vec3 = [pos[i], pos[i + 1], pos[i + 2]];
+        const b: Vec3 = [pos[i + 3], pos[i + 4], pos[i + 5]];
+        const c: Vec3 = [pos[i + 6], pos[i + 7], pos[i + 8]];
+        const n = normalize(cross(sub(b, a), sub(c, a)));
+        const f = 0.62 + 0.38 * ((n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) * 0.5 + 0.5);
+        for (let k = 0; k < 9; k++) col[i + k] *= f;
+      }
+    }
+
+    for (let s = 0; s < stories; s++) {
+      for (const [x, z] of lightPanelsPerStory[s]) {
+        parts.push(
+          bakeVertexColor(
+            new THREE.PlaneGeometry(1.4, 2.8).toNonIndexed().rotateX(Math.PI / 2).translate(x, s * storyHeight + ch - 0.02, z),
+            LIGHT_PANEL_COLOR,
+          ),
+        );
+      }
     }
   }
 
-  for (let s = 0; s < stories; s++) {
-    for (const [x, z] of lightPanelsPerStory[s]) {
-      parts.push(
-        bakeVertexColor(
-          new THREE.PlaneGeometry(1.4, 2.8).toNonIndexed().rotateX(Math.PI / 2).translate(x, s * storyHeight + ch - 0.02, z),
-          LIGHT_PANEL_COLOR,
-        ),
-      );
-    }
-  }
-
-  const interiorGeometry = mergeOrThrow(parts, "interior");
+  const interiorGeometry = render ? mergeOrThrow(parts, "interior") : null;
   parts.forEach((g) => g.dispose());
 
-  // One exact trimesh: box colliders poked invisible ledges through polygon shells.
-  const slabMerged = mergeOrThrow(slabColliderGeos, "slab colliders");
-  slabColliderGeos.forEach((g) => g.dispose());
-  const interiorSlabVertices = ((slabMerged.getAttribute("position") as THREE.BufferAttribute).array as Float32Array).slice();
-  let interiorSlabIndices: Uint32Array;
-  if (slabMerged.index) {
-    interiorSlabIndices = Uint32Array.from(slabMerged.index.array as ArrayLike<number>);
-  } else {
-    interiorSlabIndices = new Uint32Array(interiorSlabVertices.length / 3);
-    for (let i = 0; i < interiorSlabIndices.length; i++) interiorSlabIndices[i] = i;
+  let interiorSlabVertices = new Float32Array(0);
+  let interiorSlabIndices = new Uint32Array(0);
+  if (!render) {
+    // One exact trimesh: box colliders poked invisible ledges through polygon shells.
+    const slabMerged = mergeOrThrow(slabColliderGeos, "slab colliders");
+    slabColliderGeos.forEach((g) => g.dispose());
+    interiorSlabVertices = ((slabMerged.getAttribute("position") as THREE.BufferAttribute).array as Float32Array).slice();
+    if (slabMerged.index) {
+      interiorSlabIndices = Uint32Array.from(slabMerged.index.array as ArrayLike<number>);
+    } else {
+      interiorSlabIndices = new Uint32Array(interiorSlabVertices.length / 3);
+      for (let i = 0; i < interiorSlabIndices.length; i++) interiorSlabIndices[i] = i;
+    }
+    slabMerged.dispose();
   }
-  slabMerged.dispose();
   slabGeoCache.forEach((g) => g.dispose());
 
   return {
@@ -485,10 +503,15 @@ const buildInteriorGeometries = (plan: BuildingPlan) => {
   };
 };
 
+const buildInteriorColliders = (plan: BuildingPlan) => buildInteriorParts(plan, "colliders");
+
 // REFCOUNTED: the city mounts 300-600 buildings, and a capped eviction that
 // ignored mounts (the old 64-entry FIFO) disposed geometry still on live meshes.
 interface BuildingCacheEntry {
   assets: ProceduralBuildingAssets;
+  /** Walls, slabs, ramps and light panels as ONE vertex-colored geometry; null until someone needs it.
+   *  Lives exactly while the building is mounted: disposed when the refcount drops to 0. */
+  interior: THREE.BufferGeometry | null;
   refCount: number;
   /** Monotonic tick of the last drop to refcount 0 — eviction order. */
   releasedAt: number;
@@ -502,10 +525,11 @@ let releaseTick = 0;
 export const peekProceduralBuildingAssets = (seed: string, optionsKey: string): ProceduralBuildingAssets | null =>
   cache.get(`${seed}|${optionsKey}`)?.assets ?? null;
 
-const disposeAssets = (a: ProceduralBuildingAssets): void => {
-  a.exteriorGeometry.dispose();
-  a.interiorGeometry.dispose();
-  a.doorGeometry.dispose();
+const disposeEntry = (e: BuildingCacheEntry): void => {
+  e.assets.exteriorGeometry.dispose();
+  e.assets.doorGeometry.dispose();
+  e.interior?.dispose();
+  e.interior = null;
 };
 
 const trimIdleEntries = (): void => {
@@ -521,7 +545,7 @@ const trimIdleEntries = (): void => {
       }
     }
     if (oldestKey === null) break;
-    disposeAssets(cache.get(oldestKey)!.assets);
+    disposeEntry(cache.get(oldestKey)!);
     cache.delete(oldestKey);
     idle--;
   }
@@ -536,7 +560,7 @@ export const retainProceduralBuildingAssets = (seed: string, optionsKey: string,
   if (entry) {
     entry.refCount++;
   } else {
-    cache.set(key, { assets, refCount: 1, releasedAt: releaseTick++ });
+    cache.set(key, { assets, interior: null, refCount: 1, releasedAt: releaseTick++ });
   }
 };
 
@@ -545,12 +569,25 @@ export const releaseProceduralBuildingAssets = (seed: string, optionsKey: string
   if (!entry || entry.refCount === 0) return;
   entry.refCount--;
   if (entry.refCount === 0) {
+    entry.interior?.dispose();
+    entry.interior = null;
     entry.releasedAt = releaseTick++;
     trimIdleEntries();
   }
 };
 
-/** Split into phases (plan → exterior → interior → assembly) so the build
+export const peekBuildingInterior = (seed: string, optionsKey: string): THREE.BufferGeometry | null =>
+  cache.get(`${seed}|${optionsKey}`)?.interior ?? null;
+
+/** Builds the interior mesh of a RETAINED building (null if it is not). */
+export const ensureBuildingInterior = (seed: string, optionsKey: string): THREE.BufferGeometry | null => {
+  const entry = cache.get(`${seed}|${optionsKey}`);
+  if (!entry || entry.refCount === 0) return null;
+  if (!entry.interior) entry.interior = buildInteriorParts(entry.assets.plan, "render").interiorGeometry;
+  return entry.interior;
+};
+
+/** Split into phases (plan → exterior → interior colliders → assembly) so the build
  *  queue can yield between them; finish() dedupes against the cache, so a
  *  same-seed build that lost a race adopts the winner. */
 export const beginProceduralBuildingBuild = (
@@ -560,7 +597,7 @@ export const beginProceduralBuildingBuild = (
 ): { steps: Array<() => void>; finish: () => ProceduralBuildingAssets } => {
   let plan: ReturnType<typeof generateBuildingPlan>;
   let ext: ReturnType<typeof buildExteriorGeometry>;
-  let interior: ReturnType<typeof buildInteriorGeometries>;
+  let interior: ReturnType<typeof buildInteriorColliders>;
   return {
     steps: [
       () => {
@@ -570,7 +607,7 @@ export const beginProceduralBuildingBuild = (
         ext = buildExteriorGeometry(plan);
       },
       () => {
-        interior = buildInteriorGeometries(plan);
+        interior = buildInteriorColliders(plan);
       },
     ],
     finish: () => {
@@ -586,7 +623,7 @@ const assembleBuildingAssets = (
   key: string,
   plan: ReturnType<typeof generateBuildingPlan>,
   extBuild: ReturnType<typeof buildExteriorGeometry>,
-  interiorBuild: ReturnType<typeof buildInteriorGeometries>,
+  interiorBuild: ReturnType<typeof buildInteriorColliders>,
 ): ProceduralBuildingAssets => {
   const { geometry: exteriorGeometry, bodyPositionFloatCount } = extBuild;
 
@@ -600,8 +637,9 @@ const assembleBuildingAssets = (
 
   // The leaf overlaps the jamb and header so a closed door never shows a gap.
   const leafW = plan.doors[0].width + 0.16;
+  const doorLeaf = { center: [leafW / 2 - 0.08, 0.05, 0] as Vec3, size: [leafW, plan.doors[0].height + 0.2, 0.1] as Vec3, color: plan.doorColor };
   const doorGeometry = bakeVertexColor(
-    new THREE.BoxGeometry(leafW, plan.doors[0].height + 0.2, 0.1).translate(leafW / 2 - 0.08, 0.05, 0),
+    new THREE.BoxGeometry(...doorLeaf.size).translate(...doorLeaf.center),
     plan.doorColor,
   );
 
@@ -610,12 +648,12 @@ const assembleBuildingAssets = (
     exteriorGeometry,
     exteriorVertices,
     exteriorIndices,
-    interiorGeometry: interiorBuild.interiorGeometry,
     interiorColliders: interiorBuild.interiorColliders,
     rampColliders: interiorBuild.rampColliders,
     interiorSlabVertices: interiorBuild.interiorSlabVertices,
     interiorSlabIndices: interiorBuild.interiorSlabIndices,
     doorGeometry,
+    doorLeaf,
     doors: plan.doors.map((d) => ({
       position: d.position,
       yaw: d.yaw,
@@ -626,7 +664,7 @@ const assembleBuildingAssets = (
   };
 
   // Refcount 0 until the mounting <Building>'s retain effect pins it.
-  cache.set(key, { assets, refCount: 0, releasedAt: releaseTick++ });
+  cache.set(key, { assets, interior: null, refCount: 0, releasedAt: releaseTick++ });
   trimIdleEntries();
   return assets;
 };

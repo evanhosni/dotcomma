@@ -1,6 +1,7 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import type { DomainId } from "../../../../src/net/protocol";
 import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
+import { GRAVITY } from "../../../../src/physics/characterMovement";
 import { initCompute, type DomainConfig } from "../../../../src/utils/workers/vertexCompute";
 import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import { TICK_MS } from "../tick.js";
@@ -17,10 +18,8 @@ import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_RO
  * (src/world/domains/configs.ts); walkers in other domains run their machine but stay put.
  */
 
-export const PHYSICS_DOMAIN: DomainId = "glitch-city";
+export const PHYSICS_DOMAIN: DomainId = "overworld";
 export const PHYSICS_DT = TICK_MS / 1000;
-/** Matches Player.tsx GRAVITY; kinematic bodies ignore it — here for any future dynamic body. */
-export const GRAVITY = -100;
 export const DEFAULT_WORK_BUDGET_MS = 8;
 
 let rapierReady: Promise<void> | null = null;
@@ -59,11 +58,10 @@ export class PhysicsWorld {
       },
       (body) => this.removeBody(body),
     );
-    const freewayWidth = config.cityConfig.freewayWidth;
     this.dressing = new ChunkStore(
       this.jobs,
       "dressing",
-      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz, freewayWidth)),
+      (gx, gz) => () => createObstacleBodies(this, enumerateObstacles(gx, gz)),
       (bodies) => bodies.forEach((b) => this.removeBody(b)),
     );
   }
@@ -73,6 +71,7 @@ export class PhysicsWorld {
     if (!config) throw new Error(`no shared domain config for "${domain}" (src/world/domains/configs.ts)`);
     await initRapier();
     initCompute(config);
+    // Kinematic bodies ignore world gravity (the shared resolver applies GRAVITY itself); set for any future dynamic body.
     const world = new RAPIER.World({ x: 0, y: GRAVITY, z: 0 });
     world.timestep = PHYSICS_DT;
     return new PhysicsWorld(world, config);

@@ -2,7 +2,7 @@ import React from "react";
 import * as THREE from "three";
 import { instancedFromPoints, useDressingAssets, useDressingChunks, useDressingDefault, yawFromDir } from "../Dressing";
 import { DressingAttributes } from "../../types";
-import { getRoadMarkers } from "../dressingWorker";
+import { enumerateDressing } from "../dressingWorker";
 
 const MARKER_HEIGHT = 0.16;
 
@@ -36,14 +36,7 @@ export const RoadMarkers = ({
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      const points = await getRoadMarkers(
-        bounds.minX,
-        bounds.minZ,
-        bounds.maxX,
-        bounds.maxZ,
-        streetSpacing,
-        freewaySpacing
-      );
+      const points = await enumerateDressing("roadMarkers", bounds, { streetSpacing, freewaySpacing });
       if (points.length === 0) return null;
       return instancedFromPoints(assets.geometry, assets.material, points, (p) => ({
         x: p.x,

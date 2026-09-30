@@ -1,4 +1,4 @@
-import { useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import {
   getLampPostGeometry,
@@ -9,17 +9,11 @@ import {
   lampYaw,
   patchLampMask,
 } from "./lampGeometry";
-import { LAMP_COLLIDER_PARTS, LAMP_PLACEMENT } from "./lampSpec";
+import { STREET_LAMPS_SPEC } from "./lampSpec";
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
+import { LAMP_COLOR_WARM, LAMP_EMISSIVE_STRENGTH, type LampHead, registerLampHeads } from "../../../lighting/lampGlow";
 import {
-  activeLampHeads,
-  driveLampLighting,
-  LAMP_COLOR_WARM,
-  LAMP_EMISSIVE_STRENGTH,
-  markLampGridDirty,
-  unregisterLampHeads,
-} from "../../../lighting/lampGlow";
-import {
+  type ChunkWithPoints,
   DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
@@ -27,16 +21,15 @@ import {
   useDressingChunks,
   useDressingColliders,
   useDressingDefault,
+  useServerPlacementCheck,
 } from "../Dressing";
 import { DressingAttributes } from "../../types";
-import { getDensityPoints } from "../dressingWorker";
+import { enumerateDressing } from "../dressingWorker";
 
-const COLLIDER_SCAN_INTERVAL_FRAMES = 10;
+const DEFAULTS = STREET_LAMPS_SPEC.placement;
 
-interface LampChunk {
-  group: THREE.Group;
-  headKeys: string[];
-  points: { x: number; y: number; z: number; yaw: number }[];
+interface LampChunk extends ChunkWithPoints {
+  releaseHeads: () => void;
 }
 
 export interface StreetLampsProps extends DressingAttributes {}
@@ -46,16 +39,19 @@ export interface StreetLampsProps extends DressingAttributes {}
 export const StreetLamps = ({
   renderDistance,
   colliderDistance,
-  density = LAMP_PLACEMENT.density,
-  footprint = LAMP_PLACEMENT.footprint,
-  roadDistanceRange = LAMP_PLACEMENT.roadDistanceRange,
-  biomeIds = LAMP_PLACEMENT.biomeIds,
+  density = DEFAULTS.density,
+  footprint = DEFAULTS.footprint,
+  roadDistanceRange = DEFAULTS.roadDistanceRange,
+  biomeIds = DEFAULTS.biomeIds,
+  heightRange,
+  slopeRange,
 }: StreetLampsProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 440);
   const resolvedColliderDistance = useDressingDefault("colliderDistance", colliderDistance, LAMP_COLLIDER_DISTANCE);
-  const { camera } = useThree();
+  const placement = { ...DEFAULTS, density, footprint, roadDistanceRange, biomeIds, heightRange, slopeRange };
+  useServerPlacementCheck(STREET_LAMPS_SPEC, placement);
 
-  const registry = useChunkRegistry<LampChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
+  const registry = useChunkRegistry<LampChunk>((chunk) => chunk.releaseHeads());
 
   const assets = useDressingAssets(() => {
     const material = LAMP_POST_MATERIAL.clone();
@@ -66,22 +62,13 @@ export const StreetLamps = ({
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      const points = await getDensityPoints(bounds.minX, bounds.minZ, bounds.maxX, bounds.maxZ, {
-        seedTag: LAMP_PLACEMENT.seedTag,
-        density,
-        footprint,
-        biomeIds,
-        roadDistanceRange,
-      });
+      const points = await enumerateDressing(STREET_LAMPS_SPEC.enumerator, bounds, placement);
       if (points.length === 0) return null;
 
-      const headKeys: string[] = [];
-      const colliderPoints: { x: number; y: number; z: number; yaw: number }[] = [];
+      const heads: LampHead[] = [];
       const mesh = instancedFromPoints(getLampPostGeometry(), assets.material, points, (p) => {
         const yaw = lampYaw(p.x, p.z);
-        colliderPoints.push({ x: p.x, y: p.y, z: p.z, yaw });
-        const key = `sli_${p.x}_${p.z}`;
-        activeLampHeads.set(key, {
+        heads.push({
           position: new THREE.Vector3(
             p.x + Math.cos(yaw) * LAMP_HEAD_OFFSET_X,
             p.y + LAMP_POLE_HEIGHT - 0.6,
@@ -89,25 +76,20 @@ export const StreetLamps = ({
           ),
           color: LAMP_COLOR_WARM,
         });
-        headKeys.push(key);
         return { x: p.x, y: p.y, z: p.z, yaw };
       });
 
       const group = new THREE.Group();
       group.add(mesh);
-      registry.add({ group, headKeys, points: colliderPoints });
-      markLampGridDirty();
+      const releaseHeads = registerLampHeads("street-lamps", heads);
+      registry.add({ group, releaseHeads, points: points.flatMap(STREET_LAMPS_SPEC.bodiesOf) });
       return group;
     },
   });
 
-  const colliders = useDressingColliders(registry, {
-    colliderDistance: resolvedColliderDistance,
-    scanIntervalFrames: COLLIDER_SCAN_INTERVAL_FRAMES,
-  });
+  const colliders = useDressingColliders(registry, { colliderDistance: resolvedColliderDistance });
 
-  useFrame((state) => {
-    driveLampLighting(camera, state.clock.elapsedTime);
+  useFrame(() => {
     const emissive = getWindowLightsProgress() * LAMP_EMISSIVE_STRENGTH;
     if (assets.material.emissiveIntensity !== emissive) assets.material.emissiveIntensity = emissive;
   });
@@ -116,7 +98,7 @@ export const StreetLamps = ({
     <>
       <group ref={groupRef} />
       {/* Real colliders only for the lamps near the player. */}
-      <DressingPartColliders colliders={colliders} parts={LAMP_COLLIDER_PARTS} />
+      <DressingPartColliders colliders={colliders} parts={STREET_LAMPS_SPEC.colliderParts} />
     </>
   );
 };

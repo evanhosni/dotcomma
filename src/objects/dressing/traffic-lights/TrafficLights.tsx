@@ -1,19 +1,18 @@
 import { DressingAttributes } from "../../types";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import {
-  activeLampHeads,
-  driveLampLighting,
   LAMP_COLOR_GREEN,
   LAMP_COLOR_RED,
   LAMP_COLOR_YELLOW,
-  LampHead,
-  markLampGridDirty,
-  unregisterLampHeads,
+  type LampHead,
+  registerLampHeads,
+  setLampHeadColor,
 } from "../../../lighting/lampGlow";
 import {
+  type ChunkWithPoints,
   DressingPartColliders,
   instancedFromPoints,
   useChunkRegistry,
@@ -22,13 +21,14 @@ import {
   useDressingColliders,
   DRESSING_COLLIDER_DISTANCE,
   useDressingDefault,
+  useServerPlacementCheck,
   yawFromDir,
 } from "../Dressing";
-import { getTrafficLightPoints } from "../dressingWorker";
+import { enumerateDressing } from "../dressingWorker";
 
-import { ARM_LENGTH, POLE_HEIGHT, SIGNAL_COLLIDER_PARTS, SIGNAL_DEFAULT_CHANCE, SIGNAL_PARTS } from "./signalSpec";
+import { SIGNAL_ARM_LENGTH, SIGNAL_PARTS, SIGNAL_POLE_HEIGHT, TRAFFIC_LIGHTS_SPEC } from "./signalSpec";
 
-const LAMP_OFFSET = ARM_LENGTH + 0.26; // lamps proud of the head's front face
+const LAMP_OFFSET = SIGNAL_ARM_LENGTH + 0.26; // lamps proud of the head's front face
 
 // Lamp instances 3i / 3i+1 / 3i+2 = red / yellow / green, top to bottom. state: 0 green, 1 yellow, 2 red.
 const LIT_COLORS = [new THREE.Color("#ff2418"), new THREE.Color("#ffb400"), new THREE.Color("#19ff5a")];
@@ -43,16 +43,14 @@ const nextState = (state: number): number => (state + 1 + Math.floor(Math.random
 
 interface LightAnim {
   state: number;
-  secondsUntilSwitch: number; // seconds until the next switch
-  head: LampHead; // mutate .color on switch
+  secondsUntilSwitch: number;
+  head: LampHead;
 }
 
-interface SignalChunk {
-  group: THREE.Group;
+interface SignalChunk extends ChunkWithPoints {
   lamps: THREE.InstancedMesh;
   lights: LightAnim[];
-  headKeys: string[];
-  points: { x: number; y: number; z: number; yaw: number }[];
+  releaseHeads: () => void;
   secondsSincePass: number;
   /** min(lights.secondsUntilSwitch) at the last pass — the whole chunk is skipped until secondsSincePass reaches it. */
   nextSwitchIn: number;
@@ -63,15 +61,20 @@ export interface TrafficLightsProps extends DressingAttributes {
   chance?: number;
 }
 
-export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNAL_DEFAULT_CHANCE }: TrafficLightsProps) => {
+export const TrafficLights = ({
+  renderDistance,
+  colliderDistance,
+  chance = TRAFFIC_LIGHTS_SPEC.placement.chance,
+}: TrafficLightsProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
-  const { camera } = useThree();
-  const registry = useChunkRegistry<SignalChunk>((chunk) => unregisterLampHeads(chunk.headKeys));
+  const placement = { chance };
+  useServerPlacementCheck(TRAFFIC_LIGHTS_SPEC, placement);
+  const registry = useChunkRegistry<SignalChunk>((chunk) => chunk.releaseHeads());
 
   const assets = useDressingAssets(() => ({
     bodyGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.5, 0.4, 0.5).translate(0, 0.2, 0), // base
-      new THREE.BoxGeometry(0.2, POLE_HEIGHT, 0.2).translate(0, POLE_HEIGHT / 2, 0), // pole
+      new THREE.BoxGeometry(0.2, SIGNAL_POLE_HEIGHT, 0.2).translate(0, SIGNAL_POLE_HEIGHT / 2, 0), // pole
       new THREE.BoxGeometry(SIGNAL_PARTS.arm.w, SIGNAL_PARTS.arm.h, SIGNAL_PARTS.arm.d).translate(
         SIGNAL_PARTS.arm.x,
         SIGNAL_PARTS.arm.y,
@@ -92,23 +95,17 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      const points = await getTrafficLightPoints(
-        bounds.minX,
-        bounds.minZ,
-        bounds.maxX,
-        bounds.maxZ,
-        chance
-      );
+      const points = await enumerateDressing(TRAFFIC_LIGHTS_SPEC.enumerator, bounds, placement);
       if (points.length === 0) return null;
 
-      const bodies = instancedFromPoints(assets.bodyGeometry, assets.bodyMaterial, points, (p) => ({
+      const bodyMesh = instancedFromPoints(assets.bodyGeometry, assets.bodyMaterial, points, (p) => ({
         x: p.x,
         y: p.y,
         z: p.z,
         yaw: yawFromDir(p.dirX, p.dirZ),
       }));
 
-      const lampY = (l: number) => POLE_HEIGHT - 0.6 - l * 0.65;
+      const lampY = (l: number) => SIGNAL_POLE_HEIGHT - 0.6 - l * 0.65;
       const lampPoints = points.flatMap((p) => [0, 1, 2].map((l) => ({ p, l })));
       const lamps = instancedFromPoints(assets.lampGeometry, assets.lampMaterial, lampPoints, ({ p, l }) => ({
         x: p.x + p.dirX * LAMP_OFFSET,
@@ -118,7 +115,6 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
       }));
 
       // Seeded phase only desynchronizes the initial states; runtime randomness takes over.
-      const headKeys: string[] = [];
       const lights: LightAnim[] = points.map((p, i) => {
         const state = Math.floor(p.phase * 3) % 3;
         const lit = STATE_TO_LAMP[state];
@@ -126,30 +122,26 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
 
         const head: LampHead = {
           position: new THREE.Vector3(
-            p.x + p.dirX * ARM_LENGTH,
-            p.y + POLE_HEIGHT - 1.25,
-            p.z + p.dirZ * ARM_LENGTH
+            p.x + p.dirX * SIGNAL_ARM_LENGTH,
+            p.y + SIGNAL_POLE_HEIGHT - 1.25,
+            p.z + p.dirZ * SIGNAL_ARM_LENGTH
           ),
           color: STATE_TO_GLOW[state],
         };
-        const key = `tl_${p.x}_${p.z}`;
-        activeLampHeads.set(key, head);
-        headKeys.push(key);
-
         return { state, secondsUntilSwitch: (p.phase * 7.13) % randomHoldSeconds(), head };
       });
       if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
-      markLampGridDirty();
+      const releaseHeads = registerLampHeads("traffic-lights", lights.map((l) => l.head));
 
       const group = new THREE.Group();
-      group.add(bodies);
+      group.add(bodyMesh);
       group.add(lamps);
       registry.add({
         group,
         lamps,
         lights,
-        headKeys,
-        points: points.map((p) => ({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ) })),
+        releaseHeads,
+        points: points.flatMap(TRAFFIC_LIGHTS_SPEC.bodiesOf),
         secondsSincePass: 0,
         nextSwitchIn: lights.reduce((min, l) => Math.min(min, l.secondsUntilSwitch), Infinity),
       });
@@ -161,9 +153,7 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
     colliderDistance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
   });
 
-  useFrame((state, delta) => {
-    driveLampLighting(camera, state.clock.elapsedTime);
-
+  useFrame((_, delta) => {
     registry.forEachAlive((chunk) => {
       chunk.secondsSincePass += delta;
       if (chunk.secondsSincePass < chunk.nextSwitchIn) return;
@@ -179,8 +169,7 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
         if (light.secondsUntilSwitch <= 0) {
           light.state = nextState(light.state);
           light.secondsUntilSwitch = randomHoldSeconds();
-          light.head.color = STATE_TO_GLOW[light.state];
-          markLampGridDirty();
+          setLampHeadColor(light.head, STATE_TO_GLOW[light.state]);
           const lit = STATE_TO_LAMP[light.state];
           for (let l = 0; l < 3; l++) {
             chunk.lamps.setColorAt(i * 3 + l, l === lit ? LIT_COLORS[l] : DIM_COLORS[l]);
@@ -232,7 +221,7 @@ export const TrafficLights = ({ renderDistance, colliderDistance, chance = SIGNA
     <>
       <group ref={groupRef} />
       {/* Real colliders only for the signals near the player. */}
-      <DressingPartColliders colliders={colliders} parts={SIGNAL_COLLIDER_PARTS} />
+      <DressingPartColliders colliders={colliders} parts={TRAFFIC_LIGHTS_SPEC.colliderParts} />
     </>
   );
 };

@@ -1,4 +1,4 @@
-import type { DressingColliderPart } from "../types";
+import type { DressingColliderPart, DressingColliderSpec } from "../types";
 import { CITY_BIOME_ID } from "../../../world/constants";
 
 // Three-free: the art (lampGeometry.ts), the client colliders (StreetLamps.tsx) and the
@@ -24,7 +24,6 @@ export const LAMP_COLLIDER_PARTS: DressingColliderPart[] = [
   LAMP_PARTS.head,
 ];
 
-/** The server mirrors the city biome's mount, which uses these defaults. */
 export const LAMP_PLACEMENT = {
   seedTag: "street-lamp-i",
   // High because the sidewalk band is thin; footprint spacing is the real limiter.
@@ -33,4 +32,12 @@ export const LAMP_PLACEMENT = {
   // The sidewalk band of the road field (curb 7–8, sidewalk 8–12).
   roadDistanceRange: [8.2, 11.8] as [number, number],
   biomeIds: [CITY_BIOME_ID],
+};
+
+export const STREET_LAMPS_SPEC: DressingColliderSpec<"densityPoints"> = {
+  id: "StreetLamps",
+  enumerator: "densityPoints",
+  placement: LAMP_PLACEMENT,
+  colliderParts: LAMP_COLLIDER_PARTS,
+  bodiesOf: (p) => [{ x: p.x, y: p.y, z: p.z, yaw: lampYaw(p.x, p.z) }],
 };

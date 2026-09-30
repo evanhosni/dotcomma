@@ -1,6 +1,3 @@
-// Biome ids live here (not in biome folders) because workers branch on them and
-// cannot import React components. Each biome.tsx re-exports its own.
+// Biome ids the shared pipeline branches on (workers can't import biome folders). Every other id
+// lives only in its spec.ts; ids are asserted unique when a domain config is assembled (domainConfig.ts).
 export const CITY_BIOME_ID = 1;
-export const DUST_BIOME_ID = 2;
-export const GRASS_BIOME_ID = 3;
-export const WIRE_BIOME_ID = 4;

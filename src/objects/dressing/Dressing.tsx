@@ -1,8 +1,15 @@
 import { useFrame } from "@react-three/fiber";
-import { CuboidCollider, RigidBody } from "@react-three/rapier";
+import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
 import React, { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { DRESSING_CHUNK_SIZE, type DressingColliderPart } from "./types";
+import {
+  DRESSING_CHUNK_SIZE,
+  type DressingBounds,
+  type DressingColliderBody,
+  type DressingColliderMesh,
+  type DressingColliderPart,
+  type DressingColliderSpec,
+} from "./types";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
@@ -22,7 +29,8 @@ const UPDATE_INTERVAL_FRAMES = 31;
 
 // One budgeted queue across ALL dressing features so a ring of fresh chunks
 // can't stack mesh assembly into one frame.
-const dressingQueue = new TaskQueue();
+// Weight 1.5: at equal distance a building or the ground comes first; beyond 400u a chunk is background.
+const dressingQueue = new TaskQueue({ weight: 1.5 });
 
 export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
 
@@ -40,7 +48,7 @@ export const useDressingDefault = <K extends keyof DressingDefaults>(
 };
 
 /** The ONE place dressing materials are patched with world-wide effects. Quantization is
- *  deliberately absent: its instanced branch works in absolute space (utils/quantization). */
+ *  deliberately absent: its instanced branch works in absolute space (vfx/quantization.ts). */
 export const prepareDressingMaterial = (material: THREE.Material): void => {
   _curvature.patchMaterial(material);
 };
@@ -205,22 +213,43 @@ export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry
   return registryRef.current;
 };
 
-/** `yaw` must match what instancedFromPoints drew — a crossarm's collider is not square in plan. */
+/** A mounted collider body: a chunk's DressingColliderBody (types.ts) keyed for React. */
 export interface DressingColliderPoint {
   key: string;
   x: number;
   y: number;
   z: number;
   yaw: number;
+  pitch: number;
+  parts?: DressingColliderPart[];
+  mesh?: DressingColliderMesh;
 }
 
+/** `points` are the chunk's collider bodies — its spec's `bodiesOf`, so the server builds the same. */
 export interface ChunkWithPoints extends ChunkRegistryEntry {
-  points: { x: number; y: number; z: number; yaw?: number }[];
+  points: DressingColliderBody[];
 }
 
 /** Thin street furniture only needs to be solid where the player can reach it. */
 export const DRESSING_COLLIDER_DISTANCE = 90;
 
+/** Dev: the server places a collider feature with its spec's `placement` only (it never sees a
+ *  mount), so a mount prop overriding it draws scenery where the server has no colliders. */
+export const useServerPlacementCheck = <S extends DressingColliderSpec<any>>(spec: S, placement: S["placement"]): void => {
+  const placementKey = JSON.stringify(placement);
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const defaults = spec.placement as Record<string, unknown>;
+    const mounted = JSON.parse(placementKey) as Record<string, unknown>;
+    const keys = new Set([...Object.keys(defaults), ...Object.keys(mounted)]);
+    const differing = Array.from(keys).filter((k) => JSON.stringify(mounted[k]) !== JSON.stringify(defaults[k]));
+    if (differing.length === 0) return;
+    console.warn(
+      `<${spec.id}> overrides ${differing.join(", ")} at the mount — the server's colliders still use the spec's ` +
+        `placement. Change the default in the feature's *Spec.ts instead.`,
+    );
+  }, [spec, placementKey]);
+};
 
 export const DressingPartColliders = ({
   colliders,
@@ -231,10 +260,12 @@ export const DressingPartColliders = ({
 }) => (
   <>
     {colliders.map((c) => (
-      <RigidBody key={c.key} type="fixed" colliders={false} position={[c.x, c.y, c.z]} rotation={[0, c.yaw, 0]}>
-        {parts.map((p, i) => (
-          <CuboidCollider key={i} args={[p.w / 2, p.h / 2, p.d / 2]} position={[p.x, p.y, 0]} />
+      // Euler XYZ: the pitch about local Z is applied first, then the yaw — the server composes the same.
+      <RigidBody key={c.key} type="fixed" colliders={false} position={[c.x, c.y, c.z]} rotation={[0, c.yaw, c.pitch]}>
+        {(c.parts ?? parts).map((p, i) => (
+          <CuboidCollider key={i} args={[p.w / 2, p.h / 2, p.d / 2]} position={[p.x, p.y, p.z ?? 0]} rotation={[0, p.yaw ?? 0, 0]} />
         ))}
+        {c.mesh && <TrimeshCollider args={[c.mesh.vertices, c.mesh.indices]} />}
       </RigidBody>
     ))}
   </>
@@ -290,7 +321,7 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
         const dx = p.x - camera.position.x;
         const dz = p.z - camera.position.z;
         if (dx * dx + dz * dz < maxDistSq) {
-          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z, yaw: p.yaw ?? 0 });
+          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch ?? 0, parts: p.parts, mesh: p.mesh });
           hash += p.x * 31 + p.z * 17 + p.y;
         }
       }
@@ -307,16 +338,12 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
   return colliders;
 };
 
-export interface DressingChunkBounds {
-  minX: number;
-  minZ: number;
-  maxX: number;
-  maxZ: number;
-}
+export type { DressingBounds } from "./types";
 
 interface DressingChunk {
   object: THREE.Object3D | null;
   dropped: boolean;
+  taskId: string | null;
   centerX: number;
   centerZ: number;
 }
@@ -325,6 +352,8 @@ interface DressingChunk {
 const disposeChunkObject = (object: THREE.Object3D): void => {
   object.traverse((o) => {
     if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
+    // A per-chunk merged mesh (the bridge ribbons) marks itself the owner of its geometry.
+    else if ((o as THREE.Mesh).isMesh && o.userData.ownsGeometry) (o as THREE.Mesh).geometry.dispose();
   });
 };
 
@@ -335,7 +364,7 @@ export const useDressingChunks = ({
 }: {
   renderDistance: number;
   /** null = empty chunk. Must be deterministic per bounds. */
-  build: (bounds: DressingChunkBounds) => Promise<THREE.Object3D | null>;
+  build: (bounds: DressingBounds) => Promise<THREE.Object3D | null>;
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const chunks = useRef(new Map<string, DressingChunk>()).current;
@@ -349,6 +378,7 @@ export const useDressingChunks = ({
     return () => {
       chunks.forEach((chunk) => {
         chunk.dropped = true;
+        if (chunk.taskId !== null) dressingQueue.removeTask(chunk.taskId);
         if (chunk.object) {
           if (group) group.remove(chunk.object);
           disposeChunkObject(chunk.object);
@@ -386,10 +416,11 @@ export const useDressingChunks = ({
     }
     candidates.sort((a, b) => a.distSq - b.distSq);
     for (const { cx, cz, centerX, centerZ } of candidates) {
-      const entry: DressingChunk = { object: null, dropped: false, centerX, centerZ };
+      const entry: DressingChunk = { object: null, dropped: false, taskId: null, centerX, centerZ };
       chunks.set(`${cx}_${cz}`, entry);
 
-      dressingQueue.addTask(async () => {
+      entry.taskId = dressingQueue.addTask(async () => {
+        entry.taskId = null;
         if (entry.dropped) return;
         const object = await buildRef.current({
           minX: cx * DRESSING_CHUNK_SIZE,
@@ -404,7 +435,7 @@ export const useDressingChunks = ({
         }
         groupRef.current.add(object);
         entry.object = object;
-      });
+      }, { at: { x: centerX, z: centerZ } });
     }
 
     // 1.3× hysteresis so chunk borders don't thrash.
@@ -414,6 +445,7 @@ export const useDressingChunks = ({
       const ddz = camZ - entry.centerZ;
       if (ddx * ddx + ddz * ddz > dropDistSq) {
         entry.dropped = true;
+        if (entry.taskId !== null) dressingQueue.removeTask(entry.taskId);
         if (entry.object) {
           group.remove(entry.object);
           disposeChunkObject(entry.object);

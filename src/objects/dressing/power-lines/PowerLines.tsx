@@ -2,8 +2,8 @@ import { DressingAttributes } from "../../types";
 import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import { getActiveDomainConfig, whenDomainReady } from "../../../world/domains/utils";
 import {
+  type ChunkWithPoints,
   DressingPartColliders,
   finalizeInstancedChunk,
   instancedFromPoints,
@@ -14,24 +14,30 @@ import {
   useDressingColliders,
   DRESSING_COLLIDER_DISTANCE,
   useDressingDefault,
+  useServerPlacementCheck,
   yawFromDir,
 } from "../Dressing";
-import { CityFreewaySidePoint, getFreewaySidePoints } from "../dressingWorker";
+import { enumerateDressing } from "../dressingWorker";
+import type { CityFreewaySidePoint } from "../../../utils/workers/vertexCompute";
 
-import { ARM_DEPTH, ARM_HALF, ARM_THICKNESS, ARM_Y, POLE_COLLIDER_PARTS, POLE_HEIGHT, POLE_PLACEMENT } from "./poleSpec";
+import {
+  CROSSARM_DEPTH,
+  CROSSARM_HALF_LENGTH,
+  CROSSARM_THICKNESS,
+  CROSSARM_Y,
+  POWER_LINES_SPEC,
+  UTILITY_POLE_HEIGHT,
+} from "./poleSpec";
+
+const DEFAULTS = POWER_LINES_SPEC.placement;
 
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
 // Wire attach points as [y up the pole, z across it]: crossarm ends + top.
 const WIRE_ATTACH_POINTS: [number, number][] = [
-  [POLE_HEIGHT - 0.72, ARM_HALF - 0.25],
-  [POLE_HEIGHT - 0.72, -(ARM_HALF - 0.25)],
-  [POLE_HEIGHT - 0.05, 0],
+  [UTILITY_POLE_HEIGHT - 0.72, CROSSARM_HALF_LENGTH - 0.25],
+  [UTILITY_POLE_HEIGHT - 0.72, -(CROSSARM_HALF_LENGTH - 0.25)],
+  [UTILITY_POLE_HEIGHT - 0.05, 0],
 ];
-
-interface PoleChunk {
-  group: THREE.Group;
-  points: { x: number; y: number; z: number }[];
-}
 
 export interface PowerLinesProps extends DressingAttributes {
   spacing?: number;
@@ -90,17 +96,19 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
 export const PowerLines = ({
   renderDistance,
   colliderDistance,
-  spacing = POLE_PLACEMENT.spacing,
-  lateralMargin = POLE_PLACEMENT.lateralMargin,
-  junctionClear = POLE_PLACEMENT.junctionClear,
+  spacing = DEFAULTS.spacing,
+  lateralMargin = DEFAULTS.lateralMargin,
+  junctionClear = DEFAULTS.junctionClear,
 }: PowerLinesProps) => {
   const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 420);
-  const registry = useChunkRegistry<PoleChunk>();
+  const placement = { ...DEFAULTS, spacing, lateralMargin, junctionClear };
+  useServerPlacementCheck(POWER_LINES_SPEC, placement);
+  const registry = useChunkRegistry<ChunkWithPoints>();
 
   const assets = useDressingAssets(() => ({
     poleGeometry: mergeGeometries([
-      new THREE.BoxGeometry(0.3, POLE_HEIGHT, 0.3).translate(0, POLE_HEIGHT / 2, 0),
-      new THREE.BoxGeometry(ARM_THICKNESS, ARM_DEPTH, ARM_HALF * 2).translate(0, ARM_Y, 0),
+      new THREE.BoxGeometry(0.3, UTILITY_POLE_HEIGHT, 0.3).translate(0, UTILITY_POLE_HEIGHT / 2, 0),
+      new THREE.BoxGeometry(CROSSARM_THICKNESS, CROSSARM_DEPTH, CROSSARM_HALF_LENGTH * 2).translate(0, CROSSARM_Y, 0),
     ]),
     // Unit piece along +X, scaled per segment.
     wireGeometry: new THREE.BoxGeometry(1, 0.06, 0.06).translate(0.5, 0, 0),
@@ -112,20 +120,7 @@ export const PowerLines = ({
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      await whenDomainReady();
-      const lateral = getActiveDomainConfig().cityConfig.freewayWidth + lateralMargin;
-      const points = (
-        await getFreewaySidePoints(
-          bounds.minX,
-          bounds.minZ,
-          bounds.maxX,
-          bounds.maxZ,
-          spacing,
-          lateral,
-          junctionClear,
-          true
-        )
-      ).filter((p) => p.side === POLE_PLACEMENT.side);
+      const points = await enumerateDressing(POWER_LINES_SPEC.enumerator, bounds, { ...placement, withNext: true });
       if (points.length === 0) return null;
 
       const poles = instancedFromPoints(assets.poleGeometry, assets.poleMaterial, points, (p) => ({
@@ -149,7 +144,7 @@ export const PowerLines = ({
       }
       registry.add({
         group,
-        points: points.map((p) => ({ x: p.x, y: p.y, z: p.z, yaw: yawFromDir(p.dirX, p.dirZ) })),
+        points: points.flatMap(POWER_LINES_SPEC.bodiesOf),
       });
       return group;
     },
@@ -164,7 +159,7 @@ export const PowerLines = ({
     <>
       <group ref={groupRef} />
       {/* Post + crossarm only; wires are deliberately not solid (poleSpec.ts). */}
-      <DressingPartColliders colliders={colliders} parts={POLE_COLLIDER_PARTS} />
+      <DressingPartColliders colliders={colliders} parts={POWER_LINES_SPEC.colliderParts} />
     </>
   );
 };

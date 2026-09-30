@@ -1,11 +1,12 @@
 import React from "react";
 import { TerrainNoiseParams } from "../../../utils/workers/vertexCompute";
-import { Domain, Skybox, Terrain } from "../../components";
-import { HomeRegion } from "./regions";
-import { ClickToEnter } from "./regions/home/ClickToEnter";
-import { CrtMonitor } from "./regions/home/CrtMonitor";
-import { HomeGround } from "./regions/home/HomeGround";
-import { HomeTitle } from "./regions/home/HomeTitle";
+import { Domain, Regions, Skybox, Terrain } from "../../components";
+import { ClickToEnter } from "./ClickToEnter";
+import { CrtMonitor } from "./CrtMonitor";
+import { HomeGround } from "./HomeGround";
+import { HomeTitle } from "./HomeTitle";
+import { HOME_REGIONS } from "./regions";
+import { HomeRegion } from "./regions/home/region";
 
 const FLAT_NOISE: TerrainNoiseParams = {
   type: "perlin",
@@ -19,13 +20,14 @@ const FLAT_NOISE: TerrainNoiseParams = {
 
 /** The landing page (path "/"). The flat-noise config still commits so the
  *  analytic height pipeline (Player backstop/respawn) reads height 0 — keep
- *  <Terrain>/<HomeRegion> even though HomeGround is the ground. */
+ *  <Terrain> and the home region even though HomeGround is the ground. */
 export const HomeDomain = React.memo(() => (
   <Domain terrain={false} background="#000000" playerSpawn={[0, 0, 0]}>
-    <Terrain seed="home" baseNoise={FLAT_NOISE} roadNoise={FLAT_NOISE} />
+    {/* defaultProbability 0 (and no region probability) switches rivers OFF for the domain. */}
+    <Terrain seed="home" baseNoise={FLAT_NOISE} roadNoise={FLAT_NOISE} river={{ halfWidth: 1, depth: 0, bank: 1, defaultProbability: 0 }} />
     <Skybox topColor="#000000" horizonColor="#000000" bottomColor="#000000" />
 
-    <HomeRegion />
+    <Regions specs={HOME_REGIONS} components={{ home: HomeRegion }} />
 
     <HomeGround />
 

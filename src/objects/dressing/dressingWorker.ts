@@ -1,17 +1,12 @@
-/** Typed wrappers over the ONE dressing worker (utils/workers/dressing.worker.ts). */
+/** The client of the ONE dressing worker (utils/workers/dressing.worker.ts). */
 
-import {
-  CityFreewaySidePoint,
-  CitySitePoint,
-  CityTrafficLightPoint,
-  RoadMarkerPoint,
-  VertexResult,
-} from "../../utils/workers/vertexCompute";
-import type { DensityPointParams } from "../../utils/workers/densityPlacement";
+import type { CitySitePoint, PlaceInfo, VertexResult } from "../../utils/workers/vertexCompute";
 import { createWorkerClient } from "../../utils/workers/workerClient";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
+import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./enumerators";
+import type { DressingBounds } from "./types";
 
-export type { CityFreewaySidePoint, CitySitePoint, CityTrafficLightPoint, RoadMarkerPoint };
+export type { CitySitePoint, PlaceInfo };
 
 const client = createWorkerClient({
   create: () =>
@@ -29,66 +24,27 @@ export const resetDressingWorker = client.reset;
 const request = (message: Record<string, unknown>): Promise<any[]> =>
   client.request<{ points: any[] }>(message).then((r) => r.points);
 
-export const getRoadMarkers = (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number,
-  streetSpacing: number,
-  freewaySpacing: number
-): Promise<RoadMarkerPoint[]> =>
-  request({ type: "ROAD_MARKERS", minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing });
+/** Run the named enumerator (objects/dressing/enumerators.ts) over one chunk, off-thread. */
+export const enumerateDressing = <K extends DressingEnumeratorName>(
+  name: K,
+  bounds: DressingBounds,
+  args: EnumeratorArgs<K>
+): Promise<EnumeratorPoint<K>[]> => request({ type: "ENUMERATE", name, bounds, args });
 
-export const getTrafficLightPoints = (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number,
-  chance: number
-): Promise<CityTrafficLightPoint[]> =>
-  request({ type: "TRAFFIC_LIGHTS", minX, minZ, maxX, maxZ, chance });
-
-export const getFreewaySidePoints = (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number,
-  spacing: number,
-  lateral: number,
-  junctionClear: number,
-  withNext: boolean
-): Promise<CityFreewaySidePoint[]> =>
-  request({ type: "FREEWAY_SIDES", minX, minZ, maxX, maxZ, spacing, lateral, junctionClear, withNext });
-
-export type { DensityPointParams };
-
-export interface DensityPoint {
-  x: number;
-  y: number;
-  z: number;
-}
-
-/** CITY ONLY: the worker's chunk probe returns nothing outside the city biome. */
-export const getDensityPoints = (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number,
-  params: DensityPointParams
-): Promise<DensityPoint[]> =>
-  request({ type: "DENSITY_POINTS", minX, minZ, maxX, maxZ, params });
+/** Off-thread because each site can compute a pad tile. */
+export const getCityLightSites = (minX: number, minZ: number, maxX: number, maxZ: number): Promise<CitySitePoint[]> =>
+  enumerateDressing("cityLightSites", { minX, minZ, maxX, maxZ }, {});
 
 /** Padded height sample off-thread: a flatten-tile miss costs 30–70ms, a lag spike on the main
- *  thread. null until the worker is initialized. */
-export const getVertexSample = async (x: number, z: number): Promise<VertexResult | null> => {
+ *  thread. null until the worker is initialized. (Without `biomeSdf` — a per-vertex scratch field.) */
+export const getVertexSample = async (x: number, z: number): Promise<Omit<VertexResult, "biomeSdf"> | null> => {
   const points = await request({ type: "VERTEX_SAMPLE", x, z });
-  return (points[0] as VertexResult) ?? null;
+  return (points[0] as Omit<VertexResult, "biomeSdf">) ?? null;
 };
 
-/** Off-thread for the same reason as getVertexSample (each site can compute a pad tile). */
-export const getCityLightSites = (
-  minX: number,
-  minZ: number,
-  maxX: number,
-  maxZ: number
-): Promise<CitySitePoint[]> => request({ type: "CITY_SITES", minX, minZ, maxX, maxZ });
+/** Where a world point is (region/biome, sky weights, address cell) — the
+ *  sky, the stats overlay and the address bar poll this at a low rate. null until the worker is up. */
+export const getPlaceInfo = async (x: number, z: number): Promise<PlaceInfo | null> => {
+  const points = await request({ type: "PLACE_INFO", x, z });
+  return (points[0] as PlaceInfo) ?? null;
+};

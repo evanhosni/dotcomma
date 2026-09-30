@@ -197,7 +197,7 @@ export interface BuildingAttributes extends ActorAttributes {
   /** [width, height]; height is clamped below the ceiling. */
   doorSize?: [number, number];
   ceilingHeight?: number;
-  /** Fraction of windows lit per night, a different subset each night. 0 = never. Default 0.2. */
+  /** Fraction of windows lit per night, a different subset each night. 0 = never. Default 0.6. */
   windowLightChance?: number;
   /** Emissive multiplier of lit glass. Default 1.4. */
   windowLightIntensity?: number;

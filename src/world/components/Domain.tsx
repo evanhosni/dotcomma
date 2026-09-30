@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
-import { buildDomainConfig } from "../../utils/workers/buildDomainConfig";
+import { buildDomainConfig } from "../domains/buildDomainConfig";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND, DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import { DOMAIN_CONFIGS } from "../domains/configs";
 import { getCurrentDomain } from "../domains/navigation";
@@ -11,7 +11,7 @@ import { setActiveDomain } from "../domains/utils";
 import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import { Biome, Region, TerrainParams } from "../types";
 import type { DomainConfig } from "../../utils/workers/vertexCompute";
-import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
+import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext, reportHierarchyError } from "./context";
 import { SkyboxSystem } from "../sky/Skybox";
 
 /** Root of the DOMAIN → REGION → BIOME tree: children register during layout
@@ -21,7 +21,7 @@ interface DomainProps extends React.PropsWithChildren {
   terrain?: boolean;
   /** Per-domain because the canvas persists across switches. */
   background?: string;
-  /** FEET position. Unset = the default sky drop. */
+  /** FEET position. Unset = the default sky drop (or whatever the domain's own traveler sets). */
   playerSpawn?: [number, number, number];
 }
 
@@ -40,7 +40,7 @@ export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, 
     };
   }, [scene, background]);
   useEffect(() => {
-    setPlayerSpawn(playerSpawn ?? null);
+    if (playerSpawn) setPlayerSpawn(playerSpawn);
     return () => {
       setPlayerSpawn(null);
       setTerrainLoaded(false);
@@ -88,13 +88,20 @@ const commitDomain = (store: DomainStore) => {
   const biomeById = new Map<number, Biome>();
   const ensureBiome = (record: BiomeRecord): Biome => {
     let data = biomeById.get(record.id);
+    if (data && data.name !== record.name) {
+      reportHierarchyError(`biome id ${record.id} is used by both "${data.name}" and "${record.name}" — biome ids must be unique (a biome shared by two regions keeps one id AND one spec)`);
+    }
     if (!data) {
       data = {
         name: record.name,
         id: record.id,
         joinable: record.joinable,
-        blendable: record.blendable,
         blendWidth: record.blendWidth,
+        heightBlendWidth: record.heightBlendWidth,
+        water: record.water,
+        prohibitRoads: record.prohibitRoads,
+        prohibitRivers: record.prohibitRivers,
+        noise: record.noise,
         actors: [],
       };
       biomeById.set(record.id, data);
@@ -103,14 +110,11 @@ const commitDomain = (store: DomainStore) => {
   };
 
   for (const { biome } of store.biomes.values()) ensureBiome(biome);
-  for (const { biomeId, config } of store.biomeTerrain.values()) {
+  for (const { biomeId, getMaterial, riverbed } of store.biomeMaterials.values()) {
     const data = biomeById.get(biomeId);
     if (!data) continue;
-    if (config.noise) data.noise = config.noise;
-  }
-  for (const { biomeId, getMaterial } of store.biomeMaterials.values()) {
-    const data = biomeById.get(biomeId);
-    if (data) data.getMaterial = getMaterial;
+    if (getMaterial) data.getMaterial = getMaterial;
+    if (riverbed) data.riverbed = riverbed;
   }
   for (const { biomeId, descriptor } of store.actors.values()) {
     const data = biomeById.get(biomeId);
@@ -118,7 +122,7 @@ const commitDomain = (store: DomainStore) => {
     if (!data.actors!.some((d) => d.id === descriptor.id)) data.actors!.push(descriptor);
   }
 
-  // JSX order — voronoi assignment depends on it.
+  // JSX order at every level — voronoi assignment depends on it.
   const regions: Region[] = [];
   for (const record of store.regions.values()) {
     const biomes: Biome[] = [];
@@ -131,7 +135,11 @@ const commitDomain = (store: DomainStore) => {
       name: record.name,
       id: record.id,
       biomes,
-      getBoundaryMaterial: store.regionMaterials.get(record.id),
+      baseNoise: record.baseNoise,
+      blendWidth: record.blendWidth,
+      heightBlendWidth: record.heightBlendWidth,
+      riverProbability: record.riverProbability,
+      getMaterial: store.regionMaterials.get(record.id),
     });
   }
 
@@ -157,6 +165,6 @@ const verifySharedConfig = (config: DomainConfig): void => {
   );
   console.error(
     `[domain] the JSX commit and the shared config (world/domains/${getCurrentDomain()}/config.ts — what the SERVER simulates on) ` +
-      `differ in: ${keys.join(", ")}. Update the domain's config.ts (or the biome/region spec it reads) so the server's terrain matches the client's.`,
+      `differ in: ${keys.join(", ")}. Update the domain's config.ts (or the region/biome spec it reads) so the server's terrain matches the client's.`,
   );
 };

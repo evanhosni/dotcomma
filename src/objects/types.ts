@@ -15,7 +15,9 @@ import type * as THREE from "three";
 /** All optional here — a class's descriptor/props type re-declares the ones it requires. */
 export interface GameObjectAttributes {
   renderDistance?: number;
-  /** Actors default to renderDistance / 3; dressing to DRESSING_COLLIDER_DISTANCE; foliage has no colliders. */
+  /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (ModelActor.tsx), a
+   *  building to 120u (Building.tsx); dressing to DRESSING_COLLIDER_DISTANCE (bridges 140u); foliage has
+   *  no colliders. */
   colliderDistance?: number;
   /** Unset = the global grid from <PostProcessing quantization>. Dressing is never quantized (instances are rebased). */
   quantization?: number;

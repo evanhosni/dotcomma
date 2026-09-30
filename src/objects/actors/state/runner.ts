@@ -1,7 +1,7 @@
 import { AnimationChannel } from "./animation";
 import { Input } from "./input";
 import { Motion, type Vec3Like } from "./motion";
-import type { BehaviorContext, StateDef, StateMachineConfig, TriggerDef } from "./types";
+import type { BehaviorContext, StateDef, StateMachineConfig, TransitionDef, TriggerDef } from "./types";
 
 export type { Vec3Like };
 
@@ -38,23 +38,63 @@ export const mouseActionOf = (flag: MouseFlag): string => flag.slice(2).replace(
 const FLAG_BY_ACTION = new Map<string, MouseFlag>(MOUSE_ONE_SHOT_FLAGS.map((f) => [mouseActionOf(f), f]));
 export const mouseFlagOf = (action: string): MouseFlag | undefined => FLAG_BY_ACTION.get(action);
 
-// Lookup maps are pure functions of the module-constant config — once per config, not per instance.
-const configMapsCache = new WeakMap<
-  StateMachineConfig,
-  { stateMap: Map<string, StateDef>; triggerMap: Map<string, TriggerDef> }
->();
-const getConfigMaps = (config: StateMachineConfig) => {
-  let maps = configMapsCache.get(config);
-  if (!maps) {
-    const stateMap = new Map<string, StateDef>();
-    for (const s of config.states) stateMap.set(s.id, s);
-    const triggerMap = new Map<string, TriggerDef>();
-    for (const t of config.triggers) triggerMap.set(t.id, t);
-    maps = { stateMap, triggerMap };
-    configMapsCache.set(config, maps);
+interface ResolvedTransition {
+  trigger: TriggerDef;
+  target: string;
+  guard?: TransitionDef["guard"];
+}
+
+interface ConfigMaps {
+  stateMap: Map<string, StateDef>;
+  /** Per state id, its transitions with the trigger resolved (an unresolvable one is dropped). */
+  transitionsOf: Map<string, ResolvedTransition[]>;
+  /** Every trigger the machine can fire, listed or collected from its transitions. */
+  triggers: TriggerDef[];
+}
+
+/** A broken config is a typo that would otherwise silently never fire. */
+const reportConfigError = (message: string): void => {
+  if (process.env.NODE_ENV === "production") console.error(`[state machine] ${message}`);
+  else throw new Error(`[state machine] ${message}`);
+};
+
+// Pure functions of the module-constant config — once per config, not per instance.
+const configMapsCache = new WeakMap<StateMachineConfig, ConfigMaps>();
+const getConfigMaps = (config: StateMachineConfig): ConfigMaps => {
+  const cached = configMapsCache.get(config);
+  if (cached) return cached;
+  const stateMap = new Map<string, StateDef>();
+  for (const s of config.states) stateMap.set(s.id, s);
+  const triggerById = new Map<string, TriggerDef>();
+  for (const t of config.triggers ?? []) triggerById.set(t.id, t);
+  for (const s of config.states) {
+    for (const tr of s.transitions) if (typeof tr.trigger !== "string" && !triggerById.has(tr.trigger.id)) triggerById.set(tr.trigger.id, tr.trigger);
   }
+  if (!stateMap.has(config.initialState)) reportConfigError(`initialState "${config.initialState}" is not a state`);
+  const transitionsOf = new Map<string, ResolvedTransition[]>();
+  for (const s of config.states) {
+    const resolved: ResolvedTransition[] = [];
+    for (const tr of s.transitions) {
+      const trigger = typeof tr.trigger === "string" ? triggerById.get(tr.trigger) : tr.trigger;
+      if (!stateMap.has(tr.target)) reportConfigError(`state "${s.id}" transitions to unknown state "${tr.target}"`);
+      if (!trigger) {
+        reportConfigError(
+          `state "${s.id}" names unknown trigger "${tr.trigger}" — pass the trigger object itself (e.g. \`trigger: afterDelay(2)\`) or list it in \`triggers\``,
+        );
+        continue;
+      }
+      resolved.push({ trigger, target: tr.target, guard: tr.guard });
+    }
+    transitionsOf.set(s.id, resolved);
+  }
+  const maps: ConfigMaps = { stateMap, transitionsOf, triggers: [...triggerById.values()] };
+  configMapsCache.set(config, maps);
   return maps;
 };
+
+/** True when the machine can fire the trigger with this id (e.g. "mouse-left-click"). */
+export const machineHasTrigger = (config: StateMachineConfig, id: string): boolean =>
+  getConfigMaps(config).triggers.some((t) => t.id === id);
 
 export class StateMachineRunner {
   readonly blackboard: Record<string, any> = {};
@@ -62,7 +102,7 @@ export class StateMachineRunner {
   readonly animation = new AnimationChannel();
   readonly input = new Input(this.blackboard);
   private readonly stateMap: Map<string, StateDef>;
-  private readonly triggerMap: Map<string, TriggerDef>;
+  private readonly transitionsOf: Map<string, ResolvedTransition[]>;
   private stateId: string;
   private stateEnteredAt = 0;
   private exitCleanup: (() => void) | null = null;
@@ -77,7 +117,7 @@ export class StateMachineRunner {
   ) {
     const maps = getConfigMaps(config);
     this.stateMap = maps.stateMap;
-    this.triggerMap = maps.triggerMap;
+    this.transitionsOf = maps.transitionsOf;
     this.stateId = config.initialState;
     this.motion = new Motion(positionRef);
     this.ctx = {
@@ -154,10 +194,8 @@ export class StateMachineRunner {
     const current = this.stateMap.get(this.stateId);
     if (!current) return;
 
-    for (const transition of current.transitions) {
-      const trigger = this.triggerMap.get(transition.trigger);
-      if (!trigger) continue;
-      if (trigger.evaluate(this.ctx)) {
+    for (const transition of this.transitionsOf.get(this.stateId)!) {
+      if (transition.trigger.evaluate(this.ctx)) {
         if (transition.guard && !transition.guard(this.ctx)) continue;
         this.enterState(transition.target, elapsed);
         this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);

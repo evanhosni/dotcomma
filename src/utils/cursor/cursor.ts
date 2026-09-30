@@ -1,3 +1,5 @@
+import { HUD_COLOR, HUD_Z_INDEX } from "../../menus/overlay/styles";
+
 const CURSOR_ID = "game-cursor";
 
 function getOrCreateCursor(): HTMLDivElement {
@@ -14,9 +16,9 @@ function getOrCreateCursor(): HTMLDivElement {
     width: "2px",
     height: "2px",
     borderRadius: "50%",
-    backgroundColor: "#0f0",
+    backgroundColor: HUD_COLOR,
     pointerEvents: "none",
-    zIndex: "1000",
+    zIndex: String(HUD_Z_INDEX),
     display: "none",
   });
   document.body.appendChild(el);

@@ -44,7 +44,9 @@ export interface BehaviorContext extends TriggerContext {
 export type StateEnterFn = (ctx: BehaviorContext) => void | (() => void);
 
 export interface TransitionDef {
-  trigger: string;
+  /** A trigger object (the runner collects it — nothing else to list), or the id of one in
+   *  `StateMachineConfig.triggers`. An unknown id throws when the machine is built (outside production). */
+  trigger: TriggerDef | string;
   target: string;
   guard?: (ctx: TriggerContext) => boolean;
 }
@@ -61,5 +63,6 @@ export interface StateDef {
 export interface StateMachineConfig {
   initialState: string;
   states: StateDef[];
-  triggers: TriggerDef[];
+  /** Only for triggers a transition names by id; transitions may hold the trigger objects directly. */
+  triggers?: TriggerDef[];
 }

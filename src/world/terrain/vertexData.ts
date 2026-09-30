@@ -10,7 +10,10 @@ import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
 
 let lastConfig: object | null = null;
 
-const ensureInit = async (): Promise<void> => {
+/** Initializes the main-thread compute module with the active domain's config
+ *  (once per commit). Callers that use vertexCompute's place/address helpers
+ *  directly await this first. */
+export const ensureVertexCompute = async (): Promise<void> => {
   await whenDomainReady();
   const config = getActiveDomainConfig();
   if (config !== lastConfig) {
@@ -20,7 +23,7 @@ const ensureInit = async (): Promise<void> => {
 };
 
 export const getVertexData = async (x: number, z: number): Promise<VertexResult> => {
-  await ensureInit();
+  await ensureVertexCompute();
   return computeVertexData(x, z);
 };
 
@@ -29,11 +32,10 @@ export const getVertexData = async (x: number, z: number): Promise<VertexResult>
  *  EXCAVATE (up to 8.3u measured), so use it only as a pre-filter and confirm
  *  with the padded height before acting (Player.tsx resolveEmbeddedSurface). */
 export const getVertexDataRaw = async (x: number, z: number): Promise<VertexResult> => {
-  await ensureInit();
+  await ensureVertexCompute();
   return computeVertexDataRaw(x, z);
 };
 
 /** PADDED height computed in the dressing worker (absorbs the flatten-tile
  *  cost). null until the worker is up — fall back to getVertexData. */
 export { getVertexSample } from "../../objects/dressing/dressingWorker";
-

@@ -1,12 +1,34 @@
-import { computeVertexData } from "./vertexCompute";
+import { computeVertexData, riverKeepOff } from "./vertexCompute";
+import type { GameObjectAttributes } from "../../objects/types";
 import {
-  DensityPointParams,
   densityCellRange,
   densityCellSize,
   densityProbability,
   passesPlacementFilters,
   rollDensityCell,
-} from "./densityPlacement";
+} from "./densityGrid";
+
+/** The dressing `densityPoints` enumerator's params (objects/dressing/enumerators.ts). */
+export interface DensityPointParams
+  extends Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "slopeRange" | "roadDistanceRange"> {
+  /** Seed namespace — distinct from spawn-system descriptor ids. */
+  seedTag: string;
+  /** Instances per 1,000,000 sq units. */
+  density: number;
+  /** Min spacing between accepted points. */
+  footprint: number;
+}
+
+/** Half the central-difference baseline of the slope test — the foliage worker's height-grid step. */
+const SLOPE_SAMPLE_STEP = 2;
+
+/** Degrees, from central differences of the padded height (the surface the point stands on): the
+ *  `slopeRange` test of every density placement that has one (here and the spawn worker). */
+export const slopeDegreesAt = (x: number, z: number): number => {
+  const dhdx = (computeVertexData(x + SLOPE_SAMPLE_STEP, z).height - computeVertexData(x - SLOPE_SAMPLE_STEP, z).height) / (2 * SLOPE_SAMPLE_STEP);
+  const dhdz = (computeVertexData(x, z + SLOPE_SAMPLE_STEP).height - computeVertexData(x, z - SLOPE_SAMPLE_STEP).height) / (2 * SLOPE_SAMPLE_STEP);
+  return (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
+};
 
 /**
  * STATELESS density placement: the spawn-worker scheme with greedy spacing over
@@ -29,6 +51,7 @@ export const generateDensityPoints = (
   const [gz0, gz1] = densityCellRange(minZ - pad, maxZ + pad, cellSize);
   const probability = densityProbability(params.density, cellSize);
   const footprintSq = params.footprint * params.footprint;
+  const slopeRange = params.slopeRange;
 
   const accepted: { x: number; z: number; y: number }[] = [];
   for (let gx = gx0; gx <= gx1; gx++) {
@@ -38,7 +61,11 @@ export const generateDensityPoints = (
       const { x, z } = roll;
 
       const vd = computeVertexData(x, z);
-      if (!passesPlacementFilters(vd, params)) continue;
+      if (!passesPlacementFilters(vd, params, riverKeepOff())) continue;
+      if (slopeRange) {
+        const slope = slopeDegreesAt(x, z);
+        if (slope < slopeRange[0] || slope > slopeRange[1]) continue;
+      }
 
       let blocked = false;
       for (let i = accepted.length - 1; i >= 0; i--) {

@@ -3,7 +3,16 @@ import { getServerTime } from "../../net/connection";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { isMainRenderFrame } from "../../vfx/frameCap";
-import { DAY_DURATION_MS, DAY_NIGHT_CYCLE_TRANSITION_MS, MOON_DIRECTION, NIGHT_DURATION_MS, setNightBlend, SUN_DIRECTION, tickWindowLights } from "../../lighting/dayNight";
+import {
+  DAY_DURATION_MS,
+  DAY_NIGHT_CYCLE_TRANSITION_MS,
+  MOON_DIRECTION,
+  NIGHT_DURATION_MS,
+  nightBlendAt,
+  setNightBlend,
+  SUN_DIRECTION,
+  tickWindowLights,
+} from "../../lighting/dayNight";
 
 const SUN_DISTANCE = 5000;
 const SUN_SIZE = 1000; // silhouette radius, world units
@@ -15,9 +24,6 @@ const MOON_ROUNDNESS = 1; // 1 = clean crescent arcs, 0 = very irregular
 const MOON_VERTICES_COUNT = 19; // total boundary vertices across both arcs
 const STAR_DISTANCE = 5600;
 const STAR_COUNT = 550;
-
-const SUN_DIR = SUN_DIRECTION;
-const MOON_DIR = MOON_DIRECTION;
 
 const JITTER_INTERVAL_S = 0.09;
 const JITTER_AMPLITUDE = 0.07; // × radius, per tick, per vertex
@@ -186,13 +192,7 @@ export const DayNightCycle = ({
     if (!group) return;
 
     // Server clock, so every player sees the same time of day.
-    const cycleMs = dayDurationMs + transitionMs + nightDurationMs + transitionMs;
-    const t = getServerTime() % cycleMs;
-    let blend: number;
-    if (t < dayDurationMs) blend = 0;
-    else if (t < dayDurationMs + transitionMs) blend = (t - dayDurationMs) / transitionMs;
-    else if (t < dayDurationMs + transitionMs + nightDurationMs) blend = 1;
-    else blend = 1 - (t - dayDurationMs - transitionMs - nightDurationMs) / transitionMs;
+    const blend = nightBlendAt(getServerTime(), dayDurationMs, nightDurationMs, transitionMs);
     setNightBlend(blend);
     tickWindowLights(delta * 1000);
 
@@ -240,14 +240,14 @@ export const DayNightCycle = ({
         ref={sunRef}
         geometry={sun.geometry}
         material={sunMaterial}
-        position={SUN_DIR.clone().multiplyScalar(SUN_DISTANCE)}
+        position={SUN_DIRECTION.clone().multiplyScalar(SUN_DISTANCE)}
         frustumCulled={false}
       />
       <mesh
         ref={moonRef}
         geometry={moon.geometry}
         material={moonMaterial}
-        position={MOON_DIR.clone().multiplyScalar(MOON_DISTANCE)}
+        position={MOON_DIRECTION.clone().multiplyScalar(MOON_DISTANCE)}
         frustumCulled={false}
       />
       <points ref={starsRef} geometry={stars} material={starMaterial} frustumCulled={false} />

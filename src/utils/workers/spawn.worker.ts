@@ -10,8 +10,9 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints } from "./vertexCompute";
-import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityPlacement";
+import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, riverKeepOff } from "./vertexCompute";
+import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
+import { slopeDegreesAt } from "./densityPoints";
 // Type-only: keeps the React-dependent module out of the worker bundle.
 import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
 
@@ -204,7 +205,11 @@ const generateForChunk = (
 
         const vd = computeVertexData(x, z);
 
-        if (!passesPlacementFilters(vd, desc)) continue;
+        if (!passesPlacementFilters(vd, desc, riverKeepOff())) continue;
+        if (desc.slopeRange) {
+          const slope = slopeDegreesAt(x, z);
+          if (slope < desc.slopeRange[0] || slope > desc.slopeRange[1]) continue;
+        }
 
         if (
           spatialHash!.isTooClose(

@@ -36,7 +36,7 @@ export const createApp = (): Express => {
     }),
   );
 
-  // Domain paths (/, /glitch-city) are client-side pushState routes.
+  // Every path is a client-side pushState route: "/" is home, anything else an in-map address.
   app.get("*", (req, res, next) => {
     if (req.method !== "GET" || req.path.includes(".")) return next();
     res.setHeader("Cache-Control", "no-cache");

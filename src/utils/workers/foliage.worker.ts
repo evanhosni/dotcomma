@@ -3,30 +3,22 @@
  * interpolation per instance.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "GENERATE_FOLIAGE", id: number, chunkX: number, chunkZ: number, params: FoliageChunkParams }
+ *   IN:  { type: "GENERATE_FOLIAGE", id: number, chunkX: number, chunkZ: number, params: FoliageChunkParams, band: number }
  *   OUT: { type: "INIT_DONE" }
- *   OUT: { type: "FOLIAGE_RESULT", id, count, minY, maxY, offsets: Float32Array, instanceData: Float32Array }
+ *   OUT: { type: "FOLIAGE_RESULT", id, count, total, minY, maxY, offsets: Float32Array, instanceData: Float32Array }
+ *        (`count` = the band's prefix of the `total` placed blades)
  */
 
-import { DomainConfig, initCompute, computeVertexData, seedRand } from "./vertexCompute";
-import { smoothstep } from "../math/_math";
+import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
+import { seedRand, smoothstep } from "../math/_math";
+import { DomainConfig, initCompute, computeVertexData, biomeWeightOf } from "./vertexCompute";
 
 const GRID_STEP = 2; // world units between terrain samples
+// Same visibility floor as the terrain shader's per-biome branch.
+const MIN_BIOME_WEIGHT = 0.002;
 // 64u chunks at the grass field's 8M density place ~32k blades per chunk.
 const MAX_INSTANCES_PER_CHUNK = 65536;
 const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
-
-// Mirrors FoliageChunkParams in objects/foliage/foliageWorker.ts.
-
-interface FoliageChunkParams {
-  seed: string;
-  chunkSize: number;
-  density: number; // blades per 1,000,000 sq units
-  biomeIds?: number[];
-  heightRange?: [number, number];
-  slopeRange?: [number, number]; // degrees
-  slopeBlend: number; // degrees over which density fades at the slopeRange edges
-}
 
 let initialized = false;
 
@@ -40,38 +32,98 @@ const mulberry32 = (a: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-const EMPTY_RESULT = () => ({
-  count: 0,
-  minY: 0,
-  maxY: 0,
-  offsets: new Float32Array(0),
-  instanceData: new Float32Array(0),
-});
+// Reused across chunks: a 32k-blade chunk allocated ~2.5MB of scratch garbage per request.
+const SCRATCH_OFFSETS = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
+const SCRATCH_BLADE_DATA = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
+const SCRATCH_FADE_KEYS = new Float32Array(MAX_INSTANCES_PER_CHUNK);
+const SCRATCH_ORDER = new Uint32Array(MAX_INSTANCES_PER_CHUNK);
 
-const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParams) => {
-  const size = params.chunkSize;
-  const minX = chunkX * size;
-  const minZ = chunkZ * size;
+// ~8 blades per bucket at 32k blades; keys are a well-mixed hash, so buckets stay small.
+const FADE_BUCKETS = 4096;
+const INSERTION_SORT_MAX = 64;
+const bucketCounts = new Uint32Array(FADE_BUCKETS);
+const bucketEnds = new Uint32Array(FADE_BUCKETS);
 
-  // Center outside every requested biome AND farther from the boundary than the
-  // half-diagonal (0.75 > √2/2) → no point in the chunk passes the biome filter.
-  if (params.biomeIds && params.biomeIds.length > 0) {
-    const vd = computeVertexData(minX + size / 2, minZ + size / 2);
-    if (!params.biomeIds.includes(vd.biomeId) && vd.distanceToBiomeBoundaryCenter > size * 0.75) {
-      return EMPTY_RESULT();
+const bucketOf = (key: number): number => Math.min(FADE_BUCKETS - 1, (key * FADE_BUCKETS) | 0);
+
+/**
+ * Writes the first `count` blades of the DESCENDING fade-key order into `out`, ties in
+ * placement order — exactly what a stable sort of all `placed` blades begins with, so any
+ * shorter band is a strict prefix of a longer one. O(placed + count): buckets below the
+ * cut are never ordered.
+ */
+const orderByFadeKey = (keys: Float32Array, placed: number, count: number, out: Uint32Array): void => {
+  if (count <= 0) return;
+  bucketCounts.fill(0);
+  for (let i = 0; i < placed; i++) bucketCounts[bucketOf(keys[i])]++;
+  let cut = 0;
+  let end = 0;
+  for (let b = FADE_BUCKETS - 1; b >= 0; b--) {
+    bucketEnds[b] = end; // segment START until the scatter below advances it to the end
+    end += bucketCounts[b];
+    if (end >= count) {
+      cut = b;
+      break;
     }
   }
+  for (let i = 0; i < placed; i++) {
+    const b = bucketOf(keys[i]);
+    if (b >= cut) out[bucketEnds[b]++] = i;
+  }
+  let start = 0;
+  for (let b = FADE_BUCKETS - 1; b >= cut && start < count; b--) {
+    const segEnd = bucketEnds[b];
+    if (segEnd - start <= INSERTION_SORT_MAX) {
+      // Stable: strict < keeps equal keys in placement order.
+      for (let j = start + 1; j < segEnd; j++) {
+        const v = out[j];
+        const kv = keys[v];
+        let k = j - 1;
+        while (k >= start && keys[out[k]] < kv) {
+          out[k + 1] = out[k];
+          k--;
+        }
+        out[k + 1] = v;
+      }
+    } else {
+      out.subarray(start, segEnd).sort((a, c) => keys[c] - keys[a] || a - c);
+    }
+    start = segEnd;
+  }
+};
 
+interface FoliageGrid {
+  gridNodes: number;
+  heights: Float32Array;
+  slopes: Float32Array;
+  biomeWeights: Float32Array;
+  roadDistances: Float32Array;
+  submerged: Float32Array; // 1 where the water surface sits above the ground (lake, river channel)
+}
+
+// A BAND upgrade of a held chunk re-runs placement (the RNG stream is the only way to reach
+// its blades) but not the ~1,100 terrain samples: the grid is kept here. 256 × ~22KB ≈ 5.6MB
+// covers every chunk a 500u field holds; a miss only costs the resample.
+const GRID_CACHE_MAX = 256;
+const gridCache = new Map<string, FoliageGrid>();
+
+const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[] | undefined): FoliageGrid => {
   const gridNodes = Math.floor(size / GRID_STEP) + 1;
   const heights = new Float32Array(gridNodes * gridNodes);
   const slopes = new Float32Array(gridNodes * gridNodes);
-  const biomeIds = new Int32Array(gridNodes * gridNodes);
+  const biomeWeights = new Float32Array(gridNodes * gridNodes);
+  const roadDistances = new Float32Array(gridNodes * gridNodes);
+  const submerged = new Float32Array(gridNodes * gridNodes);
 
   for (let gz = 0; gz < gridNodes; gz++) {
     for (let gx = 0; gx < gridNodes; gx++) {
       const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
-      heights[gz * gridNodes + gx] = vd.height;
-      biomeIds[gz * gridNodes + gx] = vd.biomeId;
+      const i = gz * gridNodes + gx;
+      heights[i] = vd.height;
+      biomeWeights[i] = biomeIds ? biomeWeightOf(vd.biomeSdf, biomeIds) : 1;
+      roadDistances[i] = vd.distanceToRoadCenter;
+      // Nor under a bridge deck: the ground there is cut just below the deck's top, and blades grew through it.
+      submerged[i] = (!Number.isNaN(vd.waterHeight) && vd.waterHeight > vd.height - 0.3) || vd.underDeck > 0 ? 1 : 0;
     }
   }
 
@@ -86,26 +138,91 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
       slopes[gz * gridNodes + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
     }
   }
+  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged };
+};
 
-  const bilinear = (arr: Float32Array, x: number, z: number): number => {
+const takeCachedGrid = (key: string): FoliageGrid | undefined => {
+  const hit = gridCache.get(key);
+  if (hit) {
+    gridCache.delete(key); // re-insert = most recently used
+    gridCache.set(key, hit);
+  }
+  return hit;
+};
+
+const cacheGrid = (key: string, grid: FoliageGrid): void => {
+  if (gridCache.size >= GRID_CACHE_MAX) gridCache.delete(gridCache.keys().next().value!);
+  gridCache.set(key, grid);
+};
+
+const EMPTY_RESULT = () => ({
+  count: 0,
+  total: 0,
+  minY: 0,
+  maxY: 0,
+  offsets: new Float32Array(0),
+  instanceData: new Float32Array(0),
+});
+
+/**
+ * Places the chunk and returns the first `ceil(total × band)` blades of the fade-key order
+ * (`count` of `total`). Placement always runs in full — `total`, minY/maxY and every blade's
+ * values are band-independent — so a band's blades are exactly the same-rank blades of any
+ * wider band: a strict prefix, which is what lets a chunk be widened without a pop.
+ */
+export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParams, band = 1) => {
+  const size = params.chunkSize;
+  const minX = chunkX * size;
+  const minZ = chunkZ * size;
+
+  // Blades follow the terrain material's BIOME WEIGHT (the cross-fade), not the cell
+  // id: a hard stop on the cell line under a 300u texture fade read as an edge.
+  const hasBiomes = !!params.biomeIds && params.biomeIds.length > 0;
+  const biomeIds = hasBiomes ? params.biomeIds : undefined;
+  const gridKey = `${size}|${biomeIds ? biomeIds.join(",") : ""}|${chunkX},${chunkZ}`;
+  let grid = takeCachedGrid(gridKey); // only non-empty chunks are cached: a hit skips the probe
+  if (!grid) {
+    // Probe: the requested biomes invisible at the center and all four corners → nothing to place.
+    if (biomeIds) {
+      let visible = false;
+      for (const [px, pz] of [[0.5, 0.5], [0, 0], [1, 0], [0, 1], [1, 1]]) {
+        const vd = computeVertexData(minX + px * size, minZ + pz * size);
+        if (biomeWeightOf(vd.biomeSdf, biomeIds) > MIN_BIOME_WEIGHT) {
+          visible = true;
+          break;
+        }
+      }
+      if (!visible) return EMPTY_RESULT();
+    }
+    grid = sampleGrid(minX, minZ, size, biomeIds);
+    cacheGrid(gridKey, grid);
+  }
+  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged } = grid;
+
+  // One bilinear cell per blade, shared by every field it samples (the arithmetic is
+  // term-for-term the per-field version's, so the samples are bit-identical).
+  let i00 = 0;
+  let i01 = 0;
+  let tx = 0;
+  let tz = 0;
+  const setCell = (x: number, z: number): void => {
     const fx = Math.min(Math.max((x - minX) / GRID_STEP, 0), gridNodes - 1);
     const fz = Math.min(Math.max((z - minZ) / GRID_STEP, 0), gridNodes - 1);
     const x0 = Math.min(Math.floor(fx), gridNodes - 2);
     const z0 = Math.min(Math.floor(fz), gridNodes - 2);
-    const tx = fx - x0;
-    const tz = fz - z0;
-    const h00 = arr[z0 * gridNodes + x0];
-    const h10 = arr[z0 * gridNodes + x0 + 1];
-    const h01 = arr[(z0 + 1) * gridNodes + x0];
-    const h11 = arr[(z0 + 1) * gridNodes + x0 + 1];
-    return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+    tx = fx - x0;
+    tz = fz - z0;
+    i00 = z0 * gridNodes + x0;
+    i01 = (z0 + 1) * gridNodes + x0;
   };
+  const bilinear = (arr: Float32Array): number =>
+    (arr[i00] * (1 - tx) + arr[i00 + 1] * tx) * (1 - tz) + (arr[i01] * (1 - tx) + arr[i01 + 1] * tx) * tz;
 
   const targetCount = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
   const rand = mulberry32(Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31));
 
-  const offsets = new Float32Array(targetCount * 3);
-  const instanceData = new Float32Array(targetCount * 3); // phase, scale, tint
+  const offsets = SCRATCH_OFFSETS;
+  const instanceData = SCRATCH_BLADE_DATA; // phase, scale, tint
   let placed = 0;
   let minY = Infinity;
   let maxY = -Infinity;
@@ -116,21 +233,31 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
     const phase = rand() * Math.PI * 2;
     let scale = 0.7 + rand() * 0.6;
     const tint = rand();
+    setCell(x, z);
 
-    if (params.biomeIds && params.biomeIds.length > 0) {
-      const gx = Math.min(Math.max(Math.round((x - minX) / GRID_STEP), 0), gridNodes - 1);
-      const gz = Math.min(Math.max(Math.round((z - minZ) / GRID_STEP), 0), gridNodes - 1);
-      if (!params.biomeIds.includes(biomeIds[gz * gridNodes + gx])) continue;
+    if (hasBiomes) {
+      // Density dithers down and blades shorten with the biome's fading weight.
+      const w = bilinear(biomeWeights);
+      if (w <= MIN_BIOME_WEIGHT) continue;
+      if (w < 1) {
+        if (rand() >= w) continue;
+        scale *= 0.6 + 0.4 * w;
+      }
     }
 
-    const height = bilinear(heights, x, z);
+    const height = bilinear(heights);
     if (params.heightRange) {
       if (height < params.heightRange[0] || height > params.heightRange[1]) continue;
+    }
+    if (bilinear(submerged) > 0.25) continue;
+    if (params.roadDistanceRange) {
+      const road = bilinear(roadDistances);
+      if (road < params.roadDistanceRange[0] || road > params.roadDistanceRange[1]) continue;
     }
 
     if (params.slopeRange) {
       // Soft edges: density dithers down and blades shorten across the blend band.
-      const slope = bilinear(slopes, x, z);
+      const slope = bilinear(slopes);
       const [minSlope, maxSlope] = params.slopeRange;
       const blend = Math.max(params.slopeBlend, 0.001);
       let keep = 1 - smoothstep(maxSlope - blend, maxSlope, slope);
@@ -157,17 +284,17 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
   // DESCENDING per-instance fade key (the shader's fract(phase * 1.618 + tint *
   // 12.9898)) so the main thread can truncate instanceCount to the blades whose
   // fade hasn't zeroed. The LOD taper silently biases if this order changes.
-  const order: number[] = new Array(placed);
-  const fadeKey = new Float32Array(placed);
+  const fadeKey = SCRATCH_FADE_KEYS;
   for (let i = 0; i < placed; i++) {
-    order[i] = i;
     const v = instanceData[i * 3] * 1.618 + instanceData[i * 3 + 2] * 12.9898;
     fadeKey[i] = v - Math.floor(v);
   }
-  order.sort((a, b) => fadeKey[b] - fadeKey[a]);
-  const outOffsets = new Float32Array(placed * 3);
-  const outBladeData = new Float32Array(placed * 3);
-  for (let k = 0; k < placed; k++) {
+  const count = Math.min(placed, Math.ceil(placed * band));
+  const order = SCRATCH_ORDER;
+  orderByFadeKey(fadeKey, placed, count, order);
+  const outOffsets = new Float32Array(count * 3);
+  const outBladeData = new Float32Array(count * 3);
+  for (let k = 0; k < count; k++) {
     const i = order[k];
     outOffsets[k * 3] = offsets[i * 3];
     outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
@@ -178,7 +305,9 @@ const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParam
   }
 
   return {
-    count: placed,
+    count,
+    total: placed,
+    // Over ALL placed blades, so the chunk's culling sphere doesn't change with its band.
     minY: placed > 0 ? minY : 0,
     maxY: placed > 0 ? maxY : 0,
     offsets: outOffsets,
@@ -198,21 +327,13 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   if (type === "GENERATE_FOLIAGE") {
-    const { id, chunkX, chunkZ, params } = e.data;
+    const { id, chunkX, chunkZ, params, band } = e.data;
     if (!initialized) {
-      (self as any).postMessage({
-        type: "FOLIAGE_RESULT",
-        id,
-        count: 0,
-        minY: 0,
-        maxY: 0,
-        offsets: new Float32Array(0),
-        instanceData: new Float32Array(0),
-      });
+      (self as any).postMessage({ type: "FOLIAGE_RESULT", id, ...EMPTY_RESULT() });
       return;
     }
 
-    const result = generateChunk(chunkX, chunkZ, params);
+    const result = generateChunk(chunkX, chunkZ, params, band);
     (self as any).postMessage({ type: "FOLIAGE_RESULT", id, ...result }, [
       result.offsets.buffer,
       result.instanceData.buffer,

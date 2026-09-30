@@ -76,37 +76,40 @@ const chunkKeyOf = (p: SpawnPoint): string =>
 // above the batch cadence floor (MIN_FRAMES_BETWEEN_BATCHES ≈ 83ms).
 const SPAWN_BUDGET_MS = 100;
 
-/** Chunk keys must arrive sorted nearest-first: the budget covers them in that
- *  order and the remainder is re-requested next batch. Returned buckets are
- *  the cache's own entries — point objects stay identity-stable while cached. */
-export const generateSpawnPoints = async (
+/** Asks the worker for the chunks not cached yet (keys sorted nearest-first: the budget covers them
+ *  in that order and the rest are asked for again next time). Null when nothing is missing. The pool
+ *  does NOT wait for it before mounting: points already cached keep mounting while the worker works. */
+export const requestSpawnChunks = (
   chunkKeys: string[],
   descriptors: SerializedActorDescriptor[]
-): Promise<CachedSpawnChunk[]> => {
-  if (!client.isReady()) return [];
-
+): Promise<void> | null => {
+  if (!client.isReady()) return null;
   const missing = chunkKeys.filter((k) => !clientChunkCache.has(k));
-
-  if (missing.length > 0) {
-    const result = await client.request<SpawnsResult>({
+  if (missing.length === 0) return null;
+  return client
+    .request<SpawnsResult>({
       type: "GENERATE_SPAWNS",
       chunkKeys: missing,
       descriptors,
       budgetMs: SPAWN_BUDGET_MS,
+    })
+    .then((result) => {
+      for (const key of result.done) {
+        const sep = key.indexOf("_");
+        clientChunkCache.set(
+          key,
+          emptyCachedChunk(Number(key.slice(0, sep)), Number(key.slice(sep + 1)))
+        );
+      }
+      for (const p of result.points) {
+        const entry = clientChunkCache.get(chunkKeyOf(p));
+        if (entry) entry.points.push(p);
+      }
     });
-    for (const key of result.done) {
-      const sep = key.indexOf("_");
-      clientChunkCache.set(
-        key,
-        emptyCachedChunk(Number(key.slice(0, sep)), Number(key.slice(sep + 1)))
-      );
-    }
-    for (const p of result.points) {
-      const entry = clientChunkCache.get(chunkKeyOf(p));
-      if (entry) entry.points.push(p);
-    }
-  }
+};
 
+/** The cache's own entries — point objects stay identity-stable while cached. */
+export const getCachedSpawnChunks = (chunkKeys: string[]): CachedSpawnChunk[] => {
   const out: CachedSpawnChunk[] = [];
   for (const key of chunkKeys) {
     const entry = clientChunkCache.get(key);

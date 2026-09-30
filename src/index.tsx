@@ -9,7 +9,7 @@ import "./net/playerData"; // subscribes to the connection (persisted player dat
 import { DayNightLights } from "./lighting/DayNightLights";
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
-import { GlitchCityDomain } from "./world/domains/glitch-city/domain";
+import { OverworldDomain } from "./world/domains/overworld/domain";
 import { HomeDomain } from "./world/domains/home/domain";
 import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
 import { resetDomainSystems } from "./world/domains/reset";
@@ -40,10 +40,10 @@ const Dotcomma = () => {
       <LogsOverlay />
       <NetOverlay />
       <CustomCanvas>
-        {domain === "glitch-city" && (
+        {domain === "overworld" && (
           <>
             <DayNightLights />
-            <GlitchCityDomain />
+            <OverworldDomain />
           </>
         )}
         {domain === "home" && <HomeDomain />}

@@ -14,6 +14,9 @@ export interface Chunk {
   /** World-space chunk center. */
   offset: PointXZ;
   plane: THREE.Mesh;
+  /** The WATER surface over this chunk (a child of `plane`, so it shows/hides/moves with it);
+   *  null for chunks with no lake or river. Same pooled geometry family as the terrain. */
+  water: THREE.Mesh | null;
   rebuildIterator: AsyncIterator<any> | null;
   /** Imperative Rapier body, never a React <RigidBody> (see CLAUDE.md). */
   colliderBody: import("@dimforge/rapier3d-compat").RigidBody | null;

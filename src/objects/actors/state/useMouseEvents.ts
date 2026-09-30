@@ -13,24 +13,9 @@ import type { StateMachineHandle } from "./useStateMachine";
  * the hook inert.
  */
 
-export interface MouseEventDistances {
-  onMouseHoverEnter?: number;
-  onMouseHoverLeave?: number;
-  onMouseLeftClick?: number;
-  onMouseRightClick?: number;
-  onMouseLeftClickDown?: number;
-  onMouseRightClickDown?: number;
-  onMouseLeftClickUp?: number;
-  onMouseRightClickUp?: number;
-  onMouseScroll?: number;
-  onMouseScrollUp?: number;
-  onMouseScrollDown?: number;
-  onMouseDoubleClick?: number;
-  onMouseMiddleClick?: number;
-}
-
 export interface UseMouseEventsOptions {
-  distances?: MouseEventDistances;
+  /** Farthest ray distance (eye → hit) any input registers from — the actor's `interactReach`. */
+  reach: number;
   shouldGrowCursor?: boolean;
   /** Per-instance seed (hash of spawn coords) so batch-mounted actors don't all raycast on the same frame. */
   framePhase?: number;
@@ -46,8 +31,6 @@ const raise = (bb: Record<string, any>, flag: MouseFlag, sync: SyncHandle | null
   bb.__mouse_dirty = true;
   if (sync && sync.known) sync.interact(mouseActionOf(flag));
 };
-
-const DEFAULT_DISTANCE = 5;
 
 // Angular pre-test: the per-triangle CPU-skinned test below is expensive and the
 // ×3-inflated sphere reject rarely rejects, so skip actors more than ~18° off the
@@ -70,7 +53,7 @@ const _hitPt = new THREE.Vector3();
 export function useMouseEvents(
   sm: StateMachineHandle | null,
   groupRef: React.MutableRefObject<THREE.Group | null>,
-  options: UseMouseEventsOptions = {},
+  options: UseMouseEventsOptions,
 ): MouseEventsHandle {
   const bb = sm?.blackboard ?? null;
   const growCursor = options.shouldGrowCursor ?? false;
@@ -78,38 +61,12 @@ export function useMouseEvents(
   const hitDistRef = useRef(Infinity);
   const syncRef = useRef<SyncHandle | null>(null);
 
-  const distances = useMemo(
-    () => ({
-      hoverEnter: options.distances?.onMouseHoverEnter ?? DEFAULT_DISTANCE,
-      leftClick: options.distances?.onMouseLeftClick ?? DEFAULT_DISTANCE,
-      rightClick: options.distances?.onMouseRightClick ?? DEFAULT_DISTANCE,
-      leftClickDown: options.distances?.onMouseLeftClickDown ?? DEFAULT_DISTANCE,
-      rightClickDown: options.distances?.onMouseRightClickDown ?? DEFAULT_DISTANCE,
-      leftClickUp: options.distances?.onMouseLeftClickUp ?? DEFAULT_DISTANCE,
-      rightClickUp: options.distances?.onMouseRightClickUp ?? DEFAULT_DISTANCE,
-      doubleClick: options.distances?.onMouseDoubleClick ?? DEFAULT_DISTANCE,
-      middleClick: options.distances?.onMouseMiddleClick ?? DEFAULT_DISTANCE,
-      scroll: options.distances?.onMouseScroll ?? DEFAULT_DISTANCE,
-      scrollUp: options.distances?.onMouseScrollUp ?? DEFAULT_DISTANCE,
-      scrollDown: options.distances?.onMouseScrollDown ?? DEFAULT_DISTANCE,
-    }),
-    [options.distances],
-  );
+  const reach = options.reach;
 
   const frameCountRef = useRef(options.framePhase ?? 0);
   const lastHoverRef = useRef(false);
 
   const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
-
-  const maxEventDist = useMemo(
-    () =>
-      Math.max(
-        distances.hoverEnter, distances.leftClick, distances.rightClick, distances.leftClickDown, distances.rightClickDown,
-        distances.leftClickUp, distances.rightClickUp, distances.doubleClick, distances.middleClick,
-        distances.scroll, distances.scrollUp, distances.scrollDown,
-      ),
-    [distances],
-  );
 
   const tick = (camera: THREE.Camera, distanceSq2D: number, sync: SyncHandle | null): void => {
     syncRef.current = sync;
@@ -123,7 +80,7 @@ export function useMouseEvents(
     let isHovering = false;
 
     if (groupRef.current) {
-      const threshold = maxEventDist + 3; // padding for object height/radius
+      const threshold = reach + 3; // padding for object height/radius
       const thresholdSq = threshold * threshold;
       const dist3DSq =
         distanceSq2D > thresholdSq ? Infinity : camera.position.distanceToSquared(groupRef.current.position);
@@ -158,7 +115,7 @@ export function useMouseEvents(
           let hitDist = Infinity;
           const meshes = cachedMeshesRef.current;
 
-          for (let m = 0; m < meshes.length && hitDist > maxEventDist; m++) {
+          for (let m = 0; m < meshes.length && hitDist > reach; m++) {
             const sm = meshes[m];
             const geo = sm.geometry;
             if (!geo.index) continue;
@@ -184,7 +141,7 @@ export function useMouseEvents(
             }
           }
           hitDistRef.current = hitDist;
-          if (hitDist <= distances.hoverEnter) {
+          if (hitDist <= reach) {
             isHovering = true;
           }
         }
@@ -216,50 +173,50 @@ export function useMouseEvents(
 
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if (dist() > distances.leftClick) return;
+      if (dist() > reach) return;
       input("__mouse_left_click");
     };
 
     const handleContextMenu = () => {
-      if (dist() > distances.rightClick) return;
+      if (dist() > reach) return;
       input("__mouse_right_click");
     };
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (dist() > distances.leftClickDown) return;
+        if (dist() > reach) return;
         input("__mouse_left_click_down");
       } else if (e.button === 1) {
-        if (dist() > distances.middleClick) return;
+        if (dist() > reach) return;
         input("__mouse_middle_click");
       } else if (e.button === 2) {
-        if (dist() > distances.rightClickDown) return;
+        if (dist() > reach) return;
         input("__mouse_right_click_down");
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       if (e.button === 0) {
-        if (dist() > distances.leftClickUp) return;
+        if (dist() > reach) return;
         input("__mouse_left_click_up");
       } else if (e.button === 2) {
-        if (dist() > distances.rightClickUp) return;
+        if (dist() > reach) return;
         input("__mouse_right_click");
         input("__mouse_right_click_up");
       }
     };
 
     const handleDblClick = () => {
-      if (dist() > distances.doubleClick) return;
+      if (dist() > reach) return;
       input("__mouse_double_click");
     };
 
     const handleWheel = (e: WheelEvent) => {
-      if (dist() > distances.scroll) return;
+      if (dist() > reach) return;
       input("__mouse_scroll");
-      if (e.deltaY < 0 && dist() <= distances.scrollUp) {
+      if (e.deltaY < 0 && dist() <= reach) {
         input("__mouse_scroll_up");
-      } else if (e.deltaY > 0 && dist() <= distances.scrollDown) {
+      } else if (e.deltaY > 0 && dist() <= reach) {
         input("__mouse_scroll_down");
       }
     };
@@ -279,7 +236,7 @@ export function useMouseEvents(
       window.removeEventListener("dblclick", handleDblClick);
       window.removeEventListener("wheel", handleWheel);
     };
-  }, [bb, distances]);
+  }, [bb, reach]);
 
   // NOTHING is attached to the R3F group: even no-op pointer handlers register the
   // actor in R3F's interaction list, which raycasts it recursively on every pointermove.

@@ -1,9 +1,10 @@
 import type { DomainId, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
 import { getActorSpec } from "../../../../src/objects/actors/catalog";
-import type { ActorSpec } from "../../../../src/objects/actors/spec";
+import { DOOR_INTERACT_REACH } from "../../../../src/objects/actors/building/spec";
+import { INTERACT_REACH_SLACK, serverInteractReachSq, type ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
-import { createBuildingCollider } from "../physics/buildings.js";
+import { createBuildingCollider, doorOffsetsFor } from "../physics/buildings.js";
 import { createNpcBody, type NpcBody, type Pose } from "../physics/npcBody.js";
 import { DEFAULT_WORK_BUDGET_MS, PHYSICS_DOMAIN, type PhysicsWorld } from "../physics/physicsWorld.js";
 import { PlayerBodies } from "../physics/playerBodies.js";
@@ -22,11 +23,11 @@ export { PHYSICS_DOMAIN, TICK_HZ, TICK_MS };
  */
 
 const MAX_PLAYER_EXTRAPOLATION_S = 0.5;
-/** A click must come from a player within this 2D reach. */
-const INTERACT_REACH_SQ = 8 * 8;
 const STATS_LOG_EVERY_TICKS = TICK_HZ * 10;
 const SLOW_TICK_WARN_MS = 50;
 const NO_PLAYER_POSITION = { x: 1e9, y: 0, z: 1e9 };
+const DOOR_ACTION = /^door:(\d+)$/;
+const DOOR_REACH_SQ = (DOOR_INTERACT_REACH + INTERACT_REACH_SLACK) ** 2;
 
 export interface PlayerView {
   id: string;
@@ -196,21 +197,43 @@ export class EntityManager {
   }
 
   /** A mouse action becomes the machine's blackboard flag (its own triggers decide);
-   *  "door:<i>" toggles replicated state generically. */
+   *  "door:<i>" toggles replicated state generically. Both are gated on the sender's
+   *  reported position: a mouse action from the actor's origin, a door from the door's
+   *  own position (a building's origin is its center, 9–16u from a facade door). */
   interact(sessionId: string, id: string, action: string, players: PlayerView[]): void {
     const e = this.entities.get(id);
     if (!e || !e.registrants.has(sessionId)) return;
     const from = players.find((p) => p.id === sessionId);
-    if (from && (from.x - e.x) ** 2 + (from.z - e.z) ** 2 > INTERACT_REACH_SQ) return;
-    if (e.runner?.raiseMouseAction(action)) return;
-    const door = /^door:(\d+)$/.exec(action);
+    const door = DOOR_ACTION.exec(action);
     if (door) {
       const idx = Number(door[1]);
-      const doors = Array.isArray(e.state.doors) ? [...(e.state.doors as boolean[])] : [];
-      doors[idx] = !doors[idx];
-      e.state = { ...e.state, doors };
-      this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, state: e.state });
+      if (this.canReachDoor(e, idx, from)) this.toggleDoor(e, idx);
+      return;
     }
+    if (from && !this.withinOriginReach(e, from)) return;
+    e.runner?.raiseMouseAction(action);
+  }
+
+  private withinOriginReach(e: EntityRecord, from: PlayerView): boolean {
+    return (from.x - e.x) ** 2 + (from.z - e.z) ** 2 <= serverInteractReachSq(this.specs(e.kind));
+  }
+
+  /** A building kind knows its doors from the seeded plan the hull is built from: the index must
+   *  exist and the player must be within reach of THAT door. Other kinds keep the origin gate. */
+  private canReachDoor(e: EntityRecord, idx: number, from: PlayerView | undefined): boolean {
+    const hull = this.specs(e.kind)?.hull;
+    if (!hull) return !from || this.withinOriginReach(e, from);
+    const doors = doorOffsetsFor(hull, e.x, e.z);
+    if (idx >= doors.length / 2) return false;
+    if (!from) return true;
+    return (from.x - e.x - doors[idx * 2]) ** 2 + (from.z - e.z - doors[idx * 2 + 1]) ** 2 <= DOOR_REACH_SQ;
+  }
+
+  private toggleDoor(e: EntityRecord, idx: number): void {
+    const doors = Array.isArray(e.state.doors) ? [...(e.state.doors as boolean[])] : [];
+    doors[idx] = !doors[idx];
+    e.state = { ...e.state, doors };
+    this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, state: e.state });
   }
 
   /** Players of a domain, extrapolated to now. */

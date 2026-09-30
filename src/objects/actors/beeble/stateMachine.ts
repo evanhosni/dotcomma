@@ -1,23 +1,6 @@
 import type * as THREE from "three";
 import { angleDiffAbs, lerpAngle } from "../state/motion";
-import {
-  custom,
-  onMouseDoubleClick,
-  onMouseHoverEnter,
-  onMouseHoverLeave,
-  onMouseLeftClick,
-  onMouseLeftClickDown,
-  onMouseLeftClickUp,
-  onMouseMiddleClick,
-  onMouseRightClick,
-  onMouseRightClickDown,
-  onMouseRightClickUp,
-  onMouseScroll,
-  onMouseScrollDown,
-  onMouseScrollUp,
-  playerOutsideRange,
-  randomInterval,
-} from "../state/triggers";
+import { custom, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/triggers";
 import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
 import { beginInflate, type Inflate } from "./inflate";
 
@@ -71,32 +54,19 @@ function logLocalClick(ctx: BehaviorContext): void {
   if (ctx.groupRef.current && ctx.input.leftClick) console.log("you clicked me");
 }
 
+const PLAYER_VISIBLE = custom("player-visible", (ctx) => {
+  if (ctx.playerDistanceSq > SIGHT_RANGE * SIGHT_RANGE) return false;
+  return angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= SIGHT_ANGLE;
+});
+const PLAYER_LOST = playerOutsideRange(LOSE_RANGE);
+const IDLE_LOOK = randomInterval("idle-look", 20, 60);
+const IDLE_LOOK_END = randomInterval("idle-look-end", 3, 10);
+const ALERT_NEED_TURN = custom("alert-need-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) > TURN_THRESHOLD);
+const ALERT_DONE_TURN = custom("alert-done-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= TURN_DONE_THRESHOLD);
+const CLICKED = onMouseLeftClick();
+
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",
-  triggers: [
-    custom("player-visible", (ctx) => {
-      if (ctx.playerDistanceSq > SIGHT_RANGE * SIGHT_RANGE) return false;
-      return angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= SIGHT_ANGLE;
-    }),
-    playerOutsideRange(LOSE_RANGE),
-    randomInterval("idle-look", 20, 60),
-    randomInterval("idle-look-end", 3, 10),
-    custom("alert-need-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) > TURN_THRESHOLD),
-    custom("alert-done-turn", (ctx) => angleDiffAbs(ctx.motion.yaw, angleToPlayer(ctx)) <= TURN_DONE_THRESHOLD),
-    onMouseLeftClick(),
-    onMouseHoverEnter(),
-    onMouseHoverLeave(),
-    onMouseRightClick(),
-    onMouseLeftClickDown(),
-    onMouseRightClickDown(),
-    onMouseLeftClickUp(),
-    onMouseRightClickUp(),
-    onMouseScroll(),
-    onMouseScrollUp(),
-    onMouseScrollDown(),
-    onMouseDoubleClick(),
-    onMouseMiddleClick(),
-  ],
   states: [
     {
       id: "idle-walk",
@@ -124,8 +94,8 @@ export const BEEBLE_SM: StateMachineConfig = {
         ctx.motion.heading(bb.__dir_angle, BEEBLE_SPEED).fly(null).face(bb.__dir_angle);
       },
       transitions: [
-        { trigger: "player-visible", target: "alert" },
-        { trigger: "idle-look", target: "idle-look" },
+        { trigger: PLAYER_VISIBLE, target: "alert" },
+        { trigger: IDLE_LOOK, target: "idle-look" },
       ],
     },
 
@@ -137,8 +107,8 @@ export const BEEBLE_SM: StateMachineConfig = {
         resetHeadBone(ctx);
       },
       transitions: [
-        { trigger: "player-visible", target: "alert" },
-        { trigger: "idle-look-end", target: "idle-walk" },
+        { trigger: PLAYER_VISIBLE, target: "alert" },
+        { trigger: IDLE_LOOK_END, target: "idle-walk" },
       ],
     },
 
@@ -154,9 +124,9 @@ export const BEEBLE_SM: StateMachineConfig = {
         logLocalClick(ctx);
       },
       transitions: [
-        { trigger: "mouse-left-click", target: "ascending" },
-        { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "alert-need-turn", target: "alert-turning" },
+        { trigger: CLICKED, target: "ascending" },
+        { trigger: PLAYER_LOST, target: "idle-walk" },
+        { trigger: ALERT_NEED_TURN, target: "alert-turning" },
       ],
     },
 
@@ -172,9 +142,9 @@ export const BEEBLE_SM: StateMachineConfig = {
         logLocalClick(ctx);
       },
       transitions: [
-        { trigger: "mouse-left-click", target: "ascending" },
-        { trigger: `player-outside-${LOSE_RANGE}`, target: "idle-walk" },
-        { trigger: "alert-done-turn", target: "alert" },
+        { trigger: CLICKED, target: "ascending" },
+        { trigger: PLAYER_LOST, target: "idle-walk" },
+        { trigger: ALERT_DONE_TURN, target: "alert" },
       ],
     },
 

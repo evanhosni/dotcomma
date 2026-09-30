@@ -30,7 +30,6 @@ export const resetActiveDomain = () => {
 
 export const whenDomainReady = (): Promise<void> => readyPromise;
 
-
 export const getActiveRegions = (): Region[] => active?.regions ?? [];
 
 export const getTerrainParams = (): TerrainParams => active?.params ?? DEFAULT_TERRAIN_PARAMS;

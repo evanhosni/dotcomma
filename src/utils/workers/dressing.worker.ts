@@ -1,41 +1,26 @@
 /**
- * Dressing placement worker: the city feature enumerators, generic density
- * points, city-light sites and padded height samples, behind a cheap
- * chunk-center biome probe.
+ * Dressing placement worker: every dressing enumerator (the name → function table in
+ * objects/dressing/enumerators.ts), plus two point queries that share its thread and config.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "ROAD_MARKERS",   id, minX, minZ, maxX, maxZ, streetSpacing, freewaySpacing }
- *   IN:  { type: "TRAFFIC_LIGHTS", id, minX, minZ, maxX, maxZ, chance }
- *   IN:  { type: "FREEWAY_SIDES",  id, minX, minZ, maxX, maxZ, spacing, lateral, junctionClear, withNext }
- *   IN:  { type: "DENSITY_POINTS", id, minX, minZ, maxX, maxZ, params: DensityPointParams }
- *   IN:  { type: "CITY_SITES",     id, minX, minZ, maxX, maxZ } (no biome probe — big windows)
- *   IN:  { type: "VERTEX_SAMPLE",  id, x, z } (single padded height sample — Player backstop)
+ *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: DressingBounds, args }
+ *   IN:  { type: "VERTEX_SAMPLE", id, x, z } (single padded height sample — Player backstop)
+ *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell)
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "DRESSING_RESULT", id, points }
  */
 
-import {
-  computeVertexData,
-  getCityFreewaySidePoints,
-  getCityRoadMarkers,
-  getCityTrafficLightPoints,
-  getCityVoronoiSites,
-  initCompute,
-  DomainConfig,
-} from "./vertexCompute";
-import { generateDensityPoints } from "./densityPoints";
-import { CITY_BIOME_ID } from "../../world/constants";
+import { computeVertexData, getPlaceInfo, initCompute, DomainConfig } from "./vertexCompute";
+import { isDressingEnumerator, runDressingEnumerator } from "../../objects/dressing/enumerators";
 
 let initialized = false;
 
-/** No city roads possible here: center in another biome and no boundary in reach. */
-const probeEmpty = (minX: number, minZ: number, maxX: number, maxZ: number): boolean => {
-  const vd = computeVertexData((minX + maxX) / 2, (minZ + maxZ) / 2);
-  return vd.biomeId !== CITY_BIOME_ID && vd.distanceToBiomeBoundaryCenter > (maxX - minX) * 0.75;
+const reply = (id: number, points: unknown[]): void => {
+  (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
 };
 
 self.onmessage = (e: MessageEvent) => {
-  const { type } = e.data;
+  const { type, id } = e.data;
 
   if (type === "INIT") {
     initCompute(e.data.config as DomainConfig);
@@ -44,43 +29,34 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  const { id, minX, minZ, maxX, maxZ } = e.data;
+  if (!initialized) {
+    reply(id, []);
+    return;
+  }
+
+  if (type === "ENUMERATE") {
+    const { name, bounds, args } = e.data;
+    if (!isDressingEnumerator(name)) {
+      console.error(`dressing.worker: no enumerator "${name}" (objects/dressing/enumerators.ts)`);
+      reply(id, []);
+      return;
+    }
+    reply(id, runDressingEnumerator(name, bounds, args));
+    return;
+  }
 
   // A flatten-tile miss costs 30-70ms — the Player confirms its backstop here instead of on the main thread.
   if (type === "VERTEX_SAMPLE") {
-    const points = initialized ? [computeVertexData(e.data.x, e.data.z)] : [];
-    (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
+    // biomeSdf is a shared scratch buffer and not what a sample consumer needs.
+    reply(id, [{ ...computeVertexData(e.data.x, e.data.z), biomeSdf: undefined }]);
     return;
   }
 
-  // City-site scans use huge windows (~1800u), where the chunk-center probe doesn't apply.
-  if (type === "CITY_SITES") {
-    const points = initialized ? getCityVoronoiSites(minX, minZ, maxX, maxZ) : [];
-    (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
+  if (type === "PLACE_INFO") {
+    reply(id, [getPlaceInfo(e.data.x, e.data.z)]);
     return;
   }
 
-  const empty = !initialized || probeEmpty(minX, minZ, maxX, maxZ);
-  let points: unknown[] = [];
-
-  if (!empty && type === "ROAD_MARKERS") {
-    points = getCityRoadMarkers(minX, minZ, maxX, maxZ, e.data.streetSpacing, e.data.freewaySpacing);
-  } else if (!empty && type === "TRAFFIC_LIGHTS") {
-    points = getCityTrafficLightPoints(minX, minZ, maxX, maxZ, e.data.chance);
-  } else if (!empty && type === "FREEWAY_SIDES") {
-    points = getCityFreewaySidePoints(
-      minX,
-      minZ,
-      maxX,
-      maxZ,
-      e.data.spacing,
-      e.data.lateral,
-      e.data.junctionClear,
-      e.data.withNext
-    );
-  } else if (!empty && type === "DENSITY_POINTS") {
-    points = generateDensityPoints(minX, minZ, maxX, maxZ, e.data.params);
-  }
-
-  (self as any).postMessage({ type: "DRESSING_RESULT", id, points });
+  console.error(`dressing.worker: unknown message type "${type}"`);
+  reply(id, []);
 };

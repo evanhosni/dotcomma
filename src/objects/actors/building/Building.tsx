@@ -10,22 +10,30 @@ import { framePhaseFromCoords } from "../../../utils/utils";
 import { prepareActorMaterial, useActorLifecycle } from "../Actor";
 import {
   beginProceduralBuildingBuild,
+  ensureBuildingInterior,
+  peekBuildingInterior,
   peekProceduralBuildingAssets,
   ProceduralBuildingAssets,
   releaseProceduralBuildingAssets,
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
+import { addFarDoor, FarDoor, followFarDoorOrigin, removeFarDoor, setFarDoorAngle } from "./farDoors";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
+import { DOOR_INTERACT_REACH } from "./spec";
 import { BuildingAttributes, BuildingProps } from "./types";
 
 const COLLIDER_DISTANCE = 120;
 const DISTANCE_CHECK_INTERVAL = 15; // frames
 const BUILDING_DESPAWN_DISTANCE_FACTOR = 1.1;
-const CHILDREN_ACTIVE_DISTANCE = 150;
-const DOOR_INTERACT_DISTANCE = 6; // click/hover reach
+/** Inside it the building's subtree is LIVE (matrices update, see the base's freezeMatrices): the real,
+ *  clickable door leaves draw and the interior (once built) is shown. Beyond it the leaves are drawn by
+ *  the one far-door InstancedMesh (farDoors.ts) and the interior is hidden — hidden, never discarded. */
+const LIVE_DISTANCE = 150;
+/** The first time the player comes this close, the interior mesh is built and mounted, and it (and
+ *  its children) stay mounted until the building despawns. Well inside the collider range (120u), so
+ *  only buildings the player actually walks up to pay for an interior. */
+const INTERIOR_DISTANCE = 60;
 const DOOR_RAYCAST_DISTANCE = 30; // building distance under which the door raycast runs
-// A leaf is a few pixels past ~200u but each is its own lit draw call — hundreds of draws otherwise.
-const DOOR_VISIBLE_DISTANCE = 220;
 const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
 const DOOR_SWING_RATE = 4;
 
@@ -122,6 +130,9 @@ const DISTANCE_GATE_HYSTERESIS = 12;
 
 const buildQueue = new TaskQueue();
 
+// The FIRST building each frame moves the far-door origin.
+let farDoorOriginTime = -1;
+
 export const Building = ({
   id,
   descriptorId,
@@ -148,6 +159,7 @@ export const Building = ({
   interiorColors,
   materials,
   renderDistance,
+  colliderDistance = COLLIDER_DISTANCE,
   despawnDistance,
   onDestroy,
   children,
@@ -206,19 +218,31 @@ export const Building = ({
   useEffect(() => {
     if (assets) return;
     let cancelled = false;
+    let taskId: string | null = null;
     // One task per build PHASE so the queue can yield between them — as one
-    // monolithic task a heavy skyscraper was a single long frame.
+    // monolithic task a heavy skyscraper was a single long frame. Each phase queues
+    // the next, ranked by distance, so the building nearest the player finishes first.
     const build = beginProceduralBuildingBuild(resolvedSeed, buildOptions, optionsKey);
-    build.steps.forEach((step, phase) => {
-      buildQueue.addTask(async () => {
-        if (!cancelled) traceSpan(`building:phase${phase}`, step);
-      });
-    });
-    buildQueue.addTask(async () => {
-      if (!cancelled) setAssets(traceSpan("building:finish", build.finish));
-    });
+    const steps = [
+      ...build.steps.map((step, phase) => () => traceSpan(`building:phase${phase}`, step)),
+      () => setAssets(traceSpan("building:finish", build.finish)),
+    ];
+    const at = { x: coordinates[0], z: coordinates[2] };
+    const queueStep = (i: number) => {
+      taskId = buildQueue.addTask(
+        async () => {
+          taskId = null;
+          if (cancelled) return;
+          steps[i]();
+          if (i + 1 < steps.length) queueStep(i + 1);
+        },
+        { at },
+      );
+    };
+    queueStep(0);
     return () => {
       cancelled = true;
+      if (taskId !== null) buildQueue.removeTask(taskId);
     };
   }, [resolvedSeed, optionsKey]); // assets deliberately omitted: guard exits once built
 
@@ -248,13 +272,21 @@ export const Building = ({
   const hoverDoorRef = useRef(-1);
   const doorsMovingRef = useRef(false);
 
-  const interiorMeshRef = useRef<THREE.Mesh>(null);
   const doorsGroupRef = useRef<THREE.Group>(null);
+  const liveRef = useRef(false);
+  const farDoorsRef = useRef<FarDoor[] | null>(null);
+
+  // The interior is a one-way latch per life: built on the first close approach, then kept (and
+  // with it any state its children hold) until the building unmounts, whatever the distance.
+  const [interiorWanted, setInteriorWanted] = useState(false);
+  const interiorWantedRef = useRef(false);
+  const [interior, setInterior] = useState<THREE.BufferGeometry | null>(null);
+  const interiorGroupRef = useRef<THREE.Group>(null);
   const doorFrameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 3));
 
   // Doors are SERVER-owned replicated state { doors: boolean[] }: a click
   // sends "door:<i>", the server toggles + broadcasts, every client applies.
-  const { groupRef, collidersActive, nearActive, sync } = useActorLifecycle({
+  const { groupRef, collidersActive, sync } = useActorLifecycle({
     id,
     descriptorId,
     serverSynced,
@@ -263,11 +295,11 @@ export const Building = ({
     despawnDistance: despawnDistance ?? renderDistance * BUILDING_DESPAWN_DISTANCE_FACTOR,
     onDestroy,
     checkInterval: DISTANCE_CHECK_INTERVAL,
-    colliderDistance: COLLIDER_DISTANCE,
+    colliderDistance,
     gateHysteresis: DISTANCE_GATE_HYSTERESIS,
     // Activation mounts two Rapier trimeshes (several ms each).
     throttleColliderActivation: true,
-    nearDistance: CHILDREN_ACTIVE_DISTANCE,
+    nearDistance: LIVE_DISTANCE,
     freezeMatrices: true,
     onFrame: (state, delta, ctx) => {
       const time = state.clock.elapsedTime;
@@ -277,11 +309,44 @@ export const Building = ({
         NIGHT_SEED_UNIFORM.value = getNightIndex();
       }
 
-      // The interior is fully occluded by the shell from outside.
+      if (time !== farDoorOriginTime) {
+        farDoorOriginTime = time;
+        followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
+      }
+
+      // Same test as the base's near gate (same distance, same frames), so "live" is exactly
+      // "matrices unfrozen" and a real leaf never swings under a frozen matrix.
       if (ctx.gatesChecked) {
-        if (interiorMeshRef.current) interiorMeshRef.current.visible = nearActive;
-        if (doorsGroupRef.current) {
-          doorsGroupRef.current.visible = ctx.distanceSq < DOOR_VISIBLE_DISTANCE * DOOR_VISIBLE_DISTANCE;
+        const reach = LIVE_DISTANCE + (liveRef.current ? DISTANCE_GATE_HYSTERESIS : 0);
+        const live = ctx.distanceSq < reach * reach;
+        liveRef.current = live;
+        // The interior is fully occluded by the shell from outside.
+        if (interiorGroupRef.current) interiorGroupRef.current.visible = live;
+        if (doorsGroupRef.current) doorsGroupRef.current.visible = live;
+        if (live && farDoorsRef.current) {
+          farDoorsRef.current.forEach(removeFarDoor);
+          farDoorsRef.current = null;
+        } else if (!live && !farDoorsRef.current && assets) {
+          farDoorsRef.current = assets.doors.map((d, i) =>
+            addFarDoor(
+              state.scene,
+              {
+                x: coordinates[0] + d.position[0],
+                y: coordinates[1] + d.position[1],
+                z: coordinates[2] + d.position[2],
+                yaw: d.yaw,
+                width: d.width,
+                leafCenter: assets.doorLeaf.center,
+                leafSize: assets.doorLeaf.size,
+                color: assets.doorLeaf.color,
+              },
+              hingeRefs.current[i]?.rotation.y ?? (doorsOpenRef.current[i] ? DOOR_OPEN_ANGLE : 0),
+            ),
+          );
+        }
+        if (!interiorWantedRef.current && ctx.distanceSq < INTERIOR_DISTANCE * INTERIOR_DISTANCE) {
+          interiorWantedRef.current = true;
+          setInteriorWanted(true);
         }
       }
 
@@ -289,7 +354,7 @@ export const Building = ({
         let hover = -1;
         if (ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE) {
           _raycaster.setFromCamera(_center, state.camera);
-          _raycaster.far = DOOR_INTERACT_DISTANCE;
+          _raycaster.far = DOOR_INTERACT_REACH;
           for (let i = 0; i < doorMeshRefs.current.length; i++) {
             const mesh = doorMeshRefs.current[i];
             if (!mesh) continue;
@@ -327,11 +392,48 @@ export const Building = ({
             hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
             stillMoving = true;
           }
+          const far = farDoorsRef.current?.[i];
+          if (far) setFarDoorAngle(far, hinge.rotation.y);
         }
         doorsMovingRef.current = stillMoving;
       }
     },
   });
+
+  useEffect(() => {
+    if (!interiorWanted || !assets) return;
+    const cached = peekBuildingInterior(resolvedSeed, optionsKey);
+    if (cached) {
+      setInterior(cached);
+      return;
+    }
+    let cancelled = false;
+    const taskId = buildQueue.addTask(
+      async () => {
+        if (!cancelled) setInterior(traceSpan("building:interior", () => ensureBuildingInterior(resolvedSeed, optionsKey)));
+      },
+      { at: { x: coordinates[0], z: coordinates[2] } },
+    );
+    return () => {
+      cancelled = true;
+      buildQueue.removeTask(taskId);
+    };
+  }, [interiorWanted, assets, resolvedSeed, optionsKey]);
+
+  useEffect(() => {
+    if (!interior) return;
+    interiorGroupRef.current?.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) uploadOnFirstDraw(o);
+    });
+  }, [interior]);
+
+  useEffect(
+    () => () => {
+      farDoorsRef.current?.forEach(removeFarDoor);
+      farDoorsRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (collidersActive) traceEvent("building:colliders-on");
@@ -397,16 +499,26 @@ export const Building = ({
 
   return (
     <group ref={groupRef} position={coordinates}>
-      {/* Interior visibility is a ref write in onFrame; starts hidden. */}
       <mesh geometry={assets.exteriorGeometry} material={materials?.exterior ?? DEFAULT_EXTERIOR} />
-      <mesh
-        ref={interiorMeshRef}
-        visible={false}
-        geometry={assets.interiorGeometry}
-        material={materials?.interior ?? DEFAULT_INTERIOR}
-      />
 
-      {/* Hinged leaves; drawn only within DOOR_VISIBLE_DISTANCE. */}
+      {/* Built on the first approach within INTERIOR_DISTANCE and kept until unmount; shown
+          inside LIVE_DISTANCE (a ref write in onFrame). */}
+      {interior && (
+        <group ref={interiorGroupRef}>
+          <mesh geometry={interior} material={materials?.interior ?? DEFAULT_INTERIOR} />
+          {/* Seeded room slots. */}
+          {childArray.map((child, i) => {
+            const slot = slots[i % slots.length];
+            return (
+              <group key={i} position={slot.position} rotation={[0, slot.rotationY, 0]}>
+                {child}
+              </group>
+            );
+          })}
+        </group>
+      )}
+
+      {/* The real hinged leaves, inside LIVE_DISTANCE; farDoors.ts draws them beyond it. */}
       <group ref={doorsGroupRef}>
         {assets.doors.map((d, i) => (
           <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
@@ -450,17 +562,6 @@ export const Building = ({
           )}
         </RigidBody>
       )}
-
-      {/* Seeded room slots. */}
-      {nearActive &&
-        childArray.map((child, i) => {
-          const slot = slots[i % slots.length];
-          return (
-            <group key={i} position={slot.position} rotation={[0, slot.rotationY, 0]}>
-              {child}
-            </group>
-          );
-        })}
     </group>
   );
 };

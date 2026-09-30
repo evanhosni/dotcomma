@@ -1,4 +1,4 @@
-import { PLAYER_DATA_MAX_BYTES, type PlayerData } from "../../../src/net/protocol";
+import { PLAYER_DATA_MAX_BYTES, playerDataBytes, type PlayerData } from "../../../src/net/protocol";
 import { loadPlayer, savePlayerData } from "../data/players.js";
 
 /**
@@ -21,8 +21,6 @@ export interface PersistedPlayer {
 }
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-
-export const playerDataBytes = (d: PlayerData): number => Buffer.byteLength(JSON.stringify(d), "utf8");
 
 /** The merged blob when `patch` is a plain object whose merge fits the cap, else null. */
 export const validatePatch = (current: PlayerData, patch: unknown): PlayerData | null => {

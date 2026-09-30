@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useMemo } from "react";
 
 /** Group-defaults factory behind <Dressing>/<Foliage>: props on the group are
- *  defaults for the children, a child's own props win. (<Actors> keeps its own
- *  variant — its defaults carry a non-serializable `component`.) */
+ *  defaults for the children, a child's own props win. (Actors have no group: a
+ *  biome places them by data, its spec's `actors` list.) */
 export const createDefaultsGroup = <T extends object>(className: string) => {
   const Context = createContext<T>({} as T);
 

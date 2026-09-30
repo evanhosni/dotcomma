@@ -1,15 +1,19 @@
-attribute float distanceToBiomeBoundaryCenter;
-attribute float distanceToRiverCenter;
+attribute vec4 biomeSdf0;
+attribute vec4 biomeSdf1;
+attribute vec4 biomePresence0;
+attribute vec4 biomePresence1;
+attribute float riverBedDistance;
 attribute float distanceToRoadCenter;
 attribute float distanceToFreewayCenter;
 attribute float freewayAlong;
-varying float vDistanceToBiomeBoundaryCenter;
-varying float vDistanceToRiverCenter;
+varying vec4 vBiomeSdf0;
+varying vec4 vBiomeSdf1;
+varying vec4 vBiomePresence0;
+varying vec4 vBiomePresence1;
+varying float vRiverBedDistance;
 varying float vDistanceToRoadCenter;
 varying float vDistanceToFreewayCenter;
 varying float vFreewayAlong;
-attribute float biomeId;
-flat varying int vBiomeId;
 varying vec2 vUv;
 varying vec2 vWorldUv;
 varying float vSlopeAngle;
@@ -21,6 +25,13 @@ varying vec3 vWorldPosAbs;
 // quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
 // by world/terrain/material.ts.
 //
+// BIOME BLEND: vBiomeSdf* carry a SIGNED DISTANCE per biome slot (scaled so ±1 is
+// the feather edge) and vBiomePresence* the signed distance to the biome's OWN
+// boundary in its blend widths — never a weight or an id. Signed distance
+// interpolates linearly, so the fragment shader's smoothsteps land a 1–3u feather
+// at pixel resolution even on 17.5u quads. A per-triangle `flat` biome id used to
+// live here; it is what produced staircase edges and stray outlines at every wall.
+//
 // PRECISION (see CLAUDE.md, Coordinate Precision): NEVER form an absolute
 // world coordinate here — float32 swims the quantization grid past ~100k
 // units. World position = WRAPPED chunk origin + chunk-local offset, projected
@@ -28,12 +39,14 @@ varying vec3 vWorldPosAbs;
 // from vWorldPosWrapped must divide WORLD_WRAP or it seams every 4200 units.
 
 void main() {
-  vDistanceToBiomeBoundaryCenter = distanceToBiomeBoundaryCenter;
-  vDistanceToRiverCenter = distanceToRiverCenter;
+  vBiomeSdf0 = biomeSdf0;
+  vBiomeSdf1 = biomeSdf1;
+  vBiomePresence0 = biomePresence0;
+  vBiomePresence1 = biomePresence1;
+  vRiverBedDistance = riverBedDistance;
   vDistanceToRoadCenter = distanceToRoadCenter;
   vDistanceToFreewayCenter = distanceToFreewayCenter;
   vFreewayAlong = freewayAlong;
-  vBiomeId = int(biomeId);
   vUv = uv;
 
   vec3 chunkOrigin = modelMatrix[3].xyz;

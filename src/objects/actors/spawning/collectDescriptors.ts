@@ -1,19 +1,7 @@
 import { Region } from "../../../world/types";
+import { mergeActorListings } from "../spec";
 import { AnyActorDescriptor } from "./types";
 
-/** Deduplicates by descriptor id (last-registered wins). */
-export const collectDescriptors = (regions: Region[]): AnyActorDescriptor[] => {
-  const byId = new Map<string, AnyActorDescriptor>();
-
-  for (const region of regions) {
-    for (const biome of region.biomes) {
-      if (biome.actors) {
-        for (const desc of biome.actors) {
-          byId.set(desc.id, desc);
-        }
-      }
-    }
-  }
-
-  return Array.from(byId.values());
-};
+/** One descriptor per kind: spawning in every biome that lists it, otherwise last-registered wins. */
+export const collectDescriptors = (regions: Region[]): AnyActorDescriptor[] =>
+  mergeActorListings(regions.flatMap((region) => region.biomes.flatMap((biome) => biome.actors ?? [])));

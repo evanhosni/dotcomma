@@ -7,7 +7,8 @@ import { Overlay } from "../menus/overlay/Overlay";
 import { Player } from "../player/Player";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
-import { DayNightProvider } from "../lighting/DayNightContext";
+import { LampGlowDriver } from "../lighting/lampGlow";
+import { GRAVITY } from "../physics/characterMovement";
 import { initCursor } from "../utils/cursor/cursor";
 import { traceSpan } from "../utils/spikeTrace";
 import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
@@ -33,6 +34,8 @@ const SceneRender = () => {
 // Do NOT reintroduce a post-load scene-wide gl.compile here: it was itself a
 // large synchronous hitch tens of seconds into play (see CLAUDE.md).
 
+const PHYSICS_GRAVITY: [number, number, number] = [0, GRAVITY, 0];
+
 const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   const { physicsDebug } = useDevContext();
 
@@ -43,10 +46,11 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
   return (
     <>
       <SceneRender />
+      <LampGlowDriver />
       <Overlay />
       {/* interpolate={false} + timeStep="vary": no dynamic bodies; the fixed 1/60 accumulator
           drove kinematic bodies at 60/fps of their speed above 60fps (see CLAUDE.md). */}
-      <Physics gravity={[0, -100, 0]} debug={physicsDebug} interpolate={false} timeStep="vary">
+      <Physics gravity={PHYSICS_GRAVITY} debug={physicsDebug} interpolate={false} timeStep="vary">
         {children}
         <Player />
       </Physics>
@@ -68,9 +72,7 @@ export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
     // Black avoids a gray flash before the first frame (alpha: false, so CSS never shows otherwise).
     <Canvas style={{ background: "#000000" }} dpr={[1, MAX_DPR]} gl={GL_PROPS}>
       <GameContextProvider>
-        <DayNightProvider>
-          <PreCustomCanvas>{children}</PreCustomCanvas>
-        </DayNightProvider>
+        <PreCustomCanvas>{children}</PreCustomCanvas>
       </GameContextProvider>
     </Canvas>
   );

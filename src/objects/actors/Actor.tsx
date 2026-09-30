@@ -2,7 +2,7 @@ import { RootState } from "@react-three/fiber";
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
-import { _quantization } from "../../utils/quantization/quantization";
+import { _quantization } from "../../vfx/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
 import { PosePlayback } from "../../net/entities/posePlayback";

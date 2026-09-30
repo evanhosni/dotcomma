@@ -1,5 +1,5 @@
 import type { DomainConfig } from "../../utils/workers/vertexCompute";
-import { GLITCH_CITY_CONFIG } from "./glitch-city/config";
+import { OVERWORLD_CONFIG } from "./overworld/config";
 import type { DomainId } from "./types";
 
 /**
@@ -9,5 +9,5 @@ import type { DomainId } from "./types";
  * walkers run their machines but stay put); the home page needs none.
  */
 export const DOMAIN_CONFIGS: Partial<Record<DomainId, DomainConfig>> = {
-  "glitch-city": GLITCH_CITY_CONFIG,
+  overworld: OVERWORLD_CONFIG,
 };

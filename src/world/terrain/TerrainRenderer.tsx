@@ -4,12 +4,15 @@ import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { traceEvent } from "../../utils/spikeTrace";
+import { chargeFrameWork, isMachineStruggling } from "../../utils/task-queue/TaskQueue";
 import { createWorkerClient } from "../../utils/workers/workerClient";
+import { BIOME_SDF_FAR } from "../../utils/workers/vertexCompute";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import type { PointXZ } from "../../utils/math/types";
 import { getActiveDomainConfig } from "../domains/utils";
-import { getMaterial } from "./material";
-import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE, SKIRT_DEPTH } from "./lodConfig";
+import { MAX_BIOME_SLOTS, getMaterial } from "./material";
+import { getWaterMaterial, tickWater } from "../water/waterMaterial";
+import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
 import { Chunk, TerrainProps } from "./types";
 
 const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
@@ -109,6 +112,14 @@ let terrainDirty = true;
 let lastSortX = Infinity;
 let lastSortZ = Infinity;
 
+// PRIORITY (the same notion as the TaskQueue's, utils/README.md): the build queue is sorted LOD1, then
+// LOD2, each nearest-first, so the collider LODs under and around the player always build first. The
+// visual-only far LODs yield while the machine is struggling: at most one per FAR_BUILD_INTERVAL_MS.
+// Deferring one never opens a hole — an old chunk stays visible until its replacements are built —
+// and the initial load is never throttled (the loading gate waits for every chunk).
+const FAR_BUILD_INTERVAL_MS = 250;
+let lastFarBuildAt = -Infinity;
+
 const swappableKeys = new Set<string>();
 const cancelledKeys = new Set<string>();
 const pruneKeys: string[] = [];
@@ -120,7 +131,15 @@ const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
   if (pool && pool.length > 0) {
     return pool.pop()!;
   }
-  return createChunkGeometry(lod.chunkSize, lod.segments);
+  return createChunkGeometry(lod.chunkSize, lod.segments, lod.skirtDepth);
+};
+
+/** Drops a chunk's water surface back into the geometry pool (it shares the terrain's LOD family). */
+const releaseWater = (chunk: Chunk) => {
+  if (!chunk.water) return;
+  chunk.plane.remove(chunk.water);
+  releaseGeometry(chunk.lod, chunk.water.geometry);
+  chunk.water = null;
 };
 
 const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
@@ -151,6 +170,7 @@ export const resetTerrainSystem = () => {
   for (const key of Object.keys(terrain.chunks)) {
     const { chunk } = terrain.chunks[key];
     releaseGeometry(chunk.lod, chunk.plane.geometry);
+    releaseWater(chunk);
     terrain.group.remove(chunk.plane);
     // Bodies already left the persistent physics world in the unmount cleanup.
     chunk.colliderBody = null;
@@ -180,17 +200,22 @@ const buildChunkInWorker = (
   chunkSize: number,
   offsetX: number,
   offsetZ: number,
-  skipPads: boolean,
+  visualOnly: boolean,
+  carvesRivers: boolean,
   needCollider: boolean,
 ): Promise<{
   heights: Float32Array;
-  biomeIds: Float32Array;
-  distBiome: Float32Array;
-  distRegion: Float32Array;
+  /** count × slots, interleaved per vertex (world/terrain/material.ts owns the slot → biome mapping). */
+  biomeSdf: Float32Array;
+  biomePresence: Float32Array;
+  slots: number;
+  riverBed: Float32Array;
   distRoad: Float32Array;
   distFreeway: Float32Array;
   freewayAlong: Float32Array;
   normals: Float32Array;
+  /** Water surface per vertex (NaN = none); null when nothing in the chunk is under water. */
+  waterHeights: Float32Array | null;
   colliderHeights: Float32Array | null;
 }> => {
   return terrainClient.request({
@@ -199,7 +224,8 @@ const buildChunkInWorker = (
     chunkSize,
     offsetX,
     offsetZ,
-    skipPads,
+    visualOnly,
+    carvesRivers,
     needCollider,
   });
 };
@@ -292,7 +318,7 @@ const getPerimeterIndices = (segments: number): number[] => {
 };
 
 /** Grid + a skirt ring around the perimeter (skirt positions are filled in buildChunk). */
-const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferGeometry => {
+const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: number): THREE.BufferGeometry => {
   const n = segments + 1;
   const mainVertCount = n * n;
   const perimeterIndices = getPerimeterIndices(segments);
@@ -346,7 +372,7 @@ const createChunkGeometry = (chunkSize: number, segments: number): THREE.BufferG
     positions[(skirtTopStart + i) * 3 + 2] = 0;
     positions[(skirtBotStart + i) * 3] = positions[srcIdx * 3];
     positions[(skirtBotStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
-    positions[(skirtBotStart + i) * 3 + 2] = -SKIRT_DEPTH;
+    positions[(skirtBotStart + i) * 3 + 2] = -skirtDepth;
     normals[(skirtTopStart + i) * 3 + 2] = 1;
     normals[(skirtBotStart + i) * 3 + 2] = 1;
     uvs[(skirtTopStart + i) * 2] = uvs[srcIdx * 2];
@@ -383,9 +409,17 @@ export const TerrainRenderer = () => {
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
   const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
-  const { terrainLoaded, setProgress, setTerrainLoaded, terrainHighLODPending } = useGameContext();
+  const { terrainLoaded, setProgress, setTerrainLoaded, playerSpawn } = useGameContext();
   const lastRemainingRef = React.useRef<number>(-1);
   const isUpdatingTerrain = React.useRef(false);
+
+  // A new spawn (fast travel) restarts the loading gate: the stale remaining=0 would
+  // otherwise flip terrainLoaded back on before the first pass around the new position.
+  useEffect(() => {
+    lastRemainingRef.current = -1;
+    setRemainingChunks(null);
+    terrainDirty = true;
+  }, [playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
 
   useEffect(() => {
     scene.add(terrain.group);
@@ -411,6 +445,7 @@ export const TerrainRenderer = () => {
       chunk.colliderBody = null;
     }
     releaseGeometry(chunk.lod, chunk.plane.geometry);
+    releaseWater(chunk);
     terrain.group.remove(chunk.plane);
     delete terrain.chunks[chunkKey];
   };
@@ -428,7 +463,8 @@ export const TerrainRenderer = () => {
     getMaterial().then(setTerrainMaterial);
   }, []);
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
+    tickWater(clock.elapsedTime);
     if (!terrainMaterial || isUpdatingTerrain.current) return;
     // Synchronous early-out: reaching the same gate inside the async updateTerrain
     // cost a promise chain + microtask drain every parked frame.
@@ -595,6 +631,12 @@ export const TerrainRenderer = () => {
     }
 
     while (terrain.queuedToBuild.length > 0) {
+      const next = terrain.queuedToBuild[terrain.queuedToBuild.length - 1];
+      if (terrainLoaded && !next.lod.hasCollider) {
+        const t = performance.now();
+        if (isMachineStruggling() && t - lastFarBuildAt < FAR_BUILD_INTERVAL_MS) break;
+        lastFarBuildAt = t;
+      }
       const chunk = terrain.queuedToBuild.pop()!;
       terrain.activeChunk = chunk;
       chunk.rebuildIterator = buildChunk(chunk, material);
@@ -607,11 +649,6 @@ export const TerrainRenderer = () => {
       terrain.activeChunk = null;
       if (performance.now() > buildDeadline) break;
     }
-
-    const hasHighLOD =
-      terrain.queuedToBuild.some((c) => c.lod.level <= 2) ||
-      (terrain.activeChunk !== null && terrain.activeChunk.lod.level <= 2);
-    terrainHighLODPending.current = hasHighLOD;
 
     // Only the loading bar needs this; after terrainLoaded a re-render per queue change is waste.
     const newRemaining = terrain.queuedToBuild.length;
@@ -643,6 +680,7 @@ export const TerrainRenderer = () => {
       key: chunkKey,
       offset: { x: offset.x, z: offset.z },
       plane: plane,
+      water: null,
       rebuildIterator: null,
       colliderBody: null,
       lod: lod,
@@ -675,32 +713,54 @@ export const TerrainRenderer = () => {
       offset.x,
       offset.z,
       !chunk.lod.hasCollider,
+      chunk.lod.carvesRivers,
       chunk.lod.hasCollider
     );
-    const { heights, biomeIds, distBiome, distRegion, distRoad, distFreeway, freewayAlong } = workerResult;
+    const { heights, biomeSdf, biomePresence, slots, riverBed, distRoad, distFreeway, freewayAlong, waterHeights } = workerResult;
     const traceT0 = performance.now();
 
     const totalVerts = pos.count;
     const geom = chunk.plane.geometry;
-    const ensureAttr = (name: string): Float32Array => {
-      const existing = geom.getAttribute(name) as THREE.BufferAttribute | undefined;
-      if (existing && existing.count === totalVerts) return existing.array as Float32Array;
-      const arr = new Float32Array(totalVerts);
-      geom.setAttribute(name, new THREE.BufferAttribute(arr, 1));
+    const ensureAttrOn = (g: THREE.BufferGeometry, name: string, itemSize = 1): Float32Array => {
+      const existing = g.getAttribute(name) as THREE.BufferAttribute | undefined;
+      if (existing && existing.count === totalVerts && existing.itemSize === itemSize) return existing.array as Float32Array;
+      const arr = new Float32Array(totalVerts * itemSize);
+      g.setAttribute(name, new THREE.BufferAttribute(arr, itemSize));
       return arr;
     };
-    const attrBiomeId = ensureAttr("biomeId");
-    const attrDistBiome = ensureAttr("distanceToBiomeBoundaryCenter");
-    const attrDistRegion = ensureAttr("distanceToRiverCenter");
+    const ensureAttr = (name: string, itemSize = 1): Float32Array => ensureAttrOn(geom, name, itemSize);
+    // Biome slots ride in two vec4 attributes each for sdf and presence (≤ 8 biomes per domain; material.ts asserts).
+    const attrSdf0 = ensureAttr("biomeSdf0", 4);
+    const attrSdf1 = ensureAttr("biomeSdf1", 4);
+    const attrPres0 = ensureAttr("biomePresence0", 4);
+    const attrPres1 = ensureAttr("biomePresence1", 4);
+    const attrRiverBed = ensureAttr("riverBedDistance");
     const attrDistRoad = ensureAttr("distanceToRoadCenter");
     const attrDistFreeway = ensureAttr("distanceToFreewayCenter");
     const attrFreewayAlong = ensureAttr("freewayAlong");
+    const clampBlend = chunk.lod.clampBlendFields;
+    const writeSdf = (dst: number, src: number) => {
+      for (let s = 0; s < MAX_BIOME_SLOTS; s++) {
+        let v = s < slots ? biomeSdf[src * slots + s] : -BIOME_SDF_FAR;
+        let p = s < slots ? biomePresence[src * slots + s] : -BIOME_SDF_FAR;
+        if (clampBlend) {
+          v = v < -1 ? -1 : v > 1 ? 1 : v;
+          p = p < 0 ? 0 : p > 1 ? 1 : p;
+        }
+        if (s < 4) {
+          attrSdf0[dst * 4 + s] = v;
+          attrPres0[dst * 4 + s] = p;
+        } else {
+          attrSdf1[dst * 4 + (s - 4)] = v;
+          attrPres1[dst * 4 + (s - 4)] = p;
+        }
+      }
+    };
 
     for (let i = 0; i < mainVertCount; i++) {
       posArray[i * 3 + 2] = heights[i];
-      attrBiomeId[i] = biomeIds[i];
-      attrDistBiome[i] = distBiome[i];
-      attrDistRegion[i] = distRegion[i];
+      writeSdf(i, i);
+      attrRiverBed[i] = riverBed[i];
       attrDistRoad[i] = distRoad[i];
       attrDistFreeway[i] = distFreeway[i];
       attrFreewayAlong[i] = freewayAlong[i];
@@ -722,14 +782,12 @@ export const TerrainRenderer = () => {
       const bot3 = (skirtBotStart + i) * 3;
       posArray[bot3] = sx;
       posArray[bot3 + 1] = sy;
-      posArray[bot3 + 2] = sh - SKIRT_DEPTH;
+      posArray[bot3 + 2] = sh - chunk.lod.skirtDepth;
 
-      attrBiomeId[skirtTopStart + i] = attrBiomeId[srcIdx];
-      attrBiomeId[skirtBotStart + i] = attrBiomeId[srcIdx];
-      attrDistBiome[skirtTopStart + i] = attrDistBiome[srcIdx];
-      attrDistBiome[skirtBotStart + i] = attrDistBiome[srcIdx];
-      attrDistRegion[skirtTopStart + i] = attrDistRegion[srcIdx];
-      attrDistRegion[skirtBotStart + i] = attrDistRegion[srcIdx];
+      writeSdf(skirtTopStart + i, srcIdx);
+      writeSdf(skirtBotStart + i, srcIdx);
+      attrRiverBed[skirtTopStart + i] = attrRiverBed[srcIdx];
+      attrRiverBed[skirtBotStart + i] = attrRiverBed[srcIdx];
       attrDistRoad[skirtTopStart + i] = attrDistRoad[srcIdx];
       attrDistRoad[skirtBotStart + i] = attrDistRoad[srcIdx];
       attrDistFreeway[skirtTopStart + i] = attrDistFreeway[srcIdx];
@@ -738,9 +796,58 @@ export const TerrainRenderer = () => {
       attrFreewayAlong[skirtBotStart + i] = attrFreewayAlong[srcIdx];
     }
 
-    (geom.getAttribute("biomeId") as THREE.BufferAttribute).needsUpdate = true;
-    (geom.getAttribute("distanceToBiomeBoundaryCenter") as THREE.BufferAttribute).needsUpdate = true;
-    (geom.getAttribute("distanceToRiverCenter") as THREE.BufferAttribute).needsUpdate = true;
+    // WATER: a second mesh over the same grid, a CHILD of the terrain plane so it shares
+    // its transform, visibility and LOD swaps. Dry vertices dive under the ground (the
+    // fragment shader also discards depth ≤ 0), so the surface simply vanishes there — by
+    // at least the vertex spacing: a river is narrower than a coarse LOD's quads, and a 3u
+    // dive let one wet vertex's surface cover most of the triangles around it (a water sheet
+    // over the banks, hundreds of units wide, until LOD1 arrived). Along an edge the sheet
+    // now ends within ~depth of the wet vertex.
+    const dryDive = Math.max(3, chunk.lod.chunkSize / segments);
+    if (waterHeights) {
+      if (!chunk.water) {
+        const water = new THREE.Mesh(acquireGeometry(chunk.lod), getWaterMaterial());
+        water.castShadow = false;
+        water.receiveShadow = false;
+        water.renderOrder = 10;
+        // Warmed with its plane like every streamed mesh: the first water in view otherwise
+        // compiled the water program and uploaded its buffers at the frame the player turned to it.
+        uploadOnFirstDraw(water);
+        chunk.plane.add(water);
+        chunk.water = water;
+      }
+      const wgeom = chunk.water.geometry;
+      const wpos = wgeom.attributes.position.array as Float32Array;
+      const wdepth = ensureAttrOn(wgeom, "waterDepth");
+      for (let i = 0; i < mainVertCount; i++) {
+        const wh = waterHeights[i];
+        const dry = Number.isNaN(wh) || wh <= heights[i];
+        wpos[i * 3] = posArray[i * 3];
+        wpos[i * 3 + 1] = posArray[i * 3 + 1];
+        wpos[i * 3 + 2] = dry ? heights[i] - dryDive : wh;
+        wdepth[i] = dry ? 0 : wh - heights[i];
+      }
+      for (let i = 0; i < perimCount; i++) {
+        const srcIdx = perimeterIndices[i];
+        for (const dst of [skirtTopStart + i, skirtBotStart + i]) {
+          wpos[dst * 3] = wpos[srcIdx * 3];
+          wpos[dst * 3 + 1] = wpos[srcIdx * 3 + 1];
+          wpos[dst * 3 + 2] = wpos[srcIdx * 3 + 2];
+          wdepth[dst] = 0;
+        }
+      }
+      wgeom.attributes.position.needsUpdate = true;
+      (wgeom.getAttribute("waterDepth") as THREE.BufferAttribute).needsUpdate = true;
+      wgeom.computeBoundingSphere();
+    } else if (chunk.water) {
+      releaseWater(chunk);
+    }
+
+    (geom.getAttribute("biomeSdf0") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomeSdf1") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomePresence0") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("biomePresence1") as THREE.BufferAttribute).needsUpdate = true;
+    (geom.getAttribute("riverBedDistance") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToRoadCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("distanceToFreewayCenter") as THREE.BufferAttribute).needsUpdate = true;
     (geom.getAttribute("freewayAlong") as THREE.BufferAttribute).needsUpdate = true;
@@ -773,7 +880,9 @@ export const TerrainRenderer = () => {
       generateColliders(chunk, offset, workerResult.colliderHeights);
     }
 
-    traceEvent(`terrain:finish L${chunk.lod.level}`, performance.now() - traceT0);
+    const finishMs = performance.now() - traceT0;
+    traceEvent(`terrain:finish L${chunk.lod.level}`, finishMs);
+    chargeFrameWork(finishMs);
 
     yield;
   };

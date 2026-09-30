@@ -33,8 +33,9 @@ import type { AnimationState } from "../objects/actors/state/animation";
  * Coordinates: players = capsule CENTER, entities = FEET; `ry` = three.js rotation.y.
  */
 
-export type DomainId = "home" | "glitch-city";
-export const DOMAIN_IDS: readonly DomainId[] = ["home", "glitch-city"];
+/** THE domain id list (world/domains/types.ts re-exports the type). */
+export const DOMAIN_IDS = ["home", "overworld"] as const;
+export type DomainId = (typeof DOMAIN_IDS)[number];
 export const isDomainId = (v: unknown): v is DomainId =>
   typeof v === "string" && (DOMAIN_IDS as readonly string[]).includes(v);
 
@@ -68,6 +69,9 @@ export type PlayerData = Record<string, unknown>;
 
 /** Serialized cap on one blob; a patch that would exceed it is rejected on both sides. */
 export const PLAYER_DATA_MAX_BYTES = 64 * 1024;
+
+/** UTF-8 size of a blob as sent — what PLAYER_DATA_MAX_BYTES caps, measured the same on both sides. */
+export const playerDataBytes = (d: PlayerData): number => new TextEncoder().encode(JSON.stringify(d)).length;
 
 // ── client → server ────────────────────────────────────────────────────────
 

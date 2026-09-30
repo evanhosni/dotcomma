@@ -47,6 +47,7 @@ describe("actor catalog", () => {
         assert.ok(spec.stateMachine.states.some((s) => s.id === spec.stateMachine!.initialState), `${id}: initial state exists`);
       }
       if (spec.body === "kinematic") assert.ok(spec.stateMachine, `${id}: a moving body needs a state machine to move it`);
+      if ((spec.component ?? "model") === "model") assert.ok(spec.model, `${id}: renders as a GLTF model, so its spec needs \`model\``);
     }
   });
 });

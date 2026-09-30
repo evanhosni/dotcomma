@@ -1,50 +1,30 @@
 import { useContext, useLayoutEffect } from "react";
 import { TerrainParams } from "../types";
-import { BiomeNoiseConfig } from "../types";
-import { BiomeContext, RegionContext, RegionTerrainConfig, useDomainStore } from "./context";
+import { BiomeContext, RegionContext, reportHierarchyError, useDomainStore } from "./context";
 
-export interface TerrainConfigProps extends Partial<TerrainParams> {
-  /** Biome scope: the biome's ONLY height definition. */
-  noise?: BiomeNoiseConfig;
-}
+export interface TerrainConfigProps extends Partial<TerrainParams> {}
 
-/** Scope-aware: under <Domain> = global TerrainParams (unset → defaults),
- *  under <Region> = reserved, under <Biome> = the height definition (`noise`). */
-export const Terrain = (props: TerrainConfigProps) => {
+/** The domain's global TerrainParams (unset → world/defaults.ts). Domain scope only: a region's
+ *  relief is its spec's `baseNoise` and a biome's its spec's `noise`, which <Region>/<Biome>
+ *  register themselves — the server's config reads the same specs. */
+export const Terrain = (params: TerrainConfigProps) => {
   const store = useDomainStore("Terrain");
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
-
-  const { noise, ...domainParams } = props;
+  if (biome || region) {
+    reportHierarchyError("<Terrain> is domain-scoped: set `baseNoise` in the region's spec.ts / `noise` in the biome's spec.ts");
+  }
   // Stringified deps: inline JSX literals must not re-commit the world per parent render.
-  const noiseKey = JSON.stringify(noise ?? null);
-  const domainKey = JSON.stringify(domainParams);
+  const paramsKey = JSON.stringify(params);
 
   useLayoutEffect(() => {
-    if (biome) {
-      const key = `${biome.regionId}/${biome.biomeId}`;
-      store.biomeTerrain.set(key, { biomeId: biome.biomeId, config: { noise } });
-      store.invalidate();
-      return () => {
-        store.biomeTerrain.delete(key);
-        store.invalidate();
-      };
-    }
-    if (region) {
-      store.regionTerrain.set(region.regionId, domainParams as RegionTerrainConfig);
-      store.invalidate();
-      return () => {
-        store.regionTerrain.delete(region.regionId);
-        store.invalidate();
-      };
-    }
-    store.domainTerrain = domainParams;
+    store.domainTerrain = params;
     store.invalidate();
     return () => {
       store.domainTerrain = null;
       store.invalidate();
     };
-  }, [store, biome, region, noiseKey, domainKey]);
+  }, [store, paramsKey]);
 
   return null;
 };

@@ -17,10 +17,10 @@ import {
   reclaimModelClone,
   releaseModelClone,
 } from "./modelClonePool";
-import type { BodyKind, ColliderSpec, MovementKind } from "./spec";
+import { DEFAULT_INTERACT_REACH, type ActorSimulationAttributes, type ModelAttributes } from "./spec";
 import { ActorProps } from "./spawning/types";
 import { createMotionOutput } from "./state/motion";
-import type { StateMachineConfig } from "./state/types";
+import { machineHasTrigger } from "./state/runner";
 import { useMouseEvents } from "./state/useMouseEvents";
 import { useStateMachine } from "./state/useStateMachine";
 
@@ -59,26 +59,10 @@ useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/"
  * the `onFrame` prop (`ctx.machine` / `ctx.motion`), never a useFrame.
  */
 
-/** Settable on the descriptor, forwarded to every instance. The simulation
- *  attributes (stateMachine, body, collider, movement) come from the SPEC via describeActor. */
-export interface ModelActorAttributes extends ActorAttributes {
-  model: string;
-  scale?: THREE.Vector3Tuple;
-  /** Default true; movers pass false. */
-  collidersNeverMove?: boolean;
-  /** One trimesh over the whole model instead of per-node colliders. */
-  wholeTrimesh?: boolean;
-  excludeColliderNames?: string[];
-  /** Synced instances run it on the server and mirror its state here; local ones run it here. */
-  stateMachine?: StateMachineConfig;
-  /** "fixed" (default) — colliders from the GLTF; "kinematic" — a body moved by the
-   *  machine's motion output (synced: parked at the server's pose); "none" — no colliders. */
-  body?: BodyKind;
-  /** Kinematic body shape (default capsule r0.5 h2). */
-  collider?: ColliderSpec;
-  /** Kinematic: "ground" (gravity, snap, slopes) or "free" (flyers). */
-  movement?: MovementKind;
-}
+/** Settable on the spec (the Three-free fields, spec.ts) and overridable per mount; forwarded to every
+ *  instance. `body`: "fixed" (default) — colliders from the GLTF; "kinematic" — a body moved by the
+ *  machine's motion output (synced: parked at the server's pose); "none" — no colliders. */
+export interface ModelActorAttributes extends ActorAttributes, ModelAttributes, ActorSimulationAttributes {}
 
 export interface ModelActorProps extends ActorProps<ModelActorAttributes> {
   /** Body CENTER: ModelActor WRITES it every frame for kinematic bodies; an owner may pass its own ref to read it. */
@@ -109,8 +93,10 @@ export const ModelActor = ({
   body,
   collider,
   movement = "ground",
+  interactReach = DEFAULT_INTERACT_REACH,
   cursorOverride,
   renderDistance = DEFAULT_RENDER_DISTANCE,
+  colliderDistance,
   despawnDistance,
   frustumPadding,
   onDestroy,
@@ -135,18 +121,23 @@ export const ModelActor = ({
   useEffect(() => {
     if (pooled) return;
     let cancelled = false;
-    taskQueue.addTask(async () => {
-      if (cancelled) return;
-      setPooled(acquireModelClone(model, gltf, quantization));
-    });
+    const taskId = taskQueue.addTask(
+      async () => {
+        if (cancelled) return;
+        setPooled(acquireModelClone(model, gltf, quantization));
+      },
+      { at: { x: coordinates[0], z: coordinates[2] } },
+    );
     return () => {
       cancelled = true;
+      taskQueue.removeTask(taskId);
     };
   }, [pooled, model, gltf, quantization]);
 
   const machine = useStateMachine(stateMachine, positionRef, groupRef);
-  const hasClickTrigger = !!stateMachine && stateMachine.triggers.some((t) => t.id === "mouse-left-click");
+  const hasClickTrigger = !!stateMachine && machineHasTrigger(stateMachine, "mouse-left-click");
   const mouse = useMouseEvents(machine, groupRef, {
+    reach: interactReach,
     shouldGrowCursor: cursorOverride ?? hasClickTrigger,
     framePhase: framePhaseFromCoords(coordinates[0], coordinates[2], MOUSE_THROTTLE_FRAMES),
   });
@@ -190,7 +181,7 @@ export const ModelActor = ({
     // Colliders gate on DISTANCE only: gating on the frustum rebuilt the Rapier
     // colliders every time the player turned around.
     colliderDistance: hasColliders
-      ? Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2)
+      ? (colliderDistance ?? Math.min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2))
       : undefined,
     onFrame: (state, delta, ctx) => {
       const dt = Math.min(delta, 0.1);
@@ -293,7 +284,7 @@ export const ModelActor = ({
       }
     };
 
-    taskQueue.addTask(task);
+    taskQueue.addTask(task, { at: { x: coordinates[0], z: coordinates[2] } });
   }, [gltf]); // scale/rotation are stable per instance
 
   if (!pooled) return null;

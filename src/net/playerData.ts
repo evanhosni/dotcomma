@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { onServerMessage, send } from "./connection";
-import { PLAYER_DATA_MAX_BYTES, type PlayerData } from "./protocol";
+import { PLAYER_DATA_MAX_BYTES, playerDataBytes, type PlayerData } from "./protocol";
 
 /**
  * The client side of player persistence: our blob as the server last confirmed it.
@@ -26,8 +26,6 @@ const subscribe = (l: () => void) => {
 };
 export const usePlayerData = (): PlayerData | null => useSyncExternalStore(subscribe, getPlayerData);
 export const onPlayerDataChange = subscribe;
-
-export const playerDataBytes = (d: PlayerData): number => new TextEncoder().encode(JSON.stringify(d)).length;
 
 /** False (nothing sent) before the first init or when the merge would exceed the cap. */
 export const updatePlayerData = (patch: PlayerData): boolean => {

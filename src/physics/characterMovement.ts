@@ -34,6 +34,7 @@ export const SLIDE_STOP_DECEL = 60;
 // angle punches through the trimesh, and on gentle ground deflects into drift.
 export const NEAR_GROUND_FALL_SPEED_CAP = -20;
 
+/** u/s². Also the Rapier world gravity on the client (CustomCanvas) and the server (physicsWorld.ts). */
 export const GRAVITY = -100;
 export const TERMINAL_VELOCITY = -150;
 export const JUMP_IMPULSE = 40;

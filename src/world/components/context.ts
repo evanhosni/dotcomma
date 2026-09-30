@@ -1,29 +1,31 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, type Context } from "react";
 import { AnyActorDescriptor } from "../../objects/actors/spawning/types";
-import { BiomeNoiseConfig, MaterialData, RegionMaterialData, TerrainParams } from "../types";
+import type { TerrainNoiseParams } from "../../utils/workers/vertexCompute";
+import { BiomeNoiseConfig, BiomeSpec, BiomeWaterConfig, MaterialData, RegionSpec, RiverbedMaterial, TerrainParams } from "../types";
 
 // Registration store behind the <Domain> tree. Map insertion order = JSX order,
-// which voronoi assignment depends on.
+// which voronoi assignment depends on (regions AND biomes).
 
 export interface RegionRecord {
   id: number;
   name: string;
+  baseNoise?: TerrainNoiseParams;
+  blendWidth?: number;
+  heightBlendWidth?: number;
+  riverProbability?: number;
 }
 
 export interface BiomeRecord {
   id: number;
   name: string;
   joinable: boolean;
-  blendable: boolean;
   blendWidth?: number;
-}
-
-export interface BiomeTerrainConfig {
+  heightBlendWidth?: number;
+  water?: BiomeWaterConfig;
+  prohibitRoads?: boolean;
+  prohibitRivers?: boolean;
   noise?: BiomeNoiseConfig;
 }
-
-/** Reserved — no region-level terrain rules exist yet. */
-export type RegionTerrainConfig = Record<string, unknown>;
 
 export interface SkyboxSettings {
   topColor: string;
@@ -41,12 +43,11 @@ export interface DomainStore {
   domainTerrain: Partial<TerrainParams> | null;
   domainMaterial: { riverTexture?: string } | null;
   regions: Map<number, RegionRecord>;
-  regionTerrain: Map<number, RegionTerrainConfig>;
-  regionMaterials: Map<number, () => Promise<RegionMaterialData>>;
-  /** Keyed `${regionId}/${biomeId}` — the same biome may appear in several regions. */
+  /** The region's BASE material (what its biomes fade into). */
+  regionMaterials: Map<number, () => Promise<MaterialData>>;
+  /** Keyed `${regionId}/${biomeId}`. */
   biomes: Map<string, { regionId: number; biome: BiomeRecord }>;
-  biomeTerrain: Map<string, { biomeId: number; config: BiomeTerrainConfig }>;
-  biomeMaterials: Map<string, { biomeId: number; getMaterial: () => Promise<MaterialData> }>;
+  biomeMaterials: Map<string, { biomeId: number; getMaterial?: () => Promise<MaterialData>; riverbed?: RiverbedMaterial }>;
   /** Keyed `${regionId}/${biomeId}/${descriptorId}`. */
   actors: Map<string, { biomeId: number; descriptor: AnyActorDescriptor }>;
   /** Keyed `${scope}/${scopeId ?? "domain"}`. */
@@ -59,10 +60,8 @@ export const createDomainStore = (invalidate: () => void): DomainStore => ({
   domainTerrain: null,
   domainMaterial: null,
   regions: new Map(),
-  regionTerrain: new Map(),
   regionMaterials: new Map(),
   biomes: new Map(),
-  biomeTerrain: new Map(),
   biomeMaterials: new Map(),
   actors: new Map(),
   skyboxes: new Map(),
@@ -78,8 +77,31 @@ export const RegionContext = createContext<{ regionId: number } | null>(null);
 
 export const BiomeContext = createContext<{ biomeId: number; regionId: number } | null>(null);
 
+/** The spec a parent list renders at this position (<Regions> → region, <Region> → biome); the
+ *  <Region>/<Biome> mounted there asserts it is that spec, so JSX can't reorder or swap them. */
+export const RegionSlotContext = createContext<RegionSpec | null>(null);
+export const BiomeSlotContext = createContext<BiomeSpec | null>(null);
+
+/** Structural mistakes throw in development and log in production. */
+export const reportHierarchyError = (message: string): void => {
+  if (process.env.NODE_ENV === "production") console.error(message);
+  else throw new Error(message);
+};
+
 export const useDomainStore = (component: string): DomainStore => {
   const store = useContext(DomainStoreContext);
   if (!store) throw new Error(`<${component}> must be mounted inside <Domain>`);
   return store;
+};
+
+/** A <Region>/<Biome> must be the one its parent's spec list put at this position. */
+export const useSpecSlot = <S extends { id: number; name: string }>(Slot: Context<S | null>, spec: S, what: string, parent: string): void => {
+  const expected = useContext(Slot);
+  // By id + name, not identity: a hot-reloaded spec module is a new object.
+  if (expected && expected.id === spec.id && expected.name === spec.name) return;
+  reportHierarchyError(
+    expected
+      ? `<${what} spec={${spec.name}}> is mounted where the spec list has "${expected.name}" — fix the component map in ${parent}`
+      : `<${what} spec={${spec.name}}> must be rendered from its parent's spec list (${parent}), not mounted directly`,
+  );
 };

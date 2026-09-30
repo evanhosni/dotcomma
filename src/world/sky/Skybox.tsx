@@ -3,9 +3,17 @@ import { useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react
 import * as THREE from "three";
 import { getNightBlend, NIGHT_SKY_COLORS } from "../../lighting/dayNight";
 import { ditherGLSL } from "../../vfx/dither";
-import { voronoi } from "../../utils/voronoi/voronoi";
-import { getActiveRegions, getTerrainParams } from "../domains/utils";
-import { BiomeContext, RegionContext, SkyboxRecord, SkyboxSettings, useDomainStore, DomainDataContext, DomainStoreContext } from "../components/context";
+import { getPlaceInfo, PlaceInfo } from "../../objects/dressing/dressingWorker";
+import { getActiveRegions } from "../domains/utils";
+import {
+  BiomeContext,
+  RegionContext,
+  SkyboxRecord,
+  SkyboxSettings,
+  useDomainStore,
+  DomainDataContext,
+  DomainStoreContext,
+} from "../components/context";
 
 export const SKYBOX_DEFAULTS: SkyboxSettings = {
   topColor: "#4a90d9",
@@ -22,8 +30,9 @@ export interface SkyboxProps {
   radius?: number;
 }
 
-/** Scope-aware registration: under <Domain> = default sky, <Region>/<Biome> =
- *  active while the player is there (biome wins). SkyboxSystem cross-fades. */
+/** Scope-aware registration: under <Domain> = default sky; under <Region> = that
+ *  region's sky, MIXED by position across region edges; under <Biome> = active while
+ *  the player is in it (wins over the region mix). SkyboxSystem cross-fades. */
 export const Skybox = ({
   topColor = SKYBOX_DEFAULTS.topColor,
   horizonColor = SKYBOX_DEFAULTS.horizonColor,
@@ -35,7 +44,7 @@ export const Skybox = ({
   const region = useContext(RegionContext);
 
   useLayoutEffect(() => {
-    const scope = biome ? "biome" : region ? "region" : "domain";
+    const scope: SkyboxRecord["scope"] = biome ? "biome" : region ? "region" : "domain";
     const scopeId = biome ? biome.biomeId : region ? region.regionId : undefined;
     const key = `${scope}/${scopeId ?? "domain"}`;
     store.skyboxes.set(key, { scope, scopeId, topColor, horizonColor, bottomColor, radius });
@@ -74,22 +83,24 @@ void main() {
 }
 `;
 
-const BIOME_POLL_INTERVAL = 0.5; // seconds
+const PLACE_POLL_INTERVAL = 0.5; // seconds
 const COLOR_LERP_RATE = 2; // higher = faster sky cross-fade
 
 const _nightTop = new THREE.Color(NIGHT_SKY_COLORS.top);
 const _nightHorizon = new THREE.Color(NIGHT_SKY_COLORS.horizon);
 const _nightBottom = new THREE.Color(NIGHT_SKY_COLORS.bottom);
+const _mix = new THREE.Color();
 
-/** The sky mesh. Active sky = biome-scoped > region-scoped > domain > defaults;
- *  the biome is polled via the voronoi worker only when scoped skyboxes exist. */
+/** The sky mesh. Target = biome-scoped > the position-weighted mix of region skies
+ *  (domain default for regions without one); the place is polled off-thread only when
+ *  scoped skyboxes exist. */
 export const SkyboxSystem = () => {
   const store = useContext(DomainStoreContext);
   const { registrationVersion } = useContext(DomainDataContext);
   const { camera } = useThree();
 
   const meshRef = useRef<THREE.Mesh>(null);
-  const currentBiomeIdRef = useRef<number | null>(null);
+  const placeRef = useRef<PlaceInfo | null>(null);
   const pollTimerRef = useRef(0);
   const pollInFlightRef = useRef(false);
 
@@ -124,7 +135,7 @@ export const SkyboxSystem = () => {
 
   // Snap to the domain sky on first commit.
   useLayoutEffect(() => {
-    if (currentBiomeIdRef.current === null) {
+    if (placeRef.current === null) {
       material.uniforms.topColor.value.set(domainSky.topColor);
       material.uniforms.horizonColor.value.set(domainSky.horizonColor);
       material.uniforms.bottomColor.value.set(domainSky.bottomColor);
@@ -139,23 +150,34 @@ export const SkyboxSystem = () => {
   });
 
   const resolveTarget = useCallback((): void => {
-    let target: SkyboxSettings = domainSky;
-    const biomeId = currentBiomeIdRef.current;
-    if (biomeId !== null && hasScopedSkyboxes) {
-      const biomeSky = skyboxes.find((s) => s.scope === "biome" && s.scopeId === biomeId);
-      if (biomeSky) {
-        target = biomeSky;
-      } else {
-        const region = getActiveRegions().find((r) => r.biomes.some((b) => b.id === biomeId));
-        const regionSky =
-          region && skyboxes.find((s) => s.scope === "region" && s.scopeId === region.id);
-        if (regionSky) target = regionSky;
-      }
-    }
     const c = resolvedColors.current;
-    c.top.set(target.topColor);
-    c.horizon.set(target.horizonColor);
-    c.bottom.set(target.bottomColor);
+    const place = placeRef.current;
+    const setAll = (target: SkyboxSettings) => {
+      c.top.set(target.topColor);
+      c.horizon.set(target.horizonColor);
+      c.bottom.set(target.bottomColor);
+    };
+    if (place === null || !hasScopedSkyboxes) {
+      setAll(domainSky);
+      return;
+    }
+    const biomeSky = skyboxes.find((s) => s.scope === "biome" && s.scopeId === place.biomeId);
+    if (biomeSky) {
+      setAll(biomeSky);
+      return;
+    }
+    // Region skies mix by the place's cross-fade weights — no edge, ever.
+    c.top.setRGB(0, 0, 0);
+    c.horizon.setRGB(0, 0, 0);
+    c.bottom.setRGB(0, 0, 0);
+    const regions = getActiveRegions();
+    for (const { id, weight } of place.regionWeights) {
+      if (weight <= 0 || !regions.some((r) => r.id === id)) continue;
+      const sky = skyboxes.find((s) => s.scope === "region" && s.scopeId === id) ?? domainSky;
+      c.top.add(_mix.set(sky.topColor).multiplyScalar(weight));
+      c.horizon.add(_mix.set(sky.horizonColor).multiplyScalar(weight));
+      c.bottom.add(_mix.set(sky.bottomColor).multiplyScalar(weight));
+    }
   }, [skyboxes, hasScopedSkyboxes, domainSky]);
 
   useLayoutEffect(() => resolveTarget(), [resolveTarget]);
@@ -171,31 +193,19 @@ export const SkyboxSystem = () => {
 
     if (hasScopedSkyboxes && !pollInFlightRef.current) {
       pollTimerRef.current += delta;
-      if (pollTimerRef.current >= BIOME_POLL_INTERVAL) {
+      if (pollTimerRef.current >= PLACE_POLL_INTERVAL) {
         pollTimerRef.current = 0;
-        const regions = getActiveRegions();
-        if (regions.length > 0) {
-          pollInFlightRef.current = true;
-          const params = getTerrainParams();
-          voronoi
-            .create({
-              seed: params.seed,
-              currentVertex: { x: camera.position.x, z: camera.position.z },
-              gridSize: params.gridSize,
-              regionGridSize: params.regionGridSize,
-              regions,
-            })
-            .then((result: any) => {
-              const id = result.biome?.id ?? null;
-              if (id !== currentBiomeIdRef.current) {
-                currentBiomeIdRef.current = id;
-                resolveTarget();
-              }
-            })
-            .finally(() => {
-              pollInFlightRef.current = false;
-            });
-        }
+        pollInFlightRef.current = true;
+        getPlaceInfo(camera.position.x, camera.position.z)
+          .then((place) => {
+            if (!place) return;
+            placeRef.current = place;
+            resolveTarget();
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            pollInFlightRef.current = false;
+          });
       }
     }
 

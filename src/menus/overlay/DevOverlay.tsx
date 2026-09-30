@@ -1,12 +1,29 @@
 import { useEffect, useRef } from "react";
 import { useDevContext } from "../../context/DevContext";
+import { DevContextType } from "../../context/types";
 import { getOrCreateLeftColumn } from "./overlayContainer";
+import { HUD_COLOR, PANEL_CSS } from "./styles";
 
-const FONT = "'Kode Mono','Courier New',Courier,monospace";
+type DevFlag = { [K in keyof DevContextType]: DevContextType[K] extends boolean ? K : never }[keyof DevContextType];
+
+interface DevToggle {
+  label: string;
+  flag: DevFlag;
+  set: (dev: DevContextType, on: boolean) => void;
+}
+
+/** One checkbox per entry, in panel order. */
+const TOGGLES: readonly DevToggle[] = [
+  { label: "noclip", flag: "noclip", set: (dev, on) => dev.setNoclip(on) },
+  { label: "physics debug", flag: "physicsDebug", set: (dev, on) => dev.setPhysicsDebug(on) },
+];
+
+const paintCheckbox = (input: HTMLInputElement): void => {
+  input.style.background = input.checked ? HUD_COLOR : "transparent";
+};
 
 function createCheckbox(
   label: string,
-  initial: boolean,
   onChange: (checked: boolean) => void,
 ): { row: HTMLLabelElement; input: HTMLInputElement } {
   const row = document.createElement("label");
@@ -14,18 +31,14 @@ function createCheckbox(
 
   const input = document.createElement("input");
   input.type = "checkbox";
-  input.checked = initial;
+  input.checked = false;
   input.style.cssText =
-    "appearance:none;width:12px;height:12px;border:1px solid #0f0;border-radius:2px;" +
+    `appearance:none;width:12px;height:12px;border:1px solid ${HUD_COLOR};border-radius:2px;` +
     "background:transparent;cursor:pointer;position:relative;flex-shrink:0;";
-
-  const updateStyle = () => {
-    input.style.background = input.checked ? "#0f0" : "transparent";
-  };
-  updateStyle();
+  paintCheckbox(input);
 
   input.addEventListener("change", () => {
-    updateStyle();
+    paintCheckbox(input);
     onChange(input.checked);
     input.blur();
   });
@@ -39,62 +52,51 @@ function createCheckbox(
 }
 
 export const DevOverlay = () => {
-  const { devMode, noclip, physicsDebug, setNoclip, setPhysicsDebug } = useDevContext();
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const noclipInputRef = useRef<HTMLInputElement | null>(null);
-  const physicsInputRef = useRef<HTMLInputElement | null>(null);
+  const dev = useDevContext();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const inputsRef = useRef<HTMLInputElement[]>([]);
+  const devRef = useRef(dev);
+  devRef.current = dev;
 
   useEffect(() => {
     const column = getOrCreateLeftColumn();
 
     const panel = document.createElement("div");
-    panel.style.cssText =
-      `order:0;background:rgba(0,0,0,0.6);color:#0f0;` +
-      `font-family:${FONT};font-size:12px;line-height:1.5;` +
-      `padding:8px 12px;border-radius:4px;pointer-events:none;white-space:pre;`;
+    panel.style.cssText = "order:0;" + PANEL_CSS;
 
     const title = document.createElement("div");
     title.textContent = "devmode";
     title.style.cssText = "margin-bottom:4px;";
     panel.appendChild(title);
 
-    const noclipCb = createCheckbox("noclip", false, setNoclip);
-    panel.appendChild(noclipCb.row);
-    noclipInputRef.current = noclipCb.input;
+    inputsRef.current = TOGGLES.map(({ label, set }) => {
+      const checkbox = createCheckbox(label, (checked) => set(devRef.current, checked));
+      panel.appendChild(checkbox.row);
+      return checkbox.input;
+    });
 
-    const physicsCb = createCheckbox("physics debug", false, setPhysicsDebug);
-    panel.appendChild(physicsCb.row);
-    physicsInputRef.current = physicsCb.input;
-
-    containerRef.current = panel;
+    panelRef.current = panel;
     column.appendChild(panel);
 
     return () => {
       panel.remove();
-      containerRef.current = null;
+      panelRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.style.display = devMode ? "block" : "none";
-    }
-  }, [devMode]);
+    if (panelRef.current) panelRef.current.style.display = dev.devMode ? "block" : "none";
+  }, [dev.devMode]);
 
   // Devmode turning off resets the toggles externally.
+  const flags = TOGGLES.map(({ flag }) => dev[flag]);
   useEffect(() => {
-    if (noclipInputRef.current && noclipInputRef.current.checked !== noclip) {
-      noclipInputRef.current.checked = noclip;
-      noclipInputRef.current.style.background = noclip ? "#0f0" : "transparent";
-    }
-  }, [noclip]);
-
-  useEffect(() => {
-    if (physicsInputRef.current && physicsInputRef.current.checked !== physicsDebug) {
-      physicsInputRef.current.checked = physicsDebug;
-      physicsInputRef.current.style.background = physicsDebug ? "#0f0" : "transparent";
-    }
-  }, [physicsDebug]);
+    inputsRef.current.forEach((input, i) => {
+      if (input.checked === flags[i]) return;
+      input.checked = flags[i];
+      paintCheckbox(input);
+    });
+  }, flags); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 };

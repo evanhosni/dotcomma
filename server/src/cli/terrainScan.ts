@@ -52,11 +52,25 @@ export interface SlopeSpotOptions {
   radius?: number;
   /** The whole 3×3 neighborhood in range too — capsule-solid, not a one-triangle sliver. */
   solid?: boolean;
+  /** Skip road corridors: a freeway grade's ramp edge is a steep but only ~1u-tall cut, not a
+   *  natural slope (a steep scan landed on one once the rivers moved the grass patch). */
+  offRoad?: boolean;
 }
+
+/** Normalized street units: the road field is written out to FREEWAY_FIELD_REACH (70u real = 35
+ *  normalized) and is 99999 elsewhere, so this rejects every point the field reaches. */
+const ROAD_CORRIDOR = 40;
+
+/** Every point of the 3×3 vertex neighborhood around (x, z) has a slope in range. */
+const neighborhoodInRange = (x: number, z: number, inRange: (angle: number) => boolean, sample?: (x: number, z: number) => VertexResult): boolean => {
+  const s = VERTEX_SPACING;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (!inRange(slopeAt(x + a * s, z + b * s, sample).angle)) return false;
+  return true;
+};
 
 /** Scans the RAW surface first (cheap), confirms with the padded one the collider is built from. */
 export const findSlopeSpot = (cx: number, cz: number, opts: SlopeSpotOptions): SlopeSample | null => {
-  const { minDeg, maxDeg, radius = 300, solid = true } = opts;
+  const { minDeg, maxDeg, radius = 300, solid = true, offRoad = false } = opts;
   const lo = (minDeg * Math.PI) / 180;
   const hi = (maxDeg * Math.PI) / 180;
   const s = VERTEX_SPACING;
@@ -71,20 +85,11 @@ export const findSlopeSpot = (cx: number, cz: number, opts: SlopeSpotOptions): S
         const z = origin.z + j * s;
         const raw = slopeAt(x, z, computeVertexDataRaw);
         if (!inRange(raw.angle)) continue;
-        if (solid) {
-          let ok = true;
-          for (let a = -1; a <= 1 && ok; a++)
-            for (let b = -1; b <= 1 && ok; b++) if (!inRange(slopeAt(x + a * s, z + b * s, computeVertexDataRaw).angle)) ok = false;
-          if (!ok) continue;
-        }
+        if (offRoad && computeVertexDataRaw(x, z).distanceToRoadCenter < ROAD_CORRIDOR) continue;
+        if (solid && !neighborhoodInRange(x, z, inRange, computeVertexDataRaw)) continue;
         const padded = slopeAt(x, z);
         if (!inRange(padded.angle)) continue;
-        if (solid) {
-          let ok = true;
-          for (let a = -1; a <= 1 && ok; a++)
-            for (let b = -1; b <= 1 && ok; b++) if (!inRange(slopeAt(x + a * s, z + b * s).angle)) ok = false;
-          if (!ok) continue;
-        }
+        if (solid && !neighborhoodInRange(x, z, inRange)) continue;
         return padded;
       }
     }

@@ -1,10 +1,13 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useRef, useEffect } from "react";
-import { voronoi } from "../../utils/voronoi/voronoi";
+import { getPlaceInfo } from "../../objects/dressing/dressingWorker";
 import { useGameContext } from "../../context/GameContext";
 import { useDevContext } from "../../context/DevContext";
-import { getActiveRegions, getTerrainParams } from "../../world/domains/utils";
+import { getAllBiomes } from "../../utils/utils";
+import { getActiveRegions } from "../../world/domains/utils";
 import { getOrCreateLeftColumn } from "./overlayContainer";
+import { PANEL_CSS } from "./styles";
+
 const BIOME_POLL_INTERVAL = 1; // seconds
 
 const GRAPH_WIDTH = 120;
@@ -118,10 +121,7 @@ const OverlayHUD = () => {
     const column = getOrCreateLeftColumn();
 
     const container = document.createElement("div");
-    container.style.cssText =
-      "order:1;background:rgba(0,0,0,0.6);" +
-      "color:#0f0;font-family:'Kode Mono','Courier New',Courier,monospace;font-size:12px;" +
-      "line-height:1.5;padding:8px 12px;border-radius:4px;pointer-events:none;white-space:pre;";
+    container.style.cssText = "order:1;" + PANEL_CSS;
 
     const createdSpans: HTMLSpanElement[] = [];
     const createdAvgSpans: HTMLSpanElement[] = [];
@@ -212,18 +212,15 @@ const OverlayHUD = () => {
       const pos = camera.position;
       const regions = getActiveRegions();
       if (regions.length > 0) {
-        const params = getTerrainParams();
-        voronoi
-          .create({
-            seed: params.seed,
-            currentVertex: { x: pos.x, z: pos.z },
-            gridSize: params.gridSize,
-            regionGridSize: params.regionGridSize,
-            regions,
+        getPlaceInfo(pos.x, pos.z)
+          .then((place) => {
+            if (!place) return;
+            const active = getActiveRegions();
+            const biome = getAllBiomes(active).find((b) => b.id === place.biomeId);
+            const region = active.find((r) => r.id === place.regionId);
+            currentBiome.current = `${region?.name ?? "?"}/${biome?.name ?? "???"}`;
           })
-          .then((result: any) => {
-            currentBiome.current = result.biome?.name ?? "???";
-          });
+          .catch(() => undefined);
       }
     }
 

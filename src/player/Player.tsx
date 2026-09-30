@@ -9,6 +9,7 @@ import { useGameContext } from "../context/GameContext";
 import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
 import { useInput } from "./useInput";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
+import { CAMERA_FAR } from "./constants";
 import { getAssignedSpawnOffset } from "../net/connection";
 import {
   createCharacter,
@@ -42,7 +43,6 @@ const DEV_VERTICAL_SPRINT_SPEED = 300;
 
 const CAPSULE_HALF_HEIGHT = PLAYER_HEIGHT / 2 - PLAYER_RADIUS;
 
-const CAMERA_FAR = 7200;
 const CAMERA_LERP = 0.3;
 
 const _direction = new THREE.Vector3();
@@ -147,6 +147,8 @@ export const Player = () => {
       _camTarget.set(sx, spawn[1] + PLAYER_HEIGHT * 0.5, sz);
       camera.position.copy(_camTarget);
       cameraReady.current = false;
+      // Published while holding too: the address bar and terrain streaming follow the spawn, not the last stand.
+      playerPosition.set(sx, spawn[1], sz);
       return;
     }
 

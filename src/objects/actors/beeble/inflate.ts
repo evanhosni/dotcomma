@@ -58,7 +58,7 @@ export const beginInflate = (group: THREE.Object3D): Inflate => {
     update(dt) {
       if (done) return;
       t = Math.min(t + dt * INFLATE_RATE, 1);
-      // One final write at t=1, then stop — this used to re-upload every buffer every frame forever.
+      // One final write at t=1, then stop — writing on would re-upload every buffer every frame.
       for (const m of targets) {
         const arr = m.posAttr.array as Float32Array;
         for (let i = 0; i < arr.length; i++) arr[i] = m.original[i] + (m.sphere[i] - m.original[i]) * t;

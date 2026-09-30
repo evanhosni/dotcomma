@@ -8,9 +8,13 @@ import * as RAPIER from "@dimforge/rapier3d-compat";
 import { computeVertexData, getFlattenPoints } from "../../src/utils/workers/vertexCompute";
 import { BUILDING_ATTRS } from "../../src/objects/actors/building/spec";
 import { LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/lampSpec";
+import { DRESSING_COLLIDER_SPECS } from "../../src/objects/dressing/catalog";
+import { runDressingEnumerator } from "../../src/objects/dressing/enumerators";
+import { DRESSING_CHUNK_SIZE } from "../../src/objects/dressing/types";
 import { createBuildingCollider } from "../src/game/physics/buildings.js";
 import { createObstacleBodies, enumerateObstacles } from "../src/game/physics/obstacles.js";
-import { GRASS_BIOME_ID } from "../../src/world/constants";
+import { CITY_BIOME_ID } from "../../src/world/constants";
+import { GRASS_BIOME } from "../../src/world/domains/overworld/regions/city/biomes/grass/spec";
 import { PhysicsWorld, PHYSICS_DT } from "../src/game/physics/physicsWorld.js";
 import { Walker } from "../src/game/physics/walker.js";
 import { findBiomePatch, findSlopeSpot, type SlopeSample } from "../src/cli/terrainScan.js";
@@ -52,7 +56,7 @@ const place = (spot: { x: number; z: number; height: number }) => {
 describe("server physics", () => {
   before(async () => {
     pw = await PhysicsWorld.create();
-    const p = findBiomePatch(GRASS_BIOME_ID);
+    const p = findBiomePatch(GRASS_BIOME.id);
     assert.ok(p, "a grassland patch exists");
     patch = p;
   });
@@ -141,7 +145,7 @@ describe("server physics", () => {
   });
 
   it("slides down a steep slope instead of climbing it", () => {
-    let steep = findSlopeSpot(patch.x, patch.z, { minDeg: 42, maxDeg: 90, radius: 900 });
+    let steep = findSlopeSpot(patch.x, patch.z, { minDeg: 42, maxDeg: 90, radius: 900, offRoad: true });
     let synthetic = false;
     if (!steep) {
       // No ≥42° capsule-solid spot found: a synthetic 50° ramp so the test never silently passes.
@@ -169,9 +173,12 @@ describe("server physics", () => {
   });
 
   it("a building hull is sealed: a walker pushed at it stays outside", () => {
-    // The flatten engine IS the placement — same seed rule as Building.tsx.
-    const b = getFlattenPoints(-400, -400, 400, 400).find((p) => p.descId === "building");
-    assert.ok(b, "a building placed near the origin");
+    // The flatten engine IS the placement — same seed rule as Building.tsx. The
+    // origin's region is a seeded roll, so find a city patch first.
+    const city = findBiomePatch(CITY_BIOME_ID, 200, 40000);
+    assert.ok(city, "a city patch within scan range");
+    const b = getFlattenPoints(city.x - 400, city.z - 400, city.x + 400, city.z + 400).find((p) => p.descId === "building");
+    assert.ok(b, "a building placed in the city patch");
     held.push(...pw.holdTerrainAround(b.x, b.z));
     const before = pw.stats().colliders;
     const hull = createBuildingCollider(pw, BUILDING_ATTRS, b.x, b.y, b.z);
@@ -194,25 +201,35 @@ describe("server physics", () => {
     assert.equal(pw.stats().colliders, before, "hull removed");
   });
 
-  it("dressing obstacles: deterministic per chunk, one body per point with a cuboid per part", () => {
-    let gx = 0;
-    let gz = 0;
-    const fw = pw.config.cityConfig.freewayWidth;
-    let pts = enumerateObstacles(gx, gz, fw);
+  it("dressing obstacles: deterministic per chunk, one body per point with a cuboid per part (and its mesh)", () => {
+    // The city is one region among several on a 3000u grid, so scan the dressing
+    // chunks around the nearest city patch rather than the world origin.
+    const city = findBiomePatch(CITY_BIOME_ID);
+    assert.ok(city, "a city patch exists");
+    const cx = Math.floor(city.x / DRESSING_CHUNK_SIZE);
+    const cz = Math.floor(city.z / DRESSING_CHUNK_SIZE);
+    let gx = cx;
+    let gz = cz;
+    let pts = enumerateObstacles(gx, gz);
     for (let r = 1; pts.length === 0 && r <= 3; r++) {
       for (let i = -r; i <= r && pts.length === 0; i++) for (let j = -r; j <= r && pts.length === 0; j++) {
-        pts = enumerateObstacles(i, j, fw);
-        if (pts.length) (gx = i), (gz = j);
+        pts = enumerateObstacles(cx + i, cz + j);
+        if (pts.length) (gx = cx + i), (gz = cz + j);
       }
     }
-    assert.ok(pts.length > 0, "a city chunk near the origin has dressing obstacles");
+    assert.ok(pts.length > 0, "a city chunk has dressing obstacles");
     assert.ok(pts.some((p) => p.parts === LAMP_COLLIDER_PARTS), "street lamps among them");
-    assert.deepEqual(enumerateObstacles(gx, gz, fw), pts, "deterministic");
+    assert.deepEqual(enumerateObstacles(gx, gz), pts, "deterministic");
+    const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+    const fromCatalog = DRESSING_COLLIDER_SPECS.flatMap((spec) =>
+      runDressingEnumerator(spec.enumerator, bounds, spec.placement).flatMap((p) => spec.bodiesOf(p).map((b) => ({ ...b, parts: b.parts ?? spec.colliderParts }))),
+    );
+    assert.deepEqual(pts, fromCatalog, "exactly the catalog's bodies — what the client components mount");
     const before = pw.stats();
     const bodies = createObstacleBodies(pw, pts);
     const after = pw.stats();
     assert.equal(after.bodies - before.bodies, pts.length);
-    assert.equal(after.colliders - before.colliders, pts.reduce((n, p) => n + p.parts.length, 0));
+    assert.equal(after.colliders - before.colliders, pts.reduce((n, p) => n + p.parts.length + (p.mesh ? 1 : 0), 0));
     for (const b of bodies) pw.removeBody(b);
     assert.equal(pw.stats().colliders, before.colliders);
   });

@@ -19,7 +19,7 @@
 .env.production.local
 /server/.env
 
-# game assets — uploaded to R2 by scripts/, never committed or deployed
+# reserved for the deferred R2 asset pipeline (nothing uses it yet; assets live in public/)
 /assets
 
 # sqlite (local dev database; production lives on the Railway volume)

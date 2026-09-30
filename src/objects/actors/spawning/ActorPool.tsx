@@ -7,10 +7,12 @@ import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/
 import { driveActorFrames } from "../Actor";
 import type { ModelActorAttributes } from "../ModelActor";
 import { collectDescriptors } from "./collectDescriptors";
+import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
 import {
   cleanupSpawnCache,
-  generateSpawnPoints,
+  getCachedSpawnChunks,
   getNearbyChunkKeys,
+  requestSpawnChunks,
   initSpawnWorker,
   serializeDescriptors,
   SPAWN_CHUNK_SIZE,
@@ -28,10 +30,6 @@ const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius × this
 // bails out), and heavy mount work already runs through the budgeted
 // TaskQueue. Too LOW pays the O(mounted) walk repeatedly for a few objects.
 const MAX_MOUNTS_PER_BATCH = 20;
-
-// A player outrunning terrain keeps LOD1/2 permanently pending; an indefinitely
-// starved pool never evicts its caches and floods the frame it finally runs.
-const MAX_FRAMES_DEFERRED_TO_TERRAIN = 90;
 
 const getSpawnRadius = (desc: AnyActorDescriptor): number => desc.renderDistance + desc.footprint / 2;
 const getDespawnRadius = (desc: AnyActorDescriptor): number =>
@@ -73,15 +71,14 @@ export const ActorPool = () => {
   const mountedPointsRef = useRef(new Set<SpawnPoint>());
   const ledgerPointsRef = useRef(new Map<SpawnPoint, DespawnRecord>());
   const respawnBlockedRef = useRef(new Map<string, DespawnRecord>());
-  const isGeneratingRef = useRef(false);
+  const requestInFlightRef = useRef(false);
   const frameCountRef = useRef(0);
   const lastBatchFrameRef = useRef(0);
-  const deferredSinceFrameRef = useRef(0);
   const workerReadyRef = useRef(false);
   const dirtyRef = useRef(false);
 
   const { camera } = useThree();
-  const { terrainLoaded, progress, terrainHighLODPending } = useGameContext();
+  const { terrainLoaded, progress } = useGameContext();
 
   const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
 
@@ -168,21 +165,32 @@ export const ActorPool = () => {
     return removed;
   }, [camera, descriptorMap]);
 
-  const generateSpawners = useCallback(async () => {
-    if (isGeneratingRef.current) return;
+  // Mounting never waits for the worker: a batch mounts from what is cached while the worker fills
+  // in the rest (awaiting it held every mount behind up to SPAWN_BUDGET_MS of new chunks).
+  const generateSpawners = useCallback(() => {
     if (!workerReadyRef.current) return;
     if (descriptors.length === 0) return;
 
-    isGeneratingRef.current = true;
     const wasDirty = dirtyRef.current;
     dirtyRef.current = false;
 
     try {
       cleanupDespawnLedger();
-      cleanupSpawnCache(camera.position.x, camera.position.z, maxDespawnRadius * 2);
-
       const chunkKeys = getNearbyChunkKeys(camera.position.x, camera.position.z, maxSpawnRadius);
-      const buckets = await generateSpawnPoints(chunkKeys, serializedDescriptors);
+
+      if (!requestInFlightRef.current) {
+        cleanupSpawnCache(camera.position.x, camera.position.z, maxDespawnRadius * 2);
+        const request = requestSpawnChunks(chunkKeys, serializedDescriptors);
+        if (request) {
+          requestInFlightRef.current = true;
+          request
+            .catch((error) => console.error("Error in spawn generation:", error))
+            .finally(() => {
+              requestInFlightRef.current = false;
+            });
+        }
+      }
+      const buckets = getCachedSpawnChunks(chunkKeys);
 
       let hasChanges = sweepOutOfRange();
 
@@ -291,8 +299,6 @@ export const ActorPool = () => {
       }
     } catch (error) {
       console.error("Error in spawn generation:", error);
-    } finally {
-      isGeneratingRef.current = false;
     }
   }, [
     camera,
@@ -307,7 +313,10 @@ export const ActorPool = () => {
   ]);
 
   // <Domain> always mounts the pool, so this drives every actor in a domain tree.
-  useFrame(driveActorFrames);
+  useFrame((state, delta) => {
+    setWorkFocus(state.camera.position.x, state.camera.position.z);
+    driveActorFrames(state, delta);
+  });
 
   useFrame(() => {
     frameCountRef.current++;
@@ -315,12 +324,6 @@ export const ActorPool = () => {
     if (!terrainLoaded && progress < 0.5) return;
 
     if (frameCountRef.current - lastBatchFrameRef.current < MIN_FRAMES_BETWEEN_BATCHES) return;
-
-    if (terrainHighLODPending.current) {
-      if (deferredSinceFrameRef.current === 0) deferredSinceFrameRef.current = frameCountRef.current;
-      if (frameCountRef.current - deferredSinceFrameRef.current < MAX_FRAMES_DEFERRED_TO_TERRAIN) return;
-    }
-    deferredSinceFrameRef.current = 0;
 
     if (!workerReadyRef.current) return;
 

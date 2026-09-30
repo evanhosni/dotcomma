@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, before, describe, it } from "node:test";
 import type { ServerMessage } from "../../src/net/protocol";
+import { generateBuildingPlan } from "../../src/objects/actors/building/generatePlan";
+import { BUILDING_SPEC } from "../../src/objects/actors/building/spec";
 import { ACTOR_SPECS } from "../../src/objects/actors/catalog";
 import type { ActorSpec } from "../../src/objects/actors/spec";
 import type { StateMachineConfig } from "../../src/objects/actors/state/types";
@@ -27,7 +29,7 @@ const makeHost = () => {
     },
   };
   const setPlayer = (id: string, x: number, z: number) =>
-    players.set(id, { id, domain: "glitch-city", x, y: 0, z, vx: 0, vz: 0, lastMoveAt: Date.now() });
+    players.set(id, { id, domain: "overworld", x, y: 0, z, vx: 0, vz: 0, lastMoveAt: Date.now() });
   const to = (who: string) => sent.filter((s) => s.to === who).map((s) => s.msg as any);
   const clear = () => (sent.length = 0);
   return { host, players, sent, setPlayer, to, clear };
@@ -35,7 +37,7 @@ const makeHost = () => {
 
 const ID = "10_20_beeble";
 const regBeeble = (m: EntityManager, who: string, id = ID, x = 10, z = 20) =>
-  m.register(who, "glitch-city", [{ id, kind: "beeble", x, y: 3, z }]);
+  m.register(who, "overworld", [{ id, kind: "beeble", x, y: 3, z }]);
 const ticks = (m: EntityManager, n: number, t0: number) => {
   for (let i = 1; i <= n; i++) m.tick(t0 + i * TICK_MS);
 };
@@ -54,13 +56,13 @@ describe("EntityManager (server authority)", () => {
   it("registration answers with the full record; kinds outside the catalog are static", () => {
     const h = makeHost();
     const m = manager(h);
-    m.register("A", "glitch-city", [{ id: "1_2_building", kind: "building", x: 1, y: 0, z: 2 }]);
+    m.register("A", "overworld", [{ id: "1_2_building", kind: "building", x: 1, y: 0, z: 2 }]);
     const u = h.to("A")[0];
     assert.equal(u.t, "entity:update");
     assert.equal(u.x, 1);
     assert.equal(u.sm, undefined, "no machine for a building");
     assert.equal(m.get("1_2_building")!.runner, null);
-    m.register("A", "glitch-city", [{ id: "5_5_prop", kind: "some-static-prop", x: 5, y: 0, z: 5 }]);
+    m.register("A", "overworld", [{ id: "5_5_prop", kind: "some-static-prop", x: 5, y: 0, z: 5 }]);
     assert.equal(m.get("5_5_prop")!.runner, null, "unknown kind → static record");
     assert.equal(m.get("5_5_prop")!.npc, null);
     regBeeble(m, "A");
@@ -91,15 +93,16 @@ describe("EntityManager (server authority)", () => {
     assert.equal(typeof animUpdate.anim.t0, "number", "…with the server-time clock it started on");
     assert.ok(animUpdate.anim.t0 >= t0, "clip clock is server time (the tick's now)");
     assert.ok(ua.some((u: any) => u.sm === "idle-walk"), "machine state id published");
-    // y is authoritative: the registration's y=3 was only a hint (ground here ~1.9).
+    // y is authoritative: the registration's y=3 was only a hint. The spawn stands on a 23° salt-flat
+    // slope now, and a capsule on a slope rests above the analytic ground at its center, so 1u.
     const groundAt = (x: number, z: number) => computeVertexData(x, z).height;
     for (const u of ua) {
       if (u.y === undefined) continue;
       const gx = u.x ?? e.x;
       const gz = u.z ?? e.z;
-      assert.ok(Math.abs(u.y - groundAt(gx, gz)) < 0.6, `published y ${u.y.toFixed(2)} vs ground ${groundAt(gx, gz).toFixed(2)}`);
+      assert.ok(Math.abs(u.y - groundAt(gx, gz)) < 1.0, `published y ${u.y.toFixed(2)} vs ground ${groundAt(gx, gz).toFixed(2)}`);
     }
-    assert.ok(Math.abs(e.y - groundAt(e.x, e.z)) < 0.6, "record y follows the terrain");
+    assert.ok(Math.abs(e.y - groundAt(e.x, e.z)) < 1.0, "record y follows the terrain");
     const stamped = ua.filter((u: any) => u.x !== undefined);
     assert.ok(stamped.length > 5, "position published every moving tick");
     assert.ok(stamped.every((u: any) => typeof u.st === "number"), "every positional update carries st");
@@ -142,7 +145,7 @@ describe("EntityManager (server authority)", () => {
     ticks(m, 3, t0 + 200); // → alert
     assert.equal(e.sm, "alert");
     const y0 = e.y;
-    m.interact("B", ID, "mouse-left-click", m.playersFor("glitch-city"));
+    m.interact("B", ID, "mouse-left-click", m.playersFor("overworld"));
     ticks(m, 10, t0 + 500);
     assert.equal(e.sm, "ascending");
     assert.equal(e.anim?.clip, "ascend");
@@ -154,7 +157,7 @@ describe("EntityManager (server authority)", () => {
     regBeeble(m2, "A");
     h2.setPlayer("A", 500, 500);
     ticks(m2, 2, t0);
-    m2.interact("A", ID, "mouse-left-click", m2.playersFor("glitch-city"));
+    m2.interact("A", ID, "mouse-left-click", m2.playersFor("overworld"));
     ticks(m2, 2, t0 + 200);
     assert.notEqual(m2.get(ID)!.sm, "ascending", "far click ignored");
   });
@@ -177,7 +180,7 @@ describe("EntityManager (server authority)", () => {
     const flyer: ActorSpec = { id: "test-flyer", stateMachine: FLYER_SM, body: "kinematic", movement: "free" };
     const h = makeHost();
     const m = manager(h, { specs: (kind) => (kind === flyer.id ? flyer : ACTOR_SPECS[kind]) });
-    m.register("A", "glitch-city", [{ id: "0_0_test-flyer", kind: "test-flyer", x: 0, y: 0, z: 0 }]);
+    m.register("A", "overworld", [{ id: "0_0_test-flyer", kind: "test-flyer", x: 0, y: 0, z: 0 }]);
     h.setPlayer("A", 500, 500);
     const e = m.get("0_0_test-flyer")!;
     const ground = computeVertexData(0, 0).height;
@@ -199,35 +202,67 @@ describe("EntityManager (server authority)", () => {
     h.setPlayer("A", 11, 21);
     const e = m.get(ID)!;
     const bb = e.runner!.blackboard;
-    m.interact("A", ID, "mouse-hover-enter", m.playersFor("glitch-city"));
+    m.interact("A", ID, "mouse-hover-enter", m.playersFor("overworld"));
     assert.equal(bb.__mouse_hover_enter, true);
     assert.equal(bb.__mouse_hover_active, true);
-    m.interact("A", ID, "mouse-scroll-up", m.playersFor("glitch-city"));
+    m.interact("A", ID, "mouse-scroll-up", m.playersFor("overworld"));
     assert.equal(bb.__mouse_scroll_up, true);
-    m.interact("A", ID, "mouse-hover-leave", m.playersFor("glitch-city"));
+    m.interact("A", ID, "mouse-hover-leave", m.playersFor("overworld"));
     assert.equal(bb.__mouse_hover_active, false);
-    m.interact("A", ID, "not-a-mouse-thing", m.playersFor("glitch-city"));
+    m.interact("A", ID, "not-a-mouse-thing", m.playersFor("overworld"));
     assert.equal(bb["__not_a_mouse_thing"], undefined, "unknown actions never touch the blackboard");
   });
 
-  it("doors: door:<i> toggles replicated state and broadcasts", () => {
+  it("doors: a player standing at a facade door toggles it, every registrant sees it", () => {
     const h = makeHost();
     const m = manager(h);
-    const B = "1_2_building";
-    m.register("A", "glitch-city", [{ id: B, kind: "building", x: 0, y: 0, z: 0 }]);
-    m.register("C", "glitch-city", [{ id: B, kind: "building", x: 0, y: 0, z: 0 }]);
-    h.setPlayer("A", 1, 1);
+    const B = "1200_-340_building";
+    const [bx, bz] = [1200, -340];
+    // Building.tsx's seed + the spec's hull: the plan every client draws the leaves from.
+    const doors = generateBuildingPlan(`${bx}_${bz}`, BUILDING_SPEC.hull!).doors;
+    const far = doors.findIndex((d) => Math.hypot(d.position[0], d.position[2]) > 9);
+    assert.ok(far >= 0, "a facade door beyond the old 8u origin gate");
+    const at = doors[far].position;
+    m.register("A", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
+    m.register("C", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
+    // 2.5u outside the leaf, away from the center (the click ray reaches DOOR_INTERACT_REACH from the eye).
+    const out = 2.5 / Math.hypot(at[0], at[2]);
+    h.setPlayer("A", bx + at[0] * (1 + out), bz + at[2] * (1 + out));
     h.clear();
-    m.interact("A", B, "door:2", m.playersFor("glitch-city"));
+    m.interact("A", B, `door:${far}`, m.playersFor("overworld"));
     const c = h.to("C")[0];
-    assert.equal(c.state.doors[2], true, "other registrant sees the door open");
-    assert.equal(m.get(B)!.state.doors[2], true);
-    m.interact("A", B, "door:2", m.playersFor("glitch-city"));
-    assert.equal(m.get(B)!.state.doors[2], false);
+    assert.ok(c, "the toggle is broadcast");
+    assert.equal(c.state.doors[far], true, "other registrant sees the door open");
+    assert.equal(m.get(B)!.state.doors[far], true);
+    m.interact("A", B, `door:${far}`, m.playersFor("overworld"));
+    assert.equal(m.get(B)!.state.doors[far], false);
     // Late joiner gets the doors in the registration answer.
     h.clear();
-    m.register("D", "glitch-city", [{ id: B, kind: "building", x: 0, y: 0, z: 0 }]);
-    assert.deepEqual(h.to("D")[0].state.doors[2], false);
+    m.register("D", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
+    assert.deepEqual(h.to("D")[0].state.doors[far], false);
+  });
+
+  it("doors: the gate is the door's own reach — a far player, another door's index and a missing door are refused", () => {
+    const h = makeHost();
+    const m = manager(h);
+    const B = "1200_-340_building";
+    const [bx, bz] = [1200, -340];
+    const doors = generateBuildingPlan(`${bx}_${bz}`, BUILDING_SPEC.hull!).doors;
+    m.register("A", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
+    const at = doors[0].position;
+    h.setPlayer("A", bx + at[0] + 12, bz + at[2]);
+    m.interact("A", B, "door:0", m.playersFor("overworld"));
+    assert.equal(m.get(B)!.state.doors, undefined, "12u from the door: refused");
+    h.setPlayer("A", bx + at[0], bz + at[2]);
+    m.interact("A", B, `door:${doors.length}`, m.playersFor("overworld"));
+    assert.equal(m.get(B)!.state.doors, undefined, "no such door in the plan: refused");
+    const other = doors.findIndex((d) => Math.hypot(d.position[0] - at[0], d.position[2] - at[2]) > 12);
+    if (other >= 0) {
+      m.interact("A", B, `door:${other}`, m.playersFor("overworld"));
+      assert.equal(m.get(B)!.state.doors, undefined, "standing at door 0, another door's index: refused");
+    }
+    m.interact("A", B, "door:0", m.playersFor("overworld"));
+    assert.equal(m.get(B)!.state.doors[0], true, "at door 0: accepted");
   });
 
   it("a walker holds terrain + dressing chunks and a player capsule exists while it lives; all released with it", () => {

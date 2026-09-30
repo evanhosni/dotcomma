@@ -1,5 +1,5 @@
 import { computeVertexData } from "../../../src/utils/workers/vertexCompute";
-import { GRASS_BIOME_ID } from "../../../src/world/constants";
+import { GRASS_BIOME } from "../../../src/world/domains/overworld/regions/city/biomes/grass/spec";
 import { PhysicsWorld, PHYSICS_DT } from "../game/physics/physicsWorld.js";
 import { Walker } from "../game/physics/walker.js";
 import { deg, findBiomePatch, findSlopeSpot, slopeAt, type SlopeSample } from "./terrainScan.js";
@@ -47,14 +47,14 @@ const main = async () => {
   console.log(`Rapier ready. dt = ${PHYSICS_DT}s (entity tick)`);
 
   let t0 = performance.now();
-  const patch = findBiomePatch(GRASS_BIOME_ID);
+  const patch = findBiomePatch(GRASS_BIOME.id);
   if (!patch) throw new Error("no grassland patch found");
   console.log(`grassland patch at (${patch.x}, ${patch.z}) — found in ${(performance.now() - t0).toFixed(0)}ms`);
 
   t0 = performance.now();
   const flat = findSlopeSpot(patch.x, patch.z, { minDeg: 0, maxDeg: 4 });
   const gentle = findSlopeSpot(patch.x, patch.z, { minDeg: 12, maxDeg: 22 });
-  const steep = findSlopeSpot(patch.x, patch.z, { minDeg: 42, maxDeg: 90, radius: 900 });
+  const steep = findSlopeSpot(patch.x, patch.z, { minDeg: 42, maxDeg: 90, radius: 900, offRoad: true });
   console.log(
     `spots scanned in ${(performance.now() - t0).toFixed(0)}ms: flat ${flat ? deg(flat.angle) : "none"}, gentle ${gentle ? deg(gentle.angle) : "none"}, steep ${steep ? deg(steep.angle) : "NONE"}`,
   );

@@ -7,32 +7,51 @@ import type { PhysicsWorld } from "./physicsWorld.js";
 /**
  * The client's own sealed silhouette hull (building/proxyCollider.ts) over the client's
  * own plan, so an NPC the server keeps out of a wall is kept out of the wall every
- * client draws. Convex = no door: NPCs never enter buildings. The plan costs ~1ms per
- * seed and is cached per seed|attributes.
+ * client draws. Convex = no door: NPCs never enter buildings. The same plan gives the
+ * door positions the interact gate measures a door click from. The plan costs ~1ms per
+ * seed; what the server keeps of it is cached per seed|attributes.
  */
 
-const hullCache = new Map<string, Float32Array>();
-const MAX_HULL_CACHE = 4096;
+interface PlanFacts {
+  hull: Float32Array;
+  /** Each door's position relative to the building origin, x/z interleaved, in plan order (= `door:<i>`). */
+  doorsXZ: Float64Array;
+}
+
+const planCache = new Map<string, PlanFacts>();
+const MAX_PLAN_CACHE = 4096;
 
 /** Building.tsx's seed rule (no descriptor sets an explicit seed). */
 export const buildingSeed = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
-export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => {
+const planFactsFor = (seed: string, attrs: BuildingAttributes): PlanFacts => {
   const key = `${seed}|${JSON.stringify(attrs)}`;
-  let v = hullCache.get(key);
-  if (!v) {
-    if (hullCache.size >= MAX_HULL_CACHE) {
-      let n = hullCache.size >> 1;
-      for (const k of hullCache.keys()) {
+  let facts = planCache.get(key);
+  if (!facts) {
+    if (planCache.size >= MAX_PLAN_CACHE) {
+      let n = planCache.size >> 1;
+      for (const k of planCache.keys()) {
         if (n-- <= 0) break;
-        hullCache.delete(k);
+        planCache.delete(k);
       }
     }
-    v = buildProxyHullVertices(generateBuildingPlan(seed, attrs));
-    hullCache.set(key, v);
+    const plan = generateBuildingPlan(seed, attrs);
+    const doorsXZ = new Float64Array(plan.doors.length * 2);
+    plan.doors.forEach((d, i) => {
+      doorsXZ[i * 2] = d.position[0];
+      doorsXZ[i * 2 + 1] = d.position[2];
+    });
+    facts = { hull: buildProxyHullVertices(plan), doorsXZ };
+    planCache.set(key, facts);
   }
-  return v;
+  return facts;
 };
+
+export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => planFactsFor(seed, attrs).hull;
+
+/** Door offsets from the building at (x, z) — the leaves Building.tsx places from the same plan. */
+export const doorOffsetsFor = (attrs: BuildingAttributes, x: number, z: number): Float64Array =>
+  planFactsFor(buildingSeed(x, z), attrs).doorsXZ;
 
 /** `attrs` = the actor spec's `hull` (plan-shaping attributes); y = ground height. */
 export const createBuildingCollider = (
