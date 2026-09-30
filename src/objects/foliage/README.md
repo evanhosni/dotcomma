@@ -9,8 +9,10 @@
   - It samples the terrain on a coarse 2u grid and places blades by a seeded PRNG at `density` per 1,000,000 sq units.
   - It filters by `biomeIds`, `heightRange`, `slopeRange` (fading over `slopeBlend` degrees) and `roadDistanceRange`, and it skips water.
   - Blades thin out with the terrain material's biome **weight**, so a field dithers away across a biome edge instead of stopping on a line.
+  - Plants stay off the **riverbed**: against the same `riverBedDistance` field and edge the terrain shader paints the bed by (`RIVER_BED_FULL_INSET`, `world/shaders/constants.ts`), density ramps from 0 where the bed fully covers the ground to full over `RIVER_BED_PLANT_RAMP` (8 factor-1 units), so the sand is bare and only a sparse fringe reaches its fade. The per-blade roll is a hash of the chunk seed and draw index, run after every other filter, so it only ever removes blades: a chunk with no ground inside the ramp is bit-identical to before.
   - The worker streams the result as `Float32Array`s straight into GPU instance attributes.
 - **Rendering:** one instanced billboard mesh per chunk, with one shader for every plant. The shader does camera-facing billboards, wind sway, per-instance distance fade, quantization, world curvature and night dimming.
+- **Spawn fade:** each chunk dithers in when it is added, like every game object ([../../vfx/spawnFade.ts](../../vfx/spawnFade.ts), a `SpawnFadeSet` over the chunk meshes). The per-blade distance shrink stays the fade OUT: the instance-count truncation is built on it.
 - **LOD:** the worker sorts instances by their fade distance, so a far chunk just draws a shorter prefix of its instances (`instanceCount`). There is also a mild density taper past 150u.
 
 `createFoliage(defaults)` returns a component. Precedence, as for `<Dressing>`: the mount's own props, then the enclosing `<Foliage>` group's (`renderDistance`), then the plant's defaults. Without an explicit `biomeIds`, a field restricts itself to the `<Biome>` it is mounted in (via `BiomeContext`). In dev, two different plant types mounted on one `seed` log an error.

@@ -2,7 +2,7 @@
 
 ## How it works
 
-Everything placed in the world that is not terrain, water or sky is a **game object**, and every game object belongs to exactly one of three classes. Each class has a **base** that owns all the logic its members share (the camera-distance lifecycle, world curvature, GPU warm-up, disposal). A member only writes what is unique to it.
+Everything placed in the world that is not terrain, water or sky is a **game object**, and every game object belongs to exactly one of three classes. Each class has a **base** that owns all the logic its members share (the camera-distance lifecycle, world curvature, the spawn fade-in, GPU warm-up, disposal). A member only writes what is unique to it.
 
 | class | use it for | base | README |
 |---|---|---|---|

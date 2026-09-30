@@ -198,8 +198,9 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
         materials.forEach((mat) => {
           if (materialSet.has(mat)) return;
           materialSet.add(mat);
-          mat.transparent = true;
-          mat.opacity = 0;
+          // Opaque for good: the spawn fade is a screen-door dither (vfx/spawnFade.ts), not alpha.
+          mat.transparent = false;
+          mat.opacity = 1;
           (mat as any).fog = false;
 
           prepareActorMaterial(mat, {
@@ -258,13 +259,7 @@ const poolKey = (model: string, quantization: number | undefined): string =>
 
 /** Cheap enough to call synchronously in render; null on a pool miss. */
 export const acquirePooledModelClone = (model: string, quantization: number | undefined): PooledModelClone | null => {
-  const clone = pools.get(poolKey(model, quantization))?.pop();
-  if (!clone) return null;
-  for (const mat of clone.materials) {
-    mat.opacity = 0;
-    mat.transparent = true;
-  }
-  return clone;
+  return pools.get(poolKey(model, quantization))?.pop() ?? null;
 };
 
 /** Heavy on a miss (deep clone + patches + rebind): run from a task queue, never in render. */

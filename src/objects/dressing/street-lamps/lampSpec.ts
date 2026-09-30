@@ -1,5 +1,6 @@
 import type { DressingColliderPart, DressingColliderSpec } from "../types";
 import { CITY_BIOME_ID } from "../../../world/constants";
+import type { FreewayLampParams } from "../../../utils/workers/roads/runLamps";
 
 // Three-free: the art (lampGeometry.ts), the client colliders (StreetLamps.tsx) and the
 // SERVER colliders (physics/obstacles.ts) are all built from these numbers.
@@ -40,4 +41,29 @@ export const STREET_LAMPS_SPEC: DressingColliderSpec<"densityPoints"> = {
   placement: LAMP_PLACEMENT,
   colliderParts: LAMP_COLLIDER_PARTS,
   bodiesOf: (p) => [{ x: p.x, y: p.y, z: p.z, yaw: lampYaw(p.x, p.z) }],
+};
+
+/** The inter-city runs' lamps (getFreewayRunLamps): both sides, staggered — 48u on each side, the
+ *  far side offset by 24u, so along the road a head stands every 24u = the lamp-glow grid's cell
+ *  (lighting/lampGlow.ts: one head per 24u texel, falloff = one cell). Each head lands in a cell of
+ *  its own and the pools of light meet on the pavement; paired lamps would share a cell pair every
+ *  48u and leave a dark gap between. */
+export const FREEWAY_LAMP_PLACEMENT: FreewayLampParams = {
+  spacing: 48,
+  // 1.5u onto the grass past the shoulder paint (19u from the centerline) …
+  verge: 1.5,
+  // … or, where that is the grade's cut/fill ramp, on the shoulder paint (16.4u — the city lamp band's inner edge).
+  shoulder: 0.4,
+  endClear: 40,
+  beltClear: 40,
+  maxRise: 1.5,
+  maxSlope: 40,
+};
+
+export const FREEWAY_LAMPS_SPEC: DressingColliderSpec<"freewayLamps"> = {
+  id: "FreewayLamps",
+  enumerator: "freewayLamps",
+  placement: FREEWAY_LAMP_PLACEMENT,
+  colliderParts: LAMP_COLLIDER_PARTS,
+  bodiesOf: (p) => [{ x: p.x, y: p.y, z: p.z, yaw: p.yaw }],
 };

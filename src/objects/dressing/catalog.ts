@@ -1,6 +1,6 @@
 import { BRIDGES_SPEC } from "./bridges/bridgeSpec";
 import { POWER_LINES_SPEC } from "./power-lines/poleSpec";
-import { STREET_LAMPS_SPEC } from "./street-lamps/lampSpec";
+import { FREEWAY_LAMPS_SPEC, STREET_LAMPS_SPEC } from "./street-lamps/lampSpec";
 import { TRAFFIC_LIGHTS_SPEC } from "./traffic-lights/signalSpec";
 import type { DressingColliderSpec } from "./types";
 
@@ -12,4 +12,5 @@ export const DRESSING_COLLIDER_SPECS: readonly DressingColliderSpec[] = [
   STREET_LAMPS_SPEC,
   TRAFFIC_LIGHTS_SPEC,
   POWER_LINES_SPEC,
+  FREEWAY_LAMPS_SPEC,
 ];

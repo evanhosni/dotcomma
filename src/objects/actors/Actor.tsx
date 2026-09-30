@@ -5,6 +5,7 @@ import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { _quantization } from "../../vfx/quantization";
 import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
+import { _spawnFade } from "../../vfx/spawnFade";
 import { PosePlayback } from "../../net/entities/posePlayback";
 import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
 import type { MotionOutput } from "./state/motion";
@@ -22,7 +23,6 @@ export const DEFAULT_RENDER_DISTANCE = 500;
 export const DEFAULT_FRUSTUM_PADDING = 3;
 /** Hard-kill distance as a multiple of renderDistance, when none is given. */
 export const DESPAWN_DISTANCE_FACTOR = 1.2;
-const FADE_DURATION = 1; // seconds
 
 // Collider activation can mount Rapier trimeshes (several ms each), and actors at
 // similar distances cross the gate on the same frame — one activation per window.
@@ -46,17 +46,19 @@ export const driveActorFrames = (state: RootState, delta: number): void => {
 
 /**
  * The ONLY place actor materials are patched. Quantization REPLACES project_vertex,
- * the other two chain onto it; each patcher is idempotent. The skips are for
+ * the others chain onto it; each patcher is idempotent. The skips are for
  * materials an effect is genuinely wrong for (unlit → no irradiance for lamp glow;
- * procedural geometry is off the quantization lattice). Curvature has no skip.
+ * procedural geometry is off the quantization lattice). Curvature and the spawn fade
+ * have no skip. `perInstanceSpawnFade`: one mesh drawing many actors' parts (the far doors).
  */
 export const prepareActorMaterial = (
   material: THREE.Material,
-  options: { quantization?: number; skipQuantization?: boolean; skipLampGlow?: boolean } = {},
+  options: { quantization?: number; skipQuantization?: boolean; skipLampGlow?: boolean; perInstanceSpawnFade?: boolean } = {},
 ): void => {
   if (!options.skipQuantization) _quantization.patchMaterial(material, options.quantization);
   if (!options.skipLampGlow) patchStandardMaterialLampGlow(material);
   _curvature.patchMaterial(material);
+  _spawnFade.patchMaterial(material, { perInstance: options.perInstanceSpawnFade });
 };
 
 export interface ActorLifecycleOptions {
@@ -74,8 +76,9 @@ export interface ActorLifecycleOptions {
   onDestroy: (id: string) => void;
   /** Frames between gate evaluations (fade and kill run every frame). Default 1. */
   checkInterval?: number;
-  /** Receives the opacity ONLY when it changed. */
-  applyFade?: (opacity: number) => void;
+  /** Dither OUT past renderDistance (then self-destroy) instead of popping at despawnDistance. Every
+   *  actor dithers IN when its group first appears (vfx/spawnFade.ts). */
+  fadeOut?: boolean;
   /** Omit to skip the frustum test (meshes that cull themselves). */
   boundsRadius?: number;
   frustumPadding?: number;
@@ -108,6 +111,8 @@ export interface ActorFrameContext {
   gatesChecked: boolean;
   /** This frame's frustum result (true when the test is disabled). */
   visible: boolean;
+  /** Spawn-fade visibility, 0..1 — for parts drawn outside the group (a building's far doors). */
+  spawnFade: number;
 }
 
 export interface ActorLifecycle {
@@ -118,7 +123,7 @@ export interface ActorLifecycle {
   distanceSqRef: React.MutableRefObject<number>;
   destroyedRef: React.MutableRefObject<boolean>;
   sync: SyncHandle | null;
-  /** Re-arm for a fresh life. Pooled clones carry the previous life's opacity. */
+  /** Re-arm for a fresh life: fades in again. */
   resetLife: () => void;
 }
 
@@ -134,7 +139,7 @@ export const useActorLifecycle = ({
   despawnDistance,
   onDestroy,
   checkInterval = 1,
-  applyFade,
+  fadeOut = false,
   boundsRadius,
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   forceVisibleFrames = 3,
@@ -152,8 +157,8 @@ export const useActorLifecycle = ({
   const nearActiveRef = useRef(false);
   const destroyedRef = useRef(false);
   const distanceSqRef = useRef(Infinity);
-  const fadeRef = useRef({ opacity: 0, fadingOut: false });
-  const appliedOpacityRef = useRef(-1);
+  const spawnFade = useRef(new _spawnFade.SpawnFade()).current;
+  const fadeRef = useRef({ started: false, fadingOut: false });
   const lastVisibleRef = useRef<boolean | null>(null);
   const forceVisibleFramesRef = useRef(forceVisibleFrames);
   const matricesFrozenRef = useRef(false);
@@ -193,23 +198,32 @@ export const useActorLifecycle = ({
       return;
     }
 
-    if (applyFade) {
+    // The fade starts when the group first exists (a Building or a pool-miss ModelActor
+    // renders null until its assets land) and before its first draw: useFrame precedes render.
+    let fadeVisibility = 1;
+    const fadeRoot = groupRef.current;
+    if (fadeRoot) {
       const fade = fadeRef.current;
-      const beyond = distanceSq > renderDistanceSq;
-      if (beyond !== fade.fadingOut) fade.fadingOut = beyond;
-      if (fade.fadingOut) {
-        fade.opacity = Math.max(0, fade.opacity - delta / FADE_DURATION);
-        if (fade.opacity <= 0) {
+      spawnFade.setRoot(fadeRoot);
+      if (!fade.started) {
+        fade.started = true;
+        spawnFade.fadeIn(0);
+      }
+      if (fadeOut) {
+        const beyond = distanceSq > renderDistanceSq;
+        if (beyond !== fade.fadingOut) {
+          fade.fadingOut = beyond;
+          if (beyond) spawnFade.fadeOut();
+          else spawnFade.fadeIn();
+        }
+      }
+      if (spawnFade.fading) {
+        fadeVisibility = spawnFade.update();
+        if (fade.fadingOut && fadeVisibility <= 0) {
           destroyedRef.current = true;
           onDestroy(id);
           return;
         }
-      } else {
-        fade.opacity = Math.min(1, fade.opacity + delta / FADE_DURATION);
-      }
-      if (fade.opacity !== appliedOpacityRef.current) {
-        appliedOpacityRef.current = fade.opacity;
-        applyFade(fade.opacity);
       }
     }
 
@@ -278,7 +292,14 @@ export const useActorLifecycle = ({
     if (synced) playback.sample(sync.entity!, delta, sync.target);
     else playback.reset();
 
-    onFrame?.(state, delta, { distanceSq, gatesChecked: checked, visible, sync, syncRenderTime: playback.renderTime });
+    onFrame?.(state, delta, {
+      distanceSq,
+      gatesChecked: checked,
+      visible,
+      sync,
+      syncRenderTime: playback.renderTime,
+      spawnFade: fadeVisibility,
+    });
 
     // The server's pose wins over anything the component's logic wrote.
     if (synced && group && sync.target.valid) {
@@ -292,13 +313,17 @@ export const useActorLifecycle = ({
     frameUpdaters.add(frameUpdaterRef);
     return () => {
       frameUpdaters.delete(frameUpdaterRef);
+      // A pooled clone must go back on its base materials.
+      spawnFade.release();
+      fadeRef.current.started = false;
+      fadeRef.current.fadingOut = false;
     };
   }, []);
 
   const resetLife = useRef(() => {
-    fadeRef.current.opacity = 0;
+    spawnFade.release();
+    fadeRef.current.started = false;
     fadeRef.current.fadingOut = false;
-    appliedOpacityRef.current = -1;
     forceVisibleFramesRef.current = forceVisibleFrames;
     destroyedRef.current = false;
   }).current;

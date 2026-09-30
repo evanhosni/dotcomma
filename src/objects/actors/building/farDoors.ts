@@ -26,18 +26,22 @@ export interface FarDoorSpec {
 
 export interface FarDoor extends FarDoorSpec {
   angle: number;
+  /** Its building's spawn-fade visibility (the per-instance aSpawnFade). */
+  fade: number;
   index: number;
 }
 
 const INITIAL_CAPACITY = 1024;
 const REBASE_DISTANCE = 2000;
 
-const geometry = new THREE.BoxGeometry(1, 1, 1);
+const box = new THREE.BoxGeometry(1, 1, 1);
 const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0.05 });
 // No lamp glow: its patch reads modelMatrix only, so every instance would sample the mesh origin's glow.
-prepareActorMaterial(material, { skipQuantization: true, skipLampGlow: true });
+// Per-instance spawn fade: the doors of every building share this one mesh, each fading with its own.
+prepareActorMaterial(material, { skipQuantization: true, skipLampGlow: true, perInstanceSpawnFade: true });
 
 let mesh: THREE.InstancedMesh | null = null;
+let fadeAttribute: THREE.InstancedBufferAttribute | null = null;
 let capacity = 0;
 const doors: FarDoor[] = [];
 let originX = 0;
@@ -58,6 +62,11 @@ const writeMatrix = (door: FarDoor): void => {
   mesh!.instanceMatrix.needsUpdate = true;
 };
 
+const writeFade = (door: FarDoor): void => {
+  fadeAttribute!.setX(door.index, door.fade);
+  fadeAttribute!.needsUpdate = true;
+};
+
 const writeColor = (door: FarDoor): void => {
   mesh!.setColorAt(door.index, _color.set(door.color));
   mesh!.instanceColor!.needsUpdate = true;
@@ -70,6 +79,13 @@ const ensureCapacity = (scene: THREE.Scene, needed: number): void => {
   }
   const previous = mesh;
   capacity = Math.max(INITIAL_CAPACITY, capacity * 2);
+  // Its own geometry (sharing the box's attributes) because the fade attribute is sized to the capacity.
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(box.getIndex());
+  for (const name of Object.keys(box.attributes)) geometry.setAttribute(name, box.getAttribute(name));
+  fadeAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+  fadeAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("aSpawnFade", fadeAttribute);
   mesh = new THREE.InstancedMesh(geometry, material, capacity);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.setColorAt(0, _color.set(0xffffff));
@@ -80,22 +96,35 @@ const ensureCapacity = (scene: THREE.Scene, needed: number): void => {
   for (const door of doors) {
     writeMatrix(door);
     writeColor(door);
+    writeFade(door);
   }
   if (previous) {
     previous.removeFromParent();
     previous.dispose();
+    // Detach the shared box attributes first: dispose() frees every attached buffer.
+    const old = previous.geometry;
+    for (const name of Object.keys(box.attributes)) old.deleteAttribute(name);
+    old.setIndex(null);
+    old.dispose();
   }
   scene.add(mesh);
 };
 
-export const addFarDoor = (scene: THREE.Scene, spec: FarDoorSpec, angle: number): FarDoor => {
+export const addFarDoor = (scene: THREE.Scene, spec: FarDoorSpec, angle: number, fade = 1): FarDoor => {
   ensureCapacity(scene, doors.length + 1);
-  const door: FarDoor = { ...spec, angle, index: doors.length };
+  const door: FarDoor = { ...spec, angle, fade, index: doors.length };
   doors.push(door);
   mesh!.count = doors.length;
   writeMatrix(door);
   writeColor(door);
+  writeFade(door);
   return door;
+};
+
+export const setFarDoorFade = (door: FarDoor, fade: number): void => {
+  if (door.fade === fade || doors[door.index] !== door) return;
+  door.fade = fade;
+  writeFade(door);
 };
 
 export const setFarDoorAngle = (door: FarDoor, angle: number): void => {
@@ -113,6 +142,7 @@ export const removeFarDoor = (door: FarDoor): void => {
     doors[last.index] = last;
     writeMatrix(last);
     writeColor(last);
+    writeFade(last);
   }
   mesh!.count = doors.length;
 };

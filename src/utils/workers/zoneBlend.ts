@@ -15,7 +15,10 @@
  * smoothstep per PIXEL, so a 1–3u feather survives 17.5u quads without aliasing.
  */
 
+import { CellCache } from "./cellCache";
+import { domainConfig } from "./computeConfig";
 import type { DomainConfig, SerializedRegion, Wall, Zone } from "./types";
+import { biomeSiteAt, getBiomeContext } from "./voronoi";
 
 /** Saturates the shader's smoothstep either way; small enough to stay exact in float32. */
 export const BIOME_SDF_FAR = 1e4;
@@ -106,6 +109,7 @@ export const initZones = (config: DomainConfig): void => {
   zones = [];
   zoneByKey.clear();
   zonesByRegion.clear();
+  siteDepths.clear();
   biomeSlotIds = biomeSlotsOf(config);
   for (let ri = 0; ri < config.regions.length; ri++) {
     const region = config.regions[ri];
@@ -314,4 +318,79 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
     if (v > biomePresence[z.slot]) biomePresence[z.slot] = v;
   }
   if (biomePresence[own.slot] === -BIOME_SDF_FAR) biomePresence[own.slot] = BIOME_SDF_FAR;
+};
+
+// ── Dome depth (BiomeDomeConfig) ──────────────────────────────────────────
+
+/** Support of the depth interpolation, in biome cells: it must exceed the farthest any point lies
+ *  from its nearest site, or the interpolation has nothing to interpolate there. */
+const DOME_KERNEL_CELLS = 1.3;
+/** Width of the smooth minimum joining the interpolated depth to the wall distance. */
+const DOME_SMOOTH = 100;
+/** Per zone, each of its cells' SITE depth: the site's distance to the zone's nearest foreign wall. */
+const siteDepths = new Map<Zone, CellCache<number>>();
+
+const siteDepthOf = (ix: number, iz: number, sx: number, sz: number, zone: Zone, cap: number): number => {
+  let cache = siteDepths.get(zone);
+  if (!cache) siteDepths.set(zone, (cache = new CellCache<number>(16384)));
+  let depth = cache.get(ix, iz);
+  if (depth === undefined) {
+    // The site's own wall pass: the wall distance is identical from every grid window (MEASURED),
+    // so every worker caches the same value.
+    const walls = getBiomeContext({ x: sx, z: sz }).zoneWalls;
+    let minSq = Infinity;
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i];
+      if (w.a !== zone && w.b !== zone) continue;
+      const dx = w.ex - w.sx;
+      const dz = w.ez - w.sz;
+      const lenSq = dx * dx + dz * dz;
+      let t = lenSq > 0 ? ((sx - w.sx) * dx + (sz - w.sz) * dz) / lenSq : 0;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+      const d = (sx - w.sx - t * dx) ** 2 + (sz - w.sz - t * dz) ** 2;
+      if (d < minSq) minSq = d;
+    }
+    depth = Math.min(cap, Math.sqrt(minSq));
+    cache.makeRoom();
+    cache.set(ix, iz, depth);
+  }
+  return depth;
+};
+
+/** How deep inside `zone` (joined cells as one) a warped point lies, SMOOTHLY: the site depths of the
+ *  zone's cells interpolated by a compact kernel over every site nearby (a foreign site counts 0),
+ *  capped at `cap`. Unlike the wall distance it has no crease along the zone's medial axis — the wall
+ *  distance made every cell a faceted pyramid — but it does not reach 0 at the edge (domeDepthAt). */
+const smoothDepthAt = (wx: number, wz: number, zone: Zone, cap: number): number => {
+  const gs = domainConfig!.gridSize;
+  const reach = DOME_KERNEL_CELLS * gs;
+  const x0 = Math.floor((wx - reach) / gs);
+  const x1 = Math.floor((wx + reach) / gs);
+  const z0 = Math.floor((wz - reach) / gs);
+  const z1 = Math.floor((wz + reach) / gs);
+  let sum = 0;
+  // A floor under the weight keeps the ratio continuous (→ 0) should a point ever lie past every
+  // site's support.
+  let weight = 1e-6;
+  for (let ix = x0; ix <= x1; ix++) {
+    for (let iz = z0; iz <= z1; iz++) {
+      const site = biomeSiteAt(ix, iz);
+      const u = ((site.x - wx) ** 2 + (site.z - wz) ** 2) / (reach * reach);
+      if (u >= 1) continue;
+      const k = (1 - u) * (1 - u) * (1 - u);
+      weight += k;
+      if (site.zone === zone) sum += k * siteDepthOf(ix, iz, site.x, site.z, zone, cap);
+    }
+  }
+  return sum / weight;
+};
+
+/** A dome's depth at a point of `zone` whose nearest foreign wall is `wallDepth` away: the smooth
+ *  depth, held under the wall distance by a smooth minimum so it is 0 on the edge itself. */
+export const domeDepthAt = (wx: number, wz: number, zone: Zone, cap: number, wallDepth: number): number => {
+  const smooth = smoothDepthAt(wx, wz, zone, cap);
+  if (wallDepth === Infinity) return smooth;
+  const h =Math.max(0, Math.min(1, 0.5 + (0.5 * (smooth - wallDepth)) / DOME_SMOOTH));
+  return Math.max(0, smooth + (wallDepth - smooth) * h - DOME_SMOOTH * h * (1 - h));
 };

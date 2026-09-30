@@ -40,6 +40,7 @@ import {
   biomeSdf,
   biomeSdfResult,
   combineZoneWeights,
+  domeDepthAt,
   initZones,
   ownWallAlong,
   ownWallDistance,
@@ -146,7 +147,10 @@ const zoneBiomeHeight = (zone: Zone, x: number, z: number, isOwn: boolean, ctx: 
   }
   if (presence <= 0) return 0;
   const noiseConfig = domainConfig!.biomeNoiseConfigs[zone.biome.id];
-  if (noiseConfig) return biomeNoiseHeight(noiseConfig, x, z) * presence;
+  if (noiseConfig) {
+    const depth = noiseConfig.dome ? domeDepthAt(ctx.warped.x, ctx.warped.z, zone, noiseConfig.dome.reach, zoneMinDist[zone.index]) : 0;
+    return biomeNoiseHeight(noiseConfig, x, z, depth) * presence;
+  }
   if (domainConfig!.cityConfig && zone.biome.id === CITY_BIOME_ID) {
     if (!isOwn) return domainConfig!.cityConfig.maxBlockElevation * 0.5;
     if (farDry) noRiverQuay();
@@ -509,6 +513,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
 
 export type {
   BiomeContext,
+  BiomeDomeConfig,
+  BiomeNoiseConfig,
   BlendWidths,
   DomainConfig,
   FlattenDescriptor,
@@ -548,6 +554,7 @@ export {
   getCityVoronoiSites,
   getFreewayRunMarkers,
 } from "./roads/cityFeatures";
+export { type FreewayLampParams, type FreewayLampPoint, getFreewayRunLamps, runLampDebug } from "./roads/runLamps";
 export type {
   BridgeLanePaint,
   BridgeParapetGap,

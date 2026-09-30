@@ -14,6 +14,8 @@ import {
   type CitySitePoint,
   type CityTrafficLightPoint,
   type FreewayBridge,
+  type FreewayLampParams,
+  type FreewayLampPoint,
   type RoadMarkerPoint,
   computeVertexData,
   getCityFreewayEdgePoints,
@@ -21,6 +23,7 @@ import {
   getCityTrafficLightPoints,
   getCityVoronoiSites,
   getFreewayBridges,
+  getFreewayRunLamps,
   getFreewayRunMarkers,
 } from "../../utils/workers/vertexCompute";
 import { type DensityPointParams, generateDensityPoints } from "../../utils/workers/densityPoints";
@@ -90,6 +93,9 @@ export const DRESSING_ENUMERATORS = defineEnumerators({
     chunkMayHoldBiomes(b, CITY_ONLY)
       ? getCityFreewayEdgePoints(b.minX, b.minZ, b.maxX, b.maxZ, a.spacing, a.lateralMargin, a.junctionClear, a.side, a.withNext ?? false)
       : [],
+
+  /** Lamps along the inter-city runs, which cross every region — no probe. */
+  freewayLamps: (b, params: FreewayLampParams): FreewayLampPoint[] => getFreewayRunLamps(b.minX, b.minZ, b.maxX, b.maxZ, params),
 
   /** Decks also stand on inter-city runs outside the city — no probe. */
   bridges: (b, params: BridgePlacementParams): FreewayBridge[] => getFreewayBridges(b.minX, b.minZ, b.maxX, b.maxZ, params),

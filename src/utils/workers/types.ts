@@ -14,6 +14,27 @@ export interface TerrainNoiseParams {
   scale: number;
 }
 
+/** A biome's declarative height (its <Terrain noise>), before its presence: the noise, the dome,
+ *  then the offset (noise.ts biomeNoiseHeight). */
+export interface BiomeNoiseConfig {
+  params: TerrainNoiseParams;
+  absNeg?: boolean;
+  scale?: number;
+  offset?: number;
+  dome?: BiomeDomeConfig;
+}
+
+/** A MASSIF under a biome's noise: the ground rises with the square of the point's depth inside the
+ *  biome, by `height` at `reach`. Depth is measured to the nearest FOREIGN wall, so a group of joined
+ *  cells is one mass whose summit is where the group is deepest (zoneBlend.ts domeDepthAt). */
+export interface BiomeDomeConfig {
+  height: number;
+  /** Depth (warped units) at which the dome reaches `height`; deeper ground stays there. */
+  reach: number;
+  /** The noise's share at the edge (default 1); it grows to all of it with the dome. */
+  noiseFloor?: number;
+}
+
 /** Blend widths resolve biome → region → domain default (see CLAUDE.md "Blending"). */
 export interface BlendWidths {
   /** Material feather, FULL width across the wall (the smaller side wins at a wall). */
@@ -64,14 +85,7 @@ export interface DomainConfig {
   roadNoiseParams: TerrainNoiseParams;
   baseNoiseParams: TerrainNoiseParams;
   river: RiverParams;
-  biomeNoiseConfigs: {
-    [biomeId: number]: {
-      params: TerrainNoiseParams;
-      absNeg?: boolean;
-      scale?: number;
-      offset?: number;
-    };
-  };
+  biomeNoiseConfigs: { [biomeId: number]: BiomeNoiseConfig };
   cityConfig: {
     seed: string;
     gridSize: number; // block grid cell size

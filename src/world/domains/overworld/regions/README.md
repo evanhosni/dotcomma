@@ -63,7 +63,7 @@ Current regions (ids in each `spec.ts`; `world/constants.ts` keeps only the biom
        // actors: [{ actor: ROCK_SPEC, density: 40 }],   // everything that spawns here, and only here — src/objects/actors/README.md
      };
      ```
-     `noise` fields: `type` perlin|simplex, `height` (amplitude), `scale` (wavelength), plus optional `absNeg` (folded ridges) and `offset` (raise).
+     `noise` fields: `type` perlin|simplex, `height` (amplitude), `scale` (wavelength), plus optional `absNeg` (folded ridges), `offset` (raise) and `dome: { height, reach, noiseFloor? }` (a massif: the ground rises with the square of the depth inside the biome, joined cells as one, by `height` at `reach` deep; the noise fades in from `noiseFloor` at the foot — the mountain uses it).
    - `shaders/fragment.glsl`: copy [desert/biomes/dust/shaders/fragment.glsl](desert/biomes/dust/shaders/fragment.glsl). Keep `void main()` and write `gl_FragColor`; declare the uniforms/varyings you use.
    - `biome.tsx`:
      ```tsx

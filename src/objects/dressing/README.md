@@ -10,8 +10,8 @@
 - [bridges/](bridges/README.md)
 
 **The base** ([Dressing.tsx](Dressing.tsx)) owns everything features share:
-- `useDressingChunks({ renderDistance, build })`: the camera-following chunk lifecycle. Chunks are queued nearest-first on one budgeted queue shared by all features, and dropped past 1.3× the render distance. Your `build(bounds)` returns a `THREE.Object3D` (or `null` for an empty chunk) and must be deterministic.
-- `useDressingAssets(() => ({ geometry, material, … }))`: creates your shared geometries/materials once, runs every material through `prepareDressingMaterial` (world curvature) and disposes them on unmount. A material created anywhere else floats above the curved horizon.
+- `useDressingChunks({ renderDistance, build })`: the camera-following chunk lifecycle. Chunks are queued nearest-first on one budgeted queue shared by all features, and dropped past 1.3× the render distance. Your `build(bounds)` returns a `THREE.Object3D` (or `null` for an empty chunk) and must be deterministic. Each chunk dithers in as it is added (the spawn fade, [../../vfx/spawnFade.ts](../../vfx/spawnFade.ts), per CHUNK: its instances appear together); chunks don't fade out — they drop at 1.3× the render distance.
+- `useDressingAssets(() => ({ geometry, material, … }))`: creates your shared geometries/materials once, runs every material through `prepareDressingMaterial` (world curvature, the spawn fade) and disposes them on unmount. A material created anywhere else floats above the curved horizon.
 - `instancedFromPoints(geometry, material, points, place)`: builds one chunk's `InstancedMesh`. `place` maps each point to `{ x, y, z, yaw }`, where local +X faces along `yaw`. It finishes through `finalizeInstancedChunk` (rebases the chunk for float precision, sets culling bounds, warms the GPU upload). Every instanced chunk must end there.
 - `useChunkRegistry(onRemove)`: per-chunk side state (animation clocks, lamp-glow registrations), cleaned up when chunks unmount.
 - `useDressingColliders(registry, { colliderDistance })` + `<DressingPartColliders parts=… />`: real cuboid colliders, but only for bodies within `colliderDistance` (default `DRESSING_COLLIDER_DISTANCE` = 90) of the camera.
@@ -20,6 +20,7 @@
 
 **Placement runs off-thread.** Every placement function is one entry in the enumerator table, [enumerators.ts](enumerators.ts) (`DRESSING_ENUMERATORS`: name → `(bounds, args) => points`). The dressing worker ([../../utils/workers/dressing.worker.ts](../../utils/workers/dressing.worker.ts)) runs any entry by name, and a component asks for it with the typed request `enumerateDressing(name, bounds, args)` from [dressingWorker.ts](dressingWorker.ts): args and point types come from the table, so there is no message type or wrapper to write. Today's entries:
 - `densityPoints`: spawn-style random placement ([../../utils/workers/densityPoints.ts](../../utils/workers/densityPoints.ts)) with `seedTag`, `density`, `footprint`, `biomeIds`, `heightRange`, `slopeRange` and `roadDistanceRange`. It works in any biome: the chunk probe skips only chunks where none of `biomeIds` can be (unset = every biome). Street lamps use it.
+- `freewayLamps`: lamps along both sides of the inter-city runs ([../../utils/workers/roads/runLamps.ts](../../utils/workers/roads/runLamps.ts)).
 - `roadMarkers`, `trafficLights`, `freewayEdgePoints` (city road structure, [../../utils/workers/roads/cityFeatures.ts](../../utils/workers/roads/cityFeatures.ts)), `bridges` ([../../utils/workers/bridges/](../../utils/workers/bridges)), `cityLightSites`.
 
 An enumerator must give the same points no matter how the world is chunked: each point belongs to exactly one chunk (by position).

@@ -1,14 +1,15 @@
 import * as THREE from "three";
 import type { PointXZ } from "../../utils/math/types";
+import type { SwapChunk } from "./lodSwaps";
 export interface TerrainProps {
   group: THREE.Group;
-  chunks: { [key: string]: { position: number[]; chunk: Chunk } };
+  chunks: Map<string, Chunk>;
   activeChunk: Chunk | null;
   queuedToBuild: Chunk[];
-  queuedToDestroy: Set<string>;
 }
 
-export interface Chunk {
+/** A terrain chunk; its swap state (built, drawn, fade range) is lodSwaps.ts's `SwapChunk`. */
+export interface Chunk extends SwapChunk {
   /** `${lod.level}/${gx}/${gz}`, cached so per-frame passes never rebuild it from float math. */
   key: string;
   /** World-space chunk center. */

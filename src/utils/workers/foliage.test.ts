@@ -3,7 +3,8 @@
 import { OVERWORLD_CONFIG } from "../../world/domains/overworld/config";
 import { GRASS_BIOME } from "../../world/domains/overworld/regions/city/biomes/grass/spec";
 import { generateChunk } from "./foliage.worker";
-import { initCompute } from "./vertexCompute";
+import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
+import { computeVertexData, initCompute, riverKeepOff } from "./vertexCompute";
 
 const GRASS = {
   seed: "grass",
@@ -21,6 +22,10 @@ const bits = (a: Float32Array, n = a.length) => Array.from(new Uint32Array(a.buf
 const SPOT_CX = Math.floor(-1500 / 64);
 const SPOT_CZ = Math.floor(-12000 / 64);
 
+/** A grass hillside running down to a river bank (-760, 732). */
+const RIVER_CX = Math.floor(-760 / 64);
+const RIVER_CZ = Math.floor(732 / 64);
+
 let chunks: [number, number][] = [];
 
 beforeAll(() => {
@@ -28,10 +33,13 @@ beforeAll(() => {
   for (let a = -3; a <= 3 && chunks.length < 3; a++)
     for (let b = -3; b <= 3 && chunks.length < 3; b += 3)
       if (generateChunk(SPOT_CX + a * 4, SPOT_CZ + b * 4, GRASS, 1).total > 1000) chunks.push([SPOT_CX + a * 4, SPOT_CZ + b * 4]);
+  // And one on a river bank, where the riverbed thins the blades (the test at the bottom).
+  if (generateChunk(RIVER_CX, RIVER_CZ, GRASS, 1).total > 1000) chunks.push([RIVER_CX, RIVER_CZ]);
 });
 
 test("the scan found grass chunks to test on", () => {
-  expect(chunks.length).toBeGreaterThan(0);
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks[chunks.length - 1]).toEqual([RIVER_CX, RIVER_CZ]);
 });
 
 test("a narrow band is exactly the leading blades of the full band", () => {
@@ -74,4 +82,25 @@ test("a grid-cache hit places exactly what the cold sample placed", () => {
   expect(hit.total).toBe(cold.total);
   expect(bits(hit.offsets)).toEqual(bits(cold.offsets));
   expect(bits(hit.instanceData)).toEqual(bits(cold.instanceData));
+});
+
+/** The chunks around RIVER_CX/CZ hold the whole grass → riverbed transition. */
+test("grass thins out across the riverbed's edge and never stands on the bed", () => {
+  const bedCovered = riverKeepOff() - RIVER_BED_FULL_INSET;
+  let onBed = 0;
+  let rampStart = 0;
+  let pastRamp = 0;
+  for (let a = -1; a <= 1; a++)
+    for (let b = -1; b <= 1; b++) {
+      const r = generateChunk(RIVER_CX + a, RIVER_CZ + b, GRASS, 1);
+      for (let i = 0; i < r.count; i += 2) {
+        const d = computeVertexData(r.offsets[i * 3], r.offsets[i * 3 + 2]).riverBedDistance;
+        if (d < bedCovered - 0.5) onBed++; // 0.5: the worker reads the field off a 2u bilinear grid
+        else if (d < bedCovered + 2) rampStart++;
+        else if (d > bedCovered + 9 && d < bedCovered + 11) pastRamp++;
+      }
+    }
+  expect(pastRamp).toBeGreaterThan(200);
+  expect(onBed).toBe(0);
+  expect(rampStart).toBeLessThan(pastRamp * 0.2);
 });

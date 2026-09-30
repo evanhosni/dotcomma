@@ -2,7 +2,7 @@ import { Bridges } from "../../../../../../../objects/dressing/bridges/Bridges";
 import { Dressing } from "../../../../../../../objects/dressing/Dressing";
 import { PowerLines } from "../../../../../../../objects/dressing/power-lines/PowerLines";
 import { RoadMarkers } from "../../../../../../../objects/dressing/road-markers/RoadMarkers";
-import { StreetLamps } from "../../../../../../../objects/dressing/street-lamps/StreetLamps";
+import { FreewayLamps, StreetLamps } from "../../../../../../../objects/dressing/street-lamps/StreetLamps";
 import { TrafficLights } from "../../../../../../../objects/dressing/traffic-lights/TrafficLights";
 import { Biome, Material } from "../../../../../../components";
 import { CityLights } from "./CityLights";
@@ -14,6 +14,8 @@ export const CityBiome = () => (
     <Material shader={fragmentShader} textures={{ sidewalktexture: "sidewalk.png", roadtexture: "road.jpg" }} />
     <Dressing>
       <StreetLamps />
+      {/* The inter-city runs are city infrastructure too (like their markers and decks): they exist only between cities. */}
+      <FreewayLamps />
       <RoadMarkers />
       <TrafficLights />
       <PowerLines />

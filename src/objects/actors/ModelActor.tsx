@@ -170,14 +170,7 @@ export const ModelActor = ({
     onDestroy,
     frustumPadding,
     boundsRadius: pooled ? pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]) : undefined,
-    applyFade: (opacity) => {
-      if (!pooled) return;
-      const mats = pooled.materials;
-      for (let i = 0; i < mats.length; i++) {
-        mats[i].opacity = opacity;
-        mats[i].transparent = opacity < 1;
-      }
-    },
+    fadeOut: true,
     // Colliders gate on DISTANCE only: gating on the frustum rebuilt the Rapier
     // colliders every time the player turned around.
     colliderDistance: hasColliders
@@ -235,12 +228,6 @@ export const ModelActor = ({
   useEffect(() => {
     if (!pooled) return;
     reclaimModelClone(pooled);
-
-    // Also covers the StrictMode reclaim path, where no acquire reset the materials.
-    for (const mat of pooled.materials) {
-      mat.opacity = 0;
-      mat.transparent = true;
-    }
     lifecycle.resetLife();
     animPlayer.reset(); // a reused clone may be mid-clip from its previous life
 

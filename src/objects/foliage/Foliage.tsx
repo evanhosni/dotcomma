@@ -6,6 +6,7 @@ import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
 import { _quantization } from "../../vfx/quantization";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
+import { _spawnFade } from "../../vfx/spawnFade";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
@@ -300,6 +301,9 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
   const lastCellRef = useRef({ cx: Number.NaN, cz: Number.NaN });
   const lastSweepPosRef = useRef({ x: Number.NaN, z: Number.NaN });
   const headingRef = useRef({ x: 0, z: 0, anchorX: Number.NaN, anchorZ: Number.NaN });
+  // Per CHUNK, like dressing. Orthogonal to the per-blade distance shrink, which stays the fade OUT:
+  // it is what the instanceCount truncation is built on.
+  const fadesRef = useRef(new _spawnFade.SpawnFadeSet());
 
   const { camera } = useThree();
   const { terrainLoaded, progress } = useGameContext();
@@ -319,9 +323,8 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
     return tex;
   }, [png, textureFactory]);
 
-  const material = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
+  const material = useMemo(() => {
+    const created = new THREE.ShaderMaterial({
         uniforms: {
           uTime: { value: 0 },
           uColor: { value: new THREE.Color(color) },
@@ -340,7 +343,10 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
         vertexShader: VERTEX_SHADER,
         fragmentShader: FRAGMENT_SHADER,
         side: THREE.DoubleSide,
-      }),
+      });
+    _spawnFade.patchMaterial(created);
+    return created;
+  },
     // Scalar uniforms are synced below without a rebuild; quantization picks its uniform object at creation.
     [texture, quantization],
   );
@@ -385,6 +391,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
       }
     });
     chunksRef.current.clear();
+    fadesRef.current.clear();
     pendingRef.current.clear();
     sweepSettledRef.current = false;
     lastCellRef.current.cx = Number.NaN;
@@ -421,6 +428,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
       if (result.count === 0) {
         if (held?.mesh) {
           groupRef.current?.remove(held.mesh);
+          fadesRef.current.delete(held.mesh);
           disposeChunkGeometry(held.mesh.geometry);
         }
         chunksRef.current.set(key, { cx, cz, mesh: null, total: 0, held: 0, band: 1, lowDetail: false });
@@ -470,6 +478,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
         // The shader rebases instance positions on modelMatrix[3] — the mesh MUST sit at its chunk origin.
         chunk.mesh.position.set(cx * FOLIAGE_CHUNK_SIZE, 0, cz * FOLIAGE_CHUNK_SIZE);
         groupRef.current?.add(chunk.mesh);
+        fadesRef.current.add(chunk.mesh);
       }
       uploadOnFirstDraw(chunk.mesh);
       chunksRef.current.set(key, chunk);
@@ -478,6 +487,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
 
   useFrame((state) => {
     material.uniforms.uTime.value = state.clock.elapsedTime;
+    fadesRef.current.update();
 
     frameCountRef.current++;
     if (frameCountRef.current % UPDATE_INTERVAL_FRAMES !== 0) return;
@@ -534,6 +544,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
       if (distSq > keepDistSq) {
         if (chunk.mesh) {
           groupRef.current?.remove(chunk.mesh);
+          fadesRef.current.delete(chunk.mesh);
           disposeChunkGeometry(chunk.mesh.geometry);
         }
         chunksRef.current.delete(key);

@@ -13,14 +13,18 @@ every shader attribute comes from the height pipeline in
   imperatively in `useFrame`.
 - [`lodConfig.ts`](lodConfig.ts): the five LOD levels (chunk size, segments, ring distance, collider,
   skirt depth, rivers on or off, blend-field clamping).
+- [`lodQuadtree.ts`](lodQuadtree.ts): `computeDesiredChunks`, the quadtree's leaves around the player.
+- [`lodSwaps.ts`](lodSwaps.ts): `LodSwapper`, the chunk-set bookkeeping between "desired" and "drawn":
+  stale chunks, pruning, and the LOD cross-fades. Pure (no Three), so
+  [`lodSwaps.test.ts`](lodSwaps.test.ts) simulates walks through it and checks coverage every frame.
 - [`material.ts`](material.ts): builds the ONE terrain `ShaderMaterial` from every region's base shader
-  and every biome's shader. See [Shaders](../shaders/README.md).
+  and every biome's shader, and its fade twin (`createLodFadeMaterial`). See [Shaders](../shaders/README.md).
 - [`vertexData.ts`](vertexData.ts): runs the same height pipeline on the main thread (`getVertexData`,
   `getVertexDataRaw`, `ensureVertexCompute`). The player backstop, respawn and the address resolver
   use it.
 - [`types.ts`](types.ts): `Chunk` (key, center, mesh, water mesh, collider body, LOD).
 
-**The LOD quadtree** (`computeDesiredChunks`). The world is tiled by LOD5 roots (3360u). A root
+**The LOD quadtree** (`computeDesiredChunks`, [`lodQuadtree.ts`](lodQuadtree.ts)). The world is tiled by LOD5 roots (3360u). A root
 closer to the player than the next level's ring splits into four children. Splitting continues
 down to 420u chunks, which become LOD1 inside 420u and LOD2 outside it.
 
@@ -47,9 +51,37 @@ down to 420u chunks, which become LOD1 inside 420u and LOD2 outside it.
    `buildChunk` asks the terrain worker (`BUILD_CHUNK`) for heights, normals, collider heights, the
    blend fields, road/river distances and water heights, then writes them into a pooled geometry
    (`acquireGeometry` / `releaseGeometry`, pooled per LOD).
-4. `processSwaps` swaps LODs as one step. An old chunk stays visible until every new chunk covering
-   its area is built, so the ground never has holes. The overlap tests go through `ChunkIndex`, a
-   coarse grid, so they don't have to scan every chunk.
+4. `processSwaps` starts the LOD swaps that are ready (next section). An old chunk stays drawn until
+   every new chunk covering its area is built and has faded in, so the ground never has holes. The
+   overlap tests go through `ChunkIndex`, a coarse grid, so they don't have to scan every chunk.
+
+**LOD swaps cross-fade** ([`lodSwaps.ts`](lodSwaps.ts)). A swap is one connected group of overlapping
+chunks: one coarse chunk and the finer ones inside it (refine), the reverse (coarsen), or LOD1 ↔ LOD2 on
+one 420u square. It starts once its old chunks are all opaque and its new ones all built. For
+`LOD_FADE_SECONDS` (0.35s) both are drawn with a complementary SCREEN-DOOR dither: every drawn chunk has
+a range [`fadeLo`, `fadeHi`) and keeps the pixels whose screen-door threshold (`lodFadeDiscards` in
+[`lodFade.ts`](../shaders/lodFade.ts): the 4×4 Bayer pattern of the objects' spawn fade) falls in it. The new chunks hold [0, p) and the old ones
+[p, 2) of one progress p, so every pixel of that ground is drawn by exactly one of them: no hole, no
+z-fighting, nothing shaded twice, and no sorting. When p reaches 1 the old chunks are destroyed.
+- **Water** is a child of its chunk and takes the chunk's range (`syncLodFade` writes it before each
+  draw), so the old and new water sheets never both draw a pixel.
+- **Skirts** are part of the chunk and fade with it. For each hash value the drawn chunks form a
+  complete tiling (every swap either all-old or all-new), so the skirts cover a mid-fade LOD boundary
+  exactly as they cover a static one.
+- **Reversal:** if an old chunk becomes desired again mid-fade, p runs backwards; at 0 the new chunks
+  are hidden (not destroyed; they are pruned like any undrawn chunk, or reused if desired again).
+- **No chaining:** a chunk mid-fade never starts another swap; it waits until its fade ends. A swap
+  whose old and new chunks do not cover the same area (land that was never drawn) is instant, and a
+  chunk that replaces nothing is drawn at once.
+- **Material:** fading chunks draw the FADE TWIN (`TERRAIN_LOD_FADE` define). Putting `discard` in the
+  one opaque program would disable early depth testing for every terrain fragment, so only fading
+  chunks pay for it. The twin's program is linked during the load by a zero-area warm mesh.
+- **Colliders** are untouched: built with the chunk, removed when it is destroyed. The old ground stays
+  solid until its fade ends, and the new ground has been solid since it was built.
+- **Steady state:** `swapper.busy` keeps the update pass running while a fade is active or just ended,
+  and the early-out returns once nothing is fading.
+- `window.__terrainLod` (dev builds) exposes the swapper and the chunk map; `swapper.fadeSeconds = 0`
+  swaps in one frame (for A/B measurements).
 
 **Skirts.** Each chunk has a vertical ring hanging below its edge (`skirtDepth` per LOD) that
 hides the crack where it meets a coarser neighbor. Skirt vertices copy the edge's attributes and

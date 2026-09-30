@@ -5,7 +5,19 @@ import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
 import { Biome, MaterialData, Region, RiverbedMaterial } from "../../world/types";
 import { CITY_BIOME_ID } from "../../world/constants";
 import commonShader from "../../world/shaders/common.glsl";
-import { FREEWAY_CORRIDOR_INNER, FREEWAY_CORRIDOR_OUTER, glslFloat } from "../../world/shaders/constants";
+import { LOD_FADE_DEFINE, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "../../world/shaders/lodFade";
+import {
+  FREEWAY_CORRIDOR_INNER,
+  FREEWAY_CORRIDOR_OUTER,
+  RIVER_BED_FADE_INSET,
+  RIVER_BED_FULL_INSET,
+  RIVER_BED_SLOPE_END_DEG,
+  RIVER_BED_SLOPE_START_DEG,
+  glslFloat,
+} from "../../world/shaders/constants";
+
+/** cos of a slope in degrees as a GLSL literal: compared against the world normal's y. */
+const cosDegGLSL = (deg: number): string => Math.cos((deg * Math.PI) / 180).toFixed(6);
 
 /** Below this a biome's fragment function is skipped: its color could not be seen. */
 const BIOME_WEIGHT_VISIBLE = 0.002;
@@ -297,6 +309,11 @@ export namespace _material {
       .map(([name, uniform]) => getUniformDeclaration(name, uniform as { value: any }))
       .join("\n    ")}
 
+    #ifdef ${LOD_FADE_DEFINE}
+      uniform vec2 ${LOD_FADE_UNIFORM};
+      ${LOD_FADE_GLSL}
+    #endif
+
     #if NUM_POINT_LIGHTS > 0
       struct PointLight {
         vec3 position;
@@ -312,6 +329,10 @@ export namespace _material {
     ${fragmentFunctions.join("\n\n    ")}
 
     void main() {
+      // A chunk mid LOD swap draws its fade twin, which keeps only its dither share (world/terrain/lodSwaps.ts).
+      #ifdef ${LOD_FADE_DEFINE}
+      if (lodFadeDiscards(${LOD_FADE_UNIFORM})) discard;
+      #endif
       vec4 blended = vec4(0.0);
       float weightSum = 0.0;
       float remaining = 1.0;
@@ -338,9 +359,11 @@ export namespace _material {
         // a quay's asphalt, curb and 4u sidewalk band stay, so the sidewalk along a river is the same
         // constant width as along any other road. Off the city the freeway corridor below paints the
         // road over the bed (its curb strip then fades straight into the bed, not into grass).
-        float riverBlend = smoothstep(RIVER_BED_REACH - 3.0, RIVER_BED_REACH - 1.0, vRiverBedDistance);
+        float riverBlend = smoothstep(RIVER_BED_REACH - ${glslFloat(RIVER_BED_FULL_INSET)}, RIVER_BED_REACH - ${glslFloat(RIVER_BED_FADE_INSET)}, vRiverBedDistance);
         float pavement = ${cityIdx >= 0 ? `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", cityIdx)})` : "0.0"} * (1.0 - smoothstep(ROAD_HALF_WIDTH + 4.0, ROAD_HALF_WIDTH + 5.0, vDistanceToRoadCenter));
-        gl_FragColor = mix(riverColor, gl_FragColor, max(riverBlend, pavement));
+        // A steep bank keeps its own ground: a mountainside rising out of the water, not a gravel band.
+        float bedSteep = 1.0 - smoothstep(${cosDegGLSL(RIVER_BED_SLOPE_END_DEG)}, ${cosDegGLSL(RIVER_BED_SLOPE_START_DEG)}, normalize(vWorldNormal).y);
+        gl_FragColor = mix(riverColor, gl_FragColor, max(max(riverBlend, pavement), bedSteep));
       }
 
       // Freeways OUTSIDE the city — the inter-city runs and the outer half of every belt — are

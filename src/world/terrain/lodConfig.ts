@@ -35,7 +35,7 @@ export interface LODLevel {
   /** Vertical skirt around the chunk edge hiding the seam to a coarser neighbor. The FINER
    *  chunk's skirt must exceed the worst height its coarser neighbor's straight segment
    *  misses by, and that grows with vertex spacing — MEASURED along four map-spanning
-   *  lines of the overworld: LOD1→2 3u, LOD2→3 55u (later 115.8u on a mountain, hence 130), LOD3→4 113u (later 144.3u, hence 180), LOD4→5 175u. A single
+   *  lines of the overworld: LOD1→2 3u, LOD2→3 55u, LOD3→4 113u, LOD4→5 175u; after the mountain domes (peaks ~900u) the worst gaps rose to 192u / 398u / 849u (LOD2|3, LOD3|4, LOD4|5), hence 230 / 460 / 1000, and 450 for LOD5 (380u above LOD4). A single
    *  30u skirt covers only the LOD1→2 boundary. */
   skirtDepth: number;
   /** Whether the chunk evaluates the river field (channel, river water, bed paint, city quay). The
@@ -55,8 +55,8 @@ export interface LODLevel {
 
 export const LOD_LEVELS: LODLevel[] = [
   { level: 1, chunkSize: CHUNK_SIZE, segments: LOD1_SEGMENTS, maxDistance: LOD1_MAX_DISTANCE, hasCollider: true, skirtDepth: 30, carvesRivers: true, clampBlendFields: false },
-  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true, skirtDepth: 130, carvesRivers: true, clampBlendFields: false },
-  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false, skirtDepth: 180, carvesRivers: true, clampBlendFields: true },
-  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false, skirtDepth: 260, carvesRivers: false, clampBlendFields: true },
-  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false, skirtDepth: 400, carvesRivers: false, clampBlendFields: true },
+  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true, skirtDepth: 230, carvesRivers: true, clampBlendFields: false },
+  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false, skirtDepth: 460, carvesRivers: true, clampBlendFields: true },
+  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false, skirtDepth: 1000, carvesRivers: false, clampBlendFields: true },
+  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false, skirtDepth: 450, carvesRivers: false, clampBlendFields: true },
 ];

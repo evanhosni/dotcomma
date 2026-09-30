@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { _curvature } from "../../vfx/curvature";
 import { _material } from "../../utils/material/_material";
 import { _quantization } from "../../vfx/quantization";
@@ -5,6 +6,8 @@ import { getAllBiomes } from "../../utils/utils";
 import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
 import { glslFloat, WORLD_WRAP } from "../shaders/constants";
+import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
+import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
 
 // The raw .glsl asset can't import the shared chunks, so they are prepended here.
@@ -81,3 +84,15 @@ export const getMaterial = async () => {
 
   return material;
 };
+
+/** The terrain material's LOD cross-fade twin (lodSwaps.ts): the same shader with the dither
+ *  `discard` compiled in, drawn only by chunks mid-fade. Every uniform object is SHARED with the
+ *  opaque material except the per-mesh dither range. */
+export const createLodFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
+  new THREE.ShaderMaterial({
+    uniforms: { ...base.uniforms, [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } },
+    defines: { ...base.defines, [LOD_FADE_DEFINE]: "" },
+    vertexShader: base.vertexShader,
+    fragmentShader: base.fragmentShader,
+    lights: base.lights,
+  });

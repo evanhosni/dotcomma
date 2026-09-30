@@ -95,7 +95,13 @@ same scratch buffers.
   at world `(x, z)`.
 - **What `zoneBiomeHeight` returns:**
   - **A noise biome:** `biomeNoiseHeight × presence`. Presence is `sstep01(zoneMinDist /
-    heightPresenceWidth)` for the own zone and 0 for foreign zones.
+    heightPresenceWidth)` for the own zone and 0 for foreign zones. A noise config with a `dome` (the
+    mountain) adds a massif that rises with the square of the vertex's depth, `domeDepthAt`
+    ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)). The depth is the zone's site depths (each
+    site's distance to its zone's nearest foreign wall, cached per cell), interpolated by a compact
+    kernel over the sites nearby, and smooth-min'ed under `zoneMinDist` so it is 0 on the edge.
+    Joined cells have no wall between them, so a joined group is one dome, highest where it is
+    deepest. The dome also fades the noise in from `noiseFloor`.
   - **A water biome (lake):** a bowl defined relative to the blended lake level (`lakeLevelAt`,
     [`lakes.ts`](../utils/workers/lakes.ts)). It is `SHORE_RISE` above the level at the wall and
     `depth` below it at full presence, minus the base noise, so the base cancels.
@@ -278,6 +284,9 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 
 ### Fragment shader (generated, in this order)
 
+0. **LOD cross-fade**, in the fade twin only (`TERRAIN_LOD_FADE`, chunks mid LOD swap): the pixel is
+   discarded unless its screen-door threshold lies in the chunk's `uLodFade` range (`lodFadeDiscards`,
+   [`shaders/lodFade.ts`](shaders/lodFade.ts); [`terrain/lodSwaps.ts`](terrain/lodSwaps.ts)).
 1. **Per biome slot, crispest tier first** (mirroring the CPU's `combineSlotWeights`):
    1. The weight is `smoothstep(-1, 1, sdf)`. The tier claims `remaining × weight`, and softer tiers
       split what is left.
@@ -293,6 +302,8 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
    3. It replaces the ground out to `RIVER_BED_REACH − 3` and fades into it by `RIVER_BED_REACH − 1`,
       except where the CITY's road field says pavement (the city's weight × the road band up to
       `ROAD_HALF_WIDTH + 5`): a quay's asphalt, curb and sidewalk stay.
+   4. On a steep bank the bed fades out by slope (`RIVER_BED_SLOPE_START_DEG` → `_END_DEG`, 30° → 40°,
+      from `vWorldNormal`), so a mountainside rising out of the water keeps its own ground.
 4. **The road corridor**, where `vDistanceToRoadCenter < 9.5`: the CITY's own `city_frag` is painted
    over everything above, faded over 8–9.5 street units. That frag paints the asphalt, curb,
    sidewalk and the dashed lane lines from `vDistanceToFreewayCenter` / `vFreewayAlong`, with an
@@ -325,7 +336,8 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 | 7b | lane paint ends before undecked rivers | step 7b | – | lane paint | 3′, 5 |
 | 8 | road fragments | `inRoadFragment` | – | road field, lane, bed | 3′, 5, 7 |
 | GPU 1–2 | per-biome base→own by presence, crisp-tier weights | generated frag | – | ✔ | – |
-| GPU 3 | riverbed per biome | generated frag | – | ✔ | biome mix (not city pavement) |
+| GPU 0 | LOD cross-fade discard (fade twin only) | generated frag | – | ✔ | – |
+| GPU 3 | riverbed per biome (not on steep banks) | generated frag | – | ✔ | biome mix (not city pavement) |
 | GPU 4 | city/freeway corridor + lane dashes | `city_frag` | – | ✔ | biome mix + bed |
 | GPU 5–8 | night dim, lamp glow, point lights, dither | generated frag | – | ✔ | everything |
 | VS | quantize, curvature | `vertex.glsl` | visual only | – | – |

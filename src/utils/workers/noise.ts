@@ -2,7 +2,7 @@ import Noise from "noise-ts";
 import { seedRand } from "../math/_math";
 import type { PointXZ } from "../math/types";
 import { domainConfig } from "./computeConfig";
-import type { DomainConfig, TerrainNoiseParams } from "./types";
+import type { BiomeNoiseConfig, TerrainNoiseParams } from "./types";
 
 const noiseInstance = new Noise(seedRand("bierce"));
 
@@ -52,11 +52,23 @@ export const terrainNoise = (params: TerrainNoiseParams, x: number, y: number): 
   return shaped * params.height;
 };
 
-/** A biome's declarative height (its <Terrain noise> config) at a world point, before presence. */
-export const biomeNoiseHeight = (config: DomainConfig["biomeNoiseConfigs"][number], x: number, z: number): number => {
+/** A biome's declarative height (its <Terrain noise> config) at a world point, before presence.
+ *  `depth` feeds the dome: the point's depth inside its biome (zoneBlend.ts domeDepthAt). A caller
+ *  without a wall pass (the river network's terrain proxy) gets the height at the biome's edge: with
+ *  the dome in the proxy, its high-ground rule cut 3.4% of all river length and moved rivers well
+ *  outside the mountains (MEASURED); the offset alone keeps rivers out of the rock. */
+export const biomeNoiseHeight = (config: BiomeNoiseConfig, x: number, z: number, depth = 0): number => {
   let h = terrainNoise(config.params, x, z);
   if (config.absNeg) h = Math.abs(h) * -1;
   if (config.scale !== undefined) h *= config.scale;
+  const dome = config.dome;
+  if (dome) {
+    const u = Math.min(1, depth / dome.reach);
+    // Squared: gentle foothills, the steepest ground under the summit.
+    const rise = u * u;
+    const floor = dome.noiseFloor ?? 1;
+    h = h * (floor + (1 - floor) * rise) + dome.height * rise;
+  }
   if (config.offset !== undefined) h += config.offset;
   return h;
 };

@@ -17,7 +17,7 @@ import {
   releaseProceduralBuildingAssets,
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
-import { addFarDoor, FarDoor, followFarDoorOrigin, removeFarDoor, setFarDoorAngle } from "./farDoors";
+import { addFarDoor, FarDoor, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
 import { DOOR_INTERACT_REACH } from "./spec";
 import { BuildingAttributes, BuildingProps } from "./types";
@@ -341,6 +341,7 @@ export const Building = ({
                 color: assets.doorLeaf.color,
               },
               hingeRefs.current[i]?.rotation.y ?? (doorsOpenRef.current[i] ? DOOR_OPEN_ANGLE : 0),
+              ctx.spawnFade,
             ),
           );
         }
@@ -348,6 +349,12 @@ export const Building = ({
           interiorWantedRef.current = true;
           setInteriorWanted(true);
         }
+      }
+
+      // The far leaves live in one shared mesh, outside this group: they fade with it per instance.
+      const farDoors = farDoorsRef.current;
+      if (farDoors && farDoors.length > 0 && farDoors[0].fade !== ctx.spawnFade) {
+        for (const far of farDoors) setFarDoorFade(far, ctx.spawnFade);
       }
 
       if (doorFrameRef.current++ % 3 === 0) {

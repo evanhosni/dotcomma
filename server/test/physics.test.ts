@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import { before, after, describe, it } from "node:test";
 import { build } from "esbuild";
 import * as RAPIER from "@dimforge/rapier3d-compat";
-import { computeVertexData, getFlattenPoints } from "../../src/utils/workers/vertexCompute";
+import { computeVertexData, computeVertexDataRaw, freewayPointAt, getFlattenPoints, getNetwork, unwarp, warp } from "../../src/utils/workers/vertexCompute";
 import { BUILDING_ATTRS } from "../../src/objects/actors/building/spec";
-import { LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/lampSpec";
+import { FREEWAY_LAMPS_SPEC, LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/lampSpec";
 import { DRESSING_COLLIDER_SPECS } from "../../src/objects/dressing/catalog";
 import { runDressingEnumerator } from "../../src/objects/dressing/enumerators";
 import { DRESSING_CHUNK_SIZE } from "../../src/objects/dressing/types";
@@ -232,6 +232,34 @@ describe("server physics", () => {
     assert.equal(after.colliders - before.colliders, pts.reduce((n, p) => n + p.parts.length + (p.mesh ? 1 : 0), 0));
     for (const b of bodies) pw.removeBody(b);
     assert.equal(pw.stats().colliders, before.colliders);
+  });
+
+  it("freeway run lamps are obstacles too, straight from the catalog spec", () => {
+    // A chunk on an inter-city run outside every city: the lamps the client's <FreewayLamps/> draws.
+    let found: { gx: number; gz: number } | null = null;
+    for (const run of getNetwork(warp(0, 0)).freeways) {
+      for (let s = 60; s < run.length - 60 && !found; s += 32) {
+        const w = freewayPointAt(run, s);
+        const q = unwarp(w.x, w.z);
+        if (computeVertexDataRaw(q.x, q.z).biomeId === CITY_BIOME_ID) continue;
+        const gx = Math.floor(q.x / DRESSING_CHUNK_SIZE);
+        const gz = Math.floor(q.z / DRESSING_CHUNK_SIZE);
+        const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+        if (runDressingEnumerator(FREEWAY_LAMPS_SPEC.enumerator, bounds, FREEWAY_LAMPS_SPEC.placement).length > 0) found = { gx, gz };
+      }
+      if (found) break;
+    }
+    assert.ok(found, "a run chunk with lamps");
+    const { gx, gz } = found!;
+    const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+    const lamps = runDressingEnumerator(FREEWAY_LAMPS_SPEC.enumerator, bounds, FREEWAY_LAMPS_SPEC.placement);
+    const obstacles = enumerateObstacles(gx, gz);
+    for (const l of lamps) {
+      const body = obstacles.find((o) => o.x === l.x && o.y === l.y && o.z === l.z);
+      assert.ok(body, "every lamp is a server body");
+      assert.equal(body!.yaw, l.yaw, "turned like the drawn post");
+      assert.equal(body!.parts, LAMP_COLLIDER_PARTS, "the lamp's boxes");
+    }
   });
 
   it("the server bundle imports no runtime three", async () => {

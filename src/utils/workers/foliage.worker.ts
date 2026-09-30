@@ -11,7 +11,8 @@
 
 import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
 import { seedRand, smoothstep } from "../math/_math";
-import { DomainConfig, initCompute, computeVertexData, biomeWeightOf } from "./vertexCompute";
+import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
+import { DomainConfig, initCompute, computeVertexData, biomeWeightOf, riverKeepOff } from "./vertexCompute";
 
 const GRID_STEP = 2; // world units between terrain samples
 // Same visibility floor as the terrain shader's per-biome branch.
@@ -19,8 +20,25 @@ const MIN_BIOME_WEIGHT = 0.002;
 // 64u chunks at the grass field's 8M density place ~32k blades per chunk.
 const MAX_INSTANCES_PER_CHUNK = 65536;
 const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
+// Plants thin out over this many riverBedDistance units (factor-1, like the shader's bed edge):
+// none where the bed fully covers the ground, full density this far past it — the bed stays bare
+// and only a sparse fringe reaches its fade.
+const RIVER_BED_PLANT_RAMP = 8;
+// Stored in place of an out-of-reach Infinity: a bilinear weight of 0 times Infinity is NaN.
+const RIVER_BED_FAR = 1e4;
 
 let initialized = false;
+
+/** A per-blade uniform in [0, 1) from the chunk seed and the blade's draw index — NOT a draw from
+ *  the PRNG stream (an extra draw would reshuffle every later blade of the chunk) and not from
+ *  phase/tint (the fade key is made of those; thinning by it would bias the LOD prefix). */
+const bladeHash = (seed: number, index: number): number => {
+  let h = Math.imul(seed ^ Math.imul(index + 1, 0x9e3779b1), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+};
 
 /** Fast deterministic PRNG — one seedrandom call per chunk, cheap draws per blade. */
 
@@ -99,6 +117,8 @@ interface FoliageGrid {
   biomeWeights: Float32Array;
   roadDistances: Float32Array;
   submerged: Float32Array; // 1 where the water surface sits above the ground (lake, river channel)
+  riverBed: Float32Array; // riverBedDistance, capped at RIVER_BED_FAR
+  nearRiverBed: boolean; // some node inside the plant ramp: only then is it evaluated per blade
 }
 
 // A BAND upgrade of a held chunk re-runs placement (the RNG stream is the only way to reach
@@ -114,6 +134,9 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
   const biomeWeights = new Float32Array(gridNodes * gridNodes);
   const roadDistances = new Float32Array(gridNodes * gridNodes);
   const submerged = new Float32Array(gridNodes * gridNodes);
+  const riverBed = new Float32Array(gridNodes * gridNodes);
+  const rampEnd = riverKeepOff() - RIVER_BED_FULL_INSET + RIVER_BED_PLANT_RAMP;
+  let nearRiverBed = false;
 
   for (let gz = 0; gz < gridNodes; gz++) {
     for (let gx = 0; gx < gridNodes; gx++) {
@@ -124,6 +147,8 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
       roadDistances[i] = vd.distanceToRoadCenter;
       // Nor under a bridge deck: the ground there is cut just below the deck's top, and blades grew through it.
       submerged[i] = (!Number.isNaN(vd.waterHeight) && vd.waterHeight > vd.height - 0.3) || vd.underDeck > 0 ? 1 : 0;
+      riverBed[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
+      if (riverBed[i] < rampEnd) nearRiverBed = true;
     }
   }
 
@@ -138,7 +163,7 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
       slopes[gz * gridNodes + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
     }
   }
-  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged };
+  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, riverBed, nearRiverBed };
 };
 
 const takeCachedGrid = (key: string): FoliageGrid | undefined => {
@@ -197,7 +222,8 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     grid = sampleGrid(minX, minZ, size, biomeIds);
     cacheGrid(gridKey, grid);
   }
-  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged } = grid;
+  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, riverBed, nearRiverBed } = grid;
+  const bedCovered = riverKeepOff() - RIVER_BED_FULL_INSET;
 
   // One bilinear cell per blade, shared by every field it samples (the arithmetic is
   // term-for-term the per-field version's, so the samples are bit-identical).
@@ -219,7 +245,8 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     (arr[i00] * (1 - tx) + arr[i00 + 1] * tx) * (1 - tz) + (arr[i01] * (1 - tx) + arr[i01 + 1] * tx) * tz;
 
   const targetCount = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
-  const rand = mulberry32(Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31));
+  const chunkSeed = Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31);
+  const rand = mulberry32(chunkSeed);
 
   const offsets = SCRATCH_OFFSETS;
   const instanceData = SCRATCH_BLADE_DATA; // phase, scale, tint
@@ -265,6 +292,17 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
       if (keep <= 0) continue;
       if (keep < 1) {
         if (rand() >= keep) continue;
+        scale *= 0.6 + 0.4 * keep;
+      }
+    }
+
+    // LAST, after every filter that draws from `rand`: a blade it drops must not skip a draw, or
+    // every later blade of the chunk would reshuffle — the river only ever REMOVES blades.
+    if (nearRiverBed) {
+      // The riverbed paint's own field and edge (the terrain shader's riverBlend).
+      const keep = smoothstep(bedCovered, bedCovered + RIVER_BED_PLANT_RAMP, bilinear(riverBed));
+      if (keep < 1) {
+        if (keep <= 0 || bladeHash(chunkSeed, i) >= keep) continue;
         scale *= 0.6 + 0.4 * keep;
       }
     }

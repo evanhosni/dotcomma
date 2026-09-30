@@ -13,8 +13,12 @@ the shader contains no biome id and no per-triangle switch.
   Precision"), applies quantization and curvature, and projects through the view-space origin.
 - [`common.glsl`](common.glsl): helpers available to every fragment: `hash`, `valueNoise`,
   `worldFbm(xz, scale, octaves)` (repeats with `WORLD_WRAP`) and `triplanarSample`.
-- [`constants.ts`](constants.ts): `WORLD_WRAP` (4200), `glslFloat`, and the off-city freeway corridor's
-  extent (`FREEWAY_CORRIDOR_INNER`/`OUTER`, 8 and 9.5 street units — the road-fragment pass reads it too).
+- [`lodFade.ts`](lodFade.ts): the LOD cross-fade's GLSL (`lodFadeDiscards(range)`, on the objects'
+  Bayer screen door from `vfx/dither.ts`) and its uniform/define names; the terrain fade twin and the
+  water include it.
+- [`constants.ts`](constants.ts): `WORLD_WRAP` (4200), `glslFloat`, the off-city freeway corridor's
+  extent (`FREEWAY_CORRIDOR_INNER`/`OUTER`, 8 and 9.5 street units — the road-fragment pass reads it too),
+  and the riverbed paint's edge insets and slope band (`RIVER_BED_SLOPE_START_DEG`/`END_DEG`).
 - [`world/terrain/material.ts`](../terrain/material.ts): `getMaterial()`. It prepends the quantization
   and curvature GLSL chunks (`vfx/quantization.ts`, `vfx/curvature.ts`) to
   `vertex.glsl`, loads the river and riverbed textures, sets the `defines` (`WORLD_WRAP`,
@@ -36,7 +40,7 @@ the shader contains no biome id and no per-triangle switch.
    (`vBiomePresence0/1[k]`), so the base texture shows at every biome edge.
 4. Riverbed: within `RIVER_BED_REACH` of a river, each biome's riverbed texture (its
    `<Material riverbed>`, else the domain's river texture) replaces the ground. City pavement is
-   the exception and stays.
+   the exception and stays, and on banks steeper than 30° the bed fades out (gone by 40°).
 5. Road corridor: wherever `vDistanceToRoadCenter < FREEWAY_CORRIDOR_OUTER` (9.5), the CITY biome's
    own frag paints over the result. This is how inter-city freeways get the same asphalt as city roads.
 6. Night dim, lamp-grid glow (from `vWorldPosAbs`), the scene point lights (a lambert loop gated on

@@ -6,10 +6,9 @@ import {
   LAMP_COLLIDER_DISTANCE,
   LAMP_POLE_HEIGHT,
   LAMP_POST_MATERIAL,
-  lampYaw,
   patchLampMask,
 } from "./lampGeometry";
-import { STREET_LAMPS_SPEC } from "./lampSpec";
+import { FREEWAY_LAMPS_SPEC, STREET_LAMPS_SPEC } from "./lampSpec";
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
 import { LAMP_COLOR_WARM, LAMP_EMISSIVE_STRENGTH, type LampHead, registerLampHeads } from "../../../lighting/lampGlow";
 import {
@@ -25,31 +24,31 @@ import {
 } from "../Dressing";
 import { DressingAttributes } from "../../types";
 import { enumerateDressing } from "../dressingWorker";
+import type { DressingColliderSpec } from "../types";
 
 const DEFAULTS = STREET_LAMPS_SPEC.placement;
+const DEFAULT_RENDER_DISTANCE = 440;
 
 interface LampChunk extends ChunkWithPoints {
   releaseHeads: () => void;
 }
 
-export interface StreetLampsProps extends DressingAttributes {}
+type LampEnumerator = "densityPoints" | "freewayLamps";
 
-/** The ONLY lamp path — a per-object lamp actor was removed as a duplicate implementation.
+interface LampPostsProps<K extends LampEnumerator> {
+  spec: DressingColliderSpec<K>;
+  placement: DressingColliderSpec<K>["placement"];
+  renderDistance?: number;
+  colliderDistance?: number;
+}
+
+/** Every lamp post, whatever places it: one instanced chunk, its glow heads and its colliders from
+ *  the spec. The drawn yaw IS the spec's body yaw, so a post and its collider can't disagree.
  *  No per-lamp edge fade: poles are thin enough to pop at range. */
-export const StreetLamps = ({
-  renderDistance,
-  colliderDistance,
-  density = DEFAULTS.density,
-  footprint = DEFAULTS.footprint,
-  roadDistanceRange = DEFAULTS.roadDistanceRange,
-  biomeIds = DEFAULTS.biomeIds,
-  heightRange,
-  slopeRange,
-}: StreetLampsProps) => {
-  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 440);
+const LampPosts = <K extends LampEnumerator>({ spec, placement, renderDistance, colliderDistance }: LampPostsProps<K>) => {
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, DEFAULT_RENDER_DISTANCE);
   const resolvedColliderDistance = useDressingDefault("colliderDistance", colliderDistance, LAMP_COLLIDER_DISTANCE);
-  const placement = { ...DEFAULTS, density, footprint, roadDistanceRange, biomeIds, heightRange, slopeRange };
-  useServerPlacementCheck(STREET_LAMPS_SPEC, placement);
+  useServerPlacementCheck(spec, placement);
 
   const registry = useChunkRegistry<LampChunk>((chunk) => chunk.releaseHeads());
 
@@ -62,27 +61,27 @@ export const StreetLamps = ({
   const groupRef = useDressingChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
-      const points = await enumerateDressing(STREET_LAMPS_SPEC.enumerator, bounds, placement);
+      const points = await enumerateDressing(spec.enumerator, bounds, placement);
       if (points.length === 0) return null;
 
       const heads: LampHead[] = [];
-      const mesh = instancedFromPoints(getLampPostGeometry(), assets.material, points, (p) => {
-        const yaw = lampYaw(p.x, p.z);
+      const bodies = points.flatMap(spec.bodiesOf);
+      const mesh = instancedFromPoints(getLampPostGeometry(), assets.material, bodies, (b) => {
         heads.push({
           position: new THREE.Vector3(
-            p.x + Math.cos(yaw) * LAMP_HEAD_OFFSET_X,
-            p.y + LAMP_POLE_HEIGHT - 0.6,
-            p.z - Math.sin(yaw) * LAMP_HEAD_OFFSET_X
+            b.x + Math.cos(b.yaw) * LAMP_HEAD_OFFSET_X,
+            b.y + LAMP_POLE_HEIGHT - 0.6,
+            b.z - Math.sin(b.yaw) * LAMP_HEAD_OFFSET_X
           ),
           color: LAMP_COLOR_WARM,
         });
-        return { x: p.x, y: p.y, z: p.z, yaw };
+        return b;
       });
 
       const group = new THREE.Group();
       group.add(mesh);
-      const releaseHeads = registerLampHeads("street-lamps", heads);
-      registry.add({ group, releaseHeads, points: points.flatMap(STREET_LAMPS_SPEC.bodiesOf) });
+      const releaseHeads = registerLampHeads(spec.id, heads);
+      registry.add({ group, releaseHeads, points: bodies });
       return group;
     },
   });
@@ -98,7 +97,37 @@ export const StreetLamps = ({
     <>
       <group ref={groupRef} />
       {/* Real colliders only for the lamps near the player. */}
-      <DressingPartColliders colliders={colliders} parts={STREET_LAMPS_SPEC.colliderParts} />
+      <DressingPartColliders colliders={colliders} parts={spec.colliderParts} />
     </>
   );
 };
+
+export interface StreetLampsProps extends DressingAttributes {}
+
+/** The city's sidewalk lamps (density-placed). The ONLY lamp art path, with FreewayLamps — a
+ *  per-object lamp actor was removed as a duplicate implementation. */
+export const StreetLamps = ({
+  renderDistance,
+  colliderDistance,
+  density = DEFAULTS.density,
+  footprint = DEFAULTS.footprint,
+  roadDistanceRange = DEFAULTS.roadDistanceRange,
+  biomeIds = DEFAULTS.biomeIds,
+  heightRange,
+  slopeRange,
+}: StreetLampsProps) => (
+  <LampPosts
+    spec={STREET_LAMPS_SPEC}
+    placement={{ ...DEFAULTS, density, footprint, roadDistanceRange, biomeIds, heightRange, slopeRange }}
+    renderDistance={renderDistance}
+    colliderDistance={colliderDistance}
+  />
+);
+
+export interface FreewayLampsProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
+
+/** Lamps along both sides of every inter-city freeway run (getFreewayRunLamps; tune its placement in
+ *  FREEWAY_LAMP_PLACEMENT — the server builds the colliders from the spec). */
+export const FreewayLamps = ({ renderDistance, colliderDistance }: FreewayLampsProps) => (
+  <LampPosts spec={FREEWAY_LAMPS_SPEC} placement={FREEWAY_LAMPS_SPEC.placement} renderDistance={renderDistance} colliderDistance={colliderDistance} />
+);

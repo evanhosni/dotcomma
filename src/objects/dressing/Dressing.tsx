@@ -13,13 +13,14 @@ import {
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { _curvature } from "../../vfx/curvature";
+import { _spawnFade } from "../../vfx/spawnFade";
 import { DressingAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
 
 /**
  * THE DRESSING BASE (CLAUDE.md → "The three game-object classes"): a feature
  * component holds only its own placement query, geometry/materials and optional
- * animation; everything shared — chunk lifecycle, asset prep (curvature),
+ * animation; everything shared — chunk lifecycle, asset prep (curvature, spawn fade),
  * instanced assembly + rebase, chunk side-state, distance-gated colliders —
  * lives here so a new feature cannot miss a world-wide effect.
  */
@@ -51,6 +52,7 @@ export const useDressingDefault = <K extends keyof DressingDefaults>(
  *  deliberately absent: its instanced branch works in absolute space (vfx/quantization.ts). */
 export const prepareDressingMaterial = (material: THREE.Material): void => {
   _curvature.patchMaterial(material);
+  _spawnFade.patchMaterial(material);
 };
 
 export const useDressingAssets = <T extends Record<string, { dispose: () => void }>>(
@@ -368,6 +370,8 @@ export const useDressingChunks = ({
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const chunks = useRef(new Map<string, DressingChunk>()).current;
+  // Per CHUNK: a chunk's instances appear together, and the chunk is the unit that pops.
+  const fades = useRef(new _spawnFade.SpawnFadeSet()).current;
   // Random phase so the feature components don't all scan on the same frame.
   const frameCount = useRef(Math.floor(Math.random() * UPDATE_INTERVAL_FRAMES));
   const buildRef = useRef(build);
@@ -385,10 +389,12 @@ export const useDressingChunks = ({
         }
       });
       chunks.clear();
+      fades.clear();
     };
-  }, [chunks]);
+  }, [chunks, fades]);
 
   useFrame(({ camera }) => {
+    fades.update();
     if (frameCount.current++ % UPDATE_INTERVAL_FRAMES !== 0) return;
     const group = groupRef.current;
     if (!group) return;
@@ -434,6 +440,7 @@ export const useDressingChunks = ({
           return;
         }
         groupRef.current.add(object);
+        fades.add(object);
         entry.object = object;
       }, { at: { x: centerX, z: centerZ } });
     }
@@ -448,6 +455,7 @@ export const useDressingChunks = ({
         if (entry.taskId !== null) dressingQueue.removeTask(entry.taskId);
         if (entry.object) {
           group.remove(entry.object);
+          fades.delete(entry.object);
           disposeChunkObject(entry.object);
         }
         chunks.delete(key);

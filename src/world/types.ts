@@ -1,6 +1,6 @@
 import type { ActorMount } from "../objects/actors/spec";
 import type { AnyActorDescriptor } from "../objects/actors/spawning/types";
-import type { TerrainNoiseParams } from "../utils/workers/vertexCompute";
+import type { BiomeDomeConfig, TerrainNoiseParams } from "../utils/workers/vertexCompute";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
@@ -82,6 +82,7 @@ export interface BiomeNoiseConfig {
   absNeg?: boolean;
   scale?: number;
   offset?: number;
+  dome?: BiomeDomeConfig;
 }
 
 /** A water-filled biome (lakes): the terrain bowls `depth` below the region base and the

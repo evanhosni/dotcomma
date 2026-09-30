@@ -10,93 +10,25 @@ import { BIOME_SDF_FAR } from "../../utils/workers/vertexCompute";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import type { PointXZ } from "../../utils/math/types";
 import { getActiveDomainConfig } from "../domains/utils";
-import { MAX_BIOME_SLOTS, getMaterial } from "./material";
+import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
+import { MAX_BIOME_SLOTS, createLodFadeMaterial, getMaterial } from "./material";
 import { getWaterMaterial, tickWater } from "../water/waterMaterial";
-import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
+import { LODLevel } from "./lodConfig";
+import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
+import { FADE_OPAQUE_HI, LodSwapper, SwapHooks } from "./lodSwaps";
 import { Chunk, TerrainProps } from "./types";
-
-const chunksOverlap = (a: Chunk, b: Chunk): boolean => {
-  const aHalf = a.lod.chunkSize / 2;
-  const bHalf = b.lod.chunkSize / 2;
-  const overlapX = a.offset.x + aHalf > b.offset.x - bHalf && a.offset.x - aHalf < b.offset.x + bHalf;
-  const overlapZ = a.offset.z + aHalf > b.offset.z - bHalf && a.offset.z - aHalf < b.offset.z + bHalf;
-  return overlapX && overlapZ;
-};
-
-// ── Coarse spatial index over chunks ────────────────────────────────────────
-// Scanning the whole chunk set per overlap query is O(chunks × queue), which
-// grows into the hundreds on both sides when the player outruns generation.
-// Tile = the largest chunk size, so any chunk spans at most 2×2 tiles.
-const INDEX_TILE = LOD5_CHUNK_SIZE;
-
-class ChunkIndex {
-  private tiles = new Map<number, Map<number, Chunk[]>>();
-  private count = 0;
-
-  clear(): void {
-    if (this.count === 0) return;
-    this.tiles.clear();
-    this.count = 0;
-  }
-
-  get isEmpty(): boolean {
-    return this.count === 0;
-  }
-
-  add(chunk: Chunk): void {
-    const half = chunk.lod.chunkSize / 2;
-    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.z - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.z + half) / INDEX_TILE);
-    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
-      let col = this.tiles.get(tx);
-      if (!col) {
-        col = new Map();
-        this.tiles.set(tx, col);
-      }
-      for (let tz = tz0; tz <= tz1; tz++) {
-        const bucket = col.get(tz);
-        if (bucket) bucket.push(chunk);
-        else col.set(tz, [chunk]);
-      }
-    }
-    this.count++;
-  }
-
-  overlapsAny(chunk: Chunk, exclude?: Chunk): boolean {
-    if (this.count === 0) return false;
-    const half = chunk.lod.chunkSize / 2;
-    const tx1 = Math.floor((chunk.offset.x + half) / INDEX_TILE);
-    const tz0 = Math.floor((chunk.offset.z - half) / INDEX_TILE);
-    const tz1 = Math.floor((chunk.offset.z + half) / INDEX_TILE);
-    for (let tx = Math.floor((chunk.offset.x - half) / INDEX_TILE); tx <= tx1; tx++) {
-      const col = this.tiles.get(tx);
-      if (!col) continue;
-      for (let tz = tz0; tz <= tz1; tz++) {
-        const bucket = col.get(tz);
-        if (!bucket) continue;
-        for (let i = 0; i < bucket.length; i++) {
-          const other = bucket[i];
-          if (other !== exclude && other !== chunk && chunksOverlap(chunk, other)) return true;
-        }
-      }
-    }
-    return false;
-  }
-}
-
-const pendingIndex = new ChunkIndex();
-const pendingSet = new Set<Chunk>();
-const unswappableStaleIndex = new ChunkIndex();
-const visibleStaleIndex = new ChunkIndex();
 
 const terrain: TerrainProps = {
   group: new THREE.Group(),
-  chunks: {},
+  chunks: new Map(),
   activeChunk: null,
   queuedToBuild: [],
-  queuedToDestroy: new Set<string>(),
 };
+
+/** Chunk-set bookkeeping: stale chunks, the LOD cross-fades (lodSwaps.ts). */
+const swapper = new LodSwapper<Chunk>();
+// Dev inspection: the swap state, and `fadeSeconds` for A/B-ing the cross-fade.
+if (process.env.NODE_ENV !== "production") (window as any).__terrainLod = { swapper, chunks: terrain.chunks };
 
 let queueDirty = false;
 
@@ -105,7 +37,7 @@ let queueDirty = false;
 // and the whole pass is skipped once queues are drained — the quadtree
 // descent (~270 leaves, ~800 allocations) otherwise ran every parked frame.
 const DESIRED_MOVE_EPS_SQ = 8 * 8;
-let cachedDesired: { [key: string]: { position: number[]; lod: LODLevel } } | null = null;
+let cachedDesired: DesiredChunks | null = null;
 let desiredAtX = Infinity;
 let desiredAtZ = Infinity;
 let terrainDirty = true;
@@ -120,9 +52,23 @@ let lastSortZ = Infinity;
 const FAR_BUILD_INTERVAL_MS = 250;
 let lastFarBuildAt = -Infinity;
 
-const swappableKeys = new Set<string>();
-const cancelledKeys = new Set<string>();
-const pruneKeys: string[] = [];
+/** A chunk's dither range into whichever material draws it (the fade variant, or the water): three
+ *  uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
+ *  mesh writes its own range right before its draw. The opaque terrain material has no uLodFade. */
+const syncLodFade =
+  (chunk: Chunk) =>
+  (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, _camera: THREE.Camera, _geometry: THREE.BufferGeometry, material: THREE.Material) => {
+    const uniform = (material as THREE.ShaderMaterial).uniforms?.[LOD_FADE_UNIFORM];
+    if (!uniform) return;
+    const range = uniform.value as THREE.Vector2;
+    if (range.x === chunk.fadeLo && range.y === chunk.fadeHi) return;
+    range.set(chunk.fadeLo, chunk.fadeHi);
+    (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
+  };
+
+/** A zero-area triangle: drawing it links a program and rasterizes nothing. */
+const FADE_WARM_GEOMETRY = new THREE.BufferGeometry();
+FADE_WARM_GEOMETRY.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
 
 const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
 
@@ -167,22 +113,17 @@ const ensureTerrainWorker = terrainClient.ensure;
  *  geometry pool is kept: pooled geometries are fully rewritten on acquire. */
 export const resetTerrainSystem = () => {
   terrainClient.reset();
-  for (const key of Object.keys(terrain.chunks)) {
-    const { chunk } = terrain.chunks[key];
+  for (const chunk of terrain.chunks.values()) {
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     releaseWater(chunk);
     terrain.group.remove(chunk.plane);
     // Bodies already left the persistent physics world in the unmount cleanup.
     chunk.colliderBody = null;
-    delete terrain.chunks[key];
   }
+  terrain.chunks.clear();
   terrain.activeChunk = null;
   terrain.queuedToBuild.length = 0;
-  terrain.queuedToDestroy.clear();
-  pendingIndex.clear();
-  pendingSet.clear();
-  unswappableStaleIndex.clear();
-  visibleStaleIndex.clear();
+  swapper.reset();
   queueDirty = false;
   cachedDesired = null;
   desiredAtX = Infinity;
@@ -190,9 +131,6 @@ export const resetTerrainSystem = () => {
   terrainDirty = true;
   lastSortX = Infinity;
   lastSortZ = Infinity;
-  swappableKeys.clear();
-  cancelledKeys.clear();
-  pruneKeys.length = 0;
 };
 
 const buildChunkInWorker = (
@@ -228,78 +166,6 @@ const buildChunkInWorker = (
     carvesRivers,
     needCollider,
   });
-};
-
-const lodBySize: { [size: number]: LODLevel } = {};
-for (const lod of LOD_LEVELS) {
-  lodBySize[lod.chunkSize] = lod;
-}
-
-const subdivideThreshold: { [size: number]: number } = {
-  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (6720)
-  [LOD5_CHUNK_SIZE / 2]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
-  [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
-};
-
-const computeDesiredChunks = (playerX: number, playerZ: number) => {
-  const desired: { [key: string]: { position: number[]; lod: LODLevel } } = {};
-
-  const visitNode = (ox: number, oz: number, size: number) => {
-    const clampedX = Math.max(ox, Math.min(playerX, ox + size));
-    const clampedZ = Math.max(oz, Math.min(playerZ, oz + size));
-    const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
-
-    if (size > CHUNK_SIZE) {
-      const threshold = subdivideThreshold[size];
-      if (threshold !== undefined && dist < threshold) {
-        const half = size / 2;
-        visitNode(ox, oz, half);
-        visitNode(ox + half, oz, half);
-        visitNode(ox, oz + half, half);
-        visitNode(ox + half, oz + half, half);
-        return;
-      }
-    }
-
-    let lod = lodBySize[size];
-    if (!lod) {
-      lod = LOD_LEVELS[0];
-    }
-
-    if (size === CHUNK_SIZE) {
-      lod = dist < LOD_LEVELS[0].maxDistance ? LOD_LEVELS[0] : LOD_LEVELS[1];
-    }
-
-    const cx = ox + lod.chunkSize / 2;
-    const cz = oz + lod.chunkSize / 2;
-    const gx = Math.round(cx / lod.chunkSize);
-    const gz = Math.round(cz / lod.chunkSize);
-    desired[`${lod.level}/${gx}/${gz}`] = {
-      position: [cx, cz],
-      lod,
-    };
-  };
-
-  const rootSize = LOD5_CHUNK_SIZE;
-  const radius = Math.ceil(MAX_RENDER_DISTANCE / rootSize);
-  const rootGX = Math.floor(playerX / rootSize);
-  const rootGZ = Math.floor(playerZ / rootSize);
-
-  for (let dx = -radius; dx <= radius; dx++) {
-    for (let dz = -radius; dz <= radius; dz++) {
-      const ox = (rootGX + dx) * rootSize;
-      const oz = (rootGZ + dz) * rootSize;
-
-      const clampedX = Math.max(ox, Math.min(playerX, ox + rootSize));
-      const clampedZ = Math.max(oz, Math.min(playerZ, oz + rootSize));
-      const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
-      if (dist > MAX_RENDER_DISTANCE) continue;
-
-      visitNode(ox, oz, rootSize);
-    }
-  }
-
-  return desired;
 };
 
 /** Clockwise loop of main-grid edge vertex indices (4 × segments). */
@@ -408,10 +274,14 @@ export const TerrainRenderer = () => {
   const { world, rapier } = useRapier();
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
-  const [terrainMaterial, setTerrainMaterial] = useState<THREE.Material | null>(null);
+  const [terrainMaterial, setTerrainMaterial] = useState<THREE.ShaderMaterial | null>(null);
   const { terrainLoaded, setProgress, setTerrainLoaded, playerSpawn } = useGameContext();
   const lastRemainingRef = React.useRef<number>(-1);
   const isUpdatingTerrain = React.useRef(false);
+  /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
+   *  opaque terrain its early depth test), and the mesh that links that program during the load. */
+  const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+  const fadeWarmRef = React.useRef<{ mesh: THREE.Mesh; drawn: boolean } | null>(null);
 
   // A new spawn (fast travel) restarts the loading gate: the stale remaining=0 would
   // otherwise flip terrainLoaded back on before the first pass around the new position.
@@ -426,8 +296,7 @@ export const TerrainRenderer = () => {
     return () => {
       scene.remove(terrain.group);
       // The physics world outlives the domain, so heightfield bodies must leave with this mount.
-      for (const key of Object.keys(terrain.chunks)) {
-        const { chunk } = terrain.chunks[key];
+      for (const chunk of terrain.chunks.values()) {
         if (chunk.colliderBody !== null) {
           world.removeRigidBody(chunk.colliderBody);
           chunk.colliderBody = null;
@@ -436,10 +305,8 @@ export const TerrainRenderer = () => {
     };
   }, []);
 
-  const destroyChunk = (chunkKey: string) => {
-    const entry = terrain.chunks[chunkKey];
-    if (!entry) return;
-    const chunk = entry.chunk;
+  const destroyChunk = (chunk: Chunk) => {
+    if (terrain.chunks.get(chunk.key) !== chunk) return;
     if (chunk.colliderBody !== null) {
       world.removeRigidBody(chunk.colliderBody); // removes its heightfield too
       chunk.colliderBody = null;
@@ -447,7 +314,17 @@ export const TerrainRenderer = () => {
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     releaseWater(chunk);
     terrain.group.remove(chunk.plane);
-    delete terrain.chunks[chunkKey];
+    terrain.chunks.delete(chunk.key);
+  };
+
+  const swapHooks: SwapHooks<Chunk> = {
+    isDesired: (key) => cachedDesired !== null && cachedDesired[key] !== undefined,
+    destroy: destroyChunk,
+    redraw: (chunk) => {
+      chunk.plane.visible = chunk.drawn;
+      const material = chunk.transition !== null ? fadeMaterialRef.current : terrainMaterial;
+      if (material) chunk.plane.material = material;
+    },
   };
 
   useEffect(() => {
@@ -460,11 +337,32 @@ export const TerrainRenderer = () => {
   }, [remainingChunks, terrainLoaded]);
 
   useEffect(() => {
-    getMaterial().then(setTerrainMaterial);
+    getMaterial().then((material) => {
+      const fade = createLodFadeMaterial(material);
+      fadeMaterialRef.current = fade;
+      // Links the fade program during the load, under the scene's real lights (they are part of the
+      // program key): otherwise the first swap compiled the whole terrain shader mid-walk.
+      const warm = new THREE.Mesh(FADE_WARM_GEOMETRY, fade);
+      warm.frustumCulled = false;
+      const state = { mesh: warm, drawn: false };
+      warm.onAfterRender = () => {
+        state.drawn = true;
+      };
+      terrain.group.add(warm);
+      fadeWarmRef.current = state;
+      setTerrainMaterial(material);
+    });
   }, []);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
     tickWater(clock.elapsedTime);
+    const warm = fadeWarmRef.current;
+    if (warm?.drawn) {
+      terrain.group.remove(warm.mesh);
+      fadeWarmRef.current = null;
+    }
+    // Every frame, even while an update pass is awaiting a build: a fade is timed in frames' delta.
+    swapper.tick(delta, swapHooks);
     if (!terrainMaterial || isUpdatingTerrain.current) return;
     // Synchronous early-out: reaching the same gate inside the async updateTerrain
     // cost a promise chain + microtask drain every parked frame.
@@ -478,59 +376,6 @@ export const TerrainRenderer = () => {
       isUpdatingTerrain.current = false;
     });
   });
-
-  /** Atomic LOD swap: an old chunk is destroyed only once ALL its replacements
-   *  are built, and those replacements are shown in the same frame. Must run
-   *  even with an empty destroy queue — pass 2 is what makes freshly built
-   *  chunks visible at all. */
-  const processSwaps = (desiredChunks: { [key: string]: { position: number[]; lod: LODLevel } }) => {
-    // Pending (unbuilt, always invisible) chunks are the only thing that can hold an old chunk back.
-    pendingIndex.clear();
-    pendingSet.clear();
-    for (const c of terrain.queuedToBuild) {
-      if (c.plane.visible) continue;
-      pendingIndex.add(c);
-      pendingSet.add(c);
-    }
-
-    // Pass 1: old chunks whose replacements are all built
-    const swappable = swappableKeys;
-    const cancelled = cancelledKeys;
-    swappable.clear();
-    cancelled.clear();
-
-    for (const oldKey of terrain.queuedToDestroy) {
-      const entry = terrain.chunks[oldKey];
-      // Gone already, or desired again (player reversed) → cancel destruction
-      if (!entry || desiredChunks[oldKey]) {
-        cancelled.add(oldKey);
-        continue;
-      }
-      if (!pendingIndex.overlapsAny(entry.chunk)) swappable.add(oldKey);
-    }
-
-    // Pass 2: show built chunks unless they overlap a still-visible old chunk
-    // whose OTHER replacements aren't ready yet
-    unswappableStaleIndex.clear();
-    for (const oldKey of terrain.queuedToDestroy) {
-      if (swappable.has(oldKey) || cancelled.has(oldKey)) continue;
-      const entry = terrain.chunks[oldKey];
-      if (entry) unswappableStaleIndex.add(entry.chunk);
-    }
-
-    for (const key in terrain.chunks) {
-      const chunk = terrain.chunks[key].chunk;
-      if (chunk.plane.visible || pendingSet.has(chunk)) continue;
-      if (!unswappableStaleIndex.overlapsAny(chunk)) chunk.plane.visible = true;
-    }
-
-    // Pass 3
-    for (const oldKey of swappable) {
-      destroyChunk(oldKey);
-      terrain.queuedToDestroy.delete(oldKey);
-    }
-    for (const k of cancelled) terrain.queuedToDestroy.delete(k);
-  };
 
   const updateTerrain = async (material: THREE.Material) => {
     const playerX = camera.position.x;
@@ -548,50 +393,18 @@ export const TerrainRenderer = () => {
     }
     const desiredChunks = cachedDesired!;
 
-    // ── 2. Prune stale chunks ────────────────────────────────────────────
-    // Visible chunks queued for destruction are COVER: an invisible chunk
-    // overlapping one can't be dropped yet.
-    visibleStaleIndex.clear();
-    for (const oldKey of terrain.queuedToDestroy) {
-      const oldData = terrain.chunks[oldKey];
-      if (oldData && oldData.chunk.plane.visible) visibleStaleIndex.add(oldData.chunk);
-    }
-
-    pruneKeys.length = 0;
-    for (const chunkKey in terrain.chunks) {
-      if (desiredChunks[chunkKey]) continue;
-      const chunk = terrain.chunks[chunkKey].chunk;
-
-      if (chunk.plane.visible) {
-        if (!terrain.queuedToDestroy.has(chunkKey)) {
-          terrain.queuedToDestroy.add(chunkKey);
-          visibleStaleIndex.add(chunk);
-        }
-      } else if (terrain.activeChunk !== chunk && !visibleStaleIndex.overlapsAny(chunk)) {
-        pruneKeys.push(chunkKey);
-      }
-    }
-    for (const key of pruneKeys) {
-      destroyChunk(key);
-    }
+    // ── 2. Drawn chunks no longer desired go stale; undrawn ones are dropped ──
+    swapper.prune(terrain.chunks.values(), swapHooks.isDesired, terrain.activeChunk, destroyChunk);
 
     // ── 3. Add new desired chunks ────────────────────────────────────────
     for (const chunkKey in desiredChunks) {
-      if (chunkKey in terrain.chunks) continue;
-
+      if (terrain.chunks.has(chunkKey)) continue;
       const { position, lod } = desiredChunks[chunkKey];
-      const [cx, cz] = position;
-      const offset: PointXZ = { x: cx, z: cz };
-
-      const chunk = queueChunk(chunkKey, offset, lod, material);
-      terrain.chunks[chunkKey] = {
-        position: [cx, cz],
-        chunk: chunk,
-      };
+      terrain.chunks.set(chunkKey, queueChunk(chunkKey, { x: position[0], z: position[1] }, lod, material));
     }
 
-    // ── 4. Atomic visibility swaps ───────────────────────────────────────
-    processSwaps(desiredChunks);
+    // ── 4. LOD swaps: start every cross-fade that is ready ───────────────
+    swapper.processSwaps(terrain.chunks.values(), swapHooks);
 
     // ── 5. Build chunks (time budget) ────────────────────────────────────
     // Wall-clock, not chunk-count: per-chunk cost varies >10× with LOD and
@@ -606,7 +419,7 @@ export const TerrainRenderer = () => {
       const queue = terrain.queuedToBuild;
       let w = 0;
       for (let i = 0; i < queue.length; i++) {
-        if (queue[i].key in terrain.chunks) queue[w++] = queue[i];
+        if (terrain.chunks.get(queue[i].key) === queue[i]) queue[w++] = queue[i];
       }
       if (w !== queue.length) {
         queue.length = w;
@@ -659,12 +472,13 @@ export const TerrainRenderer = () => {
     }
 
     // Stay "dirty" while anything is still in flight, and for one extra pass
-    // after the last build so processSwaps gets to make it visible.
+    // after the last build so processSwaps gets to draw it.
     terrainDirty =
       builtThisPass ||
       terrain.queuedToBuild.length > 0 ||
       terrain.activeChunk !== null ||
-      terrain.queuedToDestroy.size > 0;
+      swapper.stale.size > 0 ||
+      swapper.busy;
   };
 
   const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: THREE.Material) => {
@@ -684,7 +498,13 @@ export const TerrainRenderer = () => {
       rebuildIterator: null,
       colliderBody: null,
       lod: lod,
+      built: false,
+      drawn: false,
+      transition: null,
+      fadeLo: 0,
+      fadeHi: FADE_OPAQUE_HI,
     };
+    plane.onBeforeRender = syncLodFade(chunk);
 
     terrain.group.add(plane);
     terrain.queuedToBuild.push(chunk);
@@ -813,6 +633,7 @@ export const TerrainRenderer = () => {
         // Warmed with its plane like every streamed mesh: the first water in view otherwise
         // compiled the water program and uploaded its buffers at the frame the player turned to it.
         uploadOnFirstDraw(water);
+        water.onBeforeRender = syncLodFade(chunk);
         chunk.plane.add(water);
         chunk.water = water;
       }
@@ -883,6 +704,7 @@ export const TerrainRenderer = () => {
     const finishMs = performance.now() - traceT0;
     traceEvent(`terrain:finish L${chunk.lod.level}`, finishMs);
     chargeFrameWork(finishMs);
+    chunk.built = true;
 
     yield;
   };
