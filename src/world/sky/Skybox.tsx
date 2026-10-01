@@ -83,7 +83,7 @@ void main() {
 }
 `;
 
-const PLACE_POLL_INTERVAL = 0.5; // seconds
+const PLACE_POLL_INTERVAL_S = 0.5;
 const COLOR_LERP_RATE = 2; // higher = faster sky cross-fade
 
 const _nightTop = new THREE.Color(NIGHT_SKY_COLORS.top);
@@ -193,7 +193,7 @@ export const SkyboxSystem = () => {
 
     if (hasScopedSkyboxes && !pollInFlightRef.current) {
       pollTimerRef.current += delta;
-      if (pollTimerRef.current >= PLACE_POLL_INTERVAL) {
+      if (pollTimerRef.current >= PLACE_POLL_INTERVAL_S) {
         pollTimerRef.current = 0;
         pollInFlightRef.current = true;
         getPlaceInfo(camera.position.x, camera.position.z)

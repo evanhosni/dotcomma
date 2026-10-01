@@ -11,7 +11,8 @@ import { setActiveDomain } from "../domains/utils";
 import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import { Biome, Region, TerrainParams } from "../types";
 import type { DomainConfig } from "../../utils/workers/vertexCompute";
-import { BiomeRecord, createDomainStore, DomainDataContext, DomainStore, DomainStoreContext, reportHierarchyError } from "./context";
+import { createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
+import { reportContentError } from "../../utils/contentError";
 import { SkyboxSystem } from "../sky/Skybox";
 
 /** Root of the DOMAIN → REGION → BIOME tree: children register during layout
@@ -78,38 +79,29 @@ export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, 
   );
 };
 
-const commitDomain = (store: DomainStore) => {
-  const params: TerrainParams = {
-    ...DEFAULT_TERRAIN_PARAMS,
-    ...(store.domainTerrain ?? {}),
-  };
-
-  // A biome under several regions is ONE shared object (getAllBiomes dedupes by identity).
+/** Every registered biome as ONE object per id (a biome under several regions is one shared object —
+ *  getAllBiomes dedupes by identity), with its material, riverbed and actors merged in. */
+const mergeBiomes = (store: DomainStore): Map<number, Biome> => {
   const biomeById = new Map<number, Biome>();
-  const ensureBiome = (record: BiomeRecord): Biome => {
-    let data = biomeById.get(record.id);
+  for (const { biome: record } of store.biomes.values()) {
+    const data = biomeById.get(record.id);
     if (data && data.name !== record.name) {
-      reportHierarchyError(`biome id ${record.id} is used by both "${data.name}" and "${record.name}" — biome ids must be unique (a biome shared by two regions keeps one id AND one spec)`);
+      reportContentError(`biome id ${record.id} is used by both "${data.name}" and "${record.name}" — biome ids must be unique (a biome shared by two regions keeps one id AND one spec)`);
     }
-    if (!data) {
-      data = {
-        name: record.name,
-        id: record.id,
-        joinable: record.joinable,
-        blendWidth: record.blendWidth,
-        heightBlendWidth: record.heightBlendWidth,
-        water: record.water,
-        prohibitRoads: record.prohibitRoads,
-        prohibitRivers: record.prohibitRivers,
-        noise: record.noise,
-        actors: [],
-      };
-      biomeById.set(record.id, data);
-    }
-    return data;
-  };
-
-  for (const { biome } of store.biomes.values()) ensureBiome(biome);
+    if (data) continue;
+    biomeById.set(record.id, {
+      name: record.name,
+      id: record.id,
+      joinable: record.joinable,
+      blendWidth: record.blendWidth,
+      heightBlendWidth: record.heightBlendWidth,
+      water: record.water,
+      prohibitRoads: record.prohibitRoads,
+      prohibitRivers: record.prohibitRivers,
+      noise: record.noise,
+      actors: [],
+    });
+  }
   for (const { biomeId, getMaterial, riverbed } of store.biomeMaterials.values()) {
     const data = biomeById.get(biomeId);
     if (!data) continue;
@@ -121,8 +113,12 @@ const commitDomain = (store: DomainStore) => {
     if (!data) continue;
     if (!data.actors!.some((d) => d.id === descriptor.id)) data.actors!.push(descriptor);
   }
+  return biomeById;
+};
 
-  // JSX order at every level — voronoi assignment depends on it.
+/** The regions in registration order, each with its biomes in registration order — voronoi
+ *  assignment depends on both. */
+const assembleRegions = (store: DomainStore, biomeById: ReadonlyMap<number, Biome>): Region[] => {
   const regions: Region[] = [];
   for (const record of store.regions.values()) {
     const biomes: Biome[] = [];
@@ -142,7 +138,15 @@ const commitDomain = (store: DomainStore) => {
       getMaterial: store.regionMaterials.get(record.id),
     });
   }
+  return regions;
+};
 
+const commitDomain = (store: DomainStore) => {
+  const params: TerrainParams = {
+    ...DEFAULT_TERRAIN_PARAMS,
+    ...(store.domainTerrain ?? {}),
+  };
+  const regions = assembleRegions(store, mergeBiomes(store));
   const config = buildDomainConfig(regions, params);
   verifySharedConfig(config);
   setActiveDomain({

@@ -89,9 +89,9 @@ void main() {
   float spec = pow(clamp(dot(normal, h), 0.0, 1.0), 90.0);
   color += vec3(1.0, 0.97, 0.9) * spec * 0.6 * (1.0 - uNightBlend);
 
-  // Shore: fade out over the last ~2.5u of depth instead of a hard cut — the cut traced the
-  // terrain's LOD triangles as a staircase along every shoreline (a 0.6u fade still did on
-  // 17.5u LOD2 quads; on a lake's gentle bed 2.5u of depth is ~10–20u of shore).
+  // Shore: fade out over the last ~2.5u of depth — a hard cut (or a sub-unit fade) traces the
+  // terrain's LOD triangles as a staircase along every shoreline; on a lake's gentle bed 2.5u
+  // of depth is ~10–20u of shore.
   float alpha = (mix(0.55, 0.9, depthT) + fresnel * 0.1) * smoothstep(0.02, 2.5, vWaterDepth);
 
   ${nightDimGLSL("color")}

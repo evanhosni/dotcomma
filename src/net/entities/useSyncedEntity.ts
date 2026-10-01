@@ -51,7 +51,8 @@ export const useSyncedEntity = (
         return getEntity(id);
       },
       get known() {
-        return getEntity(id)?.remote !== null && getEntity(id) !== undefined;
+        const e = getEntity(id);
+        return e !== undefined && e.remote !== null;
       },
       get state() {
         return getEntity(id)?.remote?.state;

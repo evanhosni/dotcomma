@@ -5,10 +5,10 @@ import type { StateMachineConfig } from "./state/types";
 
 /**
  * The Three-free, React-free definition of an actor kind — one per kind in
- * `<actor>/spec.ts`. The SERVER reads the simulation half (machine, body, hull,
- * interact reach) through ./catalog.ts; the client builds its descriptor from the
- * whole thing (describeActor), and biome specs place it (`BiomeSpec.actors`), so
- * nothing about an actor is written twice.
+ * `<actor>/spec.ts`. Biome specs place it (`BiomeSpec.actors`), and placing it is also
+ * what puts it in the SERVER's actor catalog (./catalog.ts — the simulation half:
+ * machine, body, hull, interact reach); the client builds its descriptor from the
+ * whole thing (describeActor), so nothing about an actor is written twice.
  */
 
 export interface CapsuleColliderSpec {
@@ -67,8 +67,9 @@ export interface ActorSpec extends ListedActorAttributes, Partial<ModelAttribute
 
 /** One actor placed in a biome (`BiomeSpec.actors`): the kind plus this biome's overrides. It spawns
  *  ONLY in the biomes that list it — a kind for several biomes is listed in each. A mount never
- *  renames the kind — a second placement with different settings is a second spec. */
-export interface ActorMount extends ListedActorAttributes, Partial<Omit<ModelAttributes & BuildingAttributes, "biomeIds">> {
+ *  renames the kind — a second placement with different settings is a second spec — and never
+ *  reshapes a building (no hull attributes: the server builds the sealed hull from the spec's). */
+export interface ActorMount extends ListedActorAttributes, Partial<ModelAttributes> {
   actor: ActorSpec;
 }
 

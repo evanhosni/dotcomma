@@ -7,7 +7,7 @@ import type { BiomeNoiseConfig, TerrainNoiseParams } from "./types";
 const noiseInstance = new Noise(seedRand("bierce"));
 
 export const simplex2 = (x: number, y: number) => noiseInstance.simplex2(x, y);
-export const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
+const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
 
 // Memoized per params object: recomputing 2**-persistence per call added a pow per noise call.
 const noiseParamsCache = new WeakMap<TerrainNoiseParams, { G: number; norm: number }>();
@@ -54,9 +54,9 @@ export const terrainNoise = (params: TerrainNoiseParams, x: number, y: number): 
 
 /** A biome's declarative height (its <Terrain noise> config) at a world point, before presence.
  *  `depth` feeds the dome: the point's depth inside its biome (zoneBlend.ts domeDepthAt). A caller
- *  without a wall pass (the river network's terrain proxy) gets the height at the biome's edge: with
- *  the dome in the proxy, its high-ground rule cut 3.4% of all river length and moved rivers well
- *  outside the mountains (MEASURED); the offset alone keeps rivers out of the rock. */
+ *  without a wall pass (the river network's terrain proxy) gets the height at the biome's edge, on
+ *  purpose: with the dome, the proxy's high-ground rule would cut rivers well outside the mountains;
+ *  the offset alone keeps rivers out of the rock. */
 export const biomeNoiseHeight = (config: BiomeNoiseConfig, x: number, z: number, depth = 0): number => {
   let h = terrainNoise(config.params, x, z);
   if (config.absNeg) h = Math.abs(h) * -1;

@@ -15,6 +15,8 @@ import { riverPiecesNear, riverWetReach } from "../rivers/riverNetwork";
 import type { DomainConfig, RiverQuaySample, Wall } from "../types";
 import { distanceToWall, isCanonicalWall } from "../voronoi";
 
+type CityConfig = DomainConfig["cityConfig"];
+
 /** Keyed by block index so merged same-label cells share one plateau. Memoized
  *  with a numeric key: seedRand builds a fresh seedrandom per call and this runs
  *  4-5× per city vertex. */
@@ -54,6 +56,8 @@ export interface CityTerrain {
  *  Buildings stay off the bank through the placement filter's river exclusion. */
 export const CITY_QUAY_INNER_CAP = 60;
 
+// ── The waterfront (the belt carried along a river) ───────────────────
+
 /** A belt wall counts as DROWNED (the river's footprint reaches over it) out to this past where its
  *  river-side curb is just dry (bank + freewayWidth), fading in over it (real units). */
 const CITY_WATERFRONT_FADE = 30;
@@ -70,14 +74,6 @@ const CITY_WATERFRONT_PENALTY = 45;
 /** The smooth minimum's reach where the belt turns onto the waterfront: a rounded corner. */
 const CITY_WATERFRONT_FILLET = 30;
 
-/** The WATERFRONT — the city's perimeter freeway continues along the river instead of stopping at
- *  the water: where a city wall lies in a river's footprint, its belt runs instead along the water's
- *  straight edge, its river-side curb on the bank (bank + freewayWidth
- *  from the centerline), and joins the belt where the wall comes out of the water — one road, one
- *  set of lanes (off the city, `inCity` false, only the drowned belt is taken away). `distance` is the real distance to that road's centerline (the belt's own where no
- *  wall is drowned), `waterfront` how far a drowned wall is in play (0–1, the rim's all-road cells
- *  give way to it), `onWaterfront` whether the waterfront line is the nearer part. The vertex's own
- *  river piece list must be current (riverQuayAt ran for it). */
 /** Whether the city wall nearest a rim cell's center lies in a river's footprint (as far as its
  *  belt's river-side curb, findWaterfrontBelt's measure). From the river pieces' geometry alone —
  *  cells are cached, and this runs in the middle of a vertex, where no terrain may be evaluated. */
@@ -138,8 +134,7 @@ export const wallDrownedAt = (px: number, pz: number, wallDx = NaN, wallDz = NaN
 };
 
 /** wallDrownedAt along a wall, sampled at WALL_DROWNED_SAMPLES points per wall and river list and
- *  interpolated: asking the river list at every vertex for every wall beside a river cost the city
- *  ~15 ms per LOD1 chunk (MEASURED). */
+ *  interpolated (asked per vertex for every wall beside a river it cost ~15 ms per LOD1 chunk). */
 const WALL_DROWNED_SAMPLES = 17;
 const wallDrownedCache = new WeakMap<Wall, { list: unknown; v: Float64Array }>();
 const wallDrownedAlong = (w: Wall, t: number): number => {
@@ -161,8 +156,16 @@ const wallDrownedAlong = (w: Wall, t: number): number => {
   return hit.v[k] + (hit.v[k + 1] - hit.v[k]) * (f - k);
 };
 
-export const waterfrontBelt = { distance: Infinity, waterfront: 0, onWaterfront: false };
-export const findWaterfrontBelt = (wx: number, wz: number, walls: Wall[], beltDistance: number, quay: RiverQuaySample, inCity: boolean): void => {
+/** The WATERFRONT: the city's belt freeway continues along the river instead of stopping at the water.
+ *  Where a city wall lies in a river's footprint, the belt runs along the water's straight edge
+ *  instead, its river-side curb on the bank (bank + freewayWidth from the centerline), and rejoins the
+ *  belt where the wall comes out of the water — one road, one set of lanes. Off the city (`inCity`
+ *  false) only the drowned belt is taken away. Writes waterfrontBelt: `distance`, the real distance to
+ *  that road's centerline (the belt's own where no wall is drowned); `waterfront`, how far a drowned
+ *  wall is in play (0–1); `onWaterfront`, whether the waterfront line is the nearer part. The vertex's
+ *  own river piece list must be current (riverQuayAt ran for it). */
+const waterfrontBelt = { distance: Infinity, waterfront: 0, onWaterfront: false };
+const findWaterfrontBelt =(wx: number, wz: number, walls: Wall[], beltDistance: number, quay: RiverQuaySample, inCity: boolean): void => {
   waterfrontBelt.distance = beltDistance;
   waterfrontBelt.waterfront = 0;
   waterfrontBelt.onWaterfront = false;
@@ -207,8 +210,8 @@ export const findWaterfrontBelt = (wx: number, wz: number, walls: Wall[], beltDi
     wf = Math.max(wf, drowned * near);
     dry = Math.min(dry, dist + CITY_WATERFRONT_PENALTY * drowned);
   }
-  // Off the city only the drowned wall's belt goes: the waterfront line runs on along the river past
-  // the city's corner, and off it drew a road into the grass and lane paint under the lake.
+  // Off the city only the drowned wall's belt goes: the waterfront line would run on along the river
+  // past the city's corner, into the grass.
   if (wf <= 0 || !inCity) {
     waterfrontBelt.distance = dry;
     return;
@@ -219,43 +222,10 @@ export const findWaterfrontBelt = (wx: number, wz: number, walls: Wall[], beltDi
   waterfrontBelt.onWaterfront = line < dry;
 };
 
-// Plateau ramps extend this far past the road half-width (across the sidewalk) for gentle grades.
-const CITY_RAMP_SPAN = 4;
-
-// The chamfer cut sits at dᵢ + dⱼ = roadWidth / scale (≈ 28.6u at 0.35);
-// fragments pinched narrower than that become road entirely.
-const CITY_CHAMFER_SCALE = 0.35;
-
-// A pair only chamfers when its toward-road directions differ (corner wedge or
-// pinch: dot ≤ 0). A road event ACROSS the street points the same way (dot ≈ +1)
-// and must not notch this block's edge; the penalty fades in over [LO, HI].
-const CITY_CHAMFER_DOT_LO = 0.6;
-const CITY_CHAMFER_DOT_HI = 0.85;
-const CITY_CHAMFER_DOT_PENALTY = 60;
-
-// The ×(roadWidth/freewayWidth) squash applies up to this normalized value (just
-// past the interior band at 12), then the field recovers at the steep slope —
-// without the recovery, blocks along every arterial stayed empty of buildings.
-const CITY_ARTERIAL_RECOVER_NORM = 12.2;
-const CITY_ARTERIAL_RECOVER_SLOPE = 3;
-/** The belt's recovery start (normalized): 9.5 = 19u real, one curb strip past its asphalt. */
-const CITY_BELT_RECOVER_NORM = 9.5;
-
-// Real units from a freeway centerline over which plateaus ramp to full height: from the asphalt's
-// edge, so a freeway is flat across its lanes (a ramp starting nearer the centerline slopes the lanes
-// toward the blocks and creases the belt down its middle at the wall); the end must stay inside the
-// building setback (~35u) so block interiors are flat.
-const CITY_FREEWAY_RAMP_START = 14;
-const CITY_FREEWAY_RAMP_END = 34;
-
-
-// Road-constraint scratch buffers (distance + toward-road world direction); workers are single-threaded.
-const roadConstraintDist = new Float64Array(24);
-const roadConstraintDirX = new Float64Array(24);
-const roadConstraintDirZ = new Float64Array(24);
+// ── Blocks: shapes and cells ──────────────────────────────────────────
 
 // Every road feature is CONFINED to its own cell — that is what guarantees no tiny leftover pieces.
-export const CITY_SHAPE_SQUARE = 0;
+const CITY_SHAPE_SQUARE = 0;
 export const CITY_SHAPE_TRI_NE = 1; // diagonal road from the SW corner to the NE corner
 export const CITY_SHAPE_TRI_NW = 2; // diagonal road from the NW corner to the SE corner
 export const CITY_SHAPE_CIRCLE = 3; // circular block inside a roundabout ring road
@@ -323,6 +293,9 @@ export const peekCityCell = (ix: number, iz: number, d: CityDistrict): CityCell 
   return store && cityCellLookup(store, d.key, ix, iz);
 };
 
+/** The rim/room verdicts read the CALLER's walls, whose circumcenters differ between biome-grid
+ *  windows in the last bits (measured ≤ 2e-10u); the cache keeps the first caller's. Order-free only
+ *  while no cell center sits that close to a threshold (nearest measured: 1.6e-3u over 35k cells). */
 export const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistrict): CityCell => {
   const city = domainConfig!.cityConfig;
   let store = cityCellCaches[city.seed];
@@ -400,6 +373,8 @@ export const getCityCell = (ix: number, iz: number, walls: Wall[], d: CityDistri
   return cell;
 };
 
+// ── Districts and arterials ───────────────────────────────────────────
+
 // Districts: jittered rows ~districtSize cells tall, split into staggered jittered
 // segments. Each rotates its whole block grid by a seeded multiple of 15° about its
 // center; district boundaries carry the arterial roads, which hide the grid seams.
@@ -450,9 +425,8 @@ export const CITY_WIGGLE_AMP = 38;
 const CITY_WIGGLE_K1 = (2 * Math.PI) / 620;
 const CITY_WIGGLE_K2 = (2 * Math.PI) / 260;
 
-/** An arterial's two seeded wiggle phases. Cached by the arterial's NUMERIC identity: the find*
- *  loops probe the curves ≥4× per city vertex, and building the "r12"/"wig1:r12" tag strings per
- *  probe was MEASURED at ~7% of a city chunk. */
+/** An arterial's two seeded wiggle phases, cached by the arterial's NUMERIC identity: the find*
+ *  loops probe the curves ≥4× per city vertex (tag strings per probe were ~7% of a city chunk). */
 const cityWigglePhases = (tag: string): Float64Array => {
   const seed = domainConfig!.cityConfig.seed;
   return Float64Array.of(seedRand(`${seed}-wig1-${tag}`) * Math.PI * 2, seedRand(`${seed}-wig2-${tag}`) * Math.PI * 2);
@@ -576,127 +550,149 @@ export const cityLocalToWorld = (lx: number, lz: number, d: CityDistrict): Point
   return { x: d.px + dx * d.cos - dz * d.sin, z: d.pz + dx * d.sin + dz * d.cos };
 };
 
-/** The city at (vx, vz): `walls` are the CITY's walls (the belt), `biomeBoundaryDist`/`biomeWallAlong` the
- *  vertex's distance to and phase along the nearest of them, `quay` the straight river field. */
-export const getCityTerrain = (
-  vx: number,
-  vz: number,
-  city: DomainConfig["cityConfig"],
-  walls: Wall[],
-  biomeBoundaryDist: number,
-  biomeWallAlong: number,
-  quay: RiverQuaySample,
-  warped: PointXZ
-): CityTerrain => {
-  const gs = city.gridSize;
+// ── getCityTerrain, step by step (workers are single-threaded: the steps share module scratch) ──
 
-  // Rotate into the district's LOCAL grid frame; distances and heights are rotation-invariant, so nothing is transformed back.
-  const d = getCityDistrict(vx, vz);
-  const rdx = vx - d.px;
-  const rdz = vz - d.pz;
-  const lx = d.px + rdx * d.cos + rdz * d.sin;
-  const lz = d.pz - rdx * d.sin + rdz * d.cos;
+// Plateau ramps extend this far past the road half-width (across the sidewalk) for gentle grades.
+const CITY_RAMP_SPAN = 4;
 
-  const ix = Math.floor(lx / gs);
-  const iz = Math.floor(lz / gs);
+// The chamfer cut sits at dᵢ + dⱼ = roadWidth / scale (≈ 28.6u at 0.35);
+// fragments pinched narrower than that become road entirely.
+const CITY_CHAMFER_SCALE = 0.35;
 
-  const cell = getCityCell(ix, iz, walls, d);
-  const cellLabel = cell.label;
-  // neighborLabels[(a+1)*3 + (b+1)] = label of cell (ix+a, iz+b)
-  const neighborLabels: number[] = [];
+// A pair only chamfers when its toward-road directions differ (corner wedge or
+// pinch: dot ≤ 0). A road event ACROSS the street points the same way (dot ≈ +1)
+// and must not notch this block's edge; the penalty fades in over [LO, HI].
+const CITY_CHAMFER_DOT_LO = 0.6;
+const CITY_CHAMFER_DOT_HI = 0.85;
+const CITY_CHAMFER_DOT_PENALTY = 60;
+
+// The ×(roadWidth/freewayWidth) squash applies up to this normalized value (just past the interior
+// band at 12), then the field recovers at the steep slope, so the blocks along an arterial are not
+// all setback (no building band).
+const CITY_ARTERIAL_RECOVER_NORM = 12.2;
+const CITY_ARTERIAL_RECOVER_SLOPE = 3;
+/** The belt's recovery start (normalized): 9.5 = 19u real, one curb strip past its asphalt. */
+const CITY_BELT_RECOVER_NORM = 9.5;
+
+// Real units from a freeway centerline over which plateaus ramp to full height: from the asphalt's
+// edge, so a freeway is flat across its lanes (a ramp starting nearer the centerline slopes the lanes
+// toward the blocks and creases the belt down its middle at the wall); the end must stay inside the
+// building setback (~35u) so block interiors are flat.
+const CITY_FREEWAY_RAMP_START = 14;
+const CITY_FREEWAY_RAMP_END = 34;
+
+
+/** The current vertex's 3×3 cell labels: neighborLabels[(a+1)*3 + (b+1)] = label of cell (ix+a, iz+b). */
+const neighborLabels: number[] = [];
+const readNeighborLabels = (ix: number, iz: number, walls: Wall[], d: CityDistrict): void => {
   for (let a = -1; a <= 1; a++) {
     for (let b = -1; b <= 1; b++) {
       neighborLabels[(a + 1) * 3 + (b + 1)] = getCityCell(ix + a, iz + b, walls, d).label;
     }
   }
-  const n = neighborLabels[5]; // (0, +1)
-  const e = neighborLabels[7]; // (+1, 0)
-  const s = neighborLabels[3]; // (0, −1)
-  const w = neighborLabels[1]; // (−1, 0)
+};
 
-  // Toward-road unit directions in the WORLD frame; NaN = pairable with anything (rim).
-  let nCons = 0;
-  const addLocalConstraint = (dd: number, lux: number, luz: number) => {
-    if (nCons >= 24) return;
-    roadConstraintDist[nCons] = dd;
-    roadConstraintDirX[nCons] = lux * d.cos - luz * d.sin;
-    roadConstraintDirZ[nCons] = lux * d.sin + luz * d.cos;
-    nCons++;
-  };
-  const addWorldConstraint = (dd: number, wux: number, wuz: number) => {
-    if (nCons >= 24) return;
-    roadConstraintDist[nCons] = dd;
-    roadConstraintDirX[nCons] = wux;
-    roadConstraintDirZ[nCons] = wuz;
-    nCons++;
-  };
+/** The current vertex's road CONSTRAINTS: distance + toward-road unit direction in the WORLD frame
+ *  (NaN = pairable with anything: the rim). */
+const MAX_ROAD_CONSTRAINTS = 24;
+const roadConstraintDist = new Float64Array(MAX_ROAD_CONSTRAINTS);
+const roadConstraintDirX = new Float64Array(MAX_ROAD_CONSTRAINTS);
+const roadConstraintDirZ = new Float64Array(MAX_ROAD_CONSTRAINTS);
+let roadConstraintCount = 0;
+/** The district whose local frame addLocalConstraint's directions are rotated out of. */
+let constraintFrame: CityDistrict | null = null;
 
-  // Inside the ring, boundary streets are suppressed so the members' internal
-  // boundaries tee into the ring road instead of slicing the island.
-  let circleR = Infinity;
-  let ringR = 0;
-  let circUx = 1; // unit direction from the ring center to the vertex (local)
-  let circUz = 0;
+const beginRoadConstraints = (d: CityDistrict): void => {
+  roadConstraintCount = 0;
+  constraintFrame = d;
+};
+const addLocalConstraint = (dd: number, lux: number, luz: number): void => {
+  if (roadConstraintCount >= MAX_ROAD_CONSTRAINTS) return;
+  const d = constraintFrame!;
+  roadConstraintDist[roadConstraintCount] = dd;
+  roadConstraintDirX[roadConstraintCount] = lux * d.cos - luz * d.sin;
+  roadConstraintDirZ[roadConstraintCount] = lux * d.sin + luz * d.cos;
+  roadConstraintCount++;
+};
+const addWorldConstraint = (dd: number, wux: number, wuz: number): void => {
+  if (roadConstraintCount >= MAX_ROAD_CONSTRAINTS) return;
+  roadConstraintDist[roadConstraintCount] = dd;
+  roadConstraintDirX[roadConstraintCount] = wux;
+  roadConstraintDirZ[roadConstraintCount] = wuz;
+  roadConstraintCount++;
+};
+
+/** The current vertex against its roundabout (a CITY_SHAPE_CIRCLE cell): its distance from the ring's
+ *  center, the ring road's centerline radius, the unit direction center → vertex (local), and whether
+ *  it is inside the ring. */
+const roundabout = { distance: Infinity, ringRadius: 0, ux: 1, uz: 0, inside: false };
+const measureRoundabout = (cell: CityCell, ix: number, iz: number, lx: number, lz: number, gs: number): void => {
+  roundabout.distance = Infinity;
+  roundabout.ringRadius = 0;
+  roundabout.ux = 1;
+  roundabout.uz = 0;
   if (cell.shape === CITY_SHAPE_CIRCLE) {
     const scx = (2 * Math.floor(ix / 2) + 1) * gs;
     const scz = (2 * Math.floor(iz / 2) + 1) * gs;
-    circleR = Math.hypot(lx - scx, lz - scz);
-    ringR = gs * CITY_RING_RADIUS_FRAC;
-    if (circleR > 1e-6) {
-      circUx = (lx - scx) / circleR;
-      circUz = (lz - scz) / circleR;
+    roundabout.distance = Math.hypot(lx - scx, lz - scz);
+    roundabout.ringRadius = gs * CITY_RING_RADIUS_FRAC;
+    if (roundabout.distance > 1e-6) {
+      roundabout.ux = (lx - scx) / roundabout.distance;
+      roundabout.uz = (lz - scz) / roundabout.distance;
     }
   }
-  const insideRing = circleR < ringR;
+  roundabout.inside = roundabout.distance < roundabout.ringRadius;
+};
 
-  if (!insideRing) {
-    // Boundary SEGMENTS over the full 3×3 neighborhood, collinear runs MERGED:
-    // per-cell infinite lines pop the chamfer's second constraint at cell borders
-    // (notched road edges), and unmerged collinear segments make the chamfer pair
-    // two pieces of the SAME road (notched sidewalks at every merged-block seam).
-    // Vertical boundary lines (between cell columns a and a+1):
-    for (let a = -1; a <= 0; a++) {
-      const X = (ix + a + 1) * gs;
-      let runStart = 99;
-      for (let b = -1; b <= 2; b++) {
-        const differs = b <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 2) * 3 + (b + 1)];
-        if (differs && runStart === 99) runStart = b;
-        if (!differs && runStart !== 99) {
-          const z0 = (iz + runStart) * gs;
-          const z1 = (iz + b) * gs;
-          const ddx = X - lx;
-          const ddz = lz < z0 ? z0 - lz : lz > z1 ? z1 - lz : 0;
-          const dd = Math.hypot(ddx, ddz);
-          if (dd < 1e-6) addLocalConstraint(0, 1, 0);
-          else addLocalConstraint(dd, ddx / dd, ddz / dd);
-          runStart = 99;
-        }
-      }
-    }
-    // Horizontal boundary lines (between cell rows b and b+1):
-    for (let b = -1; b <= 0; b++) {
-      const Z = (iz + b + 1) * gs;
-      let runStart = 99;
-      for (let a = -1; a <= 2; a++) {
-        const differs = a <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 1) * 3 + (b + 2)];
-        if (differs && runStart === 99) runStart = a;
-        if (!differs && runStart !== 99) {
-          const x0 = (ix + runStart) * gs;
-          const x1 = (ix + a) * gs;
-          const ddz = Z - lz;
-          const ddx = lx < x0 ? x0 - lx : lx > x1 ? x1 - lx : 0;
-          const dd = Math.hypot(ddx, ddz);
-          if (dd < 1e-6) addLocalConstraint(0, 0, 1);
-          else addLocalConstraint(dd, ddx / dd, ddz / dd);
-          runStart = 99;
-        }
+/** STREETS: boundary SEGMENTS between differing labels over the full 3×3 neighborhood, contiguous
+ *  collinear pieces MERGED into one run. Per-cell infinite lines would pop the chamfer's second
+ *  constraint at cell borders (notched road edges), and unmerged collinear pieces would make the
+ *  chamfer pair two pieces of the SAME road (notched sidewalks at every merged-block seam). */
+const addBoundaryStreets = (ix: number, iz: number, lx: number, lz: number, gs: number): void => {
+  // Vertical boundary lines (between cell columns a and a+1):
+  for (let a = -1; a <= 0; a++) {
+    const X = (ix + a + 1) * gs;
+    let runStart = 99;
+    for (let b = -1; b <= 2; b++) {
+      const differs = b <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 2) * 3 + (b + 1)];
+      if (differs && runStart === 99) runStart = b;
+      if (!differs && runStart !== 99) {
+        const z0 = (iz + runStart) * gs;
+        const z1 = (iz + b) * gs;
+        const ddx = X - lx;
+        const ddz = lz < z0 ? z0 - lz : lz > z1 ? z1 - lz : 0;
+        const dd = Math.hypot(ddx, ddz);
+        if (dd < 1e-6) addLocalConstraint(0, 1, 0);
+        else addLocalConstraint(dd, ddx / dd, ddz / dd);
+        runStart = 99;
       }
     }
   }
+  // Horizontal boundary lines (between cell rows b and b+1):
+  for (let b = -1; b <= 0; b++) {
+    const Z = (iz + b + 1) * gs;
+    let runStart = 99;
+    for (let a = -1; a <= 2; a++) {
+      const differs = a <= 1 && neighborLabels[(a + 1) * 3 + (b + 1)] !== neighborLabels[(a + 1) * 3 + (b + 2)];
+      if (differs && runStart === 99) runStart = a;
+      if (!differs && runStart !== 99) {
+        const x0 = (ix + runStart) * gs;
+        const x1 = (ix + a) * gs;
+        const ddz = Z - lz;
+        const ddx = lx < x0 ? x0 - lx : lx > x1 ? x1 - lx : 0;
+        const dd = Math.hypot(ddx, ddz);
+        if (dd < 1e-6) addLocalConstraint(0, 0, 1);
+        else addLocalConstraint(dd, ddx / dd, ddz / dd);
+        runStart = 99;
+      }
+    }
+  }
+};
 
-  // In-super-cell shape features (each confined to its own 2×2 super-cell):
+/** The cell's in-super-cell shape feature (each confined to its own 2×2 super-cell): a triangle's
+ *  corner-to-corner diagonal, or a roundabout's ring road. */
+const addShapeFeature = (cell: CityCell, ix: number, iz: number, lx: number, lz: number, gs: number): void => {
   if (cell.shape === CITY_SHAPE_TRI_NE || cell.shape === CITY_SHAPE_TRI_NW) {
-    // Diagonal road corner-to-corner across the 2×2 super-cell.
     const dx = lx - 2 * Math.floor(ix / 2) * gs;
     const dz = lz - 2 * Math.floor(iz / 2) * gs;
     if (cell.shape === CITY_SHAPE_TRI_NE) {
@@ -711,86 +707,105 @@ export const getCityTerrain = (
       addLocalConstraint(Math.abs(sig), f * Math.SQRT1_2, f * Math.SQRT1_2);
     }
   } else if (cell.shape === CITY_SHAPE_CIRCLE) {
-    // Island field compressed ×0.75 so buildings keep a margin from the curved curb.
-    if (insideRing) addLocalConstraint((ringR - circleR) * 0.75, circUx, circUz);
-    else addLocalConstraint(circleR - ringR, -circUx, -circUz);
+    // The island's field is compressed ×0.75 so buildings keep a margin from the curved curb.
+    if (roundabout.inside) addLocalConstraint((roundabout.ringRadius - roundabout.distance) * 0.75, roundabout.ux, roundabout.uz);
+    else addLocalConstraint(roundabout.distance - roundabout.ringRadius, -roundabout.ux, -roundabout.uz);
   }
+};
 
-  // Arterials are WORLD-aligned (only district interiors rotate) and normalized
-  // into street units so ONE road field drives shader bands, curb dip and spawn filters.
-  const freewayToStreetScale = city.roadWidth / city.freewayWidth;
-  const arterialSouth = vz - cityRowEdgeZ(d.r, vx);
-  const arterialNorth = cityRowEdgeZ(d.r + 1, vx) - vz;
-  const arterialWest = vx - citySegEdgeX(d.r, d.m, vz);
-  const arterialEast = citySegEdgeX(d.r, d.m + 1, vz) - vx;
-  let arterialReal = arterialSouth;
-  let aUx = 0;
-  let aUz = -1;
-  let arterialAlong = vx; // row boundaries run along x
-  if (arterialNorth < arterialReal) {
-    arterialReal = arterialNorth;
-    aUx = 0;
-    aUz = 1;
-    arterialAlong = vx;
+/** The district's four wiggly ARTERIALS at the vertex (real units; WORLD-aligned — only district
+ *  interiors rotate): each side's distance, and the nearest one's distance (≥ 0) and dash phase. */
+const arterials = { south: 0, north: 0, west: 0, east: 0, real: 0, along: 0 };
+/** Measures the arterials and adds the nearest as a constraint, normalized into street units so ONE
+ *  road field drives the shader bands, curb dip and spawn filters. */
+const addArterialConstraint = (vx: number, vz: number, d: CityDistrict, freewayToStreetScale: number): void => {
+  const south = vz - cityRowEdgeZ(d.r, vx);
+  const north = cityRowEdgeZ(d.r + 1, vx) - vz;
+  const west = vx - citySegEdgeX(d.r, d.m, vz);
+  const east = citySegEdgeX(d.r, d.m + 1, vz) - vx;
+  let real = south;
+  let ux = 0;
+  let uz = -1;
+  let along = vx; // row boundaries run along x
+  if (north < real) {
+    real = north;
+    ux = 0;
+    uz = 1;
+    along = vx;
   }
-  if (arterialWest < arterialReal) {
-    arterialReal = arterialWest;
-    aUx = -1;
-    aUz = 0;
-    arterialAlong = vz; // segment boundaries run along z
+  if (west < real) {
+    real = west;
+    ux = -1;
+    uz = 0;
+    along = vz; // segment boundaries run along z
   }
-  if (arterialEast < arterialReal) {
-    arterialReal = arterialEast;
-    aUx = 1;
-    aUz = 0;
-    arterialAlong = vz;
+  if (east < real) {
+    real = east;
+    ux = 1;
+    uz = 0;
+    along = vz;
   }
-  arterialReal = Math.max(0, arterialReal);
+  real = Math.max(0, real);
   // See CITY_ARTERIAL_RECOVER_NORM; max() of the two slopes keeps the field continuous.
-  const recoverNorm = CITY_ARTERIAL_RECOVER_NORM;
-  const arterialField = Math.max(
-    arterialReal * freewayToStreetScale,
-    (arterialReal - recoverNorm / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + recoverNorm
+  const field = Math.max(
+    real * freewayToStreetScale,
+    (real - CITY_ARTERIAL_RECOVER_NORM / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + CITY_ARTERIAL_RECOVER_NORM
   );
-  addWorldConstraint(arterialField, aUx, aUz);
+  addWorldConstraint(field, ux, uz);
+  arterials.south = south;
+  arterials.north = north;
+  arterials.west = west;
+  arterials.east = east;
+  arterials.real = real;
+  arterials.along = along;
+};
 
-  // BELT freeway: CENTERED ON the biome wall — its inner half is the city's rim, its outer half rides
-  // the neighbor biome like an inter-city run (computeVertexData step 5 grades and paints it), so a
-  // run leaving a wall junction meets it as one road network node. No direction — the boundary
-  // curves — so it pairs with anything in the chamfer.
-  // The belt's field recovers from CITY_BELT_RECOVER_NORM (just past its curb strip), earlier
-  // than an arterial's: as a partner in every chamfer along the rim, the squashed distance ate
-  // the corners of every block beside it into plaza, and buildings stood ~45u off the wall.
-  // The belt, carried along the water where its wall is drowned (findWaterfrontBelt).
+/** The BELT freeway, CENTERED ON the biome wall — carried along the water where its wall is drowned
+ *  (findWaterfrontBelt): its inner half is the city's rim, its outer half rides the neighbor biome like
+ *  an inter-city run (computeVertexData step 5), so a run leaving a wall junction meets it as one
+ *  network node. No direction (the boundary curves): it pairs with anything in the chamfer. Its field
+ *  recovers from CITY_BELT_RECOVER_NORM, earlier than an arterial's: as a partner in every chamfer
+ *  along the rim, the squashed distance would eat every block corner beside it into plaza. Returns the
+ *  belt's real distance. */
+const addBeltConstraint = (warped: PointXZ, walls: Wall[], biomeBoundaryDist: number, quay: RiverQuaySample, freewayToStreetScale: number): number => {
   findWaterfrontBelt(warped.x, warped.z, walls, biomeBoundaryDist, quay, true);
   const beltReal = waterfrontBelt.distance;
-  const paintOnWaterfront = waterfrontBelt.onWaterfront && waterfrontBelt.waterfront > 0.5;
   const beltField = Math.max(
     beltReal * freewayToStreetScale,
     (beltReal - CITY_BELT_RECOVER_NORM / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + CITY_BELT_RECOVER_NORM
   );
   addWorldConstraint(beltField, NaN, 0);
+  return beltReal;
+};
 
-  // A RIVER through the city: a QUAY ROAD along each bank, its inner curb at the bank's outer
-  // edge, so blocks melt against it like any street and buildings keep off it. Measured from the
-  // STRAIGHT (un-meandered) river field — distance, width factor and direction alike — so its
-  // edges stay straight while the channel winds inside the bank (a quay on the meander wobbles on a
-  // ~90u period). On the river side of its inner curb the field is the quay's own:
-  // streets tee into the quay instead of running down the embankment into the water.
-  let quayOnly = 99;
-  let riverSide = 0;
-  if (quay.distance < Infinity) {
-    const rv = domainConfig!.river;
-    const quayOffset = (rv.halfWidth + rv.bank) * quay.factor + city.roadWidth;
-    if (quay.distance >= quayOffset) addWorldConstraint(quay.distance - quayOffset, quay.dirX, quay.dirZ);
-    else {
-      quayOnly = Math.min(CITY_QUAY_INNER_CAP, quayOffset - quay.distance);
-      addWorldConstraint(quayOnly, -quay.dirX, -quay.dirZ);
-      riverSide = 1 - smoothstep(quayOffset - city.roadWidth, quayOffset - city.roadWidth * 0.5, quay.distance);
-    }
+/** A RIVER through the city: a QUAY ROAD along each bank, its inner curb at the bank's outer edge, so
+ *  blocks melt against it like any street. Measured from the STRAIGHT (un-meandered) river field —
+ *  distance, width factor and direction — so its edges stay straight while the channel winds inside
+ *  the bank. On the river side of its inner curb the field is the quay's own (`only`, faded in by
+ *  `riverSide`): streets tee into the quay instead of running down the embankment into the water. */
+const quayRoad = { only: 99, riverSide: 0 };
+const addQuayConstraint = (quay: RiverQuaySample, city: CityConfig): void => {
+  quayRoad.only = 99;
+  quayRoad.riverSide = 0;
+  if (!(quay.distance < Infinity)) return;
+  const rv = domainConfig!.river;
+  const quayOffset = (rv.halfWidth + rv.bank) * quay.factor + city.roadWidth;
+  if (quay.distance >= quayOffset) addWorldConstraint(quay.distance - quayOffset, quay.dirX, quay.dirZ);
+  else {
+    quayRoad.only = Math.min(CITY_QUAY_INNER_CAP, quayOffset - quay.distance);
+    addWorldConstraint(quayRoad.only, -quay.dirX, -quay.dirZ);
+    quayRoad.riverSide = 1 - smoothstep(quayOffset - city.roadWidth, quayOffset - city.roadWidth * 0.5, quay.distance);
   }
+};
 
-  // Bilinear plateau interpolation toward the neighbors the vertex leans into (same label → same height → no seam).
+/** Bilinear plateau interpolation toward the neighbors the vertex leans into (same label → same
+ *  height → no seam), ramping across street AND sidewalk. */
+const plateauElevation = (lx: number, lz: number, ix: number, iz: number, cellLabel: number, walls: Wall[], d: CityDistrict, city: CityConfig): number => {
+  const gs = city.gridSize;
+  const n = neighborLabels[5]; // (0, +1)
+  const e = neighborLabels[7]; // (+1, 0)
+  const s = neighborLabels[3]; // (0, −1)
+  const w = neighborLabels[1]; // (−1, 0)
   const rampFrac = (city.roadWidth + CITY_RAMP_SPAN) / gs;
   const flatEdge = 0.5 - rampFrac;
   const fx = lx / gs - (ix + 0.5); // [-0.5, 0.5] across the cell
@@ -802,43 +817,19 @@ export const getCityTerrain = (
   const hC = cityBlockElevation(city.seed, cellLabel, city.maxBlockElevation);
   const hX = cityBlockElevation(city.seed, fx >= 0 ? e : w, city.maxBlockElevation);
   const hZ = cityBlockElevation(city.seed, fz >= 0 ? n : s, city.maxBlockElevation);
-  const hD = cityBlockElevation(
-    city.seed,
-    getCityCell(ix + dxi, iz + dzi, walls, d).label,
-    city.maxBlockElevation
-  );
-  let elevation =
-    hC * (1 - wx) * (1 - wz) + hX * wx * (1 - wz) + hZ * (1 - wx) * wz + hD * wx * wz;
+  const hD = cityBlockElevation(city.seed, getCityCell(ix + dxi, iz + dzi, walls, d).label, city.maxBlockElevation);
+  return hC * (1 - wx) * (1 - wz) + hX * wx * (1 - wz) + hZ * (1 - wx) * wz + hD * wx * wz;
+};
 
-  // Freeways sit at MID-PLATEAU grade so elevation stays continuous across the
-  // district switch (grade 0 with a tight ramp reads as a V trough).
-  const freewayGrade = city.maxBlockElevation * 0.5;
-  // Outside the belt centerline the city stays AT grade all the way to the wall:
-  // that is the value cityHeightOutside continues past it, so the neighbor's height
-  // ramp starts from the freeway surface with no step (see computeVertexData).
-  const freewayRamp = smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, arterialReal) * smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, beltReal);
-  elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
-
-  // Roundabout island: its own flat plateau, blended in under the inner ring road.
-  if (insideRing) {
-    const islandH = cityBlockElevation(
-      city.seed,
-      cityUniqueLabel(Math.floor(ix / 2), Math.floor(iz / 2)),
-      city.maxBlockElevation
-    );
-    const islandMask = 1 - smoothstep(ringR - 12, ringR - 2, circleR);
-    elevation += (islandH - elevation) * islandMask;
-  }
-
-  // Pairwise LINEAR chamfer/melt: (dᵢ + dⱼ) is constant along straight lines, so
-  // corners get 45° cuts and pinched fragments become road. Fully pairwise (no
-  // argmin identity switches) and linear — a smoothstep-SCALED melt rounds
-  // every block into a blob.
+/** Pairwise LINEAR chamfer/melt over the constraints: (dᵢ + dⱼ) is constant along straight lines, so
+ *  corners get 45° cuts and pinched fragments become road. Fully pairwise (argmin pairing switches
+ *  identity discontinuously) and linear (a smoothstep-scaled melt rounds every block into a blob). */
+const chamferedRoadDistance = (): number => {
   let nearestConstraint = 99;
-  for (let i = 0; i < nCons; i++) if (roadConstraintDist[i] < nearestConstraint) nearestConstraint = roadConstraintDist[i];
+  for (let i = 0; i < roadConstraintCount; i++) if (roadConstraintDist[i] < nearestConstraint) nearestConstraint = roadConstraintDist[i];
   let chamfer = 99;
-  for (let i = 0; i < nCons; i++) {
-    for (let j = i + 1; j < nCons; j++) {
+  for (let i = 0; i < roadConstraintCount; i++) {
+    for (let j = i + 1; j < roadConstraintCount; j++) {
       let pen = 0;
       if (!Number.isNaN(roadConstraintDirX[i]) && !Number.isNaN(roadConstraintDirX[j])) {
         const dot = roadConstraintDirX[i] * roadConstraintDirX[j] + roadConstraintDirZ[i] * roadConstraintDirZ[j];
@@ -848,29 +839,23 @@ export const getCityTerrain = (
       if (c < chamfer) chamfer = c;
     }
   }
-  let roadDistance = Math.min(nearestConstraint, chamfer);
-  if (cellLabel < 0) roadDistance = 0; // biome-edge cells are all road (the rim ring road)
-  // The lerp runs inside the quay's asphalt band, where both fields are ≤ 7, so nothing steps.
-  // Freeways are NOT exempt (an undecked arterial would run down the bank into the water): it ends
-  // at the quay like a street, and a deck lands on the quay's pavement like an abutment. After the
-  // rim, or a rim cell's "all road" paints asphalt under the water where a river crosses the city's edge.
-  if (riverSide > 0) roadDistance += (quayOnly - roadDistance) * riverSide;
+  return Math.min(nearestConstraint, chamfer);
+};
 
-  // The curb dip is full across the belt, wall included — the neighbor side of the belt
-  // (computeVertexData step 5) dips by the same formula, so the road meets itself at the wall.
-  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, roadDistance));
-
-  // Lane paint. JUNCTION ZONES (a second freeway feature within reach) export
-  // "no paint" so lines end cleanly before interchanges.
-  let freewayDistance = arterialReal;
-  let freewayAlong = arterialAlong;
+/** The lane paint's distance (real) and dash phase: the nearer of the arterial and the belt, or no
+ *  paint (99999) in a JUNCTION ZONE — a second freeway feature within reach — so lines end cleanly
+ *  before interchanges. */
+const lanePaint = { distance: 99999, along: 0 };
+const measureLanePaint = (beltReal: number, biomeWallAlong: number, city: CityConfig): void => {
+  let freewayDistance = arterials.real;
+  let freewayAlong = arterials.along;
   if (beltReal < freewayDistance) {
     freewayDistance = beltReal;
     freewayAlong = biomeWallAlong;
   }
   let m1 = 99999;
   let m2 = 99999;
-  for (const v of [Math.max(0, arterialSouth), Math.max(0, arterialNorth), Math.max(0, arterialWest), Math.max(0, arterialEast), beltReal]) {
+  for (const v of [Math.max(0, arterials.south), Math.max(0, arterials.north), Math.max(0, arterials.west), Math.max(0, arterials.east), beltReal]) {
     if (v < m1) {
       m2 = m1;
       m1 = v;
@@ -882,14 +867,84 @@ export const getCityTerrain = (
     freewayDistance = 99999;
     freewayAlong = 0;
   }
+  lanePaint.distance = freewayDistance;
+  lanePaint.along = freewayAlong;
+};
 
+/** The city at (vx, vz): `walls` are the CITY's walls (the belt), `biomeBoundaryDist`/`biomeWallAlong` the
+ *  vertex's distance to and phase along the nearest of them, `quay` the straight river field. The
+ *  steps' order is part of the output (getCityCell caches by first query). */
+export const getCityTerrain = (
+  vx: number,
+  vz: number,
+  city: CityConfig,
+  walls: Wall[],
+  biomeBoundaryDist: number,
+  biomeWallAlong: number,
+  quay: RiverQuaySample,
+  warped: PointXZ
+): CityTerrain => {
+  const gs = city.gridSize;
+
+  // Rotate into the district's LOCAL grid frame; distances and heights are rotation-invariant, so nothing is transformed back.
+  const d = getCityDistrict(vx, vz);
+  const rdx = vx - d.px;
+  const rdz = vz - d.pz;
+  const lx = d.px + rdx * d.cos + rdz * d.sin;
+  const lz = d.pz - rdx * d.sin + rdz * d.cos;
+  const ix = Math.floor(lx / gs);
+  const iz = Math.floor(lz / gs);
+  const cell = getCityCell(ix, iz, walls, d);
+  readNeighborLabels(ix, iz, walls, d);
+
+  // The road constraints. Inside a roundabout's ring the boundary streets are suppressed, so the
+  // members' internal boundaries tee into the ring road instead of slicing the island.
+  beginRoadConstraints(d);
+  measureRoundabout(cell, ix, iz, lx, lz, gs);
+  if (!roundabout.inside) addBoundaryStreets(ix, iz, lx, lz, gs);
+  addShapeFeature(cell, ix, iz, lx, lz, gs);
+  const freewayToStreetScale = city.roadWidth / city.freewayWidth;
+  addArterialConstraint(vx, vz, d, freewayToStreetScale);
+  const beltReal = addBeltConstraint(warped, walls, biomeBoundaryDist, quay, freewayToStreetScale);
+  const paintOnWaterfront = waterfrontBelt.onWaterfront && waterfrontBelt.waterfront > 0.5;
+  addQuayConstraint(quay, city);
+
+  let elevation = plateauElevation(lx, lz, ix, iz, cell.label, walls, d, city);
+  // Freeways sit at MID-PLATEAU grade so elevation stays continuous across the district switch
+  // (grade 0 with a tight ramp reads as a V trough). Outside the belt centerline the city stays AT
+  // grade all the way to the wall: the value zoneBiomeHeight continues past it, so the neighbor's
+  // height ramp starts from the freeway surface with no step.
+  const freewayGrade = city.maxBlockElevation * 0.5;
+  const freewayRamp = smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, arterials.real) * smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, beltReal);
+  elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
+  // Roundabout island: its own flat plateau, blended in under the inner ring road.
+  if (roundabout.inside) {
+    const islandH = cityBlockElevation(city.seed, cityUniqueLabel(Math.floor(ix / 2), Math.floor(iz / 2)), city.maxBlockElevation);
+    const islandMask = 1 - smoothstep(roundabout.ringRadius - 12, roundabout.ringRadius - 2, roundabout.distance);
+    elevation += (islandH - elevation) * islandMask;
+  }
+
+  let roadDistance = chamferedRoadDistance();
+  if (cell.label < 0) roadDistance = 0; // biome-edge cells are all road (the rim ring road)
+  // On the river side of the quay the field becomes the quay's own. The lerp runs inside the quay's
+  // asphalt band, where both fields are ≤ 7, so nothing steps. Freeways are NOT exempt: an arterial
+  // ends at the quay like a street, and a deck lands on the quay's pavement like an abutment. After
+  // the rim, or a rim cell's "all road" would paint asphalt under the water where a river crosses the
+  // city's edge.
+  if (quayRoad.riverSide > 0) roadDistance += (quayRoad.only - roadDistance) * quayRoad.riverSide;
+
+  // The curb dip is full across the belt, wall included — the neighbor side of the belt
+  // (computeVertexData step 5) dips by the same formula, so the road meets itself at the wall.
+  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, roadDistance));
+
+  measureLanePaint(beltReal, biomeWallAlong, city);
   return {
     roadDistance,
     relativeElevation: elevation,
-    freewayDistance,
-    freewayAlong,
-    freewayReal: Math.min(arterialReal, beltReal),
-    paintOnWaterfront: paintOnWaterfront && freewayDistance === beltReal,
+    freewayDistance: lanePaint.distance,
+    freewayAlong: lanePaint.along,
+    freewayReal: Math.min(arterials.real, beltReal),
+    paintOnWaterfront: paintOnWaterfront && lanePaint.distance === beltReal,
   };
 };
 

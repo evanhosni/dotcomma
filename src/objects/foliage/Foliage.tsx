@@ -5,12 +5,15 @@ import { useGameContext } from "../../context/GameContext";
 import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
 import { _quantization } from "../../vfx/quantization";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { freezeStaticSubtree } from "../../utils/utils";
+import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
 import { _curvature } from "../../vfx/curvature";
 import { _spawnFade } from "../../vfx/spawnFade";
+import { reportContentError } from "../../utils/contentError";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
-import { createDefaultsGroup, warnUnsupportedSync } from "../utils";
+import { createDefaultsGroup, definedOnly, warnUnsupportedSync } from "../utils";
 import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./foliageWorker";
 
 /**
@@ -21,15 +24,8 @@ import { FoliageChunkParams, generateFoliageChunk, initFoliageWorker } from "./f
  * Matrix4-per-instance assembly would regress at that count.
  */
 
-export type FoliageDefaults = Pick<FoliageAttributes, "renderDistance">;
-
-const FoliageGroup = createDefaultsGroup<FoliageDefaults>("foliage");
+const FoliageGroup = createDefaultsGroup<Pick<FoliageAttributes, "renderDistance">>("foliage");
 export const Foliage = FoliageGroup.Group;
-
-export const useFoliageRenderDistance = (own: number | undefined, featureDefault: number): number => {
-  const ctx = FoliageGroup.useDefaults();
-  return own ?? ctx.renderDistance ?? featureDefault;
-};
 
 /** Must stay a whole multiple of both quantization grids (0.025, 0.2) so the chunk-relative
  *  lattice the shader works in IS the world lattice. 64 → a 500u field is ~190 draws. */
@@ -187,7 +183,7 @@ export const foliageBandToRequest = (approachDistance: number, renderDistance: n
 
 /** A chunk (center `rel` from the camera) ahead of a unit `heading` is judged at its closest
  *  approach along it; a zero heading (standing, just teleported) leaves `dNear` as it is. */
-export const foliageApproachDistance = (
+const foliageApproachDistance = (
   dNear: number,
   relX: number,
   relZ: number,
@@ -240,6 +236,54 @@ const disposeChunkGeometry = (geo: THREE.BufferGeometry): void => {
   geo.dispose();
 };
 
+const removeChunkMesh = (group: THREE.Group | null, fades: _spawnFade.SpawnFadeSet, mesh: THREE.Mesh): void => {
+  group?.remove(mesh);
+  fades.delete(mesh);
+  disposeChunkGeometry(mesh.geometry);
+};
+
+/** The chunk's nearest possible blade from (px, pz): center distance minus the half diagonal — the
+ *  distance the draw truncation and the bands are judged by. */
+const chunkNearDistance = (cx: number, cz: number, px: number, pz: number): number => {
+  const dx = (cx + 0.5) * FOLIAGE_CHUNK_SIZE - px;
+  const dz = (cz + 0.5) * FOLIAGE_CHUNK_SIZE - pz;
+  return Math.max(0, Math.sqrt(dx * dx + dz * dz) - CHUNK_HALF_DIAG);
+};
+
+/** Squared distance from (px, pz) to the chunk's nearest AABB point (center distance over-requests diagonal chunks). */
+const chunkBoxDistSq = (cx: number, cz: number, px: number, pz: number): number => {
+  const nx = Math.max(cx * FOLIAGE_CHUNK_SIZE - px, 0, px - (cx + 1) * FOLIAGE_CHUNK_SIZE);
+  const nz = Math.max(cz * FOLIAGE_CHUNK_SIZE - pz, 0, pz - (cz + 1) * FOLIAGE_CHUNK_SIZE);
+  return nx * nx + nz * nz;
+};
+
+interface Heading {
+  /** Unit direction of travel; 0 when standing or just teleported. */
+  x: number;
+  z: number;
+  anchorX: number;
+  anchorZ: number;
+}
+
+/** Re-measured every HEADING_STEP of travel; a jump (or the first sweep's NaN anchor) resets it to 0. */
+const updateHeading = (heading: Heading, px: number, pz: number): void => {
+  const hdx = px - heading.anchorX;
+  const hdz = pz - heading.anchorZ;
+  const hdSq = hdx * hdx + hdz * hdz;
+  if (!(hdSq < HEADING_TELEPORT * HEADING_TELEPORT)) {
+    heading.x = 0;
+    heading.z = 0;
+    heading.anchorX = px;
+    heading.anchorZ = pz;
+  } else if (hdSq >= HEADING_STEP * HEADING_STEP) {
+    const len = Math.sqrt(hdSq);
+    heading.x = hdx / len;
+    heading.z = hdz / len;
+    heading.anchorX = px;
+    heading.anchorZ = pz;
+  }
+};
+
 /** Mounted fields per seed, by plant type: two plant types on one seed (at one density) land on
  *  identical points and grow through each other. */
 const plantsBySeed = new Map<string, Map<object, number>>();
@@ -250,7 +294,7 @@ const usePlantSeed = (seed: string, plant: object | undefined): void => {
     let plants = plantsBySeed.get(seed);
     if (!plants) plantsBySeed.set(seed, (plants = new Map()));
     if ([...plants.keys()].some((other) => other !== plant)) {
-      console.error(`[foliage] two different plant types are mounted with seed "${seed}" — they would place on the same points. Give each createFoliage its own seed.`);
+      reportContentError(`[foliage] two different plant types are mounted with seed "${seed}" — they would place on the same points. Give each createFoliage its own seed.`);
     }
     plants.set(plant, (plants.get(plant) ?? 0) + 1);
     return () => {
@@ -261,13 +305,14 @@ const usePlantSeed = (seed: string, plant: object | undefined): void => {
   }, [seed, plant]);
 };
 
-export interface FoliageFieldProps extends FoliageAttributes {
+interface FoliageFieldProps extends FoliageAttributes {
   /** The plant type (createFoliage's), for the one-seed-per-plant check. */
   plant?: object;
 }
 
-/** Without explicit `biomeIds`, restricts itself to the enclosing <Biome>. */
-export const FoliageField: React.FC<FoliageFieldProps> = ({
+/** Without explicit `biomeIds`, restricts itself to the enclosing <Biome>. Mounted only through
+ *  createFoliage, which has already resolved mount > <Foliage> group > plant defaults. */
+const FoliageField: React.FC<FoliageFieldProps> = ({
   density = 800_000,
   biomeIds,
   heightRange,
@@ -281,13 +326,12 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
   height = 1.2,
   sway = 0.15,
   swaySpeed = 1.2,
-  renderDistance: renderDistanceProp,
+  renderDistance = 500,
   seed = "foliage",
   quantization,
   serverSynced,
   plant,
 }) => {
-  const renderDistance = useFoliageRenderDistance(renderDistanceProp, 500);
   warnUnsupportedSync("foliage", serverSynced);
   usePlantSeed(seed, plant);
   const groupRef = useRef<THREE.Group>(null);
@@ -300,12 +344,12 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
   const sweepSettledRef = useRef(false);
   const lastCellRef = useRef({ cx: Number.NaN, cz: Number.NaN });
   const lastSweepPosRef = useRef({ x: Number.NaN, z: Number.NaN });
-  const headingRef = useRef({ x: 0, z: 0, anchorX: Number.NaN, anchorZ: Number.NaN });
+  const headingRef = useRef<Heading>({ x: 0, z: 0, anchorX: Number.NaN, anchorZ: Number.NaN });
   // Per CHUNK, like dressing. Orthogonal to the per-blade distance shrink, which stays the fade OUT:
   // it is what the instanceCount truncation is built on.
   const fadesRef = useRef(new _spawnFade.SpawnFadeSet());
 
-  const { camera } = useThree();
+  const { camera, scene } = useThree();
   const { terrainLoaded, progress } = useGameContext();
 
   const biomeCtx = useContext(BiomeContext);
@@ -406,6 +450,8 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
     };
   }, []);
 
+  // Linked at load, not when the first blades stream in (utils/warmPrograms.ts).
+  useEffect(() => warmPrograms(scene, [meshTemplate(material)]), [material, scene]);
   useEffect(() => () => material.dispose(), [material]);
   useEffect(() => {
     return () => {
@@ -426,18 +472,12 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
       if (widen && !held?.mesh) return; // evicted while in flight
 
       if (result.count === 0) {
-        if (held?.mesh) {
-          groupRef.current?.remove(held.mesh);
-          fadesRef.current.delete(held.mesh);
-          disposeChunkGeometry(held.mesh.geometry);
-        }
+        if (held?.mesh) removeChunkMesh(groupRef.current, fadesRef.current, held.mesh);
         chunksRef.current.set(key, { cx, cz, mesh: null, total: 0, held: 0, band: 1, lowDetail: false });
         return;
       }
 
-      const ccx = (cx + 0.5) * FOLIAGE_CHUNK_SIZE - camera.position.x;
-      const ccz = (cz + 0.5) * FOLIAGE_CHUNK_SIZE - camera.position.z;
-      const dNear = Math.max(0, Math.sqrt(ccx * ccx + ccz * ccz) - CHUNK_HALF_DIAG);
+      const dNear = chunkNearDistance(cx, cz, camera.position.x, camera.position.z);
       const lowDetail = held ? held.lowDetail : dNear > BLADE_DETAIL_DISTANCE;
 
       const geo = new THREE.InstancedBufferGeometry();
@@ -477,6 +517,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
         chunk.mesh = new THREE.Mesh(geo, material);
         // The shader rebases instance positions on modelMatrix[3] — the mesh MUST sit at its chunk origin.
         chunk.mesh.position.set(cx * FOLIAGE_CHUNK_SIZE, 0, cz * FOLIAGE_CHUNK_SIZE);
+        freezeStaticSubtree(chunk.mesh);
         groupRef.current?.add(chunk.mesh);
         fadesRef.current.add(chunk.mesh);
       }
@@ -519,21 +560,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
     lastSweepPosRef.current.z = pz;
 
     const heading = headingRef.current;
-    const hdx = px - heading.anchorX;
-    const hdz = pz - heading.anchorZ;
-    const hdSq = hdx * hdx + hdz * hdz;
-    if (!(hdSq < HEADING_TELEPORT * HEADING_TELEPORT)) {
-      heading.x = 0; // first sweep (NaN anchor) or a jump
-      heading.z = 0;
-      heading.anchorX = px;
-      heading.anchorZ = pz;
-    } else if (hdSq >= HEADING_STEP * HEADING_STEP) {
-      const len = Math.sqrt(hdSq);
-      heading.x = hdx / len;
-      heading.z = hdz / len;
-      heading.anchorX = px;
-      heading.anchorZ = pz;
-    }
+    updateHeading(heading, px, pz);
 
     const candidates: { key: number; cx: number; cz: number; distSq: number; band: number; widen: boolean }[] = [];
     const keepDistSq = (renderDistance * 1.25) ** 2;
@@ -542,11 +569,7 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
       const dz = (chunk.cz + 0.5) * FOLIAGE_CHUNK_SIZE - pz;
       const distSq = dx * dx + dz * dz;
       if (distSq > keepDistSq) {
-        if (chunk.mesh) {
-          groupRef.current?.remove(chunk.mesh);
-          fadesRef.current.delete(chunk.mesh);
-          disposeChunkGeometry(chunk.mesh.geometry);
-        }
+        if (chunk.mesh) removeChunkMesh(groupRef.current, fadesRef.current, chunk.mesh);
         chunksRef.current.delete(key);
       } else if (chunk.mesh) {
         // dNear = the chunk's nearest possible instance, so nothing visible is ever cut.
@@ -555,11 +578,9 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
         // Short only if a widening is late (outrun) — the missing blades are the ones fading in.
         (chunk.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount = Math.min(drawn, chunk.held);
         if (!pendingRef.current.has(key) && !foliageBandCovers(chunk.band, dNear, renderDistance)) {
-          const nx = Math.max(chunk.cx * FOLIAGE_CHUNK_SIZE - px, 0, px - (chunk.cx + 1) * FOLIAGE_CHUNK_SIZE);
-          const nz = Math.max(chunk.cz * FOLIAGE_CHUNK_SIZE - pz, 0, pz - (chunk.cz + 1) * FOLIAGE_CHUNK_SIZE);
           const approach = foliageApproachDistance(dNear, dx, dz, heading.x, heading.z);
           const band = foliageBandToRequest(approach, renderDistance);
-          candidates.push({ key, cx: chunk.cx, cz: chunk.cz, distSq: nx * nx + nz * nz, band, widen: true });
+          candidates.push({ key, cx: chunk.cx, cz: chunk.cz, distSq: chunkBoxDistSq(chunk.cx, chunk.cz, px, pz), band, widen: true });
         }
 
         const low = chunk.lowDetail
@@ -589,15 +610,11 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
         const key = packChunkKey(cx, cz);
         if (chunksRef.current.has(key) || pendingRef.current.has(key)) continue;
 
-        // Nearest AABB point, not center distance — the latter over-requests diagonal chunks.
-        const nx = Math.max(cx * FOLIAGE_CHUNK_SIZE - px, 0, px - (cx + 1) * FOLIAGE_CHUNK_SIZE);
-        const nz = Math.max(cz * FOLIAGE_CHUNK_SIZE - pz, 0, pz - (cz + 1) * FOLIAGE_CHUNK_SIZE);
-        const distSq = nx * nx + nz * nz;
+        const distSq = chunkBoxDistSq(cx, cz, px, pz);
         if (distSq >= fadeZeroDistSq) continue;
-        // The band is judged by the same center-minus-half-diagonal dNear the draw truncation uses.
         const ccx = (cx + 0.5) * FOLIAGE_CHUNK_SIZE - px;
         const ccz = (cz + 0.5) * FOLIAGE_CHUNK_SIZE - pz;
-        const dNear = Math.max(0, Math.sqrt(ccx * ccx + ccz * ccz) - CHUNK_HALF_DIAG);
+        const dNear = chunkNearDistance(cx, cz, px, pz);
         const approach = foliageApproachDistance(dNear, ccx, ccz, heading.x, heading.z);
         candidates.push({ key, cx, cz, distSq, band: foliageBandToRequest(approach, renderDistance), widen: false });
       }
@@ -612,11 +629,8 @@ export const FoliageField: React.FC<FoliageFieldProps> = ({
     sweepSettledRef.current = candidates.length === 0 && pendingRef.current.size === 0;
   });
 
-  return <group ref={groupRef} />;
+  return <group ref={groupRef} matrixAutoUpdate={false} />;
 };
-
-const definedOnly = <T extends object>(props: T): Partial<T> =>
-  Object.fromEntries(Object.entries(props).filter(([, v]) => v !== undefined)) as Partial<T>;
 
 /** A plant type: its defaults baked in. Precedence, as for <Dressing>: the mount's own props,
  *  then the enclosing <Foliage> group's, then these defaults. */

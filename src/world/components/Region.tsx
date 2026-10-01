@@ -1,8 +1,11 @@
 import React, { useLayoutEffect, useMemo } from "react";
+import { reportContentError } from "../../utils/contentError";
 import type { BiomeSpec, RegionSpec } from "../types";
-import { BiomeSlotContext, RegionContext, RegionSlotContext, reportHierarchyError, useDomainStore, useSpecSlot } from "./context";
+import { Biome } from "./Biome";
+import { BiomeSlotContext, RegionContext, RegionSlotContext, useDomainStore, useSpecSlot } from "./context";
 
-/** Components keyed by spec `name`; `null` = the spec needs no client content (config only). */
+/** Components keyed by spec `name`; `null` = the spec has no client content (config only): the bare
+ *  <Region>/<Biome> is rendered for it, so its spec still registers. */
 export type SpecComponents = Readonly<Record<string, React.ComponentType | null>>;
 
 /** Renders one component per spec, IN SPEC ORDER, each inside the slot its <Region>/<Biome> asserts. */
@@ -10,13 +13,14 @@ const renderSpecSlots = <S extends { id: number; name: string }>(
   specs: readonly S[],
   components: SpecComponents,
   Slot: React.Provider<S | null>,
+  ConfigOnly: React.ComponentType<{ spec: S }>,
   where: string,
 ): JSX.Element[] => {
   const names = specs.map((s) => s.name);
   const missing = names.filter((n) => !(n in components));
   const extra = Object.keys(components).filter((n) => !names.includes(n));
   if (missing.length || extra.length) {
-    reportHierarchyError(
+    reportContentError(
       `${where}: the component map must have exactly one entry per spec name` +
         (missing.length ? ` — missing ${missing.join(", ")}` : "") +
         (extra.length ? ` — not in the spec list: ${extra.join(", ")}` : ""),
@@ -24,9 +28,15 @@ const renderSpecSlots = <S extends { id: number; name: string }>(
   }
   return specs.map((spec) => {
     const Component = components[spec.name];
-    return <Slot key={spec.id} value={spec}>{Component ? <Component /> : null}</Slot>;
+    return <Slot key={spec.id} value={spec}>{Component ? <Component /> : <ConfigOnly spec={spec} />}</Slot>;
   });
 };
+
+const ConfigOnlyBiome = ({ spec }: { spec: BiomeSpec }) => <Biome spec={spec} />;
+
+const ConfigOnlyRegion = ({ spec }: { spec: RegionSpec }) => (
+  <Region spec={spec} biomes={Object.fromEntries(spec.biomes.map((b) => [b.name, null]))} />
+);
 
 export interface RegionsProps {
   /** Voronoi order — the domain's one region list (the same array its config.ts reads). */
@@ -37,7 +47,7 @@ export interface RegionsProps {
 
 /** The domain's regions, rendered from its spec list. */
 export const Regions = ({ specs, components }: RegionsProps) => (
-  <>{renderSpecSlots(specs, components, RegionSlotContext.Provider, "<Regions>")}</>
+  <>{renderSpecSlots(specs, components, RegionSlotContext.Provider, ConfigOnlyRegion, "<Regions>")}</>
 );
 
 export interface RegionProps extends React.PropsWithChildren {
@@ -70,7 +80,7 @@ export const Region = ({ spec, biomes, children }: RegionProps) => {
   return (
     <RegionContext.Provider value={ctx}>
       {children}
-      {renderSpecSlots<BiomeSpec>(spec.biomes, biomes, BiomeSlotContext.Provider, `<Region spec={${spec.name}}> biomes`)}
+      {renderSpecSlots<BiomeSpec>(spec.biomes, biomes, BiomeSlotContext.Provider, ConfigOnlyBiome, `<Region spec={${spec.name}}> biomes`)}
     </RegionContext.Provider>
   );
 };

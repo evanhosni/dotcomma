@@ -2,8 +2,8 @@
  * The GRADE a freeway off the city rides (computeVertexData step 5): one height per centerline
  * point, flat across the road. It is the terrain at the centerline point evaluated with that
  * point's OWN wall pass (terrainOnlyAt) — with the vertex's weights, the two halves of a road lying
- * on a biome or region wall (runs ARE walls, and the belt's outer half leaves the crisp city) read
- * different weights and rose to different grades, a crease along the centerline. Sampled on a
+ * on a biome or region wall (runs ARE walls, and the belt's outer half leaves the crisp city) would
+ * read different weights and rise to different grades, a crease along the centerline. Sampled on a
  * lattice of GRADE_STEP points along each segment (cached, a pure function of the segment), a run's
  * smoothed along it over ±2 GRADE_STEP (its first units leave the crisp city's grade for the
  * neighbor's terrain within 2u), and blended by distance over every segment holding a nearest
@@ -16,8 +16,7 @@ import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
 import type { BiomeContext } from "../types";
 import { terrainOnlyAt } from "../vertexCompute";
-import { wallsOfBiome } from "../voronoi";
-import { CITY_BIOME_ID } from "../../../world/constants";
+import { cityWallsOf } from "../voronoi";
 import { FREEWAY_SMIN_K, type FreewayRun, collectRunCandidates, networkOf, pushSegCandidate, segCandidates } from "./freewayNetwork";
 
 /** The road grade takes over the terrain this far past the freeway's half-width (real units). */
@@ -83,8 +82,8 @@ const runGrade = (run: FreewayRun, s: number): number => {
   let sum = 0;
   let wsum = 0;
   // Past an end the grade is carried on by point reflection (2·g(end) − g(mirror)), so the smoothing
-  // keeps the end's own grade: two runs meeting at a hub agree there (clamped taps left them units apart
-  // on a steep hub, MEASURED).
+  // keeps the end's own grade: two runs meeting at a hub agree there (clamped taps would leave them
+  // units apart on a steep hub).
   const L = run.length;
   for (let k = 0; k < GRADE_TAPS.length; k++) {
     const t = s + GRADE_TAPS[k] * GRADE_STEP;
@@ -99,8 +98,8 @@ const gradeRuns: FreewayRun[] = [];
 const gradeRunW: number[] = [];
 const gradeRunS: number[] = [];
 /** How far along its segment (warped units) the WORLD cross-section through (wx, wz) meets a candidate
- *  point — its projection is found in warped space, and the road warp shears: the lines of one grade
- *  ran up to ~25° off square across the road, tilting it on a steep grade (MEASURED, 3u over 24u). */
+ *  point — its projection is found in warped space, and the road warp shears (up to ~25° off square
+ *  across the road), which would tilt the road across on a steep grade. */
 const worldAlongShift = (k: number, wx: number, wz: number): number => {
   const { seg, x, z } = segCandidates;
   const dx = seg[k * 4 + 2] - seg[k * 4];
@@ -122,7 +121,7 @@ export const freewayGradeAt = (px: number, pz: number, wx: number, wz: number, c
   const reach = fw + FREEWAY_GRADE_RAMP + FREEWAY_SMIN_K + 4;
   segCandidates.n = 0;
   if (!ctx.zone.biome.water && withRuns) collectRunCandidates(px, pz, networkOf(ctx).freeways, reach);
-  for (const w of wallsOfBiome(ctx.zoneWalls, CITY_BIOME_ID)) {
+  for (const w of cityWallsOf(ctx)) {
     const dx = w.ex - w.sx;
     const dz = w.ez - w.sz;
     const lenSq = dx * dx + dz * dz;
@@ -166,8 +165,8 @@ export const freewayGradeAt = (px: number, pz: number, wx: number, wz: number, c
     const shift = worldAlongShift(k, wx, wz);
     if (r) {
       // The legs of one run are one road: blended by WHERE along it, not by grade — inside a bend the
-      // lines of equal grade then fan out from the bend (the grades blended by distance tilted the road
-      // across: MEASURED, a 2u rise over 18u across a bend on a steep run).
+      // lines of equal grade then fan out from the bend (grades blended by distance would tilt the
+      // road across the bend on a steep run).
       let slot = -1;
       for (let o = 0; o < gradeRuns.length; o++) if (gradeRuns[o] === r) slot = o;
       if (slot < 0) {

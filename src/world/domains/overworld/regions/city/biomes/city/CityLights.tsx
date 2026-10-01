@@ -35,6 +35,72 @@ export interface CityLightsProps {
   auraAspect?: number;
 }
 
+/** A soft radial glow. Deliberately NO hot core: overlapping sprites must read as one hazy area, not glowing balls. */
+const createAuraTexture = (): THREE.CanvasTexture => {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0.0, "rgba(255,255,255,0.5)");
+  g.addColorStop(0.35, "rgba(255,255,255,0.3)");
+  g.addColorStop(0.65, "rgba(255,255,255,0.11)");
+  g.addColorStop(1.0, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+};
+
+const createAuraMaterial = (map: THREE.Texture, color: string): THREE.SpriteMaterial => {
+  const mat = new THREE.SpriteMaterial({
+    map,
+    color,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  // Dither the ALPHA (the banding lives in the alpha ramp): the slow radial
+  // gradient quantizes into visible rings at 8 bits.
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "outgoingLight = diffuseColor.rgb;",
+      `${ditherGLSL("diffuseColor.a")}
+	outgoingLight = diffuseColor.rgb;`,
+    );
+  };
+  // Without a key an unpatched SpriteMaterial elsewhere would share (and clobber) this program.
+  mat.customProgramCacheKey = () => "city-lights-aura";
+  return mat;
+};
+
+/** Fills `nearest` (and `nearestDistSq`, ascending) with the POOL_SIZE sites closest to (camX, camZ);
+ *  null past the site count. An insertion sort into the fixed pool: no allocation. */
+const selectNearestSites = (
+  sites: ReadonlyMap<string, CitySitePoint>,
+  camX: number,
+  camZ: number,
+  nearest: (CitySitePoint | null)[],
+  nearestDistSq: Float64Array,
+): void => {
+  for (let i = 0; i < POOL_SIZE; i++) nearest[i] = null;
+  let count = 0;
+  sites.forEach((p) => {
+    const d = (p.x - camX) * (p.x - camX) + (p.z - camZ) * (p.z - camZ);
+    if (count < POOL_SIZE) count++;
+    else if (d >= nearestDistSq[POOL_SIZE - 1]) return;
+    let i = count - 1;
+    while (i > 0 && nearestDistSq[i - 1] > d) {
+      nearestDistSq[i] = nearestDistSq[i - 1];
+      nearest[i] = nearest[i - 1];
+      i--;
+    }
+    nearestDistSq[i] = d;
+    nearest[i] = p;
+  });
+};
+
 /** One far-throw point light per city-biome voronoi cell (see CLAUDE.md). */
 export const CityLights = ({
   color = "#ffdb8d",
@@ -60,45 +126,8 @@ export const CityLights = ({
   const sitesVersion = useRef(0);
   const lastSelect = useRef({ x: Infinity, z: Infinity, version: -1 });
 
-  // Deliberately NO hot core: overlapping sprites must read as one hazy area, not glowing balls.
-  const auraTexture = useMemo(() => {
-    const size = 128;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d")!;
-    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    g.addColorStop(0.0, "rgba(255,255,255,0.5)");
-    g.addColorStop(0.35, "rgba(255,255,255,0.3)");
-    g.addColorStop(0.65, "rgba(255,255,255,0.11)");
-    g.addColorStop(1.0, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
-    return new THREE.CanvasTexture(canvas);
-  }, []);
-
-  const auraMaterial = useMemo(() => {
-    const mat = new THREE.SpriteMaterial({
-      map: auraTexture,
-      color,
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    // Dither the ALPHA (the banding lives in the alpha ramp): the slow radial
-    // gradient quantizes into visible rings at 8 bits.
-    mat.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "outgoingLight = diffuseColor.rgb;",
-        `${ditherGLSL("diffuseColor.a")}
-	outgoingLight = diffuseColor.rgb;`,
-      );
-    };
-    // Without a key an unpatched SpriteMaterial elsewhere would share (and clobber) this program.
-    mat.customProgramCacheKey = () => "city-lights-aura";
-    return mat;
-  }, [auraTexture, color]);
+  const auraTexture = useMemo(createAuraTexture, []);
+  const auraMaterial = useMemo(() => createAuraMaterial(auraTexture, color), [auraTexture, color]);
 
   useEffect(
     () => () => {
@@ -139,8 +168,7 @@ export const CityLights = ({
       });
     }
 
-    // Nearest-POOL_SIZE pick, recomputed only on RESELECT_DISTANCE travel or a
-    // site-set change (a per-frame [...sites].sort() allocated every frame).
+    // Nearest-POOL_SIZE pick, recomputed only on RESELECT_DISTANCE travel or a site-set change.
     const sel = lastSelect.current;
     const assigned = nearestSitesRef.current;
     if (
@@ -151,21 +179,7 @@ export const CityLights = ({
       sel.z = camZ;
       sel.version = sitesVersion.current;
 
-      for (let i = 0; i < POOL_SIZE; i++) assigned[i] = null;
-      let count = 0;
-      sites.forEach((p) => {
-        const d = (p.x - camX) * (p.x - camX) + (p.z - camZ) * (p.z - camZ);
-        if (count < POOL_SIZE) count++;
-        else if (d >= nearestSiteDistSq[POOL_SIZE - 1]) return;
-        let i = count - 1;
-        while (i > 0 && nearestSiteDistSq[i - 1] > d) {
-          nearestSiteDistSq[i] = nearestSiteDistSq[i - 1];
-          assigned[i] = assigned[i - 1];
-          i--;
-        }
-        nearestSiteDistSq[i] = d;
-        assigned[i] = p;
-      });
+      selectNearestSites(sites, camX, camZ, assigned, nearestSiteDistSq);
 
       for (let i = 0; i < POOL_SIZE; i++) {
         const light = lightRefs.current[i];

@@ -6,13 +6,14 @@
  * river's bank (no pavement, no paint); height is untouched. Placement follows through the road
  * field (FRAGMENT_REMOVED_FIELD: no lamp band, no building band), and a building's own band
  * (≥ FRAGMENT_LAND_FIELD) is never land, so the flatten-pad engine's raw evaluation (which never
- * sees fragments) can't disagree. MEASURED (8u lattice, 4×20 km squares): the belt slivers were
- * 64–3648u²; the smallest island kept between two decks 7808u².
+ * sees fragments) can't disagree. FRAGMENT_MAX_CELLS sits between the belt slivers found on an 8u
+ * lattice over 4×20 km squares (64–3648u²) and the smallest island kept between two decks (7808u²).
  */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import { decksAround } from "../bridges/deckGround";
+import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
 
@@ -57,13 +58,7 @@ const latticeVerdict = (ix: number, iz: number): number => {
   const k0 = latticeKey(ix, iz);
   const known = fragmentLattice.get(k0);
   if (known !== undefined) return known;
-  if (fragmentLattice.size > FRAGMENT_LATTICE_MAX) {
-    let drop = fragmentLattice.size >> 1;
-    for (const k of fragmentLattice.keys()) {
-      if (drop-- <= 0) break;
-      fragmentLattice.delete(k);
-    }
-  }
+  if (fragmentLattice.size > FRAGMENT_LATTICE_MAX) dropOldestHalf(fragmentLattice);
   if (!latticeLand(ix, iz)) {
     fragmentLattice.set(k0, 0);
     return 0;

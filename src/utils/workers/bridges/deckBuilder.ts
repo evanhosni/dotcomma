@@ -128,8 +128,8 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
    *  than lose the crossing (a severed freeway), such a deck is built again with its ends cut where the
    *  edges FIRST leave the pavement — and failing that, uncut at the chain's ends. Only a road's own
    *  chain: a synthesized crossing that drops has the road's own deck or another crossing beside it
-   *  (retried, a mouth deck leaving its road at a skew rode 54u over the pavement it climbed from,
-   *  MEASURED). */
+   *  (retried, a mouth deck leaving its road at a skew could ride far over the pavement it climbed
+   *  from). */
   const withCutRetry = (c: BridgeChain, make: () => FreewayBridge | null): FreewayBridge | null => {
     let deck = make();
     for (const mode of [1, 2] as const) {
@@ -214,8 +214,8 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
       // A T end on a corner the host's deck rounds is no longer on the host.
       if (hp.d > BRIDGE_TEE_OFF_HOST) return drop(c, `off the host's rounded corner (${hp.d.toFixed(1)}u)`);
       // The trim: where the child's centerline leaves the host's slab — its distance from the host's
-      // centerline reaching W/2, found along the child (W/2 / sin θ assumed a straight host and an
-      // end exactly on its centerline, and left a gap between a cut and a curving host's edge).
+      // centerline reaching W/2, found along the child (W/2 / sin θ assumes a straight host and an end
+      // exactly on its centerline: a gap between the cut and a curving host's edge).
       const hx = hostPath.map((v) => v.x);
       const hz = hostPath.map((v) => v.z);
       const endS = which === 0 ? 0 : L;
@@ -471,10 +471,10 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
       const t = i / samples;
       // Along the DECK (its corners are rounded off the road), and only where water is drawn: the
       // channel, and the band past it where the bank is held at the rim (a deck along a river
-      // climbing a slope stood at the level of its water there, MEASURED). Over a dry bank there
-      // is nothing to clear.
+      // climbing a slope would otherwise stand at the level of its water there). Over a dry bank
+      // there is nothing to clear.
       // Across the deck's whole width: beside a river whose surface climbs along it, the water under
-      // one edge stood above the slab (MEASURED: 3.4u through a deck's side near its landing).
+      // one edge can stand above the slab.
       const q = polyPointAt(c.path, c.cum, t * L);
       const d = polyDirAt(c.path, c.cum, t * L);
       // The edges clear the water by the bank's clearance at least (the centerline by the channel's).
@@ -518,7 +518,7 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
         if (shape > 0.2) camber = Math.max(camber, need / shape);
         // Near an end no arch lifts the deck (a landed deck ignores these samples too); beside a
         // T end the host fixes the height, so there the slab must at least stay out of the water —
-        // judged on its centerline, as before the edges were sampled (they only raise the arch).
+        // judged on its centerline only (the edge samples only raise the arch).
         // Under the host's slab (u outside [0, 1]) the child is trimmed off anyway.
         else if (u > 0 && u < 1 && trims[u < 0.5 ? 0 : 1] && !Number.isNaN(center)) {
           const needC = center + clear - (sy + m * t);

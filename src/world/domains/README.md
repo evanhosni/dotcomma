@@ -24,9 +24,9 @@ New content almost always goes into the overworld as a **region**, not a new dom
 
 **Publishing a domain.** When `<Domain>` commits ([../components/README.md](../components/README.md)), it publishes the result through [utils.ts](utils.ts). Non-React code reads it there: `getActiveRegions()`, `getActiveDomainConfig()`, `getTerrainParams()`, `await whenDomainReady()`.
 
-**Server copy.** [configs.ts](configs.ts) maps a domain id to its Three-free `DomainConfig` (today only `overworld`, built in [overworld/config.ts](overworld/config.ts) by [domainConfig.ts](domainConfig.ts)). The server simulates on that copy. In dev, the JSX commit compares itself against it and `console.error`s the keys that differ.
+**Server copy.** [configs.ts](configs.ts) lists every domain's region specs (`DOMAIN_REGIONS`, which the actor catalog is derived from) and maps a domain id to its Three-free `DomainConfig` (today only `overworld`, built in [overworld/config.ts](overworld/config.ts) by [domainConfig.ts](domainConfig.ts)). The server simulates on that copy. In dev, the JSX commit compares itself against it and `console.error`s the keys that differ.
 
-Other files: [types.ts](types.ts) (`ActiveDomain`; `DomainId` re-exported from `src/net/protocol.ts`), [constants.ts](constants.ts) (`HOME_PATH` and the two window event names).
+Other files: [components.ts](components.ts) (`DOMAIN_COMPONENTS`: the component index.tsx mounts per id), [types.ts](types.ts) (`ActiveDomain`; `DomainId` re-exported from `src/net/protocol.ts`), [constants.ts](constants.ts) (`HOME_PATH` and the two window event names).
 
 ## How to use/add
 
@@ -43,7 +43,7 @@ Add a domain only for a genuinely separate page. A new area of the game is a reg
    ));
    ```
    Put its regions in `src/world/domains/<name>/regions/`, with the ordered spec list in `regions/index.ts` (`export const NAME_REGIONS = [NAME_REGION]`, see [home/regions/index.ts](home/regions/index.ts)). `terrain={false}` skips the streaming terrain. The domain then has to render its own ground and call `setTerrainLoaded(true)` / `setProgress(1)` itself, as [home/HomeGround.tsx](home/HomeGround.tsx) does.
-2. Add the id to `DOMAIN_IDS` in `src/net/protocol.ts` (the one definition; `DomainId` derives from it and [types.ts](types.ts) re-exports it).
-3. Teach [navigation.ts](navigation.ts) its path. Today `domainIdFromPath` maps `/` to home and everything else to the overworld, so a new fixed path must be checked before the address parser.
-4. Mount it in [src/index.tsx](../../index.tsx): `{domain === "<name>" && <NameDomain />}`.
+2. Add the id to `DOMAIN_IDS` in `src/net/protocol.ts` (the one definition; `DomainId` derives from it and [types.ts](types.ts) re-exports it). The compiler then asks for the next two entries.
+3. Add `<name>: NameDomain` to `DOMAIN_COMPONENTS` in [components.ts](components.ts) (index.tsx mounts it) and `<name>: NAME_REGIONS` to `DOMAIN_REGIONS` in [configs.ts](configs.ts) (so the server catalogs its actors).
+4. Teach [navigation.ts](navigation.ts) its path. Today `domainIdFromPath` maps `/` to home and everything else to the overworld, so a new fixed path must be checked before the address parser.
 5. Optional, for server-simulated NPCs: add `<name>/config.ts` = `buildDomainConfigFromSpecs({ params, regions: NAME_REGIONS })` (copy [overworld/config.ts](overworld/config.ts)) and list it in [configs.ts](configs.ts). The server's physics currently loads only one domain (`PHYSICS_DOMAIN` in `server/src/game/physics/physicsWorld.ts`).

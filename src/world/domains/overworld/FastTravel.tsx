@@ -7,7 +7,7 @@ import { ADDRESS_TRAVEL_EVENT } from "../constants";
 import { replaceAddressPath, takePendingAddress } from "../navigation";
 import { type Address, addressOfPosition, pathForPlace, resolveAddress } from "./address";
 
-const ADDRESS_POLL_INTERVAL = 1; // seconds
+const ADDRESS_POLL_INTERVAL_S = 1;
 
 /**
  * The overworld's URL ↔ position glue. On mount and on every ADDRESS_TRAVEL_EVENT
@@ -72,7 +72,7 @@ export const FastTravel = () => {
   useFrame((_, delta) => {
     if (pollInFlight.current) return;
     pollTimer.current += delta;
-    if (pollTimer.current < ADDRESS_POLL_INTERVAL) return;
+    if (pollTimer.current < ADDRESS_POLL_INTERVAL_S) return;
     pollTimer.current = 0;
     pollInFlight.current = true;
     getPlaceInfo(playerPosition.x, playerPosition.z)

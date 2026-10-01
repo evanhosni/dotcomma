@@ -25,7 +25,6 @@ const subscribe = (l: () => void) => {
   };
 };
 export const usePlayerData = (): PlayerData | null => useSyncExternalStore(subscribe, getPlayerData);
-export const onPlayerDataChange = subscribe;
 
 /** False (nothing sent) before the first init or when the merge would exceed the cap. */
 export const updatePlayerData = (patch: PlayerData): boolean => {

@@ -15,6 +15,60 @@ import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, get
 
 let initialized = false;
 
+/** THREE.computeVertexNormals replicated exactly, main grid only (skirt normals are edge copies the
+ *  main thread applies afterwards). `localX`/`localY` are the PlaneGeometry's local frame. */
+const gridNormals = (localX: Float64Array, localY: Float64Array, heights: Float32Array, segments: number): Float32Array => {
+  const n = segments + 1;
+  const count = n * n;
+  const normals = new Float32Array(count * 3);
+  for (let iz = 0; iz < segments; iz++) {
+    for (let ix = 0; ix < segments; ix++) {
+      const a = iz * n + ix;
+      const b = a + 1;
+      const d = (iz + 1) * n + ix;
+      const c = d + 1;
+      // Same winding as the index buffer: (a, d, b) and (d, c, b)
+      for (let t = 0; t < 2; t++) {
+        const iA = t === 0 ? a : d;
+        const iB = t === 0 ? d : c;
+        const iC = b;
+        const ax = localX[iA % n], ay = localY[(iA / n) | 0], az = heights[iA];
+        const bx = localX[iB % n], by = localY[(iB / n) | 0], bz = heights[iB];
+        const cx = localX[iC % n], cy = localY[(iC / n) | 0], cz = heights[iC];
+        const cbx = cx - bx, cby = cy - by, cbz = cz - bz;
+        const abx = ax - bx, aby = ay - by, abz = az - bz;
+        const nx = cby * abz - cbz * aby;
+        const ny = cbz * abx - cbx * abz;
+        const nz = cbx * aby - cby * abx;
+        normals[iA * 3] += nx; normals[iA * 3 + 1] += ny; normals[iA * 3 + 2] += nz;
+        normals[iB * 3] += nx; normals[iB * 3 + 1] += ny; normals[iB * 3 + 2] += nz;
+        normals[iC * 3] += nx; normals[iC * 3 + 1] += ny; normals[iC * 3 + 2] += nz;
+      }
+    }
+  }
+  for (let i = 0; i < count; i++) {
+    const x = normals[i * 3], y = normals[i * 3 + 1], z = normals[i * 3 + 2];
+    const len = Math.sqrt(x * x + y * y + z * z);
+    if (len > 0) {
+      normals[i * 3] = x / len;
+      normals[i * 3 + 1] = y / len;
+      normals[i * 3 + 2] = z / len;
+    }
+  }
+  return normals;
+};
+
+/** Rapier wants COLUMN-MAJOR heights (col = X = ix, row = Z = iz). */
+const columnMajorHeights = (heights: Float32Array, n: number): Float32Array => {
+  const out = new Float32Array(n * n);
+  for (let iz = 0; iz < n; iz++) {
+    for (let ix = 0; ix < n; ix++) {
+      out[ix * n + iz] = heights[iz * n + ix];
+    }
+  }
+  return out;
+};
+
 self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
 
@@ -82,54 +136,8 @@ self.onmessage = (e: MessageEvent) => {
       }
     }
 
-    // THREE.computeVertexNormals replicated exactly, main grid only (skirt
-    // normals are edge copies the main thread applies afterwards).
-    const normals = new Float32Array(count * 3);
-    for (let iz = 0; iz < segments; iz++) {
-      for (let ix = 0; ix < segments; ix++) {
-        const a = iz * n + ix;
-        const b = a + 1;
-        const d = (iz + 1) * n + ix;
-        const c = d + 1;
-        // Same winding as the index buffer: (a, d, b) and (d, c, b)
-        for (let t = 0; t < 2; t++) {
-          const iA = t === 0 ? a : d;
-          const iB = t === 0 ? d : c;
-          const iC = b;
-          const ax = localX[iA % n], ay = localY[(iA / n) | 0], az = heights[iA];
-          const bx = localX[iB % n], by = localY[(iB / n) | 0], bz = heights[iB];
-          const cx = localX[iC % n], cy = localY[(iC / n) | 0], cz = heights[iC];
-          const cbx = cx - bx, cby = cy - by, cbz = cz - bz;
-          const abx = ax - bx, aby = ay - by, abz = az - bz;
-          const nx = cby * abz - cbz * aby;
-          const ny = cbz * abx - cbx * abz;
-          const nz = cbx * aby - cby * abx;
-          normals[iA * 3] += nx; normals[iA * 3 + 1] += ny; normals[iA * 3 + 2] += nz;
-          normals[iB * 3] += nx; normals[iB * 3 + 1] += ny; normals[iB * 3 + 2] += nz;
-          normals[iC * 3] += nx; normals[iC * 3 + 1] += ny; normals[iC * 3 + 2] += nz;
-        }
-      }
-    }
-    for (let i = 0; i < count; i++) {
-      const x = normals[i * 3], y = normals[i * 3 + 1], z = normals[i * 3 + 2];
-      const len = Math.sqrt(x * x + y * y + z * z);
-      if (len > 0) {
-        normals[i * 3] = x / len;
-        normals[i * 3 + 1] = y / len;
-        normals[i * 3 + 2] = z / len;
-      }
-    }
-
-    // Rapier wants COLUMN-MAJOR heights (col = X = ix, row = Z = iz).
-    let colliderHeights: Float32Array | null = null;
-    if (needCollider) {
-      colliderHeights = new Float32Array(count);
-      for (let iz = 0; iz < n; iz++) {
-        for (let ix = 0; ix < n; ix++) {
-          colliderHeights[ix * n + iz] = heights[iz * n + ix];
-        }
-      }
-    }
+    const normals = gridNormals(localX, localY, heights, segments);
+    const colliderHeights = needCollider ? columnMajorHeights(heights, n) : null;
 
     const transfer: Transferable[] = [
       heights.buffer,

@@ -5,8 +5,7 @@
  * way) so every decision a central wall depends on is made from the same, complete
  * neighborhood in every window that contains it. FREEWAYS connect city COMPONENTS
  * (adjacent city cells = one city, so one road per pair of neighboring cities, never one
- * per cell pair — three near-parallel runs from one city were the visible result of
- * per-cell runs) by the shortest path over walls with no city and no water on either
+ * per cell pair) by the shortest path over walls with no city and no water on either
  * side. The path starts at a junction on the city's boundary, i.e. a corner of the belt
  * freeway, so it merges into the belt at the wall. Rivers have their own grid and cross
  * roads freely (rivers/riverNetwork.ts); bridges carry the roads over them (bridges/).
@@ -24,9 +23,8 @@ import { biomeSiteAt } from "../voronoi";
 const NETWORK_RADIUS_CELLS = 18;
 /** Sources, runs and hops within this many cells of the window's border are not trusted (see getNetwork). */
 const NETWORK_BORDER_CELLS = 3;
-/** Every biome cell a vertex lands in needs its network (~10 KB, ~20 ms to build): the terrain
- *  worker's LOD rings alone touch ~720 cells around a spawn, and at 48 entries they rebuilt 1331
- *  networks there (MEASURED, 23.8 → 15.4 s of worker time for the whole startup ring). */
+/** Every biome cell a vertex lands in needs its network (~10 KB, ~20 ms to build), and the terrain
+ *  worker's LOD rings alone touch ~720 cells around a spawn. */
 const NETWORK_CACHE_MAX = 1024;
 /** Freeways combine their segments by a smooth minimum (real units) and are measured from a
  *  gently meandered query point: a road may wind, not wobble. */
@@ -101,8 +99,8 @@ interface NetGraph {
   /** 1 where a freeway may run: no city, no water and no prohibitRoads biome on either side. */
   walkable: Uint8Array;
   /** Well inside the window. The Delaunay is distorted along the window's border, so a source or a
-   *  run there decides differently than the window that has it near its center (a road that ENDED
-   *  at a cell border was such a run). */
+   *  run there decides differently than the window that has it near its center (roads would end at
+   *  cell borders). */
   trusted: (x: number, z: number) => boolean;
 }
 
@@ -110,9 +108,8 @@ const buildNetGraph = (cx: number, cz: number): NetGraph => {
   const gs = domainConfig!.gridSize;
   const R = NETWORK_RADIUS_CELLS;
 
-  // Sites — the same jitter rolls as getBiomeGrid, over the wide window, each zoned by its OWN
-  // region grid (biomeSiteAt). The window center's 5×5 region grid ends ~6000u out, inside the
-  // window's 9000u reach, and handed the outer sites whatever region was nearest within it.
+  // Sites over the wide window, each zoned by its OWN region grid (biomeSiteAt): the window center's
+  // 5×5 region grid ends ~6000u out, inside the window's 9000u reach.
   const sites: NetSite[] = [];
   for (let ix = cx - R; ix <= cx + R; ix++) {
     for (let iz = cz - R; iz <= cz + R; iz++) {
@@ -180,8 +177,7 @@ const buildNetGraph = (cx: number, cz: number): NetGraph => {
     }
   }
 
-  // Per network, not per pair: per pair, refilling three junction-sized arrays, rescanning every
-  // junction for its sources and re-deriving every wall's walkability was half of a network build.
+  // Per network, not per pair (per pair it was half of a network build).
   const walkable = new Uint8Array(walls.length);
   for (let wi = 0; wi < walls.length; wi++) {
     const za = sites[walls[wi].a].zone;
@@ -199,8 +195,8 @@ const buildNetGraph = (cx: number, cz: number): NetGraph => {
 
 /** (1) City components within FREEWAY_LINK_CELLS: one shortest path per pair (binary-heap
  *  Dijkstra; deterministic tie-break by junction position). Every pair the window can route
- *  is routed — a pair routed only from windows centered near it left roads that ended at a
- *  cell border — but only paths that stay in the trusted interior are kept. */
+ *  is routed (routed only from windows centered near it, roads would end at cell borders), but
+ *  only paths that stay in the trusted interior are kept. */
 const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDebug): void => {
   const { sites, junctions, walls, walkable, trusted } = g;
   const wallBetween = new Map<string, number>();
@@ -471,6 +467,13 @@ export const smoothMin = (a: number, b: number, k: number): number => {
   return Math.min(a, b) - h * h * k * 0.25;
 };
 
+/** The gently meandered point a freeway distance is measured from (written by meanderFreewayQuery). */
+const meanderedQuery = { x: 0, z: 0 };
+const meanderFreewayQuery = (px0: number, pz0: number): void => {
+  meanderedQuery.x = px0 + FREEWAY_MEANDER_AMP * simplex2(px0 / FREEWAY_MEANDER_SCALE, pz0 / FREEWAY_MEANDER_SCALE);
+  meanderedQuery.z = pz0 + FREEWAY_MEANDER_AMP * simplex2(pz0 / FREEWAY_MEANDER_SCALE + 5.7, px0 / FREEWAY_MEANDER_SCALE - 2.3);
+};
+
 /** What the last nearestFreewayRun found: the smooth-min distance to the runs (warped, real
  *  units; Infinity when there are none), and the dash phase and closest point of the nearest one. */
 export const nearestRun = { distance: Infinity, along: 0, x: 0, z: 0 };
@@ -479,14 +482,14 @@ export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[]):
   nearestRun.distance = Infinity;
   if (runs.length === 0) return;
   // A gentle meander, and a smooth minimum over the segments: rounded bends and hubs.
-  const px = px0 + FREEWAY_MEANDER_AMP * simplex2(px0 / FREEWAY_MEANDER_SCALE, pz0 / FREEWAY_MEANDER_SCALE);
-  const pz = pz0 + FREEWAY_MEANDER_AMP * simplex2(pz0 / FREEWAY_MEANDER_SCALE + 5.7, px0 / FREEWAY_MEANDER_SCALE - 2.3);
+  meanderFreewayQuery(px0, pz0);
+  const px = meanderedQuery.x;
+  const pz = meanderedQuery.z;
   let best = Infinity;
   for (let r = 0; r < runs.length; r++) {
     const run = runs[r];
     // A run whose box lies FREEWAY_SMIN_K beyond the running smooth minimum changes neither it
     // (smoothMin is the exact min there) nor the argmin, so skipping it is exact (+1e-6: rounding).
-    // Every vertex outside a city scanned every segment of the whole network window.
     const bx = Math.max(run.minX - px, 0, px - run.maxX);
     const bz = Math.max(run.minZ - pz, 0, pz - run.maxZ);
     const lim = nearestRun.distance + FREEWAY_SMIN_K + 1e-6;
@@ -544,8 +547,9 @@ export const pushSegCandidate = (run: FreewayRun | null, along: number, d: numbe
 };
 export const collectRunCandidates = (px0: number, pz0: number, runs: FreewayRun[], reach: number): void => {
   if (runs.length === 0) return;
-  const px = px0 + FREEWAY_MEANDER_AMP * simplex2(px0 / FREEWAY_MEANDER_SCALE, pz0 / FREEWAY_MEANDER_SCALE);
-  const pz = pz0 + FREEWAY_MEANDER_AMP * simplex2(pz0 / FREEWAY_MEANDER_SCALE + 5.7, px0 / FREEWAY_MEANDER_SCALE - 2.3);
+  meanderFreewayQuery(px0, pz0);
+  const px = meanderedQuery.x;
+  const pz = meanderedQuery.z;
   for (let r = 0; r < runs.length; r++) {
     const run = runs[r];
     const bx = Math.max(run.minX - px, 0, px - run.maxX);

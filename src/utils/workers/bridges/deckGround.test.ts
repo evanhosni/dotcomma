@@ -238,8 +238,7 @@ describe("round-17 deck and freeway ground rules", () => {
       }
     }
     expect(sections).toBeGreaterThan(40);
-    // (Round 16: 49 of these 113 sections tilted over half a unit, 22 by over 1.5 — a crease
-    // down the road. What is left twists through a sharp bend of a steep run.)
+    // (What is left twists through a sharp bend of a steep run.)
     expect(tilted / sections).toBeLessThan(0.05);
     expect(worst).toBeLessThan(2);
   });

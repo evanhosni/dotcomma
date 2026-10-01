@@ -1,6 +1,7 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import { generateBuildingPlan } from "../../../../src/objects/actors/building/generatePlan";
 import { buildProxyHullVertices, createProxyCollider, type ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
+import { buildingSeedAt } from "../../../../src/objects/actors/building/spec";
 import type { BuildingAttributes } from "../../../../src/objects/actors/building/types";
 import type { PhysicsWorld } from "./physicsWorld.js";
 
@@ -20,9 +21,6 @@ interface PlanFacts {
 
 const planCache = new Map<string, PlanFacts>();
 const MAX_PLAN_CACHE = 4096;
-
-/** Building.tsx's seed rule (no descriptor sets an explicit seed). */
-export const buildingSeed = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
 const planFactsFor = (seed: string, attrs: BuildingAttributes): PlanFacts => {
   const key = `${seed}|${JSON.stringify(attrs)}`;
@@ -47,11 +45,11 @@ const planFactsFor = (seed: string, attrs: BuildingAttributes): PlanFacts => {
   return facts;
 };
 
-export const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => planFactsFor(seed, attrs).hull;
+const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => planFactsFor(seed, attrs).hull;
 
 /** Door offsets from the building at (x, z) — the leaves Building.tsx places from the same plan. */
 export const doorOffsetsFor = (attrs: BuildingAttributes, x: number, z: number): Float64Array =>
-  planFactsFor(buildingSeed(x, z), attrs).doorsXZ;
+  planFactsFor(buildingSeedAt(x, z), attrs).doorsXZ; // no spec sets an explicit seed
 
 /** `attrs` = the actor spec's `hull` (plan-shaping attributes); y = ground height. */
 export const createBuildingCollider = (
@@ -61,7 +59,7 @@ export const createBuildingCollider = (
   y: number,
   z: number,
 ): ProxyColliderHandle => {
-  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], hullVerticesFor(buildingSeed(x, z), attrs));
+  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], hullVerticesFor(buildingSeedAt(x, z), attrs));
   pw.markQueriesDirty();
   return handle;
 };

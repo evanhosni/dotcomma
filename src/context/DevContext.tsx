@@ -1,11 +1,14 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { DevContextType } from "./types";
+import { DEV_TOGGLES } from "./constants";
+import { DevContextType, DevToggleFlag, DevToggleFlags } from "./types";
 
 const DevContext = createContext<DevContextType | undefined>(undefined);
 
 interface DevContextProviderProps {
   children: ReactNode;
 }
+
+const ALL_TOGGLES_OFF = Object.fromEntries(DEV_TOGGLES.map(({ flag }) => [flag, false])) as DevToggleFlags;
 
 function readDevParam(): boolean {
   return new URLSearchParams(window.location.search).has("devmode");
@@ -20,17 +23,17 @@ function writeDevParam(devMode: boolean) {
 
 export const DevContextProvider: React.FC<DevContextProviderProps> = ({ children }) => {
   const [devMode, setDevMode] = useState(readDevParam);
-  const [noclip, setNoclip] = useState(false);
-  const [physicsDebug, setPhysicsDebug] = useState(false);
+  const [toggles, setToggles] = useState<DevToggleFlags>(ALL_TOGGLES_OFF);
+
+  const setToggle = useCallback((flag: DevToggleFlag, on: boolean) => {
+    setToggles((prev) => (prev[flag] === on ? prev : { ...prev, [flag]: on }));
+  }, []);
 
   const toggleDevMode = useCallback(() => {
     setDevMode((prev) => {
       const next = !prev;
       writeDevParam(next);
-      if (!next) {
-        setNoclip(false);
-        setPhysicsDebug(false);
-      }
+      if (!next) setToggles(ALL_TOGGLES_OFF);
       return next;
     });
   }, []);
@@ -47,8 +50,8 @@ export const DevContextProvider: React.FC<DevContextProviderProps> = ({ children
   }, [toggleDevMode]);
 
   const value: DevContextType = useMemo(
-    () => ({ devMode, noclip, physicsDebug, toggleDevMode, setNoclip, setPhysicsDebug }),
-    [devMode, noclip, physicsDebug, toggleDevMode],
+    () => ({ ...toggles, devMode, toggleDevMode, setToggle }),
+    [toggles, devMode, toggleDevMode, setToggle],
   );
 
   return <DevContext.Provider value={value}>{children}</DevContext.Provider>;
@@ -63,5 +66,3 @@ export const useDevContext = (): DevContextType => {
 
   return context;
 };
-
-export default DevContext;

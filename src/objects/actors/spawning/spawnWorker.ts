@@ -1,8 +1,7 @@
 import { DomainConfig } from "../../../utils/workers/vertexCompute";
 import { createWorkerClient } from "../../../utils/workers/workerClient";
+import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
 import { AnyActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
-
-const SPAWN_CHUNK_SIZE = 250;
 
 /** A time-budgeted request may finish only a prefix of the requested chunks. */
 interface SpawnsResult {
@@ -46,8 +45,8 @@ export const serializeDescriptors = (
   }));
 
 // Client-side chunk cache: the pool re-requests ALL nearby chunks every batch,
-// so without it the worker re-serialized hundreds of unchanged points each
-// time. Entries carry their CENTER because parsing it out of the key made
+// so without it the worker would re-serialize hundreds of unchanged points each
+// time. Entries carry their CENTER: parsing it out of the key would make
 // eviction the most expensive thing about the cache. Read-only outside this module.
 export interface CachedSpawnChunk {
   centerX: number;
@@ -193,4 +192,3 @@ export const updateSpawnFootprint = (maxFootprint: number): void => {
   client.post({ type: "UPDATE_FOOTPRINT", maxFootprint });
 };
 
-export { SPAWN_CHUNK_SIZE };

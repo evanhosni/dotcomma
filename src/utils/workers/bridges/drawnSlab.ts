@@ -5,6 +5,7 @@ import { smoothstep } from "../../math/_math";
 import { dropOldestHalf } from "../cellCache";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_CUT_FEATHER } from "./constants";
 import { bridgeRampAt, bridgeSections, bridgeTrimRange } from "./deckGeometry";
+import type { PointXZ } from "../../math/types";
 import type { BridgeSection, FreewayBridge } from "./types";
 
 /** Where a world point lies against a deck's DRAWN slab — the ribbon's own triangles between its
@@ -12,15 +13,15 @@ import type { BridgeSection, FreewayBridge } from "./types";
  *  quad split along the diagonal the ribbon draws, from its first section's left corner to its second's
  *  right) — for the ground cut under it (computeVertexData step 7). `weight` is 1 over the slab and
  *  within `margin` beside it (the terrain's vertex spacing: a triangle with a vertex beyond the slab's
- *  edge still spans the slab — MEASURED: the bank rose through a deck between LOD vertices),
+ *  edge still spans the slab),
  *  fading to 0 over BRIDGE_CUT_FEATHER past that; 0 beyond a ramped or a T end (a landed ramp dives
  *  under its road, a T end lies in its host, whose own cut covers it) — and in front of a landed CUT
  *  end, where the road meets the slab, `flush` is the road's height (NaN elsewhere). `own` is the drawn
  *  top at the point's nearest slab point, `t` its arc fraction, `lat` its lateral offset, and `ref` the
  *  height the ground there rests on at most before its triangles are checked (bridgeTriangleCap): the
  *  flush road, or the top less BRIDGE_CUT_BELOW_TOP — beside the slab the lower of the top at its edge
- *  and the slab's plane carried on (the edge's own top, on a cross-falling slab's low side, tilted a LOD
- *  triangle reaching over the slab above it: a lip in front of a cut end, MEASURED); over a ramped end's
+ *  and the slab's plane carried on (the edge's own top, on a cross-falling slab's low side, would tilt a
+ *  LOD triangle reaching over the slab above it: a lip in front of a cut end); over a ramped end's
  *  first units the slab dives under its road on purpose, and the road there stays at the unramped line.
  *  `cutIn`: how far inward of a landed cut end's line. */
 export const bridgeDrawn = { weight: 0, t: 0, lat: 0, flush: NaN, own: Infinity, ref: Infinity, cutIn: Infinity };
@@ -212,8 +213,8 @@ export const bridgeDrawnAt = (b: FreewayBridge, x: number, z: number, margin: nu
   const t = triField(tri, bo, 3, b1, b2);
   const lat = triField(tri, bo, 4, b1, b2);
   // Past a landed CUT end by more than the margin, beside that end, it is the road in front of the deck,
-  // which no terrain triangle reaching the slab can hold: cut down to the slab's nearest (cross-falling)
-  // corner there, the road dipped units a few units before the seam (MEASURED, the bumps of Evan's 76.png).
+  // which no terrain triangle reaching the slab can hold (cut down to the slab's nearest cross-falling
+  // corner there, the road would dip a few units before the seam).
   if ((front0 >= margin && t <= S[1].t) || (front1 >= margin && t >= S[n - 2].t)) return;
   bridgeDrawn.own = own;
   bridgeDrawn.weight = Math.max(bridgeDrawn.weight, best <= margin ? 1 : 1 - smoothstep(margin, reach, best));
@@ -262,6 +263,36 @@ export const drawnCovers = (b: FreewayBridge, x: number, z: number, margin: numb
   return true;
 };
 
+/** Signed distance from (x, z) to a deck's drawn SIDE edges (its sections' outer corners, end to end;
+ *  not its end sections): positive inside the slab, negative beside it. */
+export const bridgeSideIn = (b: FreewayBridge, x: number, z: number): number => {
+  const S = drawnOf(b).S;
+  let best = Infinity;
+  let sign = 1;
+  for (const side of [1, -1] as const) {
+    for (let i = 0; i + 1 < S.length; i++) {
+      const a = S[i];
+      const c = S[i + 1];
+      const wa = side === 1 ? a.wl : -a.wr;
+      const wc = side === 1 ? c.wl : -c.wr;
+      const ax = a.x + a.ax * wa;
+      const az = a.z + a.az * wa;
+      const dx = c.x + c.ax * wc - ax;
+      const dz = c.z + c.az * wc - az;
+      const l2 = dx * dx + dz * dz;
+      const u = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l2)) : 0;
+      const d = Math.hypot(x - ax - dx * u, z - az - dz * u);
+      if (d >= best) continue;
+      best = d;
+      // Inside lies toward the section's own center from its edge.
+      const toCenter = (a.x - ax) * dz - (a.z - az) * dx;
+      const toPoint = (x - ax) * dz - (z - az) * dx;
+      sign = toCenter * toPoint >= 0 ? 1 : -1;
+    }
+  }
+  return sign * best;
+};
+
 /** The height a terrain vertex may stand at beside or under a deck, EXACT for the terrain's own
  *  triangles, not just its vertices. On the
  *  vertex lattice (spacing s, the diagonal from (x, z+s) to (x+s, z) as the terrain worker builds it)
@@ -306,8 +337,8 @@ const LATTICE_TRIANGLES = [
   [-1, 0, 0, 0, 0, -1, -1, -1, 1],
 ];
 /** Per deck and lattice (spacing, margin): each lattice vertex's reference and each lattice triangle's
- *  rise over the slab — a vertex's cap reads 9 references and 6 triangles its neighbors read too (MEASURED:
- *  uncached, the cap was half of an LOD1 chunk's build beside a deck). */
+ *  rise over the slab — a vertex's cap reads 9 references and 6 triangles its neighbors read too
+ *  (uncached, the cap is half of an LOD1 chunk's build beside a deck). */
 interface LatticeCapCache {
   key: string;
   refs: Map<number, number>;
@@ -462,7 +493,7 @@ export const bridgeMouth = { weight: 0, depth: 0, top: 0 };
 const BRIDGE_MOUTH_FEATHER = 3;
 /** How far in front of a cut end its mouth reaches (the road's curb and sidewalk, and any sand the
  *  cut's straight line leaves between itself and a curving pavement edge). */
-export const BRIDGE_MOUTH_DEPTH = 12;
+const BRIDGE_MOUTH_DEPTH = 12;
 export const bridgeMouthAt = (b: FreewayBridge, x: number, z: number, reach = BRIDGE_MOUTH_DEPTH): void => {
   bridgeMouth.weight = 0;
   const half = b.width / 2;
@@ -502,8 +533,8 @@ export const bridgeMouthAt = (b: FreewayBridge, x: number, z: number, reach = BR
  *  and that asphalt is what the road ran across the deck's mouth — its curb and sidewalk, a sliver of
  *  sand where the pavement's edge curves away from the straight cut. A column running BESIDE the road
  *  (a deck wider than the road it continues, an oblique landing's corner) never reaches asphalt, so the
- *  road's own curb there stays as it is: painting the whole rectangle in front of the cut pushed the
- *  curb out into knobs and steps beside the deck (Evan, screenshot). `lo`: how much of the chunk's
+ *  road's own curb there stays as it is (painting the whole rectangle in front of the cut would push
+ *  the curb out into knobs and steps beside the deck). `lo`: how much of the chunk's
  *  `inward` a column's asphalt reaches under the slab — all of it but near the deck's sides, where the
  *  ground beside the slab would show it. */
 interface MouthEnd {
@@ -515,6 +546,9 @@ interface MouthEnd {
   lean: number;
   reach: Float64Array;
   lo: Float64Array;
+  /** The cut's two corners (the end section's outer points). */
+  cornerL: PointXZ;
+  cornerR: PointXZ;
 }
 const MOUTH_COLUMN = 1;
 /** The road field under which the ground paints as asphalt: the city shader's curb color starts at
@@ -575,7 +609,7 @@ const mouthEndsOf = (b: FreewayBridge, roadField: (x: number, z: number) => numb
       reach[i] = hit;
       lo[i] = Math.min(1, (half - Math.abs(l)) / MOUTH_SIDE_TAPER);
     }
-    ends.push({ ex: e.x, ez: e.z, dx, dz, lean, reach, lo });
+    ends.push({ ex: e.x, ez: e.z, dx, dz, lean, reach, lo, cornerL: { x: e.x + e.ax * e.wl, z: e.z + e.az * e.wl }, cornerR: { x: e.x - e.ax * e.wr, z: e.z - e.az * e.wr } });
   }
   mouthEnds.set(b, ends);
   return ends;
@@ -585,8 +619,8 @@ const mouthEndsOf = (b: FreewayBridge, roadField: (x: number, z: number) => numb
  *  paint nothing; the terrain takes the min of it and its own (computeVertexData step 7e). ASPHALT over
  *  each mouth column (mouthEndsOf) from the cut line to where the road's asphalt begins, and under the
  *  slab `inward` more: every vertex a terrain triangle reaching past the cut line can have (the vertex
- *  fields interpolate, and the slab's own vertices kept their curb, sidewalk or sand, which the
- *  triangles drew as a strip across the mouth — MEASURED). A signed DISTANCE field off the mouth's edge,
+ *  fields interpolate, and the slab's own vertices would keep their curb, sidewalk or sand, which the
+ *  triangles would draw as a strip across the mouth). A signed DISTANCE field off the mouth's edge,
  *  not a weight (per-vertex weights stepped its edges into the terrain's lattice): the curb color starts
  *  exactly on the edge — in front of the cut, the deck's side line — and climbs MOUTH_CURB_SLOPE per unit
  *  over the curb strip, gentle enough that its line interpolates straight between the terrain's
@@ -601,6 +635,8 @@ const MOUTH_SIDE_OUT = 1.5;
 /** Past this the field is nothing the paint (city_frag's last band ends at ROAD_HALF_WIDTH + 7.2) or a
  *  placement filter shows, and the mouth leaves the ground's own field alone. */
 const MOUTH_FIELD_MAX = 14.2;
+/** The mouth's field `outside` units off its edge: the curb strip, then the ground's paint coming back. */
+const edgeField = (outside: number): number => MOUTH_ASPHALT_EDGE + MOUTH_CURB_SLOPE * Math.min(outside, MOUTH_CURB_STRIP) + MOUTH_OUTER_SLOPE * Math.max(0, outside - MOUTH_CURB_STRIP);
 export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inward: number, asphalt: number, roadField: (x: number, z: number) => number): number => {
   let field = Infinity;
   const half = b.width / 2;
@@ -613,6 +649,8 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
   const near = (e: BridgeSection) => Math.hypot(x - e.x, z - e.z) < half + BRIDGE_MOUTH_DEPTH * 2 + inward + far;
   if (S.length < 2 || !(near(S[0]) || near(S[S.length - 1]))) return field;
   for (const m of mouthEndsOf(b, roadField)) {
+    const cl = m.cornerL;
+    const cr = m.cornerR;
     const rx = x - m.ex;
     const rz = z - m.ez;
     const l = rx * -m.dz + rz * m.dx;
@@ -627,6 +665,20 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
       return l < left ? left - l : l > right ? l - right : 0;
     };
     const lowOf = (i: number) => -(inward * m.lo[i] + MOUTH_SIDE_BEHIND * (1 - m.lo[i]));
+    // Behind the cut line the asphalt keeps off the slab's real SIDE edges: a terrain triangle from there
+    // reaches the ground beside the deck, which keeps its own paint. At an oblique cut's ACUTE corner the
+    // stretch within `inward` of both the cut and the side runs far along the side (and on a curving deck
+    // the mouth's straight columns run out past the side), and its asphalt showed beside the deck as a
+    // stepped patch. Within a corner's own square the asphalt runs to the side as before (or the curb
+    // would cross the mouth there); beyond it, it keeps `inward` off the side. Off that line the field
+    // climbs like the mouth's own edge, eased in over the first unit behind the cut so nothing steps.
+    const sideClipped = (f: number, depth: number): number => {
+      if (depth >= 0) return f;
+      const corner = Math.min(Math.hypot(x - cl.x, z - cl.z), Math.hypot(x - cr.x, z - cr.z));
+      const keep = inward * smoothstep(inward, 2 * inward, corner) - bridgeSideIn(b, x, z);
+      if (keep <= 0) return f;
+      return f + (Math.max(f, edgeField(keep)) - f) * smoothstep(0, 1, -depth);
+    };
     // How far column i's asphalt lies from the point along the deck (0: the point is in it; Infinity: none).
     const off = (i: number): number => {
       const top = m.reach[i];
@@ -643,7 +695,7 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
       for (let j = Math.max(0, c - span); j <= Math.min(n - 1, c + span); j++) {
         if (off(j) !== 0) inside = Math.min(inside, Math.max(0, Math.abs(l - (-half + (j + 0.5) * col)) - col / 2));
       }
-      field = Math.min(field, Math.max(asphalt, edge - MOUTH_CURB_SLOPE * inside));
+      field = Math.min(field, sideClipped(Math.max(asphalt, edge - MOUTH_CURB_SLOPE * inside), depth));
       continue;
     }
     let outside = Infinity;
@@ -651,7 +703,47 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
       const o = off(j);
       if (Number.isFinite(o)) outside = Math.min(outside, Math.hypot(gap(j), o));
     }
-    if (outside < far) field = Math.min(field, edge + MOUTH_CURB_SLOPE * Math.min(outside, MOUTH_CURB_STRIP) + MOUTH_OUTER_SLOPE * Math.max(0, outside - MOUTH_CURB_STRIP));
+    if (outside < far) field = Math.min(field, sideClipped(edgeField(outside), depth));
   }
   return field;
+};
+
+/** A landed end's APPROACH (computeVertexData step 7): the road in front of the end section — out to
+ *  `front`, fading over `fade` — where the road is laid at its own grade, flat across, instead of giving
+ *  way to the river (VertexResult.approachHeight). `bridgeApproach.weight` is 1 there, fading over
+ *  APPROACH_SIDE_FADE from APPROACH_SIDE past the deck's sides (the approach's shoulder lies within it, and
+ *  past it the road and the ground it gives way to are one) and over `fade` inward of the end's line past
+ *  a ramp and `margin` (the slab's own cut and fill take over there); `depth` is how far in front of
+ *  that end's line (negative inward). */
+export const bridgeApproach = { weight: 0, depth: 0 };
+const APPROACH_SIDE = 26;
+const APPROACH_SIDE_FADE = 8;
+export const bridgeApproachAt = (b: FreewayBridge, x: number, z: number, margin: number, front: number, fade: number): void => {
+  bridgeApproach.weight = 0;
+  const half = b.width / 2;
+  for (const which of [0, 1] as const) {
+    const landing = b.landings?.[which];
+    if (!landing) continue;
+    const S = drawnOf(b).S;
+    if (S.length < 2) return;
+    const e = which === 0 ? S[0] : S[S.length - 1];
+    const q = which === 0 ? S[1] : S[S.length - 2];
+    const dl = Math.hypot(q.x - e.x, q.z - e.z) || 1;
+    const dx = (q.x - e.x) / dl;
+    const dz = (q.z - e.z) / dl;
+    const s = (x - e.x) * dx + (z - e.z) * dz;
+    const l = (x - e.x) * -dz + (z - e.z) * dx;
+    const side = 1 - smoothstep(half + APPROACH_SIDE, half + APPROACH_SIDE + APPROACH_SIDE_FADE, Math.abs(l));
+    if (side <= bridgeApproach.weight) continue;
+    const al = e.ax * -dz + e.az * dx;
+    const as = e.ax * dx + e.az * dz;
+    if (Math.abs(al) < 1e-9) continue;
+    const depth = as * Math.max(-half, Math.min(half, l / al)) - s;
+    // Inward over the ramp and the margin (the terrain triangles across the seam), fading as in front.
+    const inward = Math.min(b.length / 2 - fade, landing.ramp + margin);
+    const along = depth >= 0 ? 1 - smoothstep(front, front + fade, depth) : 1 - smoothstep(inward, inward + fade, -depth);
+    if (side * along <= bridgeApproach.weight) continue;
+    bridgeApproach.weight = side * along;
+    bridgeApproach.depth = depth;
+  }
 };

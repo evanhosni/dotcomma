@@ -20,7 +20,7 @@ plus a spec; the actor class does the rest, on both sides.
  deterministic point  ─────register───►     registered entity (entities/manager.ts)
                                             │
                                             ├─ looks the kind up in the ACTOR CATALOG
-                                            │  (src/objects/actors/catalog.ts — the
+                                            │  (derived from the biome specs — the
                                             │  client's own spec files) and runs its
                                             │  STATE MACHINE (beeble/stateMachine.ts)
                                             │  at 10Hz with the nearest player as
@@ -62,12 +62,12 @@ terrain (the same height function the client uses, bit-identical).
 
 ## 3. Simulation: the server runs the beeble's own state machine
 
-`src/objects/actors/catalog.ts` lists every actor kind the server simulates,
-by spec id:
-
-```ts
-[BEEBLE_SPEC.id]: BEEBLE_SPEC,
-```
+The ACTOR CATALOG is every actor kind the domains' biomes place that the server
+has something to simulate for (a state machine, a moving body, a hull), by spec
+id. It is derived, not written: `ACTOR_CATALOG` in `src/world/domains/configs.ts`
+(`actorCatalogOf` in `src/objects/actors/catalog.ts`) collects it from every
+domain's region list, so the city biome listing `{ actor: BEEBLE_SPEC }` is what
+puts the beeble in it.
 
 `BEEBLE_SPEC` is `src/objects/actors/beeble/spec.ts`: the state machine plus
 the body (`body: "kinematic"`, a capsule, `movement: "ground"`). The state
@@ -115,8 +115,8 @@ side of that moment (`src/net/entities/interpolation.ts`, driven by
 `posePlayback.ts`). Because every client asks the same question of the same
 data on the same clock, they all draw the same frame of the same track. It
 does not matter when a message arrived, whether the browser hitched, or
-whether two packets came in together — those were the causes of the old
-"teleports" and "sliding".
+whether two packets came in together: none of those can make a beeble jump or
+slide.
 
 Rules the sampler follows:
 
@@ -306,12 +306,10 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
      footprint: 5, density: 200, clustering: 0, renderDistance: 200, priority: 80,
    };
    ```
-3. **Catalog** — one line in `src/objects/actors/catalog.ts`:
-   `[X_SPEC.id]: X_SPEC,`. (Forget it and dev throws when a biome places it (`describeActor`),
-   naming the line; `server/test/catalog.test.ts` catches it headlessly.)
-4. **Place it** — one line in a biome spec's `actors`
+3. **Place it** — one line in a biome spec's `actors`
    (`src/world/domains/overworld/regions/<region>/biomes/<biome>/spec.ts`):
-   `{ actor: X_SPEC }` — it spawns in exactly the biomes that list it (mount overrides go on the same object).
+   `{ actor: X_SPEC }` — it spawns in exactly the biomes that list it (mount overrides go on the same object),
+   and placing it is what puts it in the server's actor catalog.
    No component and no descriptor file: the client builds the descriptor from
    the spec, and `ModelActor` wires the state machine, the mouse events, the
    capsule and the animation for every actor whose spec has a `stateMachine`.
@@ -319,6 +317,9 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
 That's the whole job. Terrain, buildings, poles, player collision, publishing,
 interpolation and animation sync are all inherited. `serverSynced: false` on
 the placement runs the very same machine locally instead (same code path).
+Scene logic the machine cannot express (bones, particles) goes in a ModelActor
+wrapper with an `onFrame` — `src/objects/actors/README.md`, "An NPC with
+scene logic".
 
 ### Testing it without a browser
 
@@ -339,7 +340,7 @@ the two output channels.
 | beeble behavior (THE file to edit) | `src/objects/actors/beeble/stateMachine.ts` |
 | beeble spec (behavior + body + model + spawn knobs) | `src/objects/actors/beeble/spec.ts` |
 | where the beeble is placed | `actors` of `src/world/domains/overworld/regions/city/biomes/city/spec.ts` |
-| the actor catalog (kinds the server simulates) | `src/objects/actors/catalog.ts` |
+| the actor catalog (kinds the server simulates, derived from the biome specs) | `ACTOR_CATALOG` in `src/world/domains/configs.ts` (`actorCatalogOf`: `src/objects/actors/catalog.ts`) |
 | spec type, body/movement kinds | `src/objects/actors/spec.ts` |
 | state machine core (runs on both sides) | `src/objects/actors/state/runner.ts`, `triggers.ts`, `types.ts` |
 | motion + animation output channels, input reads | `src/objects/actors/state/motion.ts`, `animation.ts`, `input.ts` |
@@ -365,9 +366,9 @@ the two output channels.
   colliders … queue …`; a tick over 50ms warns.
 - `__entities.list()` in the browser console lists every registered entity
   with its server state and position.
-- `[domain] the JSX commit and the shared config … differ` in the browser
-  console means a region/biome/flatten actor was mounted in JSX without being
-  listed in the domain's `config.ts` — the server would stand NPCs on
-  different ground. Fix the config.
+- `[domain] the JSX commit and the shared config … differ in: …` in the
+  browser console means the ground the client commits differs from the
+  domain's shared `config.ts` (built from the same region/biome specs) — the
+  server would stand NPCs on different ground. Fix the spec or the config.
 - Remember: dotcomma.io runs the last deployed release. Uncommitted work only
   exists at `localhost:3000` (`npm run dev`).

@@ -6,7 +6,6 @@ import { CrtMonitor } from "./CrtMonitor";
 import { HomeGround } from "./HomeGround";
 import { HomeTitle } from "./HomeTitle";
 import { HOME_REGIONS } from "./regions";
-import { HomeRegion } from "./regions/home/region";
 
 const FLAT_NOISE: TerrainNoiseParams = {
   type: "perlin",
@@ -27,7 +26,7 @@ export const HomeDomain = React.memo(() => (
     <Terrain seed="home" baseNoise={FLAT_NOISE} roadNoise={FLAT_NOISE} river={{ halfWidth: 1, depth: 0, bank: 1, defaultProbability: 0 }} />
     <Skybox topColor="#000000" horizonColor="#000000" bottomColor="#000000" />
 
-    <Regions specs={HOME_REGIONS} components={{ home: HomeRegion }} />
+    <Regions specs={HOME_REGIONS} components={{ home: null }} />
 
     <HomeGround />
 

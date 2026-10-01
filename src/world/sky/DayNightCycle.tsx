@@ -13,88 +13,30 @@ import {
   SUN_DIRECTION,
   tickWindowLights,
 } from "../../lighting/dayNight";
+import {
+  buildCrescent,
+  buildDisc,
+  buildStarField,
+  jitterBody,
+  JITTER_INTERVAL_S,
+  MOON_DISTANCE,
+  MOON_ROUNDNESS,
+  MOON_SIZE,
+  MOON_VERTICES_COUNT,
+  STAR_COUNT,
+  STAR_DISTANCE,
+  SUN_DISTANCE,
+  SUN_ROUNDNESS,
+  SUN_SIZE,
+  SUN_VERTICES_COUNT,
+} from "./celestialBodies";
 
-const SUN_DISTANCE = 5000;
-const SUN_SIZE = 1000; // silhouette radius, world units
-const SUN_ROUNDNESS = 0.75; // 1 = perfect circle, 0 = very irregular blob
-const SUN_VERTICES_COUNT = 10; // rim vertices — fewer = chunkier
-const MOON_DISTANCE = 5000;
-const MOON_SIZE = 1000;
-const MOON_ROUNDNESS = 1; // 1 = clean crescent arcs, 0 = very irregular
-const MOON_VERTICES_COUNT = 19; // total boundary vertices across both arcs
-const STAR_DISTANCE = 5600;
-const STAR_COUNT = 550;
-
-const JITTER_INTERVAL_S = 0.09;
-const JITTER_AMPLITUDE = 0.07; // × radius, per tick, per vertex
-const QUANT_BASE = 0.13; // × radius — the exaggerated quantization grid
-const QUANT_DEGRADE = 0.55; // extra grid coarseness at full shrink
-
-interface JitterBody {
-  geometry: THREE.BufferGeometry;
-  /** Un-jittered local positions. */
-  base: Float32Array;
-  radius: number;
-}
-
-const buildDisc = (radius: number, rim: number, roundness: number): JitterBody => {
-  const irregularity = 1 - Math.min(Math.max(roundness, 0), 1);
-  const positions: number[] = [0, 0, 0];
-  for (let i = 0; i < rim; i++) {
-    const a = (i / rim) * Math.PI * 2 + (Math.random() - 0.5) * 0.7 * irregularity;
-    const r = radius * (1 - 0.45 * irregularity + Math.random() * 0.68 * irregularity);
-    positions.push(Math.cos(a) * r, Math.sin(a) * r, 0);
-  }
-  const indices: number[] = [];
-  for (let i = 1; i <= rim; i++) indices.push(0, i, (i % rim) + 1);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  return { geometry, base: new Float32Array(positions), radius };
-};
-
-const buildCrescent = (radius: number, vertexCount: number, roundness: number): JitterBody => {
-  const irregularity = 1 - Math.min(Math.max(roundness, 0), 1);
-  const wobble = (): number => 1 + (Math.random() - 0.5) * 0.5 * irregularity;
-  const outerSegs = Math.max(5, Math.round(vertexCount * 0.58));
-  const innerSegs = Math.max(4, vertexCount - outerSegs);
-  const innerR = radius * 0.92;
-  const innerCx = radius * 0.5;
-  // Circle-circle intersection → crescent tips
-  const ix = (radius * radius + innerCx * innerCx - innerR * innerR) / (2 * innerCx);
-  const iy = Math.sqrt(Math.max(radius * radius - ix * ix, 0));
-  const tip = Math.atan2(iy, ix); // upper tip angle on the outer circle
-  const shape = new THREE.Shape();
-  for (let i = 0; i <= outerSegs; i++) {
-    const a = tip + ((Math.PI * 2 - 2 * tip) * i) / outerSegs;
-    const r = radius * (i === 0 || i === outerSegs ? 1 : wobble()); // tips stay exact
-    if (i === 0) shape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-    else shape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-  }
-  const phi = Math.atan2(iy, ix - innerCx); // tip angle on the inner circle
-  // Concave inner edge, lower tip back to upper tip (angle runs -phi → phi - 2π).
-  for (let i = 1; i < innerSegs; i++) {
-    const a = -phi + ((2 * phi - Math.PI * 2) * i) / innerSegs;
-    const r = innerR * wobble();
-    shape.lineTo(innerCx + Math.cos(a) * r, Math.sin(a) * r);
-  }
-  const geometry = new THREE.ShapeGeometry(shape);
-  const base = new Float32Array((geometry.getAttribute("position") as THREE.BufferAttribute).array);
-  return { geometry, base, radius };
-};
-
-/** `degrade` (0..1) coarsens the grid so the shrinking body reads as even lower poly. */
-const jitterBody = (body: JitterBody, degrade: number): void => {
-  const attr = body.geometry.getAttribute("position") as THREE.BufferAttribute;
-  const amp = body.radius * JITTER_AMPLITUDE;
-  const q = body.radius * (QUANT_BASE + degrade * QUANT_DEGRADE);
-  const arr = attr.array as Float32Array;
-  for (let i = 0; i < arr.length; i += 3) {
-    arr[i] = Math.round((body.base[i] + (Math.random() * 2 - 1) * amp) / q) * q;
-    arr[i + 1] = Math.round((body.base[i + 1] + (Math.random() * 2 - 1) * amp) / q) * q;
-    arr[i + 2] = Math.round(((Math.random() * 2 - 1) * amp * 0.5) / q) * q;
-  }
-  attr.needsUpdate = true;
+/** A body shrinks away with its presence (never to 0 scale: the warm-up draw needs a triangle) and faces the camera. */
+const placeCelestialBody = (mesh: THREE.Mesh | null, presence: number, camera: THREE.Camera): void => {
+  if (!mesh) return;
+  mesh.visible = presence > 0.02;
+  mesh.scale.setScalar(Math.max(presence, 0.001));
+  mesh.quaternion.copy(camera.quaternion);
 };
 
 interface DayNightCycleProps {
@@ -127,20 +69,7 @@ export const DayNightCycle = ({
     [],
   );
 
-  const stars = useMemo(() => {
-    const positions = new Float32Array(STAR_COUNT * 3);
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const azimuth = Math.random() * Math.PI * 2;
-      const y = 0.06 + Math.random() * 0.94; // upper hemisphere only
-      const horizontal = Math.sqrt(1 - y * y);
-      positions[i * 3] = Math.cos(azimuth) * horizontal * STAR_DISTANCE;
-      positions[i * 3 + 1] = y * STAR_DISTANCE;
-      positions[i * 3 + 2] = Math.sin(azimuth) * horizontal * STAR_DISTANCE;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    return geometry;
-  }, []);
+  const stars = useMemo(() => buildStarField(STAR_COUNT, STAR_DISTANCE), []);
   const starMaterial = useMemo(
     () =>
       new THREE.PointsMaterial({
@@ -203,16 +132,8 @@ export const DayNightCycle = ({
 
     const sunMesh = sunRef.current;
     const moonMesh = moonRef.current;
-    if (sunMesh) {
-      sunMesh.visible = sunPresence > 0.02;
-      sunMesh.scale.setScalar(Math.max(sunPresence, 0.001));
-      sunMesh.quaternion.copy(camera.quaternion);
-    }
-    if (moonMesh) {
-      moonMesh.visible = moonPresence > 0.02;
-      moonMesh.scale.setScalar(Math.max(moonPresence, 0.001));
-      moonMesh.quaternion.copy(camera.quaternion);
-    }
+    placeCelestialBody(sunMesh, sunPresence, camera);
+    placeCelestialBody(moonMesh, moonPresence, camera);
     if (starsRef.current) {
       starMaterial.opacity = blend * 0.9;
       starsRef.current.visible = blend > 0.01;

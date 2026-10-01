@@ -5,18 +5,16 @@
  * at the call site to bundle the worker — hence the `create` factory.
  */
 
-export interface WorkerClientOptions<TInit> {
+interface WorkerClientOptions<TInit> {
   /** Construct the Worker — must be the literal `new Worker(new URL(...))`. */
   create: () => Worker;
   /** INIT payload (sent as `{ type: "INIT", ...payload }`); may be async. Omit for handshake-free workers. */
   init?: () => TInit | Promise<TInit>;
-  /** Message `type` a request result arrives with (other types go to onMessage). Default: any message carrying a pending `id`. */
+  /** Message `type` a request result arrives with (other messages are ignored). Default: any message carrying a pending `id`. */
   resultType?: string;
-  /** Fire-and-forget messages that aren't request results. */
-  onMessage?: (data: any) => void;
 }
 
-export interface WorkerClient {
+interface WorkerClient {
   /** Idempotent; resolves once INIT_DONE arrived. */
   ensure: () => Promise<void>;
   isReady: () => boolean;
@@ -43,10 +41,8 @@ export const createWorkerClient = <TInit = unknown>(options: WorkerClientOptions
       if (resolve) {
         pending.delete(data.id);
         resolve(data);
-        return;
       }
     }
-    options.onMessage?.(data);
   };
 
   const ensure = (): Promise<void> => {

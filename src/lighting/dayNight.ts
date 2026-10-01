@@ -57,7 +57,6 @@ export const setNightBlend = (blend: number): void => {
 };
 
 export const getNightBlend = (): number => nightBlend;
-export const getDayNightPhase = (): DayNightPhase => phase;
 
 let windowLightsProgress = 0; // 0 = all off, 1 = every selected window on
 let nightIndex = 0; // reshuffles WHICH windows light each nightfall

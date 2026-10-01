@@ -1,23 +1,7 @@
-import { DressingAttributes } from "../../types";
-import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import {
-  type ChunkWithPoints,
-  DressingPartColliders,
-  finalizeInstancedChunk,
-  instancedFromPoints,
-  setInstanceTransform,
-  useChunkRegistry,
-  useDressingAssets,
-  useDressingChunks,
-  useDressingColliders,
-  DRESSING_COLLIDER_DISTANCE,
-  useDressingDefault,
-  useServerPlacementCheck,
-  yawFromDir,
-} from "../Dressing";
-import { enumerateDressing } from "../dressingWorker";
+import { DressingAttributes } from "../../types";
+import { finalizeInstancedChunk, instancedFromPoints, setInstanceTransform, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
 import type { CityFreewaySidePoint } from "../../../utils/workers/vertexCompute";
 
 import {
@@ -29,9 +13,12 @@ import {
   UTILITY_POLE_HEIGHT,
 } from "./poleSpec";
 
-const DEFAULTS = POWER_LINES_SPEC.placement;
-
+const DEFAULT_RENDER_DISTANCE = 420;
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
+const WIRE_SAG_PER_LENGTH = 0.05; // midspan drop per unit of span length …
+const WIRE_MAX_SAG = 3; // … capped here
+/** Wire cross-section 0.06u, rounded up. */
+const WIRE_BOUNDS_PAD = 0.1;
 // Wire attach points as [y up the pole, z across it]: crossarm ends + top.
 const WIRE_ATTACH_POINTS: [number, number][] = [
   [UTILITY_POLE_HEIGHT - 0.72, CROSSARM_HALF_LENGTH - 0.25],
@@ -39,13 +26,8 @@ const WIRE_ATTACH_POINTS: [number, number][] = [
   [UTILITY_POLE_HEIGHT - 0.05, 0],
 ];
 
-export interface PowerLinesProps extends DressingAttributes {
-  spacing?: number;
-  /** Past the freeway edge. */
-  lateralMargin?: number;
-  /** Runs stop this close to interchanges. */
-  junctionClear?: number;
-}
+/** Placement lives in poleSpec.ts only (the server builds the colliders from it). */
+export interface PowerLinesProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
 
 /** Both ends' crossarm offsets use the starting pole's frame — the next pole's tangent differs
  *  by a few degrees of wiggle at most, invisible at pole height. */
@@ -68,7 +50,7 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
       a.set(p.x + offX * az, p.y + ay, p.z + offZ * az);
       b.set(n.x + offX * az, n.y + ay, n.z + offZ * az);
       const span = a.distanceTo(b);
-      const sag = Math.min(3, span * 0.05);
+      const sag = Math.min(WIRE_MAX_SAG, span * WIRE_SAG_PER_LENGTH);
       for (let s = 0; s < WIRE_SEGMENTS; s++) {
         const t0 = s / WIRE_SEGMENTS;
         const t1 = (s + 1) / WIRE_SEGMENTS;
@@ -88,23 +70,12 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
   }
   wires.instanceMatrix.needsUpdate = true;
   if (instanceIndex > 0) {
-    finalizeInstancedChunk(wires, min.x, min.y, min.z, max.x, max.y, max.z, 0.1); // 0.06u wire cross-section
+    finalizeInstancedChunk(wires, min.x, min.y, min.z, max.x, max.y, max.z, WIRE_BOUNDS_PAD);
   }
 };
 
 /** Each pole owns the wire span to its `next` point, so runs stay continuous across chunk borders. */
-export const PowerLines = ({
-  renderDistance,
-  colliderDistance,
-  spacing = DEFAULTS.spacing,
-  lateralMargin = DEFAULTS.lateralMargin,
-  junctionClear = DEFAULTS.junctionClear,
-}: PowerLinesProps) => {
-  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 420);
-  const placement = { ...DEFAULTS, spacing, lateralMargin, junctionClear };
-  useServerPlacementCheck(POWER_LINES_SPEC, placement);
-  const registry = useChunkRegistry<ChunkWithPoints>();
-
+export const PowerLines = ({ renderDistance, colliderDistance }: PowerLinesProps) => {
   const assets = useDressingAssets(() => ({
     poleGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.3, UTILITY_POLE_HEIGHT, 0.3).translate(0, UTILITY_POLE_HEIGHT / 2, 0),
@@ -117,12 +88,13 @@ export const PowerLines = ({
     wireMaterial: new THREE.MeshBasicMaterial({ color: 0x0e0e10 }),
   }));
 
-  const groupRef = useDressingChunks({
-    renderDistance: resolvedDistance,
-    build: async (bounds) => {
-      const points = await enumerateDressing(POWER_LINES_SPEC.enumerator, bounds, { ...placement, withNext: true });
-      if (points.length === 0) return null;
-
+  // Post + crossarm colliders only; wires are deliberately not solid (poleSpec.ts).
+  const { content } = useSolidDressing(POWER_LINES_SPEC, {
+    requestExtras: { withNext: true },
+    renderDistance,
+    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
+    colliderDistance,
+    build: (points) => {
       const poles = instancedFromPoints(assets.poleGeometry, assets.poleMaterial, points, (p) => ({
         x: p.x,
         y: p.y,
@@ -142,24 +114,9 @@ export const PowerLines = ({
         fillWireSpans(wires, spans);
         group.add(wires);
       }
-      registry.add({
-        group,
-        points: points.flatMap(POWER_LINES_SPEC.bodiesOf),
-      });
-      return group;
+      return { group };
     },
   });
 
-  // Also owns the registry's prune sweep — PowerLines has no other frame loop.
-  const colliders = useDressingColliders(registry, {
-    colliderDistance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
-  });
-
-  return (
-    <>
-      <group ref={groupRef} />
-      {/* Post + crossarm only; wires are deliberately not solid (poleSpec.ts). */}
-      <DressingPartColliders colliders={colliders} parts={POWER_LINES_SPEC.colliderParts} />
-    </>
-  );
+  return content;
 };

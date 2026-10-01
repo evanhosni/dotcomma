@@ -1,26 +1,19 @@
 import { useContext, useLayoutEffect } from "react";
-import { getActorSpec } from "../../objects/actors/catalog";
 import { ACTOR_COMPONENTS } from "../../objects/actors/components";
-import { actorAttributesOf, mountOverridesOf, specNeedsServer, specsAgree, type ActorMount, type ActorSpec } from "../../objects/actors/spec";
+import { actorAttributesOf, mountOverridesOf, specNeedsServer, type ActorMount, type ActorSpec } from "../../objects/actors/spec";
 import { ActorDescriptor, AnyActorDescriptor } from "../../objects/actors/spawning/types";
 import { ActorAttributes } from "../../objects/types";
+import { reportContentError } from "../../utils/contentError";
+import { getActorSpec } from "../domains/configs";
 import { BiomeContext, useDomainStore } from "./context";
 
-const reportActorError = (problem: string): void => {
-  if (process.env.NODE_ENV === "development") throw new Error(problem);
-  console.error(problem);
-};
-
-/** A kind the server simulates must be in the catalog under its id with the same simulation. */
+/** A kind the server simulates must reach the server's catalog, which is derived from DOMAIN_REGIONS. */
 const assertCataloged = (spec: ActorSpec): void => {
-  const listed = getActorSpec(spec.id);
-  const problem =
-    !listed && specNeedsServer(spec)
-      ? `actor "${spec.id}" has a spec the server simulates but no entry in src/objects/actors/catalog.ts. Add \`[${spec.id}]: <its spec>\` there.`
-      : listed && !specsAgree(listed, spec)
-        ? `actor "${spec.id}": the catalog's spec differs from the one its descriptor was built from — the client and the server would simulate different things.`
-        : null;
-  if (problem) reportActorError(problem);
+  if (!specNeedsServer(spec) || getActorSpec(spec.id) === spec) return;
+  reportContentError(
+    `[actors] "${spec.id}" is simulated by the server, but no domain in world/domains/configs.ts (DOMAIN_REGIONS) ` +
+      `places this spec — list the domain's region list there.`,
+  );
 };
 
 const DESCRIPTOR_OF_SPEC = new WeakMap<ActorSpec, AnyActorDescriptor>();
@@ -33,9 +26,11 @@ export const describeActor = <A extends ActorAttributes>(spec: ActorSpec): Actor
   assertCataloged(spec);
   const component = ACTOR_COMPONENTS[spec.component ?? "model"];
   if (component === ACTOR_COMPONENTS.model && !spec.model) {
-    reportActorError(`actor "${spec.id}" renders as a GLTF model but its spec sets no \`model\` (or a \`component\`).`);
+    reportContentError(`[actors] "${spec.id}" renders as a GLTF model but its spec sets no \`model\` (or a \`component\`).`);
   }
-  const descriptor = { component, ...actorAttributesOf(spec) } as unknown as AnyActorDescriptor;
+  // A kind the server has nothing to simulate would only register an entity for nothing.
+  const localOnly = specNeedsServer(spec) ? {} : { serverSynced: false };
+  const descriptor = { component, ...localOnly, ...actorAttributesOf(spec) } as unknown as AnyActorDescriptor;
   DESCRIPTOR_OF_SPEC.set(spec, descriptor);
   return descriptor as ActorDescriptor<A>;
 };
@@ -49,9 +44,6 @@ const Actor = (props: AnyActorDescriptor) => {
   if (!biome) throw new Error("actors must be mounted inside <Biome>");
 
   const descriptor: AnyActorDescriptor = { ...props, biomeIds: [biome.biomeId] };
-  // A kind the server has nothing to simulate would only register an entity for nothing.
-  if (descriptor.serverSynced === undefined && !getActorSpec(descriptor.id)) descriptor.serverSynced = false;
-
   const { component, ...serializable } = descriptor;
   const dataKey = JSON.stringify(serializable);
   const descriptorId = descriptor.id;

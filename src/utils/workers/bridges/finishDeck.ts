@@ -23,11 +23,17 @@ const BRIDGE_PAINT_JUNCTION_CLEAR = 8;
 /** At a landed end whose road carries no lane paint, the deck's paint starts this far in. */
 const BRIDGE_PAINT_END_CLEAR = 12;
 
+/** The decks each finished deck merges with (its hosts, T-children and overlapping decks). Finishing
+ *  twice would be wrong: the gaps are stations, so a second pass would see different sections. */
+const mergedWith = new WeakMap<FreewayBridge, FreewayBridge[]>();
+export const deckMerges = (deck: FreewayBridge): FreewayBridge[] | undefined => mergedWith.get(deck);
+
 /** An owned deck's parapet gaps and lane paint, against every deck it meets — its hosts, its
  *  T-children, and any deck overlapping it: its walls stand only on the outer edge of their merged
- *  slabs, never over pavement, and never as a stub. */
+ *  slabs, never over pavement, and never as a stub. Once per deck. */
 export const finishDeck = (c: BridgeChain, chains: BridgeChain[], build: (c: BridgeChain) => FreewayBridge | null): void => {
   const deck = c.deck!;
+  if (mergedWith.has(deck)) return;
   const others = new Set<FreewayBridge>();
   // A host's slab edge is where this deck's cut — and so its walls — already end: no gap against it.
   const hosts = new Set<FreewayBridge>();
@@ -111,9 +117,10 @@ export const finishDeck = (c: BridgeChain, chains: BridgeChain[], build: (c: Bri
   // just outside its own drawn edge (fillets and flares included) lies another merged deck's DRAWN slab —
   // its hosts' too. So the host's wall runs on to exactly where a child's fillet leaves its edge and the
   // fillet's wall takes over there, and at a T's corner the host's wall ends on the child's side wall
-  // (clipping each wall against the other deck's strip left a stray wall in the middle of a Y, gaps and
-  // jogged, overlapping corners — Evan, screenshots).
+  // (clipping each wall against the other deck's strip instead leaves a stray wall in the middle of a
+  // Y, gaps and jogged, overlapping corners).
   const merging = [...others, ...hosts];
+  mergedWith.set(deck, merging);
   if (merging.length > 0) {
     for (const side of [1, -1] as const) {
       const coveredAt = (i: number, f: number): boolean => {

@@ -16,7 +16,7 @@ import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
 import { cityRowEdgeZ, citySegEdgeX, cityWiggleSlope, getCityDistrict, rowWiggle, segWiggle } from "../roads/cityTerrain";
 import { FREEWAY_LINK_CELLS, networkOf } from "../roads/freewayNetwork";
-import { biomeSiteAt, getBiomeContext, wallsOfBiome } from "../voronoi";
+import { biomeSiteAt, getBiomeContext, cityWallsOf } from "../voronoi";
 import { RIVER_BLOCK_WATER, RIVER_MEANDER_AMP, riverCellEntry, riverDebug, type RiverEdge, riverEdgeBlocked, riverKeepOff, type RiverPiece } from "./riverNetwork";
 
 /** The road layer (riverPieceSuppressed): where a road runs within ALIGN of the river's direction
@@ -78,7 +78,7 @@ const riverPieceAlongRoad = (e: RiverEdge, i: number): boolean => {
     }
     if (along) break;
   }
-  if (!along) along = wallsOfBiome(ctx.zoneWalls, CITY_BIOME_ID).some((w) => distanceToSegment(mx, mz, w.sx, w.sz, w.ex, w.ez) < reach && aligned(w.ex - w.sx, w.ez - w.sz));
+  if (!along) along = cityWallsOf(ctx).some((w) => distanceToSegment(mx, mz, w.sx, w.sz, w.ex, w.ez) < reach && aligned(w.ex - w.sx, w.ez - w.sz));
   if (!along && ctx.zone.biome.id === CITY_BIOME_ID) {
     // Arterials are world-space curves (axis distance, like cityArterialDist); compare in world space.
     const p = unwarp(mx, mz);
@@ -193,9 +193,10 @@ const layerCarried = (s: RoadLayerScan, p: RoadPath, k: number): boolean => {
 
 /** How a stretch's polyline (samples lo-1..b+1) meets the edge: crossings of its built centerline —
  *  each END of a built stretch extended by its half-width (a pond's round end, as the bridges count
- *  them; not a junction the river goes on through: the extension ran into the other river's water and
- *  a run beside a confluence counted twice), once per point (a path through a network hub passes one
- *  point twice) — the shallowest of them, and its length along the shore inside the footprint. */
+ *  them; not at a junction the river goes on through, where the extension would run into the other
+ *  river's water and count a run beside a confluence twice), once per point (a path through a network
+ *  hub passes one point twice) — the shallowest of them, and its length along the shore inside the
+ *  footprint. */
 const layerCrossings = (s: RoadLayerScan, p: RoadPath, lo: number, b: number): { crossings: number; angle: number; along: number } => {
   const { e, n, step, widths, reach } = s;
   const hw = domainConfig!.river.halfWidth;
@@ -263,7 +264,7 @@ const classifyRoadStretches = (s: RoadLayerScan): { deckable: number[]; undeckab
     const cum = [0];
     for (let k = 1; k < m; k++) cum.push(cum[k - 1] + Math.hypot(p.x[k] - p.x[k - 1], p.z[k] - p.z[k - 1]));
     // (A road ends in the water only where its end sample is in it for certain — the meander on the
-    // far side: the margin made a run's end at a belt corner on the bank read as in the river.)
+    // far side — or a run's end at a belt corner on the bank would read as in the river.)
     const certainlyWet = (k: number) => layerNearest(s, p.wx[k], p.wz[k], RIVER_MEANDER_AMP) < yields[pi][k];
     for (let a = 0; a < m; ) {
       if (!wet[a]) {
@@ -304,8 +305,8 @@ const classifyRoadStretches = (s: RoadLayerScan): { deckable: number[]; undeckab
       const cls = open ? "openAlong" : !odd ? "graze" : angle < RIVER_ROAD_MIN_CROSSING ? "shallow" : "along";
       // A city arterial that does not cross the river deckably — it follows it, grazes it, or ends in it
       // on its own bank — is carried along the bank by the QUAY road (the city's own, getCityTerrain),
-      // which it meets at both ends: removing the river under every one took out a city's whole river
-      // front (MEASURED: ~290 of the 28 km square's 3600 built pieces).
+      // which it meets at both ends: removing the river under every one would take out a city's whole
+      // river front.
       if (cls !== "shallow" && arterial) continue;
       for (let k = lo; k <= b; k++) endless[pi][k] = 1;
       undeckable.push({ ...stretch, cls });
@@ -345,9 +346,9 @@ const classifyRoadStretches = (s: RoadLayerScan): { deckable: number[]; undeckab
  *     a belt or run ending in the water with no deck to tee into there (STRANDED) — again and again,
  *     until none is left (a removal can leave a road grazing the new end). Not a GRAZE (a deck landing
  *     beside it or the road going on round it carries the connection — removing the river under every
- *     graze takes out whole river mouths between two cities, their decks with them: MEASURED 14 of the
- *     bench's 59 decks), not a stretch beside one a deck carries, not a belt the
- *     waterfront or a city arterial the quay carries along the bank;
+ *     graze would take out whole river mouths between two cities, their decks with them), not a
+ *     stretch beside one a deck carries, not a belt the waterfront or a city arterial the quay carries
+ *     along the bank;
  *   - NO RIVER END UNDER A ROAD: a river END — natural (pond, fizzle), at an unbuilt piece, at a gap
  *     the road won, or at a junction every other river leaving gave up (RIVER_JUNCTION_RETRACT pieces
  *     at most: a longer retraction eats a decked crossing beside it) — retracts, piece by piece, while
@@ -391,7 +392,7 @@ const riverEdgeRoadLayer = (e: RiverEdge, beforeRetraction = false): Uint8Array 
   const runYield = runRiverYield();
   const s: RoadLayerScan = { e, n, step, blocked, widths, out, reach, paths, yields: paths.map((p) => p.wx.map(() => (p.kind === "run" ? runYield : reach))) };
   // A closed road (two runs between the same hubs, a whole belt ring) is opened at a dry sample: its
-  // seam is no road end (a wet stretch across it read as the road ending in the water).
+  // seam is no road end (a wet stretch across it would read as the road ending in the water).
   for (const p of paths) {
     const m = p.wx.length;
     if (m < 3 || Math.hypot(p.wx[0] - p.wx[m - 1], p.wz[0] - p.wz[m - 1]) > 1e-6) continue;

@@ -69,7 +69,7 @@ test("a landed cut end is one surface with its road", () => {
           const v = computeVertexData(px, pz);
           // Asphalt right up to the cut (no curb across the mouth) wherever the road's own asphalt lies
           // ahead of it along the deck — a deck wider than the road it carries on keeps that road's
-          // curb beside it (round 18) — at the cut's own height.
+          // curb beside it — at the cut's own height.
           let ahead = false;
           for (let d = 0; d <= 12 && !ahead; d += 0.25) ahead = computeVertexDataRaw(px - dx * d, pz - dz * d).distanceToRoadCenter < 6.7;
           if (ahead) expect(v.distanceToRoadCenter).toBeLessThan(7);

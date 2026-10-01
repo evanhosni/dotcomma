@@ -1,6 +1,4 @@
-import { DressingAttributes } from "../../types";
 import { useFrame } from "@react-three/fiber";
-import React from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import {
@@ -11,24 +9,18 @@ import {
   registerLampHeads,
   setLampHeadColor,
 } from "../../../lighting/lampGlow";
-import {
-  type ChunkWithPoints,
-  DressingPartColliders,
-  instancedFromPoints,
-  useChunkRegistry,
-  useDressingAssets,
-  useDressingChunks,
-  useDressingColliders,
-  DRESSING_COLLIDER_DISTANCE,
-  useDressingDefault,
-  useServerPlacementCheck,
-  yawFromDir,
-} from "../Dressing";
-import { enumerateDressing } from "../dressingWorker";
-
+import { instancedTemplate } from "../../../utils/warmPrograms";
+import { DressingAttributes } from "../../types";
+import { type ChunkWithPoints, instancedFromPoints, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
 import { SIGNAL_ARM_LENGTH, SIGNAL_PARTS, SIGNAL_POLE_HEIGHT, TRAFFIC_LIGHTS_SPEC } from "./signalSpec";
 
+const DEFAULT_RENDER_DISTANCE = 340;
 const LAMP_OFFSET = SIGNAL_ARM_LENGTH + 0.26; // lamps proud of the head's front face
+const LAMPS_PER_SIGNAL = 3;
+/** Lamp `l` (0 = top)'s center above the pole base: 0.6 under the pole top, 0.65 apart. */
+const lampHeight = (l: number): number => SIGNAL_POLE_HEIGHT - 0.6 - l * 0.65;
+/** The glow source: the head's center (SIGNAL_PARTS.head), this far under the pole top. */
+const GLOW_DROP = 1.25;
 
 // Lamp instances 3i / 3i+1 / 3i+2 = red / yellow / green, top to bottom. state: 0 green, 1 yellow, 2 red.
 const LIT_COLORS = [new THREE.Color("#ff2418"), new THREE.Color("#ffb400"), new THREE.Color("#19ff5a")];
@@ -56,21 +48,78 @@ interface SignalChunk extends ChunkWithPoints {
   nextSwitchIn: number;
 }
 
-export interface TrafficLightsProps extends DressingAttributes {
-  /** Seeded fraction of eligible intersections that get signals. */
-  chance?: number;
-}
+const paintSignal = (lamps: THREE.InstancedMesh, signal: number, state: number): void => {
+  const lit = STATE_TO_LAMP[state];
+  for (let l = 0; l < LAMPS_PER_SIGNAL; l++) {
+    lamps.setColorAt(signal * LAMPS_PER_SIGNAL + l, l === lit ? LIT_COLORS[l] : DIM_COLORS[l]);
+  }
+};
 
-export const TrafficLights = ({
-  renderDistance,
-  colliderDistance,
-  chance = TRAFFIC_LIGHTS_SPEC.placement.chance,
-}: TrafficLightsProps) => {
-  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
-  const placement = { chance };
-  useServerPlacementCheck(TRAFFIC_LIGHTS_SPEC, placement);
-  const registry = useChunkRegistry<SignalChunk>((chunk) => chunk.releaseHeads());
+/** Partial GPU upload of the flipped instance range [minInst, maxInst] (the attribute counts array
+ *  elements, 3 per instance). A still-pending range means the mesh was frustum-culled and the renderer
+ *  never consumed it — the new range must EXPAND over it (kept as ONE range, or a long-culled chunk
+ *  accumulates an entry per flip) or those colors silently never reach the GPU. Runtime three is r157
+ *  (single `updateRange`); `updateRanges`/addUpdateRange arrived in r159 and @types/three is newer than
+ *  the runtime, so branch on what exists. */
+const markInstanceColorRange = (attr: THREE.InstancedBufferAttribute, minInst: number, maxInst: number): void => {
+  let start = minInst * 3;
+  let end = (maxInst + 1) * 3;
+  const anyAttr = attr as any;
+  const ranges: { start: number; count: number }[] | undefined = anyAttr.updateRanges;
+  if (Array.isArray(ranges)) {
+    if (ranges.length > 0) {
+      const r = ranges[0];
+      start = Math.min(start, r.start);
+      end = Math.max(end, r.start + r.count);
+      ranges.length = 1;
+      r.start = start;
+      r.count = end - start;
+    } else {
+      anyAttr.addUpdateRange(start, end - start);
+    }
+  } else if (anyAttr.updateRange) {
+    if (anyAttr.updateRange.count !== -1) {
+      start = Math.min(start, anyAttr.updateRange.offset);
+      end = Math.max(end, anyAttr.updateRange.offset + anyAttr.updateRange.count);
+    }
+    anyAttr.updateRange.offset = start;
+    anyAttr.updateRange.count = end - start;
+  }
+  attr.needsUpdate = true;
+};
 
+/** Advances one chunk's lights by the time since its last pass; flips the due ones. */
+const stepSignalChunk = (chunk: SignalChunk, delta: number): void => {
+  chunk.secondsSincePass += delta;
+  if (chunk.secondsSincePass < chunk.nextSwitchIn) return;
+  const elapsed = chunk.secondsSincePass;
+  chunk.secondsSincePass = 0;
+
+  let minRemaining = Infinity;
+  let minInst = Infinity;
+  let maxInst = -1;
+  for (let i = 0; i < chunk.lights.length; i++) {
+    const light = chunk.lights[i];
+    light.secondsUntilSwitch -= elapsed;
+    if (light.secondsUntilSwitch <= 0) {
+      light.state = nextState(light.state);
+      light.secondsUntilSwitch = randomHoldSeconds();
+      setLampHeadColor(light.head, STATE_TO_GLOW[light.state]);
+      paintSignal(chunk.lamps, i, light.state);
+      if (i * LAMPS_PER_SIGNAL < minInst) minInst = i * LAMPS_PER_SIGNAL;
+      maxInst = i * LAMPS_PER_SIGNAL + LAMPS_PER_SIGNAL - 1;
+    }
+    if (light.secondsUntilSwitch < minRemaining) minRemaining = light.secondsUntilSwitch;
+  }
+  chunk.nextSwitchIn = minRemaining;
+
+  if (maxInst >= 0 && chunk.lamps.instanceColor) markInstanceColorRange(chunk.lamps.instanceColor, minInst, maxInst);
+};
+
+/** Placement (the signal `chance`) lives in signalSpec.ts only (the server builds the colliders from it). */
+export interface TrafficLightsProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
+
+export const TrafficLights = ({ renderDistance, colliderDistance }: TrafficLightsProps) => {
   const assets = useDressingAssets(() => ({
     bodyGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.5, 0.4, 0.5).translate(0, 0.2, 0), // base
@@ -79,25 +128,25 @@ export const TrafficLights = ({
         SIGNAL_PARTS.arm.x,
         SIGNAL_PARTS.arm.y,
         0
-      ), // arm
+      ),
       new THREE.BoxGeometry(SIGNAL_PARTS.head.w, SIGNAL_PARTS.head.h, SIGNAL_PARTS.head.d).translate(
         SIGNAL_PARTS.head.x,
         SIGNAL_PARTS.head.y,
         0
-      ), // head
+      ),
     ]),
     lampGeometry: new THREE.BoxGeometry(0.18, 0.48, 0.48),
     bodyMaterial: new THREE.MeshStandardMaterial({ color: 0x23262a, roughness: 0.9, metalness: 0.2 }),
     // Untonemapped so lit lamps read as light sources by day too.
     lampMaterial: new THREE.MeshBasicMaterial({ toneMapped: false }),
-  }));
+  }), (a) => [instancedTemplate(a.bodyMaterial), instancedTemplate(a.lampMaterial, { instanceColor: true })]);
 
-  const groupRef = useDressingChunks({
-    renderDistance: resolvedDistance,
-    build: async (bounds) => {
-      const points = await enumerateDressing(TRAFFIC_LIGHTS_SPEC.enumerator, bounds, placement);
-      if (points.length === 0) return null;
-
+  const { registry, content } = useSolidDressing<"trafficLights", SignalChunk>(TRAFFIC_LIGHTS_SPEC, {
+    renderDistance,
+    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
+    colliderDistance,
+    onRemove: (chunk) => chunk.releaseHeads(),
+    build: (points) => {
       const bodyMesh = instancedFromPoints(assets.bodyGeometry, assets.bodyMaterial, points, (p) => ({
         x: p.x,
         y: p.y,
@@ -105,11 +154,10 @@ export const TrafficLights = ({
         yaw: yawFromDir(p.dirX, p.dirZ),
       }));
 
-      const lampY = (l: number) => SIGNAL_POLE_HEIGHT - 0.6 - l * 0.65;
       const lampPoints = points.flatMap((p) => [0, 1, 2].map((l) => ({ p, l })));
       const lamps = instancedFromPoints(assets.lampGeometry, assets.lampMaterial, lampPoints, ({ p, l }) => ({
         x: p.x + p.dirX * LAMP_OFFSET,
-        y: p.y + lampY(l),
+        y: p.y + lampHeight(l),
         z: p.z + p.dirZ * LAMP_OFFSET,
         yaw: yawFromDir(p.dirX, p.dirZ),
       }));
@@ -117,15 +165,9 @@ export const TrafficLights = ({
       // Seeded phase only desynchronizes the initial states; runtime randomness takes over.
       const lights: LightAnim[] = points.map((p, i) => {
         const state = Math.floor(p.phase * 3) % 3;
-        const lit = STATE_TO_LAMP[state];
-        for (let l = 0; l < 3; l++) lamps.setColorAt(i * 3 + l, l === lit ? LIT_COLORS[l] : DIM_COLORS[l]);
-
+        paintSignal(lamps, i, state);
         const head: LampHead = {
-          position: new THREE.Vector3(
-            p.x + p.dirX * SIGNAL_ARM_LENGTH,
-            p.y + SIGNAL_POLE_HEIGHT - 1.25,
-            p.z + p.dirZ * SIGNAL_ARM_LENGTH
-          ),
+          position: new THREE.Vector3(p.x + p.dirX * SIGNAL_ARM_LENGTH, p.y + SIGNAL_POLE_HEIGHT - GLOW_DROP, p.z + p.dirZ * SIGNAL_ARM_LENGTH),
           color: STATE_TO_GLOW[state],
         };
         return { state, secondsUntilSwitch: (p.phase * 7.13) % randomHoldSeconds(), head };
@@ -136,92 +178,18 @@ export const TrafficLights = ({
       const group = new THREE.Group();
       group.add(bodyMesh);
       group.add(lamps);
-      registry.add({
+      return {
         group,
         lamps,
         lights,
         releaseHeads,
-        points: points.flatMap(TRAFFIC_LIGHTS_SPEC.bodiesOf),
         secondsSincePass: 0,
         nextSwitchIn: lights.reduce((min, l) => Math.min(min, l.secondsUntilSwitch), Infinity),
-      });
-      return group;
+      };
     },
   });
 
-  const colliders = useDressingColliders(registry, {
-    colliderDistance: useDressingDefault("colliderDistance", colliderDistance, DRESSING_COLLIDER_DISTANCE),
-  });
+  useFrame((_, delta) => registry.forEachAlive((chunk) => stepSignalChunk(chunk, delta)));
 
-  useFrame((_, delta) => {
-    registry.forEachAlive((chunk) => {
-      chunk.secondsSincePass += delta;
-      if (chunk.secondsSincePass < chunk.nextSwitchIn) return;
-      const elapsed = chunk.secondsSincePass;
-      chunk.secondsSincePass = 0;
-
-      let minRemaining = Infinity;
-      let minInst = Infinity;
-      let maxInst = -1;
-      for (let i = 0; i < chunk.lights.length; i++) {
-        const light = chunk.lights[i];
-        light.secondsUntilSwitch -= elapsed;
-        if (light.secondsUntilSwitch <= 0) {
-          light.state = nextState(light.state);
-          light.secondsUntilSwitch = randomHoldSeconds();
-          setLampHeadColor(light.head, STATE_TO_GLOW[light.state]);
-          const lit = STATE_TO_LAMP[light.state];
-          for (let l = 0; l < 3; l++) {
-            chunk.lamps.setColorAt(i * 3 + l, l === lit ? LIT_COLORS[l] : DIM_COLORS[l]);
-          }
-          if (i * 3 < minInst) minInst = i * 3;
-          maxInst = i * 3 + 2;
-        }
-        if (light.secondsUntilSwitch < minRemaining) minRemaining = light.secondsUntilSwitch;
-      }
-      chunk.nextSwitchIn = minRemaining;
-
-      if (maxInst >= 0 && chunk.lamps.instanceColor) {
-        // Partial GPU upload of the flipped range (units: array elements, 3 per instance).
-        // A still-pending range means the mesh was frustum-culled and the renderer never
-        // consumed it — the new range must EXPAND over it (kept as ONE range, or a long-culled
-        // chunk accumulates an entry per flip) or those colors silently never reach the GPU.
-        // Runtime three is r157 (single `updateRange`); `updateRanges`/addUpdateRange arrived
-        // in r159 and @types/three is newer than the runtime, so branch on what exists.
-        const attr = chunk.lamps.instanceColor;
-        let start = minInst * 3;
-        let end = (maxInst + 1) * 3;
-        const anyAttr = attr as any;
-        const ranges: { start: number; count: number }[] | undefined = anyAttr.updateRanges;
-        if (Array.isArray(ranges)) {
-          if (ranges.length > 0) {
-            const r = ranges[0];
-            start = Math.min(start, r.start);
-            end = Math.max(end, r.start + r.count);
-            ranges.length = 1;
-            r.start = start;
-            r.count = end - start;
-          } else {
-            anyAttr.addUpdateRange(start, end - start);
-          }
-        } else if (anyAttr.updateRange) {
-          if (anyAttr.updateRange.count !== -1) {
-            start = Math.min(start, anyAttr.updateRange.offset);
-            end = Math.max(end, anyAttr.updateRange.offset + anyAttr.updateRange.count);
-          }
-          anyAttr.updateRange.offset = start;
-          anyAttr.updateRange.count = end - start;
-        }
-        attr.needsUpdate = true;
-      }
-    });
-  });
-
-  return (
-    <>
-      <group ref={groupRef} />
-      {/* Real colliders only for the signals near the player. */}
-      <DressingPartColliders colliders={colliders} parts={TRAFFIC_LIGHTS_SPEC.colliderParts} />
-    </>
-  );
+  return content;
 };

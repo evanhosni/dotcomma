@@ -1,4 +1,5 @@
 import React from "react";
+import { DayNightLights } from "../../../lighting/DayNightLights";
 import { PostProcessing } from "../../../vfx/PostProcessing";
 import { Domain, Material, Regions, Skybox, Terrain } from "../../components";
 import { DayNightCycle } from "../../sky/DayNightCycle";
@@ -14,6 +15,7 @@ import { SnowRegion } from "./regions/snow/region";
  *  see address.ts), rendered from OVERWORLD_REGIONS — the list config.ts builds the server's copy from. */
 export const OverworldDomain = React.memo(() => (
   <Domain>
+    <DayNightLights />
     <Terrain seed={OVERWORLD_SEED} />
     <Material riverTexture="potato_sack.jpg" />
     <Skybox topColor="#4a90d9" horizonColor="#87ceeb" bottomColor="#666666" />

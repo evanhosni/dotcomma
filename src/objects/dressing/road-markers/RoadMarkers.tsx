@@ -1,9 +1,9 @@
-import React from "react";
 import * as THREE from "three";
 import { instancedFromPoints, useDressingAssets, useDressingChunks, useDressingDefault, yawFromDir } from "../Dressing";
 import { DressingAttributes } from "../../types";
 import { enumerateDressing } from "../dressingWorker";
 
+const DEFAULT_RENDER_DISTANCE = 340;
 const MARKER_HEIGHT = 0.16;
 
 export interface RoadMarkersProps extends DressingAttributes {
@@ -17,7 +17,7 @@ export const RoadMarkers = ({
   streetSpacing = 9,
   freewaySpacing = 11,
 }: RoadMarkersProps) => {
-  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, 340);
+  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, DEFAULT_RENDER_DISTANCE);
 
   const assets = useDressingAssets(() => {
     // Top face pulled inward → a low frustum "turtle" (unlit, so no normal recompute).

@@ -116,6 +116,9 @@ export interface FlattenDescriptor {
 
 export interface VertexResult {
   height: number;
+  /** The height before step 7 had the road not given way to a river: a deck landing's approach lays
+   *  the road there (bridges/deckGround.ts), and its landed ends sit on it (bridges/landings.ts). */
+  approachHeight: number;
   /** The biome of the vertex's own voronoi cell (spawn/foliage filters key on it). */
   biomeId: number;
   regionId: number;

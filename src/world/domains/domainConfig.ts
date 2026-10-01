@@ -1,3 +1,4 @@
+import { reportContentError } from "../../utils/contentError";
 import { mergeActorListings, mountAttributesOf } from "../../objects/actors/spec";
 import type {
   DomainConfig,
@@ -76,9 +77,7 @@ const findSpecProblems = (regions: SerializedRegion[]): string[] => {
 const assertValidSpecs = (regions: SerializedRegion[]): void => {
   const problems = findSpecProblems(regions);
   if (problems.length === 0) return;
-  const message = `[domain] invalid region/biome specs:\n  ${problems.join("\n  ")}`;
-  if (process.env.NODE_ENV === "production") console.error(message);
-  else throw new Error(message);
+  reportContentError(`[domain] invalid region/biome specs:\n  ${problems.join("\n  ")}`);
 };
 
 /** The ONLY place the key order is decided. */

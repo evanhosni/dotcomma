@@ -1,12 +1,13 @@
 import { useGLTF } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import React, { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../../context/GameContext";
 import { traceEvent } from "../../../utils/spikeTrace";
 import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/utils";
-import { driveActorFrames } from "../Actor";
+import { DEFAULT_FRUSTUM_PADDING, driveActorFrames } from "../Actor";
 import type { ModelActorAttributes } from "../ModelActor";
 import { collectDescriptors } from "./collectDescriptors";
+import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
 import {
   cleanupSpawnCache,
@@ -15,13 +16,14 @@ import {
   requestSpawnChunks,
   initSpawnWorker,
   serializeDescriptors,
-  SPAWN_CHUNK_SIZE,
   updateSpawnFootprint,
 } from "./spawnWorker";
-import { AnyActorDescriptor, ActorProps, SPAWN_ONLY_KEYS, SpawnPoint } from "./types";
+import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SPAWN_ONLY_KEYS, SpawnPoint } from "./types";
 
 // Spawn lifecycle radii and the despawn ledger are described in CLAUDE.md → Actor Spawn Lifecycle.
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps
+/** Spawning waits for half the initial terrain (foliage lands first, at 0). */
+const MIN_TERRAIN_PROGRESS = 0.5;
 const RESPAWN_COOLDOWN_MS = 1000;
 const DESPAWN_HYSTERESIS = 1.2; // despawn radius = spawn radius × this
 const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius × this
@@ -60,6 +62,72 @@ interface DespawnRecord {
  *  its dominant cost, so the scan uses point identity instead. */
 const objIdOf = (point: SpawnPoint): string =>
   `${point.x}_${point.z}_${point.descriptorId}`;
+
+interface SpawnCandidate {
+  point: SpawnPoint;
+  desc: AnyActorDescriptor;
+  distSq: number;
+}
+
+/** The hot path (~3,000 points per batch, nearly all "already mounted"): pure arithmetic + identity
+ *  lookups, no strings. Every cached point inside its descriptor's spawn radius that is neither mounted
+ *  nor respawn-blocked — with NO inner exclusion for first spawns, so spawning catches up with a fast player. */
+const collectSpawnCandidates = (
+  buckets: ReturnType<typeof getCachedSpawnChunks>,
+  cameraX: number,
+  cameraZ: number,
+  bucketGateSq: number,
+  descriptorMap: Map<string, AnyActorDescriptor>,
+  mountedPoints: Set<SpawnPoint>,
+  ledgerPoints: Map<SpawnPoint, DespawnRecord>,
+): SpawnCandidate[] => {
+  const candidates: SpawnCandidate[] = [];
+  for (const bucket of buckets) {
+    const bdx = bucket.centerX - cameraX;
+    const bdz = bucket.centerZ - cameraZ;
+    if (bdx * bdx + bdz * bdz > bucketGateSq) continue;
+
+    for (const point of bucket.points) {
+      if (mountedPoints.has(point)) continue;
+      if (ledgerPoints.has(point)) continue;
+
+      const desc = descriptorMap.get(point.descriptorId);
+      if (!desc) continue;
+
+      const dx = point.x - cameraX;
+      const dz = point.z - cameraZ;
+      const distSq = dx * dx + dz * dz;
+      const spawnRadius = getSpawnRadius(desc);
+      if (distSq > spawnRadius * spawnRadius) continue;
+
+      candidates.push({ point, desc, distSq });
+    }
+  }
+  return candidates;
+};
+
+/** A descriptor's attributes minus the spawn-only ones, plus the per-instance props (the pool is the
+ *  one source of every radius). */
+const actorPropsOf = (
+  desc: AnyActorDescriptor,
+  point: SpawnPoint,
+  id: string,
+  onDestroy: (id: string) => void,
+): ActorProps => {
+  const attributes: Record<string, unknown> = { ...desc };
+  delete attributes.component;
+  for (const key of SPAWN_ONLY_KEYS) delete attributes[key];
+  return {
+    ...attributes,
+    id,
+    descriptorId: point.descriptorId,
+    coordinates: [point.x, point.height, point.z],
+    renderDistance: getSpawnRadius(desc),
+    despawnDistance: getDespawnRadius(desc),
+    frustumPadding: desc.frustumPadding ?? DEFAULT_FRUSTUM_PADDING,
+    onDestroy,
+  };
+};
 
 export const ActorPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
@@ -166,8 +234,8 @@ export const ActorPool = () => {
   }, [camera, descriptorMap]);
 
   // Mounting never waits for the worker: a batch mounts from what is cached while the worker fills
-  // in the rest (awaiting it held every mount behind up to SPAWN_BUDGET_MS of new chunks).
-  const generateSpawners = useCallback(() => {
+  // in the rest (awaiting it would hold every mount behind up to SPAWN_BUDGET_MS of new chunks).
+  const runSpawnBatch = useCallback(() => {
     if (!workerReadyRef.current) return;
     if (descriptors.length === 0) return;
 
@@ -194,38 +262,19 @@ export const ActorPool = () => {
 
       let hasChanges = sweepOutOfRange();
 
-      // The hot path (~3,000 points per batch, nearly all "already mounted"):
-      // pure arithmetic + identity lookups, no strings. Only the nearest
-      // MAX_MOUNTS_PER_BATCH mount; the rest are re-tested against the NEXT
-      // camera position, so ground the player has left is never mounted at all.
-      const candidates: { point: SpawnPoint; desc: AnyActorDescriptor; distSq: number }[] = [];
-
       const bucketGate = maxDescSpawnRadius + CHUNK_HALF_DIAGONAL;
-      const bucketGateSq = bucketGate * bucketGate;
+      const candidates = collectSpawnCandidates(
+        buckets,
+        camera.position.x,
+        camera.position.z,
+        bucketGate * bucketGate,
+        descriptorMap,
+        mountedPointsRef.current,
+        ledgerPointsRef.current,
+      );
 
-      for (const bucket of buckets) {
-        const bdx = bucket.centerX - camera.position.x;
-        const bdz = bucket.centerZ - camera.position.z;
-        if (bdx * bdx + bdz * bdz > bucketGateSq) continue;
-
-        for (const point of bucket.points) {
-          if (mountedPointsRef.current.has(point)) continue;
-          if (ledgerPointsRef.current.has(point)) continue;
-
-          const desc = descriptorMap.get(point.descriptorId);
-          if (!desc) continue;
-
-          // No inner exclusion for initial spawns, so spawning can catch up with a fast player.
-          const dx = point.x - camera.position.x;
-          const dz = point.z - camera.position.z;
-          const distSq = dx * dx + dz * dz;
-          const spawnRadius = getSpawnRadius(desc);
-          if (distSq > spawnRadius * spawnRadius) continue;
-
-          candidates.push({ point, desc, distSq });
-        }
-      }
-
+      // Only the nearest MAX_MOUNTS_PER_BATCH mount; the rest are re-tested against the NEXT
+      // camera position, so ground the player has left is never mounted at all.
       if (candidates.length > MAX_MOUNTS_PER_BATCH) {
         candidates.sort((a, b) => a.distSq - b.distSq);
         candidates.length = MAX_MOUNTS_PER_BATCH;
@@ -253,37 +302,23 @@ export const ActorPool = () => {
         }
 
         const Component = desc.component;
-        const attributes: Record<string, unknown> = { ...desc };
-        delete attributes.component;
-        for (const key of SPAWN_ONLY_KEYS) delete attributes[key];
-        const spawnRadius = getSpawnRadius(desc);
-        const despawnRadius = getDespawnRadius(desc);
-        const props: ActorProps = {
-          ...attributes,
-          id: objId,
-          descriptorId: point.descriptorId,
-          coordinates: [point.x, point.height, point.z],
-          renderDistance: spawnRadius,
-          despawnDistance: despawnRadius,
-          frustumPadding: desc.frustumPadding ?? 3,
-          onDestroy: (id: string) => {
-            // A stale onDestroy after a sweep + remount must not orphan the NEW point.
-            const entry = objectsMapRef.current.get(id);
-            const livePoint = entry ? entry.point : point;
-            const rec: DespawnRecord = {
-              despawnedAt: Date.now(),
-              x: point.x,
-              z: point.z,
-              descriptorId: point.descriptorId,
-              point: livePoint,
-            };
-            respawnBlockedRef.current.set(id, rec);
-            ledgerPointsRef.current.set(livePoint, rec);
-            objectsMapRef.current.delete(id);
-            mountedPointsRef.current.delete(livePoint);
-            dirtyRef.current = true;
-          },
-        };
+        const props = actorPropsOf(desc, point, objId, (id: string) => {
+          // A stale onDestroy after a sweep + remount must not orphan the NEW point.
+          const entry = objectsMapRef.current.get(id);
+          const livePoint = entry ? entry.point : point;
+          const rec: DespawnRecord = {
+            despawnedAt: Date.now(),
+            x: point.x,
+            z: point.z,
+            descriptorId: point.descriptorId,
+            point: livePoint,
+          };
+          respawnBlockedRef.current.set(id, rec);
+          ledgerPointsRef.current.set(livePoint, rec);
+          objectsMapRef.current.delete(id);
+          mountedPointsRef.current.delete(livePoint);
+          dirtyRef.current = true;
+        });
 
         objectsMapRef.current.set(objId, {
           node: <Component key={objId} {...props} />,
@@ -321,15 +356,36 @@ export const ActorPool = () => {
   useFrame(() => {
     frameCountRef.current++;
 
-    if (!terrainLoaded && progress < 0.5) return;
+    if (!terrainLoaded && progress < MIN_TERRAIN_PROGRESS) return;
 
     if (frameCountRef.current - lastBatchFrameRef.current < MIN_FRAMES_BETWEEN_BATCHES) return;
 
     if (!workerReadyRef.current) return;
 
     lastBatchFrameRef.current = frameCountRef.current;
-    generateSpawners();
+    runSpawnBatch();
   });
 
-  return <>{stableComponents}</>;
+  const warmups = useMemo(() => {
+    const nodes = new Map<string, React.ReactNode>();
+    for (const desc of descriptors) {
+      const hooks = desc.component as ActorWarmupHooks;
+      if (!hooks.Warmup) continue;
+      let hookId = warmupIds.get(hooks.Warmup);
+      if (hookId === undefined) warmupIds.set(hooks.Warmup, (hookId = warmupIds.size));
+      const key = `${hookId}:${hooks.warmupKey?.(desc) ?? ""}`;
+      if (!nodes.has(key)) nodes.set(key, <hooks.Warmup key={key} descriptor={desc} />);
+    }
+    return Array.from(nodes.values());
+  }, [descriptors]);
+
+  return (
+    <>
+      {stableComponents}
+      <Suspense fallback={null}>{warmups}</Suspense>
+    </>
+  );
 };
+
+/** Warm-up components are module-level members' statics: a handful, alive for the page. */
+const warmupIds = new Map<React.FC<{ descriptor: AnyActorDescriptor }>, number>();

@@ -22,7 +22,7 @@ export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 export const DEFAULT_RENDER_DISTANCE = 500;
 export const DEFAULT_FRUSTUM_PADDING = 3;
 /** Hard-kill distance as a multiple of renderDistance, when none is given. */
-export const DESPAWN_DISTANCE_FACTOR = 1.2;
+const DESPAWN_DISTANCE_FACTOR = 1.2;
 
 // Collider activation can mount Rapier trimeshes (several ms each), and actors at
 // similar distances cross the gate on the same frame — one activation per window.
@@ -277,12 +277,19 @@ export const useActorLifecycle = ({
       if (nearDistance !== undefined) {
         const reach = nearDistance + (nearActiveRef.current ? gateHysteresis : 0);
         const near = distanceSq < reach * reach;
-        if (freezeMatrices && group && matricesFrozenRef.current) group.matrixWorldAutoUpdate = near;
         if (near !== nearActiveRef.current) {
           nearActiveRef.current = near;
           setNearActive(near);
         }
       }
+    }
+
+    // A culled actor's subtree (a beeble: ~37 nodes incl. bones) skips the renderer's matrix
+    // update too; the frame it turns visible, the update runs before its draw. Frozen actors
+    // additionally stay frozen outside the near gate.
+    if (group) {
+      const live = visible && (!freezeMatrices || !matricesFrozenRef.current || nearActiveRef.current);
+      if (group.matrixWorldAutoUpdate !== live) group.matrixWorldAutoUpdate = live;
     }
 
     // Snapshot interpolation (net/entities/interpolation.ts): drawn as it was
@@ -304,8 +311,11 @@ export const useActorLifecycle = ({
     // The server's pose wins over anything the component's logic wrote.
     if (synced && group && sync.target.valid) {
       const t = sync.target;
-      group.position.set(t.x, t.y, t.z);
-      group.rotation.y = t.ry;
+      // Written only on change: the rotation setter recomputes the quaternion (trig) and a static
+      // actor (every building) holds one pose for its whole life.
+      const p = group.position;
+      if (p.x !== t.x || p.y !== t.y || p.z !== t.z) p.set(t.x, t.y, t.z);
+      if (group.rotation.y !== t.ry) group.rotation.y = t.ry;
     }
   };
 

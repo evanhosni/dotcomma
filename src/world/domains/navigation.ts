@@ -66,9 +66,7 @@ export const navigateToAddress = (path: string) => {
   pendingAddress = address;
   currentPath = stripBase(path);
   if (currentDomain !== "overworld") {
-    currentDomain = "overworld";
-    pushEntry();
-    domainListeners.forEach((fn) => fn("overworld"));
+    switchDomain("overworld");
     return;
   }
   pushEntry();

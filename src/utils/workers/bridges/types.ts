@@ -52,6 +52,15 @@ export interface BridgeParapetGap {
   t1: number;
 }
 
+/** A wall's run-on at a merge: `at` is a polyline of (outer, inner) corner pairs on the slab top (x, y, z
+ *  each) from the wall's end to where it meets the other deck's wall; it stands `wall` × the parapet's
+ *  height. */
+export interface BridgeWallJoin {
+  side: 1 | -1;
+  wall: number;
+  at: number[];
+}
+
 /** Lane paint along the deck, continuing the terrain road's: at each landed end whose road is
  *  painted (`has0`/`has1`) the dash phase there (`a`) and its rate per unit of world arc going
  *  OUTWARD onto the road (`r`); blended between the two ends. `off` (arc fractions): no paint —
@@ -101,6 +110,8 @@ export interface FreewayBridge {
   camber: number;
   piers: FreewayBridgePier[];
   gaps?: BridgeParapetGap[];
+  /** Wall ends at a merge, run on to the other deck's wall (wallJoins.ts). */
+  wallJoins?: BridgeWallJoin[];
   paint: BridgeLanePaint;
   /** World arc trimmed off a T end (the child stops at the host's slab edge), and its end section. */
   trimStart?: number;

@@ -1,6 +1,6 @@
 /** The round-15 deck rules (CHANGES.md §2.21), over areas with mouth decks between two cities, Y
  *  merges and oblique landings: every deck crosses its river, a freeway-wide deck has freeway at both
- *  ends, a Y is one surface without walls or slabs inside the other deck (round 18: its fillets too, and
+ *  ends, a Y is one surface without walls or slabs inside the other deck (its fillets too, and
  *  no stray stub of wall left between openings), and a landed end meets the
  *  road flush wherever its edge lies over pavement. On the real compute module with the overworld's
  *  shared config. */
@@ -206,7 +206,6 @@ describe("round-15 deck rules", () => {
       }
     }
     expect(standing).toBeGreaterThan(1000);
-    // (Round 17: 24 wall points stood inside a merged deck's slab, 6 stubs under 3u.)
     expect({ inside, stubs }).toEqual({ inside: 0, stubs: 0 });
   });
 

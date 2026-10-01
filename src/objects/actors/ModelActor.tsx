@@ -1,9 +1,10 @@
 import { useGLTF } from "@react-three/drei";
-import { RootState } from "@react-three/fiber";
+import { RootState, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
+import { warmPrograms } from "../../utils/warmPrograms";
 import { ActorAttributes } from "../types";
 import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
 import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
@@ -18,13 +19,11 @@ import {
   releaseModelClone,
 } from "./modelClonePool";
 import { DEFAULT_INTERACT_REACH, type ActorSimulationAttributes, type ModelAttributes } from "./spec";
-import { ActorProps } from "./spawning/types";
+import { ActorProps, ActorWarmupHooks } from "./spawning/types";
 import { createMotionOutput } from "./state/motion";
 import { machineHasTrigger } from "./state/runner";
 import { useMouseEvents } from "./state/useMouseEvents";
 import { useStateMachine } from "./state/useStateMachine";
-
-export { MAX_COLLIDER_RENDER_DISTANCE };
 
 // Animation LOD: mixers pause while frustum-culled and run at half rate past this
 // fraction of the render distance; skipped time accumulates (capped) so loops stay continuous.
@@ -113,8 +112,8 @@ export const ModelActor = ({
   const gltf = useGLTF(model);
 
   // Pool HIT is synchronous; a MISS renders null and builds through the shared queue
-  // (same peek-then-queue pattern as <Building>): a batch of 20 fresh clones used to
-  // run 20 full clone pipelines inside one React commit.
+  // (same peek-then-queue pattern as <Building>) — otherwise a batch of 20 fresh clones
+  // would run 20 full clone pipelines inside one React commit.
   const [pooled, setPooled] = useState<PooledModelClone | null>(() =>
     acquirePooledModelClone(model, quantization),
   );
@@ -215,7 +214,8 @@ export const ModelActor = ({
   });
 
   const mover = useKinematicMover({
-    enabled: isKinematic,
+    // The capsule appears with the model (a pool miss renders nothing until its clone lands).
+    enabled: isKinematic && pooled !== null,
     collider,
     movement,
     coordinates,
@@ -284,7 +284,6 @@ export const ModelActor = ({
 
   return (
     <Suspense fallback={null}>
-      {mover.element}
       <group ref={setGroup} visible={false} position={coordinates}>
         <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
@@ -307,3 +306,25 @@ export const ModelActor = ({
     </Suspense>
   );
 };
+
+/** Load-time program warm-up (utils/warmPrograms.ts): one real clone per (model, quantization) is
+ *  drawn once — skinning, morph targets and every material exactly as a spawn draws them — then
+ *  parked in the clone pool, so the first spawn also skips the clone pipeline. */
+const ModelActorWarmup = ({ descriptor }: { descriptor: Pick<ModelActorAttributes, "model" | "quantization"> }) => {
+  const { model, quantization } = descriptor;
+  const gltf = useGLTF(model);
+  const scene = useThree((state) => state.scene);
+  useEffect(() => {
+    const clone = acquireModelClone(model, gltf, quantization);
+    return warmPrograms(scene, [clone.scene], () => releaseModelClone(clone));
+  }, [gltf, model, quantization, scene]);
+  return null;
+};
+ModelActor.Warmup = ModelActorWarmup;
+ModelActor.warmupKey = (descriptor: Pick<ModelActorAttributes, "model" | "quantization">) =>
+  `${descriptor.model}|${descriptor.quantization ?? "global"}`;
+
+/** Makes a custom wrapper — a component rendering `<ModelActor {...props} onFrame={…} />` — an actor
+ *  member (actors/components.ts): it draws the same model, so it reuses ModelActor's load-time warm-up. */
+export const withModelActorWarmup = <P,>(Wrapper: React.FC<P>): React.FC<P> & ActorWarmupHooks =>
+  Object.assign(Wrapper, { Warmup: ModelActor.Warmup, warmupKey: ModelActor.warmupKey });

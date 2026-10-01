@@ -18,9 +18,15 @@ the player walks on the river or lake bed.
   the terrain along the river's centerline, minus `RIVER_SURFACE_BELOW`, and eases onto the lake
   level near a mouth. See the Rivers section of the
   [workers README](../../utils/workers/README.md).
+- **Mouths** (`riverMouthShare` in [`lakes.ts`](../../utils/workers/lakes.ts)): wherever the ground
+  before the river lies under a lake's water, the river only deepens it. There is no bank rim, and
+  the water is the lake's level. The share ramps from 1 at the level to 0 at the shore height, so
+  ground under the water stays under it and the river's water never stands on the dry beach. This
+  is what opens a mouth into the sea: before it, the rim (`surface + SHORE_RISE`) stood a dry levee
+  in the water around the mouth's pond.
 - Both end up in `VertexResult.waterHeight`, which is `NaN` where no water is in reach.
 
-**The mesh** ([`world/terrain/TerrainRenderer.tsx`](../terrain/TerrainRenderer.tsx), in `buildChunk`):
+**The mesh** ([`world/terrain/TerrainRenderer.tsx`](../terrain/TerrainRenderer.tsx) `ensureWaterMesh`, filled by `writeWaterBuffers` in [`chunkGeometry.ts`](../terrain/chunkGeometry.ts)):
 a terrain chunk whose worker result has `waterHeights` gets a second mesh on the same pooled grid.
 That mesh is a CHILD of the chunk plane (`Chunk.water`), so it shares the chunk's LOD swaps,
 visibility and disposal (`releaseWater`). Wet vertices sit at the water height and carry a
@@ -42,8 +48,9 @@ TerrainRenderer.
 **Add a new lake-type biome** (a pond, a marsh):
 1. In the biome's `spec.ts`, set `water: { depth: <units below the level> }` and
    `joinable: true` (so adjacent cells form one body). Usually also set `prohibitRoads: true`
-   (keeps inter-city freeways off it) and a `blendWidth` under 250.
+   (keeps inter-city freeways off it).
 2. Nothing else. The level, bed, shore lift, river mouths and water mesh all follow from `water`.
+   `riverBanks.test.ts` checks that every mouth opens into the lake.
    See `src/world/domains/overworld/regions/ocean/biomes/lake/` for the template.
 
 **Tune the look:** the color constants, `0.18 * swell`, and the alpha fade `smoothstep(0.02, 2.5, …)`

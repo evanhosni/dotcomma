@@ -19,7 +19,7 @@ Operations (local setup, database, Railway, deploying) are in the root [README.m
 | [game/tick.ts](src/game/tick.ts) | `TICK_HZ` (10). |
 | [game/persistence.ts](src/game/persistence.ts) | `PlayerPersistence`: one record per connected **identity** (two tabs share one). `validatePatch`, the write policy (save when the last session leaves if dirty, otherwise at most every `SAVE_INTERVAL_MS`, never on the tick), `saveAll` on shutdown. |
 | [data/](src/data/) | ALL SQL. `db.ts` (open, pragmas, refuses a stale schema), `migrations.ts` (append-only, `PRAGMA user_version`; read its header rules), `players.ts` (prepared statements). |
-| [game/entities/manager.ts](src/game/entities/manager.ts) | The NPC authority. Clients register entities they render. A kind in the actor catalog (`src/objects/actors/catalog.ts`) runs its **own client state machine** here, with the nearest player as "the player". Buildings get a sealed hull. Zero registrants disposes the entity. |
+| [game/entities/manager.ts](src/game/entities/manager.ts) | The NPC authority. Clients register entities they render. A kind in the actor catalog (`ACTOR_CATALOG` in `src/world/domains/configs.ts`, derived from the biome specs) runs its **own client state machine** here, with the nearest player as "the player". Buildings get a sealed hull. Zero registrants disposes the entity. |
 | [game/entities/publish.ts](src/game/entities/publish.ts) | Diffs each tick against what registrants last saw. Positional changes go out as complete server-time-stamped snapshots. |
 | [game/physics/](src/game/physics/) | Server physics, below. |
 | [cli/](src/cli/) | `migrate.ts`, `inspect.ts`, `physicsDemo.ts` + `terrainScan.ts` (`npm run physics:demo`). |
@@ -39,10 +39,10 @@ Every 10s the server logs a `[physics] …` stats line. A tick over 50ms warns.
 
 ## How to use/add
 
-- **A synced NPC**: nothing in `server/`. Add its spec to the catalog (see [NPC_TRACKING.md](../NPC_TRACKING.md) §6). `test/catalog.test.ts` checks the catalog. Copy a case in `test/entities.test.ts` to test the NPC headlessly.
+- **A synced NPC**: nothing in `server/`. Place its spec in a biome (see [NPC_TRACKING.md](../NPC_TRACKING.md) §6); that catalogs it. `test/catalog.test.ts` checks the catalog. Copy a case in `test/entities.test.ts` to test the NPC headlessly.
 - **A message type**: see [src/net/README.md](../src/net/README.md#add-a-message-type).
 - **A database change**: append a migration to [data/migrations.ts](src/data/migrations.ts) and put its SQL in `data/`. Run `db:migrate` on the live database BEFORE deploying. The root README explains how.
-- **A dressing feature with colliders**: nothing in `server/`. Give it a Three-free `*Spec.ts` exporting a `DressingColliderSpec` (enumerator, placement, collider parts) and add ONE line to `DRESSING_COLLIDER_SPECS` in `src/objects/dressing/catalog.ts`; [obstacles.ts](src/game/physics/obstacles.ts) builds every listed spec. Keep the placement in the spec, not at the biome mount: the server only sees the spec.
-- **A new building variant**: nothing in `server/`. Add its spec to `src/objects/actors/building/spec.ts`, one line to the actor catalog, and place it in a biome spec's `actors`. The hull follows automatically.
+- **A dressing feature with colliders**: nothing in `server/`. Give it a Three-free `*Spec.ts` exporting a `DressingColliderSpec` (enumerator, placement, collider parts) and add ONE line to `DRESSING_COLLIDER_SPECS` in `src/objects/dressing/catalog.ts`; [obstacles.ts](src/game/physics/obstacles.ts) builds every listed spec. The placement lives in the spec only (the component takes no placement props): the server only sees the spec.
+- **A new building variant**: nothing in `server/`. Add its spec to `src/objects/actors/building/spec.ts` and place it in a biome spec's `actors`. The hull follows automatically.
 
 Commands (inside `server/`): `npm run dev`, `npm test`, `npm run typecheck`, `npm run build`, `npm run db:migrate`, `npm run db:inspect`, `npm run physics:demo`. `npm run dev` at the repo root runs the server and client together.

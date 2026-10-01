@@ -378,8 +378,8 @@ const landCrossing = (x: number, z: number, ux: number, uz: number, W: number): 
 
 /** How far the straight line from s0 to s1 along (ux, uz) runs within BRIDGE_ALONG_ALIGN of the
  *  nearest river inside its footprint (alongShoreLength's measure, for a straight deck): a fill slot
- *  at a bend, squared to one leg of the river, can run on along the other leg's bank (MEASURED: a 462u
- *  deck two thirds over the sand beside the water). */
+ *  at a bend, squared to one leg of the river, can run on along the other leg's bank (a deck mostly
+ *  over the sand beside the water). */
 const straightAlongShore = (x: number, z: number, ux: number, uz: number, s0: number, s1: number): number => {
   const reach = domainConfig!.river.halfWidth + domainConfig!.river.bank;
   const cosAlign = Math.cos(BRIDGE_ALONG_ALIGN);

@@ -55,15 +55,15 @@ let lastOriginX = Number.NaN;
 let lastOriginZ = Number.NaN;
 let lastHeadCount = -1;
 
-/** MUST be called by anything that adds/removes/recolors a head, or the 64KB grid re-upload
- *  skips the change (the head-count check below is only a backstop and misses same-count swaps). */
-export const markLampGridDirty = (): void => {
+/** Every add/remove/recolor of a head calls this, or the 64KB grid re-upload skips the change (the
+ *  head-count check below is only a backstop and misses same-count swaps). */
+const markLampGridDirty = (): void => {
   gridDirty = true;
 };
 
 const headBuffer: LampHead[] = [];
 
-export const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: number, cameraZ: number): void => {
+const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: number, cameraZ: number): void => {
   const originX = Math.floor(cameraX / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
   const originZ = Math.floor(cameraZ / LAMP_CELL_SIZE) - LAMP_GRID_SIZE / 2;
   if (!gridDirty && originX === lastOriginX && originZ === lastOriginZ && heads.size === lastHeadCount) {
@@ -94,12 +94,14 @@ export const updateLampGrid = (heads: ReadonlyMap<string, LampHead>, cameraX: nu
   headBuffer.length = 0;
 };
 
-export const setLampGlowIntensity = (value: number): void => {
+const setLampGlowIntensity = (value: number): void => {
   LAMP_GRID_UNIFORMS.uLampGlowIntensity.value = value;
 };
 
 /** Every mounted glow source. Insertion order decides which head wins a shared cell. */
-export const activeLampHeads = new Map<string, LampHead>();
+const lampHeads = new Map<string, LampHead>();
+/** Read-only view (tests, debugging): add and remove heads with registerLampHeads. */
+export const activeLampHeads: ReadonlyMap<string, LampHead> = lampHeads;
 
 /** Lit windows sit around 1.4; street lights burn much brighter. */
 export const LAMP_EMISSIVE_STRENGTH = 12;
@@ -116,7 +118,7 @@ export const registerLampHeads = (source: string, heads: readonly LampHead[]): (
   const prefix = `${source}#${registrationCount++}:`;
   const keys = heads.map((head, i) => {
     const key = prefix + i;
-    activeLampHeads.set(key, head);
+    lampHeads.set(key, head);
     return key;
   });
   markLampGridDirty();
@@ -129,17 +131,16 @@ export const setLampHeadColor = (head: LampHead, color: number): void => {
   markLampGridDirty();
 };
 
-/** The low-level half of hand-keyed `activeLampHeads` entries; prefer registerLampHeads. */
-export const unregisterLampHeads = (keys: Iterable<string>): void => {
-  for (const key of keys) activeLampHeads.delete(key);
+const unregisterLampHeads = (keys: Iterable<string>): void => {
+  for (const key of keys) lampHeads.delete(key);
   markLampGridDirty();
   clearLampGridIfEmpty();
 };
 
 /** With no heads nobody drives the grid, so ghost light pools would linger on the terrain. */
-export const clearLampGridIfEmpty = (): void => {
-  if (activeLampHeads.size === 0) {
-    updateLampGrid(activeLampHeads, 0, 0);
+const clearLampGridIfEmpty = (): void => {
+  if (lampHeads.size === 0) {
+    updateLampGrid(lampHeads, 0, 0);
     setLampGlowIntensity(0);
   }
 };
@@ -150,19 +151,19 @@ let lastDriveTime = -1;
 let driveFrameCount = 0;
 
 /** Time-guarded: the FIRST caller per frame does the work, so extra callers are harmless. */
-export const driveLampLighting = (camera: THREE.Camera, time: number): void => {
+const driveLampLighting = (camera: THREE.Camera, time: number): void => {
   if (time === lastDriveTime) return;
   lastDriveTime = time;
   setLampGlowIntensity(getWindowLightsProgress());
   if (driveFrameCount++ % GRID_REWRITE_INTERVAL_FRAMES === 0) {
-    updateLampGrid(activeLampHeads, camera.position.x, camera.position.z);
+    updateLampGrid(lampHeads, camera.position.x, camera.position.z);
   }
 };
 
 /** Drives the grid every frame while any head is registered. Mounted once, in CustomCanvas. */
 export const LampGlowDriver = (): null => {
   useFrame((state) => {
-    if (activeLampHeads.size > 0) driveLampLighting(state.camera, state.clock.elapsedTime);
+    if (lampHeads.size > 0) driveLampLighting(state.camera, state.clock.elapsedTime);
   });
   return null;
 };

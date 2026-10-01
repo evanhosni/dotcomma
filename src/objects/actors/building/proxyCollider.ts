@@ -3,8 +3,8 @@ import { BuildingPlan } from "./types";
 
 // COLLIDER LOD (see CLAUDE.md → Procedural buildings, point 4): beyond the
 // collider gate a building is this one SEALED convex hull, so NPCs never walk
-// through distant walls. An AABB cuboid was tried instead and removed (a
-// rotated square's AABB is ~1.41× wide; NPCs stopped short of facades).
+// through distant walls. Not an AABB cuboid: a rotated square's AABB is ~1.41×
+// wide, and NPCs would stop short of facades.
 
 /** The shell's 2D silhouette extruded bottom-to-top — deliberately FATTER
  *  than a hull over the raw corners so it contains a leaning shell at every
@@ -66,8 +66,8 @@ const convexHull2D = (points: number[][]): number[][] => {
 
 // The body is created and destroyed IMPERATIVELY, never via React state: a
 // setState from the frame loop defeats ActorPool's element-identity bailout
-// (measured 1–5 fps loss). Hull count is NOT a known cost — an 85% cut in
-// live proxies and a 6× cheaper cloud each measured as no fps change.
+// (a 1–5 fps loss). The hull count itself is not a measured cost (CLAUDE.md →
+// Procedural buildings, point 4).
 
 export interface ProxyColliderHandle {
   dispose: () => void;

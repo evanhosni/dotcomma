@@ -1,6 +1,6 @@
-import { useFrame } from "@react-three/fiber";
-import { CuboidCollider, RigidBody, TrimeshCollider } from "@react-three/rapier";
-import React, { useEffect, useMemo, useRef } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import { useRapier, type RapierRigidBody } from "@react-three/rapier";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   DRESSING_CHUNK_SIZE,
@@ -12,10 +12,14 @@ import {
 } from "./types";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { freezeStaticSubtree } from "../../utils/utils";
+import { instancedTemplate, reportUnwarmedPrograms, warmPrograms } from "../../utils/warmPrograms";
 import { _curvature } from "../../vfx/curvature";
 import { _spawnFade } from "../../vfx/spawnFade";
 import { DressingAttributes } from "../types";
 import { createDefaultsGroup } from "../utils";
+import { enumerateDressing } from "./dressingWorker";
+import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./enumerators";
 
 /**
  * THE DRESSING BASE (CLAUDE.md → "The three game-object classes"): a feature
@@ -23,9 +27,12 @@ import { createDefaultsGroup } from "../utils";
  * animation; everything shared — chunk lifecycle, asset prep (curvature, spawn fade),
  * instanced assembly + rebase, chunk side-state, distance-gated colliders —
  * lives here so a new feature cannot miss a world-wide effect.
+ *
+ * A feature uses: useDressingAssets (its geometry/materials) + useDressingChunks (a
+ * placement-only feature) or useSolidDressing (a feature with a DressingColliderSpec),
+ * and instancedFromPoints to assemble each chunk.
  */
 
-export { DRESSING_CHUNK_SIZE } from "./types";
 const UPDATE_INTERVAL_FRAMES = 31;
 
 // One budgeted queue across ALL dressing features so a ring of fresh chunks
@@ -33,7 +40,7 @@ const UPDATE_INTERVAL_FRAMES = 31;
 // Weight 1.5: at equal distance a building or the ground comes first; beyond 400u a chunk is background.
 const dressingQueue = new TaskQueue({ weight: 1.5 });
 
-export type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
+type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
 
 const DressingGroup = createDefaultsGroup<DressingDefaults>("dressing");
 export const Dressing = DressingGroup.Group;
@@ -55,9 +62,14 @@ export const prepareDressingMaterial = (material: THREE.Material): void => {
   _spawnFade.patchMaterial(material);
 };
 
+/** `warm`: the objects this feature draws, as program templates (utils/warmPrograms.ts) — linked at
+ *  domain load, not when the first chunk streams in. Default: one InstancedMesh per material (what
+ *  instancedFromPoints draws); a feature drawing anything else (a plain Mesh, instanceColor) lists its own. */
 export const useDressingAssets = <T extends Record<string, { dispose: () => void }>>(
-  create: () => T
+  create: () => T,
+  warm?: (assets: T) => THREE.Object3D[]
 ): T => {
+  const scene = useThree((state) => state.scene);
   const assets = useMemo(() => {
     const created = create();
     for (const key of Object.keys(created)) {
@@ -66,20 +78,24 @@ export const useDressingAssets = <T extends Record<string, { dispose: () => void
     }
     return created;
   }, []);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const templates = warm
+      ? warm(assets)
+      : Object.values(assets)
+          .filter((a) => (a as unknown as THREE.Material).isMaterial)
+          .map((m) => instancedTemplate(m as unknown as THREE.Material));
+    const cancelWarm = warmPrograms(scene, templates);
+    return () => {
+      cancelWarm();
       for (const key of Object.keys(assets)) assets[key].dispose();
-    },
-    [assets]
-  );
+    };
+  }, [assets, scene]);
   return assets;
 };
 
-// Three-free in ./types so the SERVER builds the same collider boxes.
 export { yawFromDir } from "./types";
-export type { DressingColliderPart } from "./types";
 
-export interface InstancePlacement {
+interface InstancePlacement {
   x: number;
   y: number;
   z: number;
@@ -170,7 +186,7 @@ export const setInstanceTransform = (
   mesh.setMatrixAt(index, scratchMatrix);
 };
 
-export interface ChunkRegistryEntry {
+interface ChunkRegistryEntry {
   /** parent === null once the chunk lifecycle unmounts it — the prune signal. */
   group: THREE.Object3D;
 }
@@ -178,7 +194,7 @@ export interface ChunkRegistryEntry {
 /** Per-chunk side-state pruned lazily from the feature's own frame loop (forEachAlive) and
  *  flushed on unmount — without the unmount flush, external registrations (lamp heads in
  *  the glow grid) leaked as phantom lights across domain switches / HMR. */
-export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
+const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
   const onRemoveRef = useRef(onRemove);
   onRemoveRef.current = onRemove;
   const registryRef = useRef<{
@@ -216,7 +232,7 @@ export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry
 };
 
 /** A mounted collider body: a chunk's DressingColliderBody (types.ts) keyed for React. */
-export interface DressingColliderPoint {
+interface DressingColliderPoint {
   key: string;
   x: number;
   y: number;
@@ -233,55 +249,78 @@ export interface ChunkWithPoints extends ChunkRegistryEntry {
 }
 
 /** Thin street furniture only needs to be solid where the player can reach it. */
-export const DRESSING_COLLIDER_DISTANCE = 90;
+const DRESSING_COLLIDER_DISTANCE = 90;
 
-/** Dev: the server places a collider feature with its spec's `placement` only (it never sees a
- *  mount), so a mount prop overriding it draws scenery where the server has no colliders. */
-export const useServerPlacementCheck = <S extends DressingColliderSpec<any>>(spec: S, placement: S["placement"]): void => {
-  const placementKey = JSON.stringify(placement);
-  useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
-    const defaults = spec.placement as Record<string, unknown>;
-    const mounted = JSON.parse(placementKey) as Record<string, unknown>;
-    const keys = new Set([...Object.keys(defaults), ...Object.keys(mounted)]);
-    const differing = Array.from(keys).filter((k) => JSON.stringify(mounted[k]) !== JSON.stringify(defaults[k]));
-    if (differing.length === 0) return;
-    console.warn(
-      `<${spec.id}> overrides ${differing.join(", ")} at the mount — the server's colliders still use the spec's ` +
-        `placement. Change the default in the feature's *Spec.ts instead.`,
-    );
-  }, [spec, placementKey]);
-};
+const _colliderEuler = new THREE.Euler();
+const _colliderQuat = new THREE.Quaternion();
 
-export const DressingPartColliders = ({
+/** One fixed Rapier body per point, created IMPERATIVELY (like the terrain heightfields and the
+ *  building proxies): r-t-r's frame loop syncs every mounted <RigidBody> each frame and a fixed
+ *  body never reads as sleeping. Same shapes and transforms as `<RigidBody rotation={[0, yaw,
+ *  pitch]}>` + a `<CuboidCollider>` per part — the server builds the same (physics/obstacles.ts). */
+const DressingPartColliders = ({
   colliders,
   parts,
 }: {
   colliders: DressingColliderPoint[];
   parts: DressingColliderPart[];
-}) => (
-  <>
-    {colliders.map((c) => (
-      // Euler XYZ: the pitch about local Z is applied first, then the yaw — the server composes the same.
-      <RigidBody key={c.key} type="fixed" colliders={false} position={[c.x, c.y, c.z]} rotation={[0, c.yaw, c.pitch]}>
-        {(c.parts ?? parts).map((p, i) => (
-          <CuboidCollider key={i} args={[p.w / 2, p.h / 2, p.d / 2]} position={[p.x, p.y, p.z ?? 0]} rotation={[0, p.yaw ?? 0, 0]} />
-        ))}
-        {c.mesh && <TrimeshCollider args={[c.mesh.vertices, c.mesh.indices]} />}
-      </RigidBody>
-    ))}
-  </>
-);
+}): null => {
+  const { world, rapier } = useRapier();
+  const bodies = useRef(new Map<string, RapierRigidBody>()).current;
+  const partsRef = useRef(parts);
+
+  useEffect(() => {
+    // The shared boxes changed: every body is rebuilt.
+    if (partsRef.current !== parts) {
+      partsRef.current = parts;
+      bodies.forEach((body) => world.removeRigidBody(body));
+      bodies.clear();
+    }
+    const wanted = new Set<string>();
+    for (const c of colliders) wanted.add(c.key);
+    bodies.forEach((body, key) => {
+      if (wanted.has(key)) return;
+      world.removeRigidBody(body);
+      bodies.delete(key);
+    });
+    for (const c of colliders) {
+      if (bodies.has(c.key)) continue;
+      _colliderQuat.setFromEuler(_colliderEuler.set(0, c.yaw, c.pitch));
+      const body = world.createRigidBody(
+        rapier.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z).setRotation(_colliderQuat),
+      );
+      for (const p of c.parts ?? parts) {
+        _colliderQuat.setFromEuler(_colliderEuler.set(0, p.yaw ?? 0, 0));
+        world.createCollider(
+          rapier.ColliderDesc.cuboid(p.w / 2, p.h / 2, p.d / 2).setTranslation(p.x, p.y, p.z ?? 0).setRotation(_colliderQuat),
+          body,
+        );
+      }
+      if (c.mesh) world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
+      bodies.set(c.key, body);
+    }
+  }, [colliders, parts, world, rapier, bodies]);
+
+  useEffect(
+    () => () => {
+      bodies.forEach((body) => world.removeRigidBody(body));
+      bodies.clear();
+    },
+    [world, bodies],
+  );
+
+  return null;
+};
 
 /** Real colliders only within `colliderDistance` (thousands of Rapier shapes would cost more than the
  *  instancing saved). The registry sweep must run every interval even when the scan is skipped:
  *  forEachAlive is what prunes unmounted chunks and fires their onRemove. */
-export const useDressingColliders = <T extends ChunkWithPoints>(
+const useDressingColliders = <T extends ChunkWithPoints>(
   registry: { forEachAlive: (cb: (entry: T) => void) => void },
   options: { colliderDistance?: number; scanIntervalFrames?: number } = {},
 ): DressingColliderPoint[] => {
   const { colliderDistance = DRESSING_COLLIDER_DISTANCE, scanIntervalFrames = 10 } = options;
-  const [colliders, setColliders] = React.useState<DressingColliderPoint[]>([]);
+  const [colliders, setColliders] = useState<DressingColliderPoint[]>([]);
   const frameCount = useRef(0);
   const aliveScratch = useRef<T[]>([]);
   const lastScan = useRef({
@@ -340,7 +379,6 @@ export const useDressingColliders = <T extends ChunkWithPoints>(
   return colliders;
 };
 
-export type { DressingBounds } from "./types";
 
 interface DressingChunk {
   object: THREE.Object3D | null;
@@ -379,6 +417,7 @@ export const useDressingChunks = ({
 
   useEffect(() => {
     const group = groupRef.current;
+    if (group) freezeStaticSubtree(group);
     return () => {
       chunks.forEach((chunk) => {
         chunk.dropped = true;
@@ -439,6 +478,8 @@ export const useDressingChunks = ({
           disposeChunkObject(object);
           return;
         }
+        reportUnwarmedPrograms(object, "a dressing chunk", "list it in the feature's useDressingAssets(create, warm) templates.");
+        freezeStaticSubtree(object);
         groupRef.current.add(object);
         fades.add(object);
         entry.object = object;
@@ -464,4 +505,64 @@ export const useDressingChunks = ({
   });
 
   return groupRef;
+};
+
+/**
+ * A SOLID dressing feature — one with a DressingColliderSpec (listed in catalog.ts, so the server builds
+ * the same colliders): the chunk lifecycle, the spec's enumerator run with the spec's placement, the
+ * spec's bodies per chunk and the distance-gated colliders, wired once. The placement is the spec's
+ * ONLY: the server never sees a mount, so a solid feature takes no placement props (change the spec).
+ * `build` turns a chunk's points (and the bodies `spec.bodiesOf` places for them — the drawn yaw must
+ * be the body's) into what the chunk draws plus any per-chunk side state, which `onRemove` releases
+ * when the chunk unmounts. Render the returned `content`; drive per-chunk animation from
+ * `registry.forEachAlive` in your own useFrame.
+ */
+export const useSolidDressing = <K extends DressingEnumeratorName, T extends ChunkWithPoints = ChunkWithPoints>(
+  spec: DressingColliderSpec<K>,
+  options: {
+    /** This client's request only, on top of the placement — must not move any point (e.g. power lines' `withNext`). */
+    requestExtras?: Partial<EnumeratorArgs<K>>;
+    /** The mount's own values; unset = the <Dressing> group's, then the default. */
+    renderDistance: number | undefined;
+    defaultRenderDistance: number;
+    colliderDistance: number | undefined;
+    /** Default DRESSING_COLLIDER_DISTANCE. */
+    defaultColliderDistance?: number;
+    onRemove?: (chunk: T) => void;
+    build: (points: EnumeratorPoint<K>[], bodies: DressingColliderBody[], bounds: DressingBounds) => Omit<T, "points">;
+  },
+) => {
+  const renderDistance = useDressingDefault("renderDistance", options.renderDistance, options.defaultRenderDistance);
+  const colliderDistance = useDressingDefault(
+    "colliderDistance",
+    options.colliderDistance,
+    options.defaultColliderDistance ?? DRESSING_COLLIDER_DISTANCE,
+  );
+  const registry = useChunkRegistry<T>(options.onRemove);
+  const buildChunk = options.build;
+  const request = options.requestExtras ? { ...spec.placement, ...options.requestExtras } : spec.placement;
+
+  const groupRef = useDressingChunks({
+    renderDistance,
+    build: async (bounds) => {
+      const points = await enumerateDressing(spec.enumerator, bounds, request);
+      if (points.length === 0) return null;
+      const bodies = points.flatMap(spec.bodiesOf);
+      const chunk = buildChunk(points, bodies, bounds) as T;
+      chunk.points = bodies;
+      registry.add(chunk);
+      return chunk.group;
+    },
+  });
+
+  const colliders = useDressingColliders(registry, { colliderDistance });
+
+  const content = (
+    <>
+      <group ref={groupRef} />
+      {/* Real colliders only for the bodies near the player. */}
+      <DressingPartColliders colliders={colliders} parts={spec.colliderParts} />
+    </>
+  );
+  return { registry, content };
 };

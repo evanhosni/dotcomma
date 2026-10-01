@@ -1,4 +1,4 @@
-import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
+import { useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import {
@@ -38,8 +38,6 @@ export interface KinematicMoverOptions {
 
 export interface KinematicMover {
   step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void;
-  /** The <RigidBody> to render (null when disabled). */
-  element: JSX.Element | null;
 }
 
 export const useKinematicMover = ({
@@ -51,10 +49,27 @@ export const useKinematicMover = ({
   groupRef,
 }: KinematicMoverOptions): KinematicMover => {
   const { world, rapier } = useRapier();
-  const rigidBodyRef = useRef<RapierRigidBody>(null);
+  const rigidBodyRef = useRef<RapierRigidBody | null>(null);
+  const halfHeight = collider.height / 2;
+
+  // Imperative, like the terrain heightfields and building proxies: r-t-r syncs every mounted
+  // <RigidBody> back to an Object3D each frame, and nothing reads this one's (27 in the city).
+  // The spawn point is the body's starting translation, as the <RigidBody position> was.
+  const [spawnX, spawnY, spawnZ] = coordinates;
+  useEffect(() => {
+    if (!enabled) return;
+    const body = world.createRigidBody(
+      rapier.RigidBodyDesc.kinematicPositionBased().setTranslation(spawnX, spawnY + halfHeight, spawnZ),
+    );
+    world.createCollider(rapier.ColliderDesc.capsule(halfHeight - collider.radius, collider.radius), body);
+    rigidBodyRef.current = body;
+    return () => {
+      rigidBodyRef.current = null;
+      world.removeRigidBody(body);
+    };
+  }, [world, rapier, enabled, halfHeight, collider.radius, spawnX, spawnY, spawnZ]);
   const characterRef = useRef<Character | null>(null);
   const result = useRef(createStepResult()).current;
-  const halfHeight = collider.height / 2;
 
   useEffect(() => {
     if (!enabled || movement !== "ground") return;
@@ -103,16 +118,5 @@ export const useKinematicMover = ({
     groupRef.current?.position.set(pos.x, pos.y - halfHeight, pos.z);
   };
 
-  const element = enabled ? (
-    <RigidBody
-      ref={rigidBodyRef}
-      type="kinematicPosition"
-      position={[coordinates[0], coordinates[1] + halfHeight, coordinates[2]]}
-      colliders={false}
-    >
-      <CapsuleCollider args={[halfHeight - collider.radius, collider.radius]} />
-    </RigidBody>
-  ) : null;
-
-  return { step, element };
+  return { step };
 };

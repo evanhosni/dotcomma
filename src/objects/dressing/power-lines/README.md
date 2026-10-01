@@ -12,11 +12,6 @@ Files: [PowerLines.tsx](PowerLines.tsx), [poleSpec.ts](poleSpec.ts) (Three-free 
 
 ## How to use/add
 
-Mount `<PowerLines />` in the city biome's `<Dressing>`. Props:
-- `spacing` (default 55)
-- `lateralMargin` (default 5)
-- `junctionClear` (default 26)
-- `renderDistance` (default 420)
-- `colliderDistance`
+Mount `<PowerLines />` in the city biome's `<Dressing>`. Props: `renderDistance` (default 420), `colliderDistance`.
 
-Tune the defaults in `UTILITY_POLE_PLACEMENT` ([poleSpec.ts](poleSpec.ts)) rather than at the mount: the server places from the spec, and a mount override logs a dev warning.
+The placement (`spacing` 55, `lateralMargin` 5, `junctionClear` 26, `side` 1) lives in `UTILITY_POLE_PLACEMENT` ([poleSpec.ts](poleSpec.ts)) only: the server places from the spec, so the component takes no placement props. (The client alone also asks for `withNext`, the wire spans; it moves no pole.)

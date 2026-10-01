@@ -25,6 +25,6 @@ N/A (one global player). Knobs:
 - Walk/sprint speed: `WALK_SPEED` / `SPRINT_SPEED` in [Player.tsx](Player.tsx). Noclip speeds: `DEV_*` in the same file.
 - Gravity, jump, slopes: [physics/characterMovement.ts](../physics/characterMovement.ts). They are shared with the server, so changing them changes NPCs too.
 - Capsule size: [spec.ts](spec.ts). Remote players and the server's player bodies read it too.
-- Camera far plane: `CAMERA_FAR` in [constants.ts](constants.ts). The terrain LOD rings are sized against it, so change them together.
-- New key binding: add the `KeyboardEvent.code` → action pair to `KeyAction` and a field to `InputState` in [useInput.tsx](useInput.tsx).
+- Camera far plane: `CAMERA_FAR` in [constants.ts](constants.ts). The terrain LOD rings are sized against it, so change them together (lodConfig.ts throws in dev when it leaves the LOD4–LOD5 band).
+- New key binding: add a field to `InputState` and its `KeyboardEvent.code` → field pair to `KEY_BINDINGS` in [useInput.tsx](useInput.tsx) (the compiler rejects a binding to a field that doesn't exist).
 - Noclip / physics debug: press F1 for devmode, then use the checkboxes (see [context/](../context/)).

@@ -33,9 +33,6 @@ const SEVERED_WATERFRONT_SEED = 180;
 const SEVERED_END_SEED = 12;
 /** A belt path's end this close inside the yield (factor-1 units) is the ring going on onto dry land. */
 const SEVERED_RING_EDGE = 8;
-/** What the last census justified rather than counted: city arterials the quay carries. */
-export const severedDebug = { quay: 0 };
-
 /** THE INVARIANT's census — a connecting freeway ALWAYS gets across a river: every freeway — inter-city run, belt, arterial — near every river reaching the box, cut into its
  *  WET stretches (the centerline inside the yield the terrain gives the road to the river: a run's
  *  near the water, blended to the belt's at a belt corner, the others' over the footprint). A belt
@@ -49,11 +46,10 @@ export const severedDebug = { quay: 0 };
  *   - one where the road ends in the water at a junction ("open") needs its dry end served (a T
  *     into the deck carrying the road it joins);
  *  except a city arterial that does not cross the river (it follows the shore, grazes it, or ends in
- *  it on its own bank): the quay road along the bank meets it and carries it on (severedDebug.quay
- *  counts them; riverNetwork's road layer leaves the river there).
+ *  it on its own bank): the quay road along the bank meets it and carries it on (riverNetwork's road
+ *  layer leaves the river there).
  *  Probes and tests. */
 export const getSeveredFreeways = (minX: number, minZ: number, maxX: number, maxZ: number): SeveredFreeway[] => {
-  severedDebug.quay = 0;
   if (!domainConfig || !riversEnabled) return [];
   const rv = domainConfig.river;
   const reach = rv.halfWidth + rv.bank;
@@ -235,10 +231,7 @@ export const getSeveredFreeways = (minX: number, minZ: number, maxX: number, max
         };
         // A city arterial that does not cross the river — it follows the shore, grazes it or ends in it
         // on its own bank — meets the quay: the city's road along the bank carries it on.
-        if ((path.kind === "arterial" || path.kind === "arterialSeg") && !odd) {
-          severedDebug.quay++;
-          continue;
-        }
+        if ((path.kind === "arterial" || path.kind === "arterialSeg") && !odd) continue;
         let shape: SeveredFreeway["shape"];
         let severed: boolean;
         if (!open0 && !open1) {

@@ -22,7 +22,7 @@ GameObjectAttributes      every class: renderDistance, colliderDistance, quantiz
 │  │                      frustumPadding, cursorOverride, flattenGround/Radius/Skirt
 │  ├─ ModelActorAttributes   (actors/ModelActor.tsx) model, scale, collider options
 │  └─ BuildingAttributes     (actors/building/types.ts) shell, window and interior knobs
-├─ DressingAttributes     empty today: each feature adds its own placement props
+├─ DressingAttributes     empty today: placement is each feature's enumerator args (a solid feature's: its spec)
 └─ FoliageAttributes      slopeBlend, color, png/texture, width, height, sway, swaySpeed, seed
 ```
 

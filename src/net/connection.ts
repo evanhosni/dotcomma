@@ -68,7 +68,6 @@ const setState = (patch: Partial<ConnectionState>) => {
 };
 
 export const getConnectionState = (): ConnectionState => state;
-export const getSelfId = (): string | null => state.selfId;
 export const getAssignedSpawnOffset = (): { x: number; z: number } | null => state.spawnOffset;
 
 const subscribeState = (l: () => void) => {
@@ -126,7 +125,6 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 let lastPongAt = 0;
 let helloSentAt = 0;
-let manuallyClosed = false;
 
 /** Drops silently when not open: intent is re-sent after every init, so nothing that matters is lost. */
 export const send = (msg: ClientMessage): boolean => {
@@ -143,7 +141,7 @@ const clearTimers = () => {
 };
 
 const scheduleReconnect = () => {
-  if (manuallyClosed || reconnectTimer) return;
+  if (reconnectTimer) return;
   const n = state.attempts;
   const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** n) * (0.8 + Math.random() * 0.4);
   setState({ status: "reconnecting", attempts: n + 1, selfId: null });
@@ -151,6 +149,55 @@ const scheduleReconnect = () => {
     reconnectTimer = null;
     open();
   }, delay);
+};
+
+/** A ping every PING_INTERVAL_MS; no pong for PONG_TIMEOUT_MS closes the socket (→ onclose → reconnect). */
+const startHeartbeat = (socket: WebSocket): void => {
+  pingTimer = setInterval(() => {
+    if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
+      console.warn("[net] no pong — treating connection as dead");
+      socket.close();
+      return;
+    }
+    send({ t: "ping", t0: Date.now() });
+  }, PING_INTERVAL_MS);
+};
+
+/** A text frame as a server message; null for anything malformed (ignored). */
+const parseServerFrame = (data: unknown): ServerMessage | null => {
+  if (typeof data !== "string") return null;
+  let msg: ServerMessage;
+  try {
+    msg = JSON.parse(data) as ServerMessage;
+  } catch {
+    return null;
+  }
+  if (typeof msg !== "object" || msg === null || typeof msg.t !== "string") return null;
+  return msg;
+};
+
+/** What the connection itself does with a message before every subscriber sees it. */
+const handleConnectionMessage = (msg: ServerMessage): void => {
+  switch (msg.t) {
+    case "init":
+      setState({
+        status: "connected",
+        selfId: msg.id,
+        color: msg.color,
+        spawnOffset: msg.spawn,
+        attempts: 0,
+      });
+      lastPongAt = Date.now();
+      // hello→init is the first clock sample so day/night is right from the first
+      // frame, not after the first 15s ping.
+      if (helloSentAt) sampleClock(helloSentAt, msg.serverTime);
+      send({ t: "ping", t0: Date.now() });
+      break;
+    case "pong":
+      lastPongAt = Date.now();
+      sampleClock(msg.t0, msg.serverTime);
+      break;
+  }
 };
 
 const open = () => {
@@ -171,46 +218,14 @@ const open = () => {
     lastPongAt = Date.now();
     helloSentAt = Date.now();
     send({ t: "hello", identity: getIdentity(), domain: getCurrentDomain() });
-    pingTimer = setInterval(() => {
-      if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
-        console.warn("[net] no pong — treating connection as dead");
-        socket.close(); // → onclose → reconnect
-        return;
-      }
-      send({ t: "ping", t0: Date.now() });
-    }, PING_INTERVAL_MS);
+    startHeartbeat(socket);
   };
 
   socket.onmessage = (ev) => {
-    if (ws !== socket || typeof ev.data !== "string") return;
-    let msg: ServerMessage;
-    try {
-      msg = JSON.parse(ev.data) as ServerMessage;
-    } catch {
-      return; // malformed → ignore
-    }
-    if (typeof msg !== "object" || msg === null || typeof msg.t !== "string") return;
-
-    switch (msg.t) {
-      case "init":
-        setState({
-          status: "connected",
-          selfId: msg.id,
-          color: msg.color,
-          spawnOffset: msg.spawn,
-          attempts: 0,
-        });
-        lastPongAt = Date.now();
-        // hello→init is the first clock sample so day/night is right from the first
-        // frame, not after the first 15s ping.
-        if (helloSentAt) sampleClock(helloSentAt, msg.serverTime);
-        send({ t: "ping", t0: Date.now() });
-        break;
-      case "pong":
-        lastPongAt = Date.now();
-        sampleClock(msg.t0, msg.serverTime);
-        break;
-    }
+    if (ws !== socket) return;
+    const msg = parseServerFrame(ev.data);
+    if (!msg) return;
+    handleConnectionMessage(msg);
     messageHandlers.forEach((h) => h(msg));
   };
 
@@ -218,10 +233,6 @@ const open = () => {
     if (ws !== socket) return;
     ws = null;
     clearTimers();
-    if (manuallyClosed) {
-      setState({ status: "offline", selfId: null });
-      return;
-    }
     scheduleReconnect();
   };
 
@@ -234,7 +245,6 @@ const open = () => {
 export const startConnection = () => {
   if (started) return;
   started = true;
-  manuallyClosed = false;
   open();
 
   (window as unknown as { __net: unknown }).__net = {
@@ -258,9 +268,9 @@ export const startConnection = () => {
     }
   });
 
-  // Close OURSELVES on leave. MEASURED in Chrome: a navigated-away page's socket
-  // stayed open server-side for the whole heartbeat window, so other tabs saw a
-  // ghost for up to 60s. A bfcache restore fires pageshow(persisted) → reconnect.
+  // Close OURSELVES on leave: Chrome keeps a navigated-away page's socket open server-side for the
+  // whole heartbeat window, so other tabs saw a ghost for up to 60s. A bfcache restore fires
+  // pageshow(persisted) → reconnect.
   window.addEventListener("pagehide", () => {
     const socket = ws;
     ws = null; // onclose sees ws !== socket → no reconnect scheduled
@@ -269,12 +279,6 @@ export const startConnection = () => {
     setState({ status: "offline", selfId: null });
   });
   window.addEventListener("pageshow", (ev) => {
-    if (ev.persisted && started && !manuallyClosed && !ws) open();
+    if (ev.persisted && started && !ws) open();
   });
-};
-
-export const stopConnection = () => {
-  manuallyClosed = true;
-  clearTimers();
-  ws?.close();
 };

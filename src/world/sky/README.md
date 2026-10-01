@@ -19,7 +19,7 @@ Two independent pieces live here:
 **The day/night cycle** ([DayNightCycle.tsx](DayNightCycle.tsx)) is mounted by the overworld domain. It:
 
 - computes the night blend from the **server clock** (`nightBlendAt(getServerTime(), …)` in [lighting/dayNight.ts](../../lighting/dayNight.ts)), so every player sees the same time of day, and writes it with `setNightBlend` (read by everything through [lighting/](../../lighting/));
-- draws the jittery low-poly sun disc, crescent moon and stars, which follow the camera. They shrink/grow with the blend;
+- draws the jittery low-poly sun disc, crescent moon and stars (their geometry is [celestialBodies.ts](celestialBodies.ts)), which follow the camera. They shrink/grow with the blend;
 - pre-compiles the scene's shaders at mount and warm-draws the moon and stars for two frames. Without this, the first nightfall hitches. The reason is in [CLAUDE.md](../../../CLAUDE.md) under `sky/DayNightCycle.tsx`.
 
 ## How to use/add
@@ -48,5 +48,5 @@ Notes:
 
 - Day, night and transition lengths: `DAY_DURATION_MS`, `NIGHT_DURATION_MS`, `DAY_NIGHT_CYCLE_TRANSITION_MS` in [lighting/dayNight.ts](../../lighting/dayNight.ts). They can also be overridden per domain as `<DayNightCycle>` props.
 - Night sky colors: `NIGHT_SKY_COLORS` in the same file.
-- Sun/moon look (size, roundness, jitter): the constants at the top of [DayNightCycle.tsx](DayNightCycle.tsx).
+- Sun/moon/star look (size, roundness, jitter, star count): the constants at the top of [celestialBodies.ts](celestialBodies.ts).
 - Sun/moon direction: `SUN_DIRECTION` / `MOON_DIRECTION` in `dayNight.ts`. These also aim the directional light.

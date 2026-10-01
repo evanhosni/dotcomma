@@ -12,7 +12,7 @@ import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
 import { riverKeepOff } from "./rivers/riverNetwork";
-import type { DomainConfig, VertexResult } from "./types";
+import type { DomainConfig, FlattenDescriptor, VertexResult } from "./types";
 import { computeVertexData } from "./vertexCompute";
 
 const FLATTEN_TILE = 128; // world units per canonical placement tile
@@ -62,63 +62,47 @@ export function computeVertexDataRaw(x: number, z: number): VertexResult {
   }
 }
 
-/** Accepted flatten points whose center lies in the tile — canonical, so every caller sees the identical set. */
-const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
-  const key = `${tx},${tz}`;
-  const hit = flattenTileCache.get(key);
-  if (hit) return hit;
-  if (flattenTileCache.size > 2048) dropOldestHalf(flattenTileCache);
-
-  const minX = tx * FLATTEN_TILE;
-  const minZ = tz * FLATTEN_TILE;
-  const maxX = minX + FLATTEN_TILE;
-  const maxZ = minZ + FLATTEN_TILE;
-  const pMinX = minX - flattenSpacingPad;
-  const pMinZ = minZ - flattenSpacingPad;
-  const pMaxX = maxX + flattenSpacingPad;
-  const pMaxZ = maxZ + flattenSpacingPad;
-
-  const descs = domainConfig!.flattenDescriptors!;
+/** Every descriptor's density-grid candidates in a box that pass the placement filters against the
+ *  RAW height (the spawn worker's own rolls), per cell cached across tiles. */
+const rollPadCandidates = (pMinX: number, pMinZ: number, pMaxX: number, pMaxZ: number, descs: FlattenDescriptor[]): FlattenCandidate[] => {
   const candidates: FlattenCandidate[] = [];
-  evaluatingPadCandidates = true;
-  try {
-    for (let di = 0; di < descs.length; di++) {
-      const desc = descs[di];
-      const cellSize = densityCellSize(desc.density);
-      const [gx0, gx1] = densityCellRange(pMinX, pMaxX, cellSize);
-      const [gz0, gz1] = densityCellRange(pMinZ, pMaxZ, cellSize);
-      const probability = densityProbability(desc.density, cellSize);
-      for (let gx = gx0; gx <= gx1; gx++) {
-        for (let gz = gz0; gz <= gz1; gz++) {
-          const candKey = `${di}:${gx},${gz}`;
-          const cached = flattenCandCache.get(candKey);
-          if (cached !== undefined) {
-            if (cached !== null) candidates.push(cached);
-            continue;
-          }
-          if (flattenCandCache.size > 65536) dropOldestHalf(flattenCandCache);
-
-          let cand: FlattenCandidate | null = null;
-          const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
-          if (roll) {
-            const vd = computeVertexData(roll.x, roll.z); // RAW (evaluatingPadCandidates guard)
-            if (passesPlacementFilters(vd, desc, riverKeepOff())) {
-              cand = { x: roll.x, z: roll.z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
-            }
-          }
-          flattenCandCache.set(candKey, cand);
-          if (cand !== null) candidates.push(cand);
+  for (let di = 0; di < descs.length; di++) {
+    const desc = descs[di];
+    const cellSize = densityCellSize(desc.density);
+    const [gx0, gx1] = densityCellRange(pMinX, pMaxX, cellSize);
+    const [gz0, gz1] = densityCellRange(pMinZ, pMaxZ, cellSize);
+    const probability = densityProbability(desc.density, cellSize);
+    for (let gx = gx0; gx <= gx1; gx++) {
+      for (let gz = gz0; gz <= gz1; gz++) {
+        const candKey = `${di}:${gx},${gz}`;
+        const cached = flattenCandCache.get(candKey);
+        if (cached !== undefined) {
+          if (cached !== null) candidates.push(cached);
+          continue;
         }
+        if (flattenCandCache.size > 65536) dropOldestHalf(flattenCandCache);
+
+        let cand: FlattenCandidate | null = null;
+        const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
+        if (roll) {
+          const vd = computeVertexDataRaw(roll.x, roll.z);
+          if (passesPlacementFilters(vd, desc, riverKeepOff())) {
+            cand = { x: roll.x, z: roll.z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };
+          }
+        }
+        flattenCandCache.set(candKey, cand);
+        if (cand !== null) candidates.push(cand);
       }
     }
-  } finally {
-    evaluatingPadCandidates = false;
   }
+  return candidates;
+};
 
-  // Iterated LOCAL spacing (Matérn-II rounds): a candidate is rejected by any
-  // earlier-ordered POOL member within its footprint — purely local, so tiles
-  // agree (greedy against ACCEPTED points would chain acceptances across tile
-  // windows). One round packs ~45% of greedy; the re-entry rounds converge.
+/** Iterated LOCAL spacing (Matérn-II rounds): a candidate is rejected by any earlier-ordered POOL
+ *  member within its footprint — purely local, so tiles agree (greedy against ACCEPTED points would
+ *  chain acceptances across tile windows). One round packs ~45% of greedy; the re-entry rounds
+ *  converge. Sorts `candidates` in place. */
+const spacePadCandidates = (candidates: FlattenCandidate[], descs: FlattenDescriptor[]): FlattenCandidate[] => {
   candidates.sort((a, b) => {
     const pa = descs[a.descIndex].priority;
     const pb = descs[b.descIndex].priority;
@@ -163,6 +147,23 @@ const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
     const winSet = new Set(winners);
     pool = pool.filter((c) => !winSet.has(c));
   }
+  return accepted;
+};
+
+/** Accepted flatten points whose center lies in the tile — canonical, so every caller sees the identical set. */
+const flattenTilePoints = (tx: number, tz: number): FlattenPoint[] => {
+  const key = `${tx},${tz}`;
+  const hit = flattenTileCache.get(key);
+  if (hit) return hit;
+  if (flattenTileCache.size > 2048) dropOldestHalf(flattenTileCache);
+
+  const minX = tx * FLATTEN_TILE;
+  const minZ = tz * FLATTEN_TILE;
+  const maxX = minX + FLATTEN_TILE;
+  const maxZ = minZ + FLATTEN_TILE;
+  const descs = domainConfig!.flattenDescriptors!;
+  const candidates = rollPadCandidates(minX - flattenSpacingPad, minZ - flattenSpacingPad, maxX + flattenSpacingPad, maxZ + flattenSpacingPad, descs);
+  const accepted = spacePadCandidates(candidates, descs);
 
   const points: FlattenPoint[] = [];
   for (const c of accepted) {
@@ -204,9 +205,8 @@ export function getFlattenPoints(
   return out;
 }
 
-// Influences apply in ASCENDING mask order so the dominant pad lands last (a
-// dense neighbor's skirt otherwise tilted the footing). Parallel reused buffers,
-// almost always ≤3 entries — an object per influence was steady GC churn.
+// Influences apply in ASCENDING mask order so the dominant pad lands last (a dense neighbor's skirt
+// would otherwise tilt the footing). Parallel reused buffers, almost always ≤3 entries.
 const padInfluenceHeights: number[] = [];
 const padInfluenceMasks: number[] = [];
 export const applyFlattenPads = (x: number, z: number, height: number): number => {

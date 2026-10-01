@@ -3,36 +3,30 @@
  * jittered sites, the element each cell rolls, the 5×5 grids a query sees, their Delaunay
  * triangulations and the zone walls between them.
  *
- * Each cell rolls its element from the enclosing level's list with the SAME `${x},${z}` seed the
- * biome grid always used. The jitter seeds are rolled IDENTICALLY by gridSite (the site caches, the
- * place queries) and by getCityVoronoiSites — change them together or the biome map disagrees with
- * itself. Sites and rolls are cached per cell: three seedRand calls per site per grid build were
- * most of what a grid miss cost, and far-LOD terrain and the river network miss constantly.
+ * Each cell rolls its element from the enclosing level's list, seeded by its site (`${x},${z}`).
+ * Every site and roll comes from the per-cell site caches below (regionSiteAt, rawBiomeSiteAt,
+ * biomeSiteAt): the grids, the place queries and the city-light sites all read them, so the biome
+ * map can never disagree with itself. Cached because three seedRand calls per site per grid build
+ * were most of what a grid miss cost, and far-LOD terrain and the river network miss constantly.
  */
 
 import Delaunator from "delaunator";
 import { seedRand } from "../math/_math";
 import type { PointXZ } from "../math/types";
+import { CITY_BIOME_ID } from "../../world/constants";
 import { CellCache } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import type { BiomeContext, SerializedRegion, VoronoiCell, Wall, Zone } from "./types";
-import { zoneByKey, zonesByRegion } from "./zoneBlend";
+import { zonesByRegion } from "./zoneBlend";
 
-export const gridSite = (seed: string, ix: number, iz: number, gs: number): PointXZ => ({
+const gridSite = (seed: string, ix: number, iz: number, gs: number): PointXZ => ({
   x: (ix + seedRand(`${seed} - ${ix}X${iz}`)) * gs,
   z: (iz + seedRand(`${seed} - ${ix}Z${iz}`)) * gs,
 });
 
-export const rollRegion = (point: PointXZ, regions: SerializedRegion[]): SerializedRegion => {
+const rollRegion = (point: PointXZ, regions: SerializedRegion[]): SerializedRegion => {
   const uuid = seedRand(`${point.x},${point.z}`);
   return regions[Math.floor(uuid * regions.length)];
-};
-
-export const rollZone = (point: PointXZ, rGrid: VoronoiCell[]): Zone => {
-  const region: SerializedRegion = nearestCell(point, rGrid).element;
-  const uuid = seedRand(`${point.x},${point.z}`);
-  const biome = region.biomes[Math.floor(uuid * region.biomes.length)];
-  return zoneByKey.get(`${region.id}/${biome.id}`)!;
 };
 
 // ── Site caches ───────────────────────────────────────────────────────────
@@ -54,9 +48,8 @@ export const regionSiteAt = (ix: number, iz: number): RegionSite => {
   return site;
 };
 
-/** A biome-grid cell's site and its biome roll — the three seedRand calls rollZone makes for it,
- *  cached per cell: a network window re-reads 1369 sites, 97% of them shared with the neighboring
- *  cell's window (MEASURED: seedRand was ~80% of a 56ms network build). */
+/** A biome-grid cell's site and its biome roll, cached per cell: a network window re-reads 1369
+ *  sites, 97% of them shared with the neighboring cell's window (seedRand was ~80% of a network build). */
 interface RawBiomeSite {
   x: number;
   z: number;
@@ -73,8 +66,9 @@ export const rawBiomeSiteAt = (ix: number, iz: number): RawBiomeSite => {
   }
   return site;
 };
-/** rollZone for a cached site: the same region lookup, the same roll. */
-export const zoneOfRawSite = (site: RawBiomeSite, rGrid: VoronoiCell[]): Zone => {
+/** The zone a cached site rolled: the region of the nearest region-grid site, then the biome roll
+ *  over that region's list. */
+const zoneOfRawSite = (site: RawBiomeSite, rGrid: VoronoiCell[]): Zone => {
   const region: SerializedRegion = nearestCell(site, rGrid).element;
   return zonesByRegion.get(region)![Math.floor(site.roll * region.biomes.length)];
 };
@@ -347,11 +341,9 @@ export const getBiomeContext = (currentVertex: PointXZ): BiomeContext => {
   return { zone, cell, zoneWalls: getZoneWalls(currentVertex, biomeGrid), grid: biomeGrid, warped: currentVertex };
 };
 
-// The walls that bound a given biome, filtered once per wall list (the city's rim /
-// belt logic measures against the CITY's boundary only — a wall between two foreign
-// zones near a triple junction must not read as the rim).
+/** The walls that bound a given biome, filtered once per wall list. */
 const biomeWallsCache = new WeakMap<Wall[], Map<number, Wall[]>>();
-export const wallsOfBiome = (zoneWalls: Wall[], biomeId: number): Wall[] => {
+const wallsOfBiome = (zoneWalls: Wall[], biomeId: number): Wall[] => {
   let byBiome = biomeWallsCache.get(zoneWalls);
   if (!byBiome) {
     byBiome = new Map();
@@ -364,6 +356,11 @@ export const wallsOfBiome = (zoneWalls: Wall[], biomeId: number): Wall[] => {
   }
   return walls;
 };
+
+/** The CITY's walls around a context — the belt freeway's centerline. The city's rim / belt logic
+ *  measures against these only: a wall between two foreign zones near a triple junction must not
+ *  read as the rim. */
+export const cityWallsOf = (ctx: BiomeContext): Wall[] => wallsOfBiome(ctx.zoneWalls, CITY_BIOME_ID);
 
 /** getZoneWalls emits each wall twice, endpoint-swapped: this picks one of the two. */
 export const isCanonicalWall = (w: Wall): boolean => !(w.ex < w.sx || (w.ex === w.sx && w.ez < w.sz));

@@ -1,6 +1,6 @@
 import type { DomainId, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
-import { getActorSpec } from "../../../../src/objects/actors/catalog";
+import { getActorSpec } from "../../../../src/world/domains/configs";
 import { DOOR_INTERACT_REACH } from "../../../../src/objects/actors/building/spec";
 import { INTERACT_REACH_SLACK, serverInteractReachSq, type ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
@@ -246,12 +246,13 @@ export class EntityManager {
     return list;
   }
 
+  /** One simulation tick: generation work → player capsules → query refresh → every machine ticks and
+   *  moves its body → ONE world step → resolved poses published. */
   tick(now = Date.now()): void {
     const tickStart = performance.now();
     this.tickNo++;
     const dt = TICK_MS / 1000;
     this.elapsed += dt;
-    const elapsed = this.elapsed;
     const playersByDomain = new Map<DomainId, PlayerView[]>();
     const playersOf = (domain: DomainId): PlayerView[] => {
       let list = playersByDomain.get(domain);
@@ -259,18 +260,31 @@ export class EntityManager {
       return list;
     };
 
-    const pw = this.physics;
-    const simulate = pw !== null && (this.npcCount > 0 || this.players!.size > 0);
-    if (pw) {
-      pw.workFor(this.workBudgetMs);
-      if (simulate) {
-        const domains = new Set<DomainId>();
-        for (const e of this.entities.values()) if (e.npc) domains.add(e.domain);
-        this.players!.sync([...domains].flatMap((d) => playersOf(d)));
-      }
-      pw.ensureQueries();
-    }
+    const simulate = this.preparePhysics(playersOf);
+    this.stepMachines(dt, now, playersOf);
+    if (simulate) this.physics!.step();
+    this.publishPoses(dt, now);
+    this.logTick(performance.now() - tickStart);
+  }
 
+  /** Runs the physics world's budgeted generation, syncs the player capsules and refreshes the query
+   *  structure. Returns whether the world steps this tick (anything simulated at all). */
+  private preparePhysics(playersOf: (domain: DomainId) => PlayerView[]): boolean {
+    const pw = this.physics;
+    if (!pw) return false;
+    const simulate = this.npcCount > 0 || this.players!.size > 0;
+    pw.workFor(this.workBudgetMs);
+    if (simulate) {
+      const domains = new Set<DomainId>();
+      for (const e of this.entities.values()) if (e.npc) domains.add(e.domain);
+      this.players!.sync([...domains].flatMap((d) => playersOf(d)));
+    }
+    pw.ensureQueries();
+    return simulate;
+  }
+
+  /** Every machine ticks against its nearest player; its motion output drives its body. */
+  private stepMachines(dt: number, now: number, playersOf: (domain: DomainId) => PlayerView[]): void {
     for (const e of this.entities.values()) {
       const r = e.runner;
       if (!r) continue;
@@ -278,30 +292,31 @@ export class EntityManager {
       e.position.x = e.x;
       e.position.y = e.y;
       e.position.z = e.z;
-      r.tick(elapsed, dt, now, pos, distSq);
+      r.tick(this.elapsed, dt, now, pos, distSq);
       if (e.npc) {
         const m = r.motion.out;
         e.npc.step(dt, m.vx, m.vz, m.vy);
       }
     }
+  }
 
-    if (simulate) pw!.step();
-
+  private publishPoses(dt: number, now: number): void {
     for (const e of this.entities.values()) {
       if (!e.runner) continue;
       const pose = e.npc ? e.npc.resolvePose(dt, this.poseScratch) : null;
       const fields = publishTick(e, pose, e.runner, now);
       if (fields) this.send(e, fields);
     }
+  }
 
-    const tickMs = performance.now() - tickStart;
+  private logTick(tickMs: number): void {
     if (tickMs > this.maxTickMs) this.maxTickMs = tickMs;
-    if (this.log && pw) {
-      if (tickMs > SLOW_TICK_WARN_MS) console.warn(`[physics] slow tick ${tickMs.toFixed(1)}ms — ${this.statsLine()}`);
-      if (this.tickNo % STATS_LOG_EVERY_TICKS === 0 && (this.npcCount > 0 || pw.jobs.length > 0)) {
-        console.log(`[physics] ${this.statsLine()}`);
-        this.maxTickMs = 0;
-      }
+    const pw = this.physics;
+    if (!this.log || !pw) return;
+    if (tickMs > SLOW_TICK_WARN_MS) console.warn(`[physics] slow tick ${tickMs.toFixed(1)}ms — ${this.statsLine()}`);
+    if (this.tickNo % STATS_LOG_EVERY_TICKS === 0 && (this.npcCount > 0 || pw.jobs.length > 0)) {
+      console.log(`[physics] ${this.statsLine()}`);
+      this.maxTickMs = 0;
     }
   }
 

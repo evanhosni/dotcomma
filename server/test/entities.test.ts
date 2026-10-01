@@ -3,7 +3,7 @@ import { afterEach, before, describe, it } from "node:test";
 import type { ServerMessage } from "../../src/net/protocol";
 import { generateBuildingPlan } from "../../src/objects/actors/building/generatePlan";
 import { BUILDING_SPEC } from "../../src/objects/actors/building/spec";
-import { ACTOR_SPECS } from "../../src/objects/actors/catalog";
+import { ACTOR_CATALOG } from "../../src/world/domains/configs";
 import type { ActorSpec } from "../../src/objects/actors/spec";
 import type { StateMachineConfig } from "../../src/objects/actors/state/types";
 import { computeVertexData } from "../../src/utils/workers/vertexCompute";
@@ -179,7 +179,7 @@ describe("EntityManager (server authority)", () => {
     };
     const flyer: ActorSpec = { id: "test-flyer", stateMachine: FLYER_SM, body: "kinematic", movement: "free" };
     const h = makeHost();
-    const m = manager(h, { specs: (kind) => (kind === flyer.id ? flyer : ACTOR_SPECS[kind]) });
+    const m = manager(h, { specs: (kind) => (kind === flyer.id ? flyer : ACTOR_CATALOG[kind]) });
     m.register("A", "overworld", [{ id: "0_0_test-flyer", kind: "test-flyer", x: 0, y: 0, z: 0 }]);
     h.setPlayer("A", 500, 500);
     const e = m.get("0_0_test-flyer")!;
@@ -221,7 +221,7 @@ describe("EntityManager (server authority)", () => {
     // Building.tsx's seed + the spec's hull: the plan every client draws the leaves from.
     const doors = generateBuildingPlan(`${bx}_${bz}`, BUILDING_SPEC.hull!).doors;
     const far = doors.findIndex((d) => Math.hypot(d.position[0], d.position[2]) > 9);
-    assert.ok(far >= 0, "a facade door beyond the old 8u origin gate");
+    assert.ok(far >= 0, "a facade door more than 8u from the building origin");
     const at = doors[far].position;
     m.register("A", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
     m.register("C", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);

@@ -7,7 +7,7 @@ All HUD panels live in [overlay/](overlay/). They are plain DOM on top of the ca
 | panel | where it mounts | shows |
 |---|---|---|
 | [Overlay.tsx](overlay/Overlay.tsx) | inside the canvas ([world/CustomCanvas.tsx](../world/CustomCanvas.tsx)), because it reads `gl.info` in `useFrame` | devmode stats: FPS / MS / memory graphs, position, biome, draw calls, terrain progress. Backspace resets the held worst values. |
-| [DevOverlay.tsx](overlay/DevOverlay.tsx) | [index.tsx](../index.tsx) | the devmode checkboxes, one per entry of its `TOGGLES` list (noclip, physics debug) |
+| [DevOverlay.tsx](overlay/DevOverlay.tsx) | [index.tsx](../index.tsx) | the devmode checkboxes, one per entry of `DEV_TOGGLES` ([context/constants.ts](../context/constants.ts): noclip, physics debug) |
 | [LogsOverlay.tsx](overlay/LogsOverlay.tsx) | [index.tsx](../index.tsx) | captured console logs, warnings and errors (devmode only, expire after 30s) |
 | [NetOverlay.tsx](overlay/NetOverlay.tsx) | [index.tsx](../index.tsx) | top-right connection status, your color/id, players here (always on) |
 

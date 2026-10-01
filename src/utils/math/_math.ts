@@ -3,9 +3,9 @@ export const MASTER_SEED = "mynamebierce";
 
 // seedrandom's default generator (ARC4, RC4-drop[256], 52-bit doubles) on two reused byte arrays:
 // bit-identical to `seedrandom(seed + MASTER_SEED)()` (_math.test.ts compares them) at ~2.3× the
-// speed. The library allocated a generator, its closures and two 256-entry arrays per call and
-// mixed every state into its global entropy pool; seedRand was the pipeline's largest self time
-// (MEASURED: ~20% of the terrain worker's startup ring).
+// speed. The library allocates a generator, its closures and two 256-entry arrays per call and
+// mixes every state into its global entropy pool, which made it the pipeline's largest self time
+// (~20% of the terrain worker's startup ring).
 const arc4S = new Uint8Array(256);
 const arc4Key = new Uint8Array(256);
 const TWO_POW_48 = 281474976710656;

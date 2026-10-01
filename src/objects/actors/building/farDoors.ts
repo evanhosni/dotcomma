@@ -3,8 +3,8 @@ import { prepareActorMaterial } from "../Actor";
 
 /**
  * The door leaves of every building beyond its live distance, as ONE InstancedMesh (one draw call
- * for all of them). A leaf per mesh was one lit draw per door out to 625u, which is why far doors
- * used to be hidden; inside the live distance Building.tsx draws the real, clickable leaves.
+ * for all of them — a mesh per leaf would be one lit draw per door out to 625u); inside the live
+ * distance Building.tsx draws the real, clickable leaves.
  *
  * Instances are placed relative to a rebase origin near the camera (the mesh's position), so the GPU
  * never sees an absolute world coordinate (CLAUDE.md → Coordinate Precision).
@@ -157,4 +157,11 @@ export const followFarDoorOrigin = (cameraX: number, cameraZ: number): void => {
   originZ = Math.round(cameraZ);
   mesh.position.set(originX, 0, originZ);
   for (const door of doors) writeMatrix(door);
+};
+
+/** A program template of the shared mesh (instanceColor + the per-instance fade) — utils/warmPrograms.ts. */
+export const farDoorWarmTemplate = (): THREE.InstancedMesh => {
+  const template = new THREE.InstancedMesh(box, material, 1);
+  template.setColorAt(0, _color.set(0xffffff));
+  return template;
 };

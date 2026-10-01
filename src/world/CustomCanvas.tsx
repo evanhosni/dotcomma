@@ -20,6 +20,11 @@ const SceneRender = () => {
   const { gl, scene, camera } = useThree();
   useEffect(() => {
     (window as any).__game = { gl, scene, camera }; // console/debug access only
+    // A self-updating scene root FORCES updateMatrixWorld through every descendant each frame,
+    // matrixWorldAutoUpdate = false included, which would defeat the actors' matrix freezing.
+    // The root never moves (~364 → 218µs per scene update in the city).
+    scene.updateMatrix();
+    scene.matrixAutoUpdate = false;
   }, [gl, scene, camera]);
   useFrame(() => {
     shouldPresentThisFrame();

@@ -13,16 +13,15 @@
 import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, riverKeepOff } from "./vertexCompute";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
 import { slopeDegreesAt } from "./densityPoints";
+import { SPAWN_CHUNK_SIZE } from "./constants";
 // Type-only: keeps the React-dependent module out of the worker bundle.
 import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
-
-const SPAWN_CHUNK_SIZE = 250;
 
 class SpatialHash {
   private cellSize: number;
   private invCellSize: number;
-  // Nested numeric maps (cx → cz → bucket): a string key was built per candidate
-  // × 9 neighbor cells. Buckets keep insertion order; isTooClose scans dx-then-dz.
+  // Nested numeric maps (cx → cz → bucket): no string key per candidate × 9 neighbor cells.
+  // Buckets keep insertion order; isTooClose scans dx-then-dz.
   private cells = new Map<number, Map<number, SpawnPoint[]>>();
 
   constructor(maxFootprint: number) {
@@ -106,8 +105,7 @@ let initialized = false;
 let spatialHash: SpatialHash | null = null;
 
 /** Carries its own center and hash membership: CLEANUP walks the whole cache
- *  every batch, and parsing coordinates out of the key made eviction the most
- *  expensive thing about it. */
+ *  every batch, and must not parse coordinates out of the key. */
 interface CachedChunk {
   centerX: number;
   centerZ: number;
@@ -116,6 +114,74 @@ interface CachedChunk {
 }
 
 const chunkCache = new Map<string, CachedChunk>();
+
+/** Every flatten-pad point of a chunk (getFlattenPoints returns all descriptors' at once), bucketed
+ *  by descriptor id in the engine's order. */
+const flattenPointsByDescriptor = (chunkMinX: number, chunkMinZ: number): Map<string, FlattenPoint[]> => {
+  const byDesc = new Map<string, FlattenPoint[]>();
+  for (const p of getFlattenPoints(chunkMinX, chunkMinZ, chunkMinX + SPAWN_CHUNK_SIZE, chunkMinZ + SPAWN_CHUNK_SIZE)) {
+    let arr = byDesc.get(p.descId);
+    if (!arr) {
+      arr = [];
+      byDesc.set(p.descId, arr);
+    }
+    arr.push(p);
+  }
+  return byDesc;
+};
+
+/** A flattenGround descriptor's points come from the flatten engine (the same function the terrain
+ *  pads under) and still enter the hash, so OTHER descriptors space against them. */
+const placeFlattenPoints = (desc: SerializedDescriptor, descPoints: FlattenPoint[] | undefined, out: SpawnPoint[]): void => {
+  if (!descPoints) return;
+  for (const p of descPoints) {
+    const point: SpawnPoint = {
+      x: p.x,
+      z: p.z,
+      height: p.y,
+      biomeId: p.biomeId,
+      descriptorId: desc.id,
+    };
+    spatialHash!.insert(point);
+    out.push(point);
+  }
+};
+
+/** A density descriptor over one chunk: the shared density-grid roll, the placement filters, its
+ *  slopeRange, then spacing against everything already in the hash. */
+const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunkMinZ: number, out: SpawnPoint[]): void => {
+  const cellSize = densityCellSize(desc.density);
+  const [startCellX, endCellX] = densityCellRange(chunkMinX, chunkMinX + SPAWN_CHUNK_SIZE, cellSize);
+  const [startCellZ, endCellZ] = densityCellRange(chunkMinZ, chunkMinZ + SPAWN_CHUNK_SIZE, cellSize);
+  const probability = densityProbability(desc.density, cellSize);
+
+  for (let gx = startCellX; gx <= endCellX; gx++) {
+    for (let gz = startCellZ; gz <= endCellZ; gz++) {
+      const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
+      if (!roll) continue;
+      const { x, z } = roll;
+      if (x < chunkMinX || x >= chunkMinX + SPAWN_CHUNK_SIZE || z < chunkMinZ || z >= chunkMinZ + SPAWN_CHUNK_SIZE) continue;
+
+      const vd = computeVertexData(x, z);
+      if (!passesPlacementFilters(vd, desc, riverKeepOff())) continue;
+      if (desc.slopeRange) {
+        const slope = slopeDegreesAt(x, z);
+        if (slope < desc.slopeRange[0] || slope > desc.slopeRange[1]) continue;
+      }
+      if (spatialHash!.isTooClose(x, z, desc.footprint, desc.spacingOverrides)) continue;
+
+      const point: SpawnPoint = {
+        x,
+        z,
+        height: vd.height,
+        biomeId: vd.biomeId,
+        descriptorId: desc.id,
+      };
+      spatialHash!.insert(point);
+      out.push(point);
+    }
+  }
+};
 
 const generateForChunk = (
   chunkKey: string,
@@ -137,102 +203,15 @@ const generateForChunk = (
   const chunkMinZ = cz * SPAWN_CHUNK_SIZE;
 
   const chunkPoints: SpawnPoint[] = [];
-
-  // Fetched ONCE per chunk (getFlattenPoints returns every descriptor's points)
-  // and bucketed by descId; consumption order keeps spatial-hash insertion
-  // byte-identical to calling the engine per descriptor.
+  // Fetched once per chunk, on the first flatten descriptor; consumption in priority order keeps
+  // the hash's insertion order identical to asking the engine per descriptor.
   let flattenByDesc: Map<string, FlattenPoint[]> | null = null;
-
   for (const desc of descriptorsByPriority) {
-    // flattenGround actors: points come from the flatten engine (the same function
-    // the terrain pads under) and still enter the hash so OTHER descriptors space
-    // against them.
     if (desc.flattenGround) {
-      if (flattenByDesc === null) {
-        flattenByDesc = new Map();
-        for (const p of getFlattenPoints(
-          chunkMinX,
-          chunkMinZ,
-          chunkMinX + SPAWN_CHUNK_SIZE,
-          chunkMinZ + SPAWN_CHUNK_SIZE
-        )) {
-          let arr = flattenByDesc.get(p.descId);
-          if (!arr) {
-            arr = [];
-            flattenByDesc.set(p.descId, arr);
-          }
-          arr.push(p);
-        }
-      }
-      const descPoints = flattenByDesc.get(desc.id);
-      if (descPoints) {
-        for (const p of descPoints) {
-          const point: SpawnPoint = {
-            x: p.x,
-            z: p.z,
-            height: p.y,
-            biomeId: p.biomeId,
-            descriptorId: desc.id,
-          };
-          spatialHash!.insert(point);
-          chunkPoints.push(point);
-        }
-      }
-      continue;
-    }
-
-    if (desc.density <= 0) continue;
-
-    const cellSize = densityCellSize(desc.density);
-    const [startCellX, endCellX] = densityCellRange(chunkMinX, chunkMinX + SPAWN_CHUNK_SIZE, cellSize);
-    const [startCellZ, endCellZ] = densityCellRange(chunkMinZ, chunkMinZ + SPAWN_CHUNK_SIZE, cellSize);
-    const probability = densityProbability(desc.density, cellSize);
-
-    for (let gx = startCellX; gx <= endCellX; gx++) {
-      for (let gz = startCellZ; gz <= endCellZ; gz++) {
-        const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
-        if (!roll) continue;
-        const { x, z } = roll;
-
-        if (
-          x < chunkMinX ||
-          x >= chunkMinX + SPAWN_CHUNK_SIZE ||
-          z < chunkMinZ ||
-          z >= chunkMinZ + SPAWN_CHUNK_SIZE
-        ) {
-          continue;
-        }
-
-        const vd = computeVertexData(x, z);
-
-        if (!passesPlacementFilters(vd, desc, riverKeepOff())) continue;
-        if (desc.slopeRange) {
-          const slope = slopeDegreesAt(x, z);
-          if (slope < desc.slopeRange[0] || slope > desc.slopeRange[1]) continue;
-        }
-
-        if (
-          spatialHash!.isTooClose(
-            x,
-            z,
-            desc.footprint,
-            desc.spacingOverrides
-          )
-        ) {
-          continue;
-        }
-
-        const point: SpawnPoint = {
-          x,
-          z,
-          height: vd.height,
-          biomeId: vd.biomeId,
-          descriptorId: desc.id,
-        };
-
-        spatialHash!.insert(point);
-        chunkPoints.push(point);
-      }
+      if (flattenByDesc === null) flattenByDesc = flattenPointsByDescriptor(chunkMinX, chunkMinZ);
+      placeFlattenPoints(desc, flattenByDesc.get(desc.id), chunkPoints);
+    } else if (desc.density > 0) {
+      placeDensityPoints(desc, chunkMinX, chunkMinZ, chunkPoints);
     }
   }
 

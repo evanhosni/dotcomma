@@ -1,9 +1,9 @@
 /**
  * SNAPSHOT INTERPOLATION (see CLAUDE.md → Entity sync). The entity is drawn as
  * it was INTERP_DELAY_MS ago on the SERVER clock, between the two bracketing
- * snapshots — message ARRIVAL time plays no part. Arrival-time extrapolation was
- * REJECTED: under real browser load messages arrive in bursts, so it overshot
- * stops, slid back and lurched after every hitch (unreproducible headlessly).
+ * snapshots — message ARRIVAL time plays no part: under real browser load messages
+ * arrive in bursts, and arrival-time extrapolation overshoots stops, slides back and
+ * lurches after every hitch.
  */
 
 export interface Snapshot {
@@ -105,8 +105,8 @@ export const sampleSnapshots = (snaps: Snapshot[], renderTime: number, out: Samp
   let span = b.st - a.st;
   const dist = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
   // An idle gap (nothing is published while an entity rests) = "stood at `a`
-  // until one interval before `b`", not a creep across the gap. MEASURED: lerping
-  // across it hopped ~0.5u the frame the first moving snapshot arrived.
+  // until one interval before `b`", not a creep across the gap (lerping across it
+  // hops ~0.5u the frame the first moving snapshot arrives).
   let aSt = a.st;
   if (span > 2 * PUBLISH_INTERVAL_MS) {
     aSt = b.st - PUBLISH_INTERVAL_MS;

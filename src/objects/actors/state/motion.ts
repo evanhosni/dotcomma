@@ -25,13 +25,6 @@ export interface Vec3Like {
 
 export const createMotionOutput = (): MotionOutput => ({ vx: 0, vy: null, vz: 0, yaw: 0 });
 
-export const copyMotionOutput = (from: MotionOutput, to: MotionOutput): void => {
-  to.vx = from.vx;
-  to.vy = from.vy;
-  to.vz = from.vz;
-  to.yaw = from.yaw;
-};
-
 /** Wrap to (−π, π]. */
 export const wrapAngle = (a: number): number => {
   let d = a;

@@ -13,6 +13,6 @@ Files: [TrafficLights.tsx](TrafficLights.tsx), [signalSpec.ts](signalSpec.ts) (T
 
 ## How to use/add
 
-Mount `<TrafficLights />` in the city biome's `<Dressing>`. Props: `chance` (default `SIGNAL_PLACEMENT.chance` = 0.45), `renderDistance` (default 340), `colliderDistance`.
+Mount `<TrafficLights />` in the city biome's `<Dressing>`. Props: `renderDistance` (default 340), `colliderDistance`.
 
-Change `chance` in [signalSpec.ts](signalSpec.ts), not at the mount: the server places its colliders from the spec, and a mount override logs a dev warning.
+The signal `chance` (0.45) lives in `SIGNAL_PLACEMENT` ([signalSpec.ts](signalSpec.ts)) only: the server places its colliders from the spec, so the component takes no placement props.

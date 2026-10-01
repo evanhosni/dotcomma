@@ -11,6 +11,7 @@ import {
   bridgeSections,
   DEFAULT_BRIDGE_PLACEMENT,
 } from "../../../utils/workers/vertexCompute";
+import type { BridgeWallJoin } from "../../../utils/workers/bridges/types";
 
 // Three-free: the deck art (Bridges.tsx), the client colliders AND the server's
 // (physics/obstacles.ts) are all built from these — from ONE set of stations, so every
@@ -42,6 +43,21 @@ export interface BridgePierColumn {
 const across = (s: BridgeSection, lateral: number): [number, number, number] => [s.x + s.ax * lateral, s.y + s.slope * lateral, s.z + s.az * lateral];
 
 
+/** A wall join's prism sinks this far into the slab under it (the slabs it spans differ by up to a
+ *  T end's drawn drop). */
+const WALL_JOIN_SINK = 0.05;
+/** A wall join's prisms, one per leg: [bottom, top] at its outer and inner corners at both ends. */
+const wallJoinPrisms = (j: BridgeWallJoin): [number[], number[]][][] => {
+  const h = BRIDGE_PARAPET_HEIGHT * j.wall;
+  const corner = (k: number): [number[], number[]] => {
+    const [x, y, z] = [j.at[3 * k], j.at[3 * k + 1], j.at[3 * k + 2]];
+    return [[x, y - WALL_JOIN_SINK, z], [x, y + h, z]];
+  };
+  const legs: [number[], number[]][][] = [];
+  for (let k = 0; 6 * k + 12 <= j.at.length; k++) legs.push([corner(2 * k), corner(2 * k + 1), corner(2 * k + 2), corner(2 * k + 3)]);
+  return legs;
+};
+
 export interface BridgeColliderPoint {
   x: number;
   y: number;
@@ -54,10 +70,10 @@ export interface BridgeColliderPoint {
 /** The deck's colliders: one fixed body per chord between consecutive sections, at the chord's middle
  *  (unrotated), carrying a TRIANGLE MESH of exactly what the ribbon draws there — the slab's top (split
  *  along the ribbon's own diagonal), its underside and edges, and each STANDING parapet as a closed
- *  prism with a cap wherever it starts or stops. Pitched boxes per chord could not follow a slab that
+ *  prism with a cap wherever it starts or stops. A pitched box per chord cannot follow a slab that
  *  cross-falls and twists between two sections (a landed end on a hillside, an oblique cut, a fillet):
- *  MEASURED 8% of the drawn top more than 0.1u off its box, up to 6.7u — players fell through (Evan,
- *  74.png). What the client's <Bridges/> and the server's obstacles both mount. */
+ *  8% of the drawn top sat more than 0.1u off its box, up to 6.7u, and players fell through. What the
+ *  client's <Bridges/> and the server's obstacles both mount. */
 export const bridgeColliderPoints = (b: FreewayBridge): BridgeColliderPoint[] => {
   const sections = bridgeSections(b);
   const T = BRIDGE_DECK_THICKNESS;
@@ -108,13 +124,32 @@ export const bridgeColliderPoints = (b: FreewayBridge): BridgeColliderPoint[] =>
     }
     out.push({ x: mx, y: my, z: mz, yaw: 0, parts: [], mesh: { vertices: new Float32Array(vertices), indices: new Uint32Array(indices) } });
   }
+  // Each wall join as one body, a closed prism per leg.
+  for (const j of b.wallJoins ?? []) {
+    const legs = wallJoinPrisms(j);
+    if (legs.length === 0) continue;
+    const from = legs[0][0][0];
+    const to = legs[legs.length - 1][3][1];
+    const mx = (from[0] + to[0]) / 2;
+    const my = (from[1] + to[1]) / 2;
+    const mz = (from[2] + to[2]) / 2;
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    const faces = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 2, 6, 4], [1, 5, 7, 3], [0, 4, 5, 1], [2, 3, 7, 6]];
+    for (const [[ob, ot], [ib, it], [eob, eot], [eib, eit]] of legs) {
+      const base = vertices.length / 3;
+      for (const q of [ob, ib, eob, eib, ot, it, eot, eit]) vertices.push(q[0] - mx, q[1] - my, q[2] - mz);
+      for (const [a, c, d, e] of faces) indices.push(base + a, base + c, base + d, base + a, base + d, base + e);
+    }
+    out.push({ x: mx, y: my, z: mz, yaw: 0, parts: [], mesh: { vertices: new Float32Array(vertices), indices: new Uint32Array(indices) } });
+  }
   return out;
 };
 
 /** A column pair per pier station, from the channel floor to the DRAWN slab's underside — the lowest
  *  over the column's footprint, the ribbon's own triangles (cross-falls, twists and ramps included):
- *  from the deck's centerline height plus the ramp alone, columns stood up through a cross-falling
- *  slab's low side (Evan, 73.png). */
+ *  from the deck's centerline height plus the ramp alone, columns would stand up through a
+ *  cross-falling slab's low side. */
 export const bridgePierColumns = (b: FreewayBridge): BridgePierColumn[] => {
   const out: BridgePierColumn[] = [];
   const h = BRIDGE_PIER_SIZE / 2;
@@ -164,7 +199,7 @@ const DECK_SIDE_COLOR = [0.52, 0.52, 0.5];
 const PARAPET_COLOR = [0.62, 0.62, 0.6];
 /** A T end's slab top — its cut section and the crotch fillets beside it, where the child lies over its
  *  host — is DRAWN this far under the host's: the two surfaces coincide there, and the depth test fought
- *  over them as a faint line across the merged road (Evan, screenshot). Render-only: the colliders and
+ *  over them as a faint line across the merged road. Render-only: the colliders and
  *  the terrain cut keep the true sections. */
 const TEE_TOP_DROP = 0.02;
 /** The terrain's road texture repeat (world units per tile) — vertex.glsl's vWorldUv. */
@@ -240,7 +275,7 @@ export const bridgeRibbon = (b: FreewayBridge, ox: number, oy: number, oz: numbe
     const paint = bridgePaintAt(b, tm) ? 1 : 0;
     const aL = across(a, a.wl), aR = across(a, -a.wr), cL = across(c, c.wl), cR = across(c, -c.wr);
     // Where a side's wall is open the road runs on past that edge (another deck, a road): no gutter
-    // there (the host's gutter ran across a Y's mouth as a dark seam — Evan, screenshot).
+    // there (the host's gutter would run across a Y's mouth as a dark seam).
     const gutterL = bridgeParapetAt(b, tm, 1) ? 1 : 2;
     const gutterR = bridgeParapetAt(b, tm, -1) ? 1 : 2;
     quad([[topAt(i, a.wl), a.wl * laneScale, along[i], gutterL], [topAt(i, -a.wr), -a.wr * laneScale, along[i], gutterR], [topAt(i + 1, -c.wr), -c.wr * laneScale, along[i + 1], gutterR], [topAt(i + 1, c.wl), c.wl * laneScale, along[i + 1], gutterL]], up, DECK_TOP_COLOR, 1, paint, up);
@@ -269,6 +304,27 @@ export const bridgeRibbon = (b: FreewayBridge, ox: number, oy: number, oz: numbe
         quad([[ci, 0, 0], [co, 0, 0], [lift(co, hc), 0, 0], [lift(ci, hc), 0, 0]], tangent, PARAPET_COLOR, 0);
       }
     }
+  }
+  // Wall joins: each wall's run-on to its partner at a merge (its start abuts the wall's own end cap).
+  // A face of a join's leg: a wedge leg turning about its outer corner has two corners in one place, so
+  // the face is drawn from its distinct corners (a quad whose first three are collinear draws nothing).
+  const joinFace = (pts: number[][], hint: number[]) => {
+    const c = pts.filter((q, k) => k === 0 || Math.hypot(q[0] - pts[k - 1][0], q[1] - pts[k - 1][1], q[2] - pts[k - 1][2]) > 1e-6);
+    if (c.length > 3 && Math.hypot(c[3][0] - c[0][0], c[3][1] - c[0][1], c[3][2] - c[0][2]) < 1e-6) c.pop();
+    if (c.length < 3) return;
+    const q = c.length === 3 ? [c[0], c[1], c[2], c[2]] : c;
+    quad(q.map((v): Corner => [v, 0, 0]), hint, PARAPET_COLOR, 0);
+  };
+  for (const j of b.wallJoins ?? []) {
+    const legs = wallJoinPrisms(j);
+    legs.forEach(([[ob, ot], [ib, it], [eob, eot], [eib, eit]], k) => {
+      const out3 = [ob[0] - ib[0], 0, ob[2] - ib[2]];
+      const fwd = [eob[0] - ob[0] + eib[0] - ib[0], 0, eob[2] - ob[2] + eib[2] - ib[2]];
+      joinFace([ob, ot, eot, eob], out3);
+      joinFace([ib, it, eit, eib], [-out3[0], 0, -out3[2]]);
+      joinFace([it, ot, eot, eit], up);
+      if (k === legs.length - 1) joinFace([eib, eob, eot, eit], fwd);
+    });
   }
   // Slab end faces.
   for (const [i, k] of [[0, 1], [n - 1, n - 2]]) {
