@@ -11,7 +11,7 @@
 
 import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
 import { seedRand, smoothstep } from "../math/_math";
-import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
+import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { DomainConfig, initCompute, computeVertexData, biomeWeightOf, riverKeepOff } from "./vertexCompute";
 
 const GRID_STEP = 2; // world units between terrain samples
@@ -20,10 +20,10 @@ const MIN_BIOME_WEIGHT = 0.002;
 // 64u chunks at the grass field's 8M density place ~32k blades per chunk.
 const MAX_INSTANCES_PER_CHUNK = 65536;
 const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
-// Plants thin out over this many riverBedDistance units (factor-1, like the shader's bed edge):
-// none where the bed fully covers the ground, full density this far past it — the bed stays bare
-// and only a sparse fringe reaches its fade.
-const RIVER_BED_PLANT_RAMP = 8;
+// Plants thin out across the shader's bed fade (riverBedDistance, factor-1 units): none where the bed
+// fully covers the ground, full density where its fade ends — the bed stays bare and the blades thin
+// as the sand grows in.
+const RIVER_BED_PLANT_RAMP = RIVER_BED_BLEND_WIDTH;
 // Stored in place of an out-of-reach Infinity: a bilinear weight of 0 times Infinity is NaN.
 const RIVER_BED_FAR = 1e4;
 

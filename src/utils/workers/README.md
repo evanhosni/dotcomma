@@ -69,7 +69,11 @@ the rivers.
   keeps a river with probability `RIVER_KEEP_PER_PROBABILITY × riverProbability` of the region
   under it. Edges are cut into 50u pieces. A piece is not built deep in water, near a
   `prohibitRivers` biome, or on mountainous or steep ground. Short gaps between river and water
-  are filled back in. An end becomes a pond or a fizzle. Width is set per junction and grows
+  are filled back in. A gap the fill leaves — at a junction (`junctionGorgesAt`), or across tall
+  relief that is not the mountain's rock (`RiverEdge.rock`: dunes and hills are not rock) — is built
+  as a GORGE when the real ground rises under `RIVER_GORGE_MAX_RISE` (25u) above the water line
+  (`gorgeRise`, which saves and restores the wall pass around its evaluations); the surface runs
+  straight and downhill through it (riverField's `gorgeSurfaces`). An end becomes a pond or a fizzle. Width is set per junction and grows
   toward the ocean, up to `RIVER_WIDTH_MAX`.
 - **Road layer** ([`rivers/riverRoadLayer.ts`](rivers/riverRoadLayer.ts), `riverPieceSuppressed`
   and the `RIVER_ROAD_*` constants): where a road runs ALONG a river for longer than a deck should
@@ -79,21 +83,28 @@ the rivers.
   distance in "factor-1" units (real distance ÷ the local width factor, so every consumer compares
   against the `river` config in `world/defaults.ts`), the width factor and the water surface.
   Rivers combine by a smooth minimum, which rounds confluences, and are measured from a meandered
-  point, which makes channels wind. `riverQuayAt` / `riverStraightNear` give the un-meandered
-  distance that the city's quay roads follow.
+  point, which makes channels wind. The width factor, the surface and the bed limit's station come
+  from each RUN's (an edge's consecutive built pieces) PLAINLY nearest piece, weighted across runs by
+  the same smooth-minimum weights: the nearest piece by factor-1 distance jumped between pieces of one
+  run wherever the width varies (a pond's start, a widening toward the sea) — up to 10.9u of surface.
+  `riverQuayAt` / `riverStraightNear` give the un-meandered distance that the city's quay roads follow.
 - **Where the bed ends** (`riverField.ts`, `capRiverBed`): the bed paint is connected to its river.
   Marches out from STATIONS every 12.5u along an edge (both sides, and a fan past a piece's end)
   walk the carved bank under the full river field and stop at the first step steeper than
   `RIVER_BED_SLOPE_START_DEG`. That distance is the bed's limit; past it the vertex reads as out of
   the bed's reach, fading over `RIVER_BED_CAP_FADE`, so the bed never resumes where a bank flattens
   again further out. Marches are lazy (only stations some bank vertex needs) and cached per station
-  and direction, so every chunk agrees. Flat banks are unchanged.
+  and direction, so every chunk agrees. Flat banks are unchanged. A limit never lies inside the
+  half-width, and beside a city the limit is found past the reach (`RIVER_BED_LIMIT_PAST`; the quay
+  rule paints the bed there): cut off at either, the cap stepped the bed paint (33u at a fizzle).
 - The channel carve itself is step 4 of `computeVertexData`. Every placement filter keeps objects
   off rivers through `riverKeepOff()` (`densityGrid.ts`).
 - **Mouths** (step 4, `riverMouthShare` in [`lakes.ts`](lakes.ts)): where the river-free ground lies
   under a lake's water, the river only deepens it. Its rim and bank are not forced, its surface is
   the lake's level, and its bed paint yields to the lake's. Before this, the rim stood a dry levee in
-  the water between the river and the sea at three mouths in four.
+  the water between the river and the sea at three mouths in four. Beside a crisp city, which draws
+  no lake on its side, the river surface is held up to the lake's level instead
+  (`riverSurfaceBesideCrispShore`), so it meets the lake at the wall.
 
 ### Freeways and city roads
 

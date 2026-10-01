@@ -7,7 +7,7 @@ import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
 import { warp } from "../noise";
-import { riverFieldAt, riverSample } from "../rivers/riverField";
+import { drawnRiverSurface, riverFieldAt, riverSample } from "../rivers/riverField";
 import { computeVertexData } from "../vertexCompute";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_DECK_LIFT, BRIDGE_EDGE_GUARD, BRIDGE_MAX_ALONG_SHORE, BRIDGE_MAX_LENGTH, BRIDGE_MAX_TURN, BRIDGE_MIN_CROSSING, BRIDGE_MIN_T_SIN, BRIDGE_TEE_OFF_HOST, BRIDGE_WET_SAMPLE, deckWidth } from "./constants";
 import { boxApart, CROSSING_NEAR_PAD, CROSSING_OVERLAP_CLEAR, crossingBefore, crossingGeom, crossingGeoms, failedCrossing, FILL_CLEAR, FILL_SNAP_MAX, geomBoxApart, mouthBefore, mouthRank, resolveCrossingChain } from "./crossings";
@@ -485,10 +485,11 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
         const w = warp(q.x - d.z * off, q.z + d.x * off);
         riverFieldAt(w.x, w.z);
         if (!(riverSample.distance < waterBand)) continue;
+        const drawn = drawnRiverSurface(w.x, w.z);
         if (off === 0) {
-          center = riverSample.surface;
+          center = drawn;
           inChannel = riverSample.distance < halfWidth;
-        } else surface = Math.max(surface, riverSample.surface + BRIDGE_BANK_CLEARANCE);
+        } else surface = Math.max(surface, drawn + BRIDGE_BANK_CLEARANCE);
       }
       const clear = inChannel ? BRIDGE_WATER_CLEARANCE : BRIDGE_BANK_CLEARANCE;
       const needed = Math.max(Number.isNaN(center) ? -Infinity : center + clear, surface);

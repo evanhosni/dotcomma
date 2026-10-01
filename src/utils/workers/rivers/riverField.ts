@@ -7,13 +7,13 @@
 import { smoothstep } from "../../math/_math";
 import { CellCache, dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
-import { lakeSurface, lastShore, riverMouthShare } from "../lakes";
+import { lakeSurface, lastShore, riverMouthShare, riverSurfaceBesideCrispShore } from "../lakes";
 import { simplex2, unwarp } from "../noise";
 import { getNetwork } from "../roads/freewayNetwork";
-import { RIVER_FILLET, RIVER_MEANDER_AMP, RIVER_MEANDER_SCALE, RIVER_SURFACE_BELOW, type RiverEdge, type RiverPiece, riverMaxReach, riverPiecesIn, riversEnabled } from "./riverNetwork";
+import { RIVER_FILLET, RIVER_MEANDER_AMP, RIVER_MEANDER_SCALE, RIVER_SURFACE_BELOW, type RiverEdge, type RiverGorge, type RiverPiece, riverMaxReach, riverPiecesIn, riversEnabled } from "./riverNetwork";
 import type { RiverQuaySample } from "../types";
 import { blendedTerrainAt, carveRiverChannel } from "../vertexCompute";
-import { RIVER_BED_SLOPE_START_DEG } from "../../../world/shaders/constants";
+import { RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_START_DEG } from "../../../world/shaders/constants";
 import { getBiomeContext, cityWallsOf } from "../voronoi";
 import { accumulateWallFields, combineZoneWeights, zoneFinal, zoneWeights } from "../zoneBlend";
 
@@ -47,7 +47,8 @@ const riverSurfaceAt = (wx: number, wz: number): number => {
     if (ctx.zone.biome.water) {
       if (!Number.isNaN(inLake)) h = Math.min(h, inLake);
     } else if (!Number.isNaN(shore.level)) {
-      h = shore.level + Math.max(0, h - shore.level) * smoothstep(0, RIVER_MOUTH_APPROACH, shore.dWater);
+      const approach = smoothstep(0, RIVER_MOUTH_APPROACH, shore.dWater);
+      h = shore.level + Math.max(0, h - shore.level) * (shore.fade === 1 ? approach : 1 - (1 - approach) * shore.fade);
     }
     riverSurfaceCache.set(key, h);
   }
@@ -210,8 +211,40 @@ const roadCrossingCap = (e: RiverEdge, k: number): number => {
   return cap;
 };
 
-/** A piece end's surface: the terrain's (riverSurfaceAt), under any freeway crossing beside it. */
+/** A GORGE's surface (riverNetwork's junction gaps) at each of its piece ends, `from` to `to`: straight
+ *  from the water where the edge's own river stops to the junction's water, never uphill over the ridge
+ *  between, which the channel then cuts like any bank (carveRiverChannel). Under a freeway crossing
+ *  beside it as anywhere (roadCrossingCap), and then the running minimum from its higher end: a cap
+ *  easing back up along the gorge would run the water uphill. Per edge and end, cached. */
+const gorgeSurfaceCache = new Map<string, Float64Array>();
+const gorgeSurfaces = (e: RiverEdge, g: RiverGorge): Float64Array => {
+  const key = `${e.key}:${g.from}:${g.to}`;
+  let s = gorgeSurfaceCache.get(key);
+  if (s) return s;
+  if (gorgeSurfaceCache.size > 4096) dropOldestHalf(gorgeSurfaceCache);
+  const n = Math.abs(g.to - g.from);
+  const dir = g.to > g.from ? 1 : -1;
+  const own = Math.min(riverSurfaceAt(g.bx, g.bz), roadCrossingCap(e, g.from));
+  let junction: number;
+  if (g.pair) {
+    const p = riverSurfaceAt(g.px, g.pz);
+    junction = p + (riverSurfaceAt(g.qx, g.qz) - p) * g.share;
+  } else junction = riverSurfaceAt(g.jx, g.jz);
+  junction = Math.min(junction, roadCrossingCap(e, g.to));
+  s = new Float64Array(n + 1);
+  for (let i = 0; i <= n; i++) s[i] = Math.min(own + (junction - own) * (i / n), roadCrossingCap(e, g.from + dir * i));
+  if (own >= junction) for (let i = 1; i <= n; i++) s[i] = Math.min(s[i], s[i - 1]);
+  else for (let i = n - 1; i >= 1; i--) s[i] = Math.min(s[i], s[i + 1]);
+  gorgeSurfaceCache.set(key, s);
+  return s;
+};
+
+/** A piece end's surface: a gorge's, else the terrain's (riverSurfaceAt) under any freeway crossing beside it. */
 const pieceEndSurface = (p: RiverPiece, which: 0 | 1): number => {
+  const k = p.index + which;
+  for (const g of p.edge.gorges) {
+    if (k !== g.from && (k - g.from) * (k - g.to) <= 0) return gorgeSurfaces(p.edge, g)[Math.abs(k - g.from)];
+  }
   const h = which === 0 ? riverSurfaceAt(p.sx, p.sz) : riverSurfaceAt(p.ex, p.ez);
   return Math.min(h, roadCrossingCap(p.edge, p.index + which));
 };
@@ -227,6 +260,12 @@ const RIVER_BED_MARCH_STEP = 3;
 /** The paint fades out over this many factor-1 units inward of the limit (capRiverBed), at least two LOD1
  *  vertex spacings: over 4 the cut-off edge traced the triangles. */
 const RIVER_BED_CAP_FADE = 8;
+/** Beside a city the bed limit is found past the river's reach, wherever a city vertex's bed distance
+ *  (the straight one, RIVER_BED_FULL_INSET in) can still be inside it: the meandered field lies within
+ *  the meander (2 × RIVER_MEANDER_AMP, ±10u on each axis) and a margin of it — this many REAL units
+ *  past reach + inset (a fizzle's width factor of 0.2 puts that 70 factor-1 units out). A literal: a
+ *  pipeline module's export read at the top level is not yet initialized in every bundle's order. */
+const RIVER_BED_LIMIT_PAST = 30;
 
 /** The bank at warped point (px, pz) as step 4 carves it: the terrain there (its own wall pass and
  *  shore) under the FULL river field of the point's own piece list — every river near it, confluences
@@ -298,7 +337,8 @@ const bedLimitAlong = (e: RiverEdge, q: number, dx: number, dz: number, key: str
       const along = Number.isNaN(prevH) ? 0 : (h - prevH) / Math.hypot(world.x - prevX, world.z - prevZ);
       const aside = Number.isNaN(hAside) ? 0 : (hAside - h) / Math.hypot(asideWorld.x - world.x, asideWorld.z - world.z);
       if (Math.hypot(along, aside) > RIVER_BED_END_SLOPE) {
-        limit = bankSample.distance;
+        // Never inside the half-width, where the channel is: the bed limit is read only from there out.
+        limit = Math.max(rv.halfWidth, bankSample.distance);
         break;
       }
     }
@@ -369,7 +409,8 @@ export const capRiverBed = (bed: number, limit: number): number => {
 
 // ── Per-cell piece lists ───────────────────────────────────────────────
 
-/** The pieces that can reach a biome-grid cell, with their surfaces at both ends, grouped by edge. */
+/** The pieces that can reach a biome-grid cell, with their surfaces at both ends, grouped by edge and,
+ *  within an edge, into RUNS of consecutive pieces (an edge's unbuilt pieces split it). */
 interface RiverCellList {
   n: number;
   sx: Float64Array;
@@ -384,6 +425,8 @@ interface RiverCellList {
   pieces: RiverPiece[];
   group: Int32Array;
   groups: number;
+  run: Int32Array;
+  runs: number;
   cx: number;
   cz: number;
 }
@@ -393,7 +436,7 @@ let lastRiverCellList: RiverCellList | null = null;
 const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
   const gs = domainConfig!.gridSize;
   const pieces = riverPiecesIn({ x: (cx + 0.5) * gs, z: (cz + 0.5) * gs }, cx * gs, cz * gs, (cx + 1) * gs, (cz + 1) * gs, riverMaxReach());
-  pieces.sort((a, b) => (a.edge.key < b.edge.key ? -1 : a.edge.key > b.edge.key ? 1 : 0));
+  pieces.sort((a, b) => (a.edge.key < b.edge.key ? -1 : a.edge.key > b.edge.key ? 1 : a.index - b.index));
   const n = pieces.length;
   const list: RiverCellList = {
     n,
@@ -408,6 +451,8 @@ const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
     pieces,
     group: new Int32Array(n),
     groups: 0,
+    run: new Int32Array(n),
+    runs: 0,
     cx,
     cz,
   };
@@ -415,6 +460,8 @@ const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
     const p = pieces[j];
     if (j === 0 || p.edge !== pieces[j - 1].edge) list.groups++;
     list.group[j] = list.groups - 1;
+    if (j === 0 || p.edge !== pieces[j - 1].edge || p.index !== pieces[j - 1].index + 1) list.runs++;
+    list.run[j] = list.runs - 1;
     list.sx[j] = p.sx;
     list.sz[j] = p.sz;
     list.ex[j] = p.ex;
@@ -458,24 +505,32 @@ export const riverSample = { distance: Infinity, factor: 1, surface: NaN, bedLim
 /** What the last riverQuayAt found (see RiverQuaySample). */
 export const riverQuay: RiverQuaySample = { distance: Infinity, factor: 1, dirX: 1, dirZ: 0 };
 
-// Per-edge scratch (workers are single-threaded), grown by ensureEdgeScratch.
+// Per-edge and per-run scratch (workers are single-threaded), grown by ensureFieldScratch.
 let edgeDist = new Float64Array(16);
-let edgeFactor = new Float64Array(16);
-let edgeSurface = new Float64Array(16);
-let edgeQuayDist = new Float64Array(16);
-let edgeQuayFactor = new Float64Array(16);
-let edgeQuayX = new Float64Array(16);
-let edgeQuayZ = new Float64Array(16);
 /** Per-edge smooth-minimum weights (edgeSmoothMin). */
 let edgeWeight = new Float64Array(16);
 /** The smooth minimum edgeSmoothMin computed. */
 let smoothMinDist = Infinity;
+/** Per RUN (RiverCellList): its nearest distance (factor-1), its smooth-minimum weight, and what its
+ *  PLAINLY nearest piece reads — list index, t, width factor, surface, the foot of the perpendicular,
+ *  and the sine / past-end cosine of the vertex's angle off it (bedLimitOfPiece). */
+let runDist = new Float64Array(16);
+let runWeight = new Float64Array(16);
+let runPlain = new Float64Array(16);
+let runPiece = new Int32Array(16);
+let runT = new Float64Array(16);
+let runFactor = new Float64Array(16);
+let runSurface = new Float64Array(16);
+let runSideCos = new Float64Array(16);
+let runOutCos = new Float64Array(16);
+let runFootX = new Float64Array(16);
+let runFootZ = new Float64Array(16);
 
 /** Compact smooth minimum over the per-edge distances in `d`: each edge within RIVER_FILLET of the
  *  nearest weighs h² (h = 1 − gap/FILLET), the distance drops by up to FILLET/4 where two meet —
- *  continuous, order-free, and exactly the plain minimum wherever only one river is near. Returns
- *  the weight sum; the per-edge weights are left in edgeWeight, the minimum in smoothMinDist. */
-const edgeSmoothMin = (d: Float64Array, groups: number): number => {
+ *  continuous, order-free, and exactly the plain minimum wherever only one river is near. The
+ *  per-edge weights are left in edgeWeight, the minimum in smoothMinDist. */
+const edgeSmoothMin = (d: Float64Array, groups: number): void => {
   let dmin = Infinity;
   for (let g = 0; g < groups; g++) if (d[g] < dmin) dmin = d[g];
   let sum = 0;
@@ -485,24 +540,41 @@ const edgeSmoothMin = (d: Float64Array, groups: number): number => {
     sum += edgeWeight[g];
   }
   smoothMinDist = Math.max(0, dmin - (RIVER_FILLET / 4) * Math.min(1, sum - 1));
+};
+
+/** The same weights per RUN (runDist against the edges' minimum), into runWeight; returns their sum.
+ *  An edge of one run weighs exactly its edgeWeight; the runs of an edge its unbuilt pieces split
+ *  blend like two rivers, where the nearest run alone would jump between them. */
+const runSmoothWeights = (runs: number, groups: number): number => {
+  let dmin = Infinity;
+  for (let g = 0; g < groups; g++) if (edgeDist[g] < dmin) dmin = edgeDist[g];
+  let sum = 0;
+  for (let r = 0; r < runs; r++) {
+    const h = 1 - (runDist[r] - dmin) / RIVER_FILLET;
+    runWeight[r] = h > 0 ? h * h : 0;
+    sum += runWeight[r];
+  }
   return sum;
 };
 
-const ensureEdgeScratch = (groups: number): void => {
+const ensureFieldScratch = (groups: number, runs: number): void => {
   if (edgeDist.length < groups) {
-    const size = groups * 2;
-    edgeDist = new Float64Array(size);
-    edgeFactor = new Float64Array(size);
-    edgeSurface = new Float64Array(size);
-    edgePiece = new Int32Array(size);
-    edgeT = new Float64Array(size);
-    edgeSideCos = new Float64Array(size);
-    edgeOutCos = new Float64Array(size);
-    edgeQuayDist = new Float64Array(size);
-    edgeQuayFactor = new Float64Array(size);
-    edgeQuayX = new Float64Array(size);
-    edgeQuayZ = new Float64Array(size);
-    edgeWeight = new Float64Array(size);
+    edgeDist = new Float64Array(groups * 2);
+    edgeWeight = new Float64Array(groups * 2);
+  }
+  if (runDist.length < runs) {
+    const size = runs * 2;
+    runDist = new Float64Array(size);
+    runWeight = new Float64Array(size);
+    runPlain = new Float64Array(size);
+    runPiece = new Int32Array(size);
+    runT = new Float64Array(size);
+    runFactor = new Float64Array(size);
+    runSurface = new Float64Array(size);
+    runSideCos = new Float64Array(size);
+    runOutCos = new Float64Array(size);
+    runFootX = new Float64Array(size);
+    runFootZ = new Float64Array(size);
   }
 };
 
@@ -514,30 +586,26 @@ export const noRiverSample = (): void => {
   riverSample.bedLimit = Infinity;
 };
 
-/** What the last fieldFromList found (riverSample's fields), and per edge group its nearest piece (list
- *  index), t along it, and the sine / past-end cosine of the vertex's angle off it (bedLimitOfPiece). */
+/** What the last fieldFromList found (riverSample's fields). */
 let fieldDist = Infinity;
 let fieldFactor = 1;
 let fieldSurface = NaN;
-let edgePiece = new Int32Array(16);
-let edgeT = new Float64Array(16);
-let edgeSideCos = new Float64Array(16);
-let edgeOutCos = new Float64Array(16);
 
-/** The river field of a piece list at a warped point, measured from a meandered query point
- *  (±RIVER_MEANDER_AMP) so a straight edge winds. Sets field* and the per-group edge scratch. */
-const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
-  fieldDist = Infinity;
-  fieldFactor = 1;
-  fieldSurface = NaN;
-  if (list.n === 0) return;
-  const groups = list.groups;
-  ensureEdgeScratch(groups);
-  edgeDist.fill(Infinity, 0, groups);
-  const qx = px + RIVER_MEANDER_AMP * simplex2(px / RIVER_MEANDER_SCALE, pz / RIVER_MEANDER_SCALE);
-  const qz = pz + RIVER_MEANDER_AMP * simplex2(pz / RIVER_MEANDER_SCALE + 7.31, px / RIVER_MEANDER_SCALE - 3.17);
+/** One pass over a piece list at a warped point (qx, qz): per edge its nearest distance in factor-1
+ *  units (edgeDist, the field's distance), per run its own, and what the run's PLAINLY nearest piece
+ *  reads (run*). The width factor, the surface and the bed limit's station come from the plainly
+ *  nearest piece, not the nearest by factor-1 distance: where the width varies along a river that one
+ *  jumps between pieces of a run (to a pond's start from a piece upstream: 10.9u of surface at
+ *  (-6300, 3511)), while the projection onto the run's collinear pieces moves continuously. Wherever
+ *  the two are the same piece nothing differs. */
+const scanPieces = (list: RiverCellList, qx: number, qz: number, forQuay: boolean): void => {
+  ensureFieldScratch(list.groups, list.runs);
+  edgeDist.fill(Infinity, 0, list.groups);
+  runDist.fill(Infinity, 0, list.runs);
+  runPlain.fill(Infinity, 0, list.runs);
   for (let j = 0; j < list.n; j++) {
     const g = list.group[j];
+    const r = list.run[j];
     const sx = list.sx[j];
     const sz = list.sz[j];
     const dx = list.ex[j] - sx;
@@ -551,39 +619,60 @@ const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
     const oz = qz - (sz + dz * t);
     const real = Math.hypot(ox, oz);
     const d = real / f;
-    if (d < edgeDist[g]) {
-      edgeDist[g] = d;
-      edgeFactor[g] = f;
-      edgeSurface[g] = list.h0[j] + (list.h1[j] - list.h0[j]) * t;
+    if (d < edgeDist[g]) edgeDist[g] = d;
+    if (d < runDist[r]) runDist[r] = d;
+    if (real < runPlain[r]) {
+      runPlain[r] = real;
+      runFactor[r] = f;
+      if (forQuay) {
+        runFootX[r] = sx + dx * t;
+        runFootZ[r] = sz + dz * t;
+        continue;
+      }
+      runPiece[r] = j;
+      runT[r] = t;
+      runSurface[r] = list.h0[j] + (list.h1[j] - list.h0[j]) * t;
       const l = Math.sqrt(l2);
-      edgePiece[g] = j;
-      edgeT[g] = t;
-      edgeSideCos[g] = real > 1e-9 ? (dx * oz - dz * ox) / (l * real) : 0;
-      edgeOutCos[g] = real > 1e-9 ? Math.abs(ox * dx + oz * dz) / (l * real) : 0;
+      runSideCos[r] = real > 1e-9 ? (dx * oz - dz * ox) / (l * real) : 0;
+      runOutCos[r] = real > 1e-9 ? Math.abs(ox * dx + oz * dz) / (l * real) : 0;
     }
   }
-  const sum = edgeSmoothMin(edgeDist, groups);
+};
+
+/** The river field of a piece list at a warped point, measured from a meandered query point
+ *  (±RIVER_MEANDER_AMP) so a straight edge winds. Sets field* and the run scratch. */
+const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
+  fieldDist = Infinity;
+  fieldFactor = 1;
+  fieldSurface = NaN;
+  if (list.n === 0) return;
+  const qx = px + RIVER_MEANDER_AMP * simplex2(px / RIVER_MEANDER_SCALE, pz / RIVER_MEANDER_SCALE);
+  const qz = pz + RIVER_MEANDER_AMP * simplex2(pz / RIVER_MEANDER_SCALE + 7.31, px / RIVER_MEANDER_SCALE - 3.17);
+  scanPieces(list, qx, qz, false);
+  edgeSmoothMin(edgeDist, list.groups);
+  const sum = runSmoothWeights(list.runs, list.groups);
   let wf = 0;
   let ws = 0;
-  for (let g = 0; g < groups; g++) {
-    if (edgeWeight[g] === 0) continue;
-    wf += edgeWeight[g] * edgeFactor[g];
-    ws += edgeWeight[g] * edgeSurface[g];
+  for (let r = 0; r < list.runs; r++) {
+    if (runWeight[r] === 0) continue;
+    wf += runWeight[r] * runFactor[r];
+    ws += runWeight[r] * runSurface[r];
   }
   fieldDist = smoothMinDist;
   fieldFactor = wf / sum;
   fieldSurface = ws / sum;
 };
 
-// The groups a vertex's bed limit blends (riverFieldAt), copied out of the edge scratch the marches clobber.
+// The runs a vertex's bed limit blends (riverFieldAt), copied out of the run scratch the marches clobber.
 const limitPiece: RiverPiece[] = [];
 let limitT = new Float64Array(16);
 let limitSideCos = new Float64Array(16);
 let limitOutCos = new Float64Array(16);
 let limitWeight = new Float64Array(16);
 
-/** Sets riverSample for a warped point: fieldFromList over the point's cell list. */
-export const riverFieldAt = (px: number, pz: number): void => {
+/** Sets riverSample for a warped point: fieldFromList over the point's cell list. `besideCity`: the bed
+ *  limit is wanted past the river's reach too (the city's quay rule paints the bed there). */
+export const riverFieldAt = (px: number, pz: number, besideCity = false): void => {
   noRiverSample();
   if (!riversEnabled) return;
   const list = riverCellList(px, pz);
@@ -593,31 +682,42 @@ export const riverFieldAt = (px: number, pz: number): void => {
   riverSample.factor = fieldFactor;
   riverSample.surface = fieldSurface;
   // The bed limit only matters on the bank (capRiverBed leaves anything RIVER_BED_CAP_FADE inside a limit
-  // alone, and no limit lies inside the channel's half-width). The marches read other cells' lists
-  // (riverCellListAt: never lastRiverCellList) and clobber the edge scratch: the groups are copied first.
+  // alone, and no limit lies inside the channel's half-width), and beside a city a little past it. The
+  // marches read other cells' lists (riverCellListAt: never lastRiverCellList) and clobber the run
+  // scratch: the runs are copied first.
   const rv = domainConfig!.river;
-  if (!(fieldDist < rv.halfWidth + rv.bank && fieldDist > rv.halfWidth - RIVER_BED_CAP_FADE)) return;
+  const reach = rv.halfWidth + rv.bank;
+  if (!(fieldDist > rv.halfWidth - RIVER_BED_CAP_FADE)) return;
+  if (!(fieldDist < reach || (besideCity && (fieldDist - reach - RIVER_BED_FULL_INSET) * fieldFactor < RIVER_BED_LIMIT_PAST))) return;
   let n = 0;
   let sum = 0;
-  if (limitT.length < list.groups) {
-    limitT = new Float64Array(list.groups * 2);
-    limitSideCos = new Float64Array(list.groups * 2);
-    limitOutCos = new Float64Array(list.groups * 2);
-    limitWeight = new Float64Array(list.groups * 2);
+  if (limitT.length < list.runs) {
+    limitT = new Float64Array(list.runs * 2);
+    limitSideCos = new Float64Array(list.runs * 2);
+    limitOutCos = new Float64Array(list.runs * 2);
+    limitWeight = new Float64Array(list.runs * 2);
   }
-  for (let g = 0; g < list.groups; g++) {
-    if (edgeWeight[g] === 0) continue;
-    limitPiece[n] = list.pieces[edgePiece[g]];
-    limitT[n] = edgeT[g];
-    limitSideCos[n] = edgeSideCos[g];
-    limitOutCos[n] = edgeOutCos[g];
-    limitWeight[n] = edgeWeight[g];
-    sum += edgeWeight[g];
+  for (let r = 0; r < list.runs; r++) {
+    if (runWeight[r] === 0) continue;
+    limitPiece[n] = list.pieces[runPiece[r]];
+    limitT[n] = runT[r];
+    limitSideCos[n] = runSideCos[r];
+    limitOutCos[n] = runOutCos[r];
+    limitWeight[n] = runWeight[r];
+    sum += runWeight[r];
     n++;
   }
   let limit = 0;
   for (let i = 0; i < n; i++) limit += limitWeight[i] * bedLimitOfPiece(limitPiece[i], limitT[i], limitSideCos[i], limitOutCos[i]);
   riverSample.bedLimit = limit / sum;
+};
+
+/** riverSample.surface as step 4 draws it at the warped point riverFieldAt last ran at: held up to a
+ *  lake's level beside crisp land (lakes.ts riverSurfaceBesideCrispShore), so a deck clears the water
+ *  that is drawn. Clobbers the wall-pass scratch and the shore state. */
+export const drawnRiverSurface = (px: number, pz: number): number => {
+  setShoreAt(px, pz);
+  return riverSurfaceBesideCrispShore(riverSample.surface);
 };
 
 /** Sets riverQuay to "no river in reach". */
@@ -626,49 +726,29 @@ export const noRiverQuay = (): void => {
   riverQuay.factor = 1;
 };
 
-/** Sets riverQuay for a warped point: the river field from the STRAIGHT point. Only the city's
- *  quay (and the belt beside a river, step 5) reads it, after the vertex's riverFieldAt built the list. */
+/** Sets riverQuay for a warped point: the river field from the STRAIGHT point, its factor and
+ *  direction read off each run's plainly nearest piece (scanPieces). Only the city's quay (and the
+ *  belt beside a river, step 5) reads it, after the vertex's riverFieldAt built the list. */
 export const riverQuayAt = (px: number, pz: number): void => {
   noRiverQuay();
   if (!riversEnabled) return;
   const list = riverCellList(px, pz);
   if (list.n === 0) return;
-  const groups = list.groups;
-  ensureEdgeScratch(groups);
-  edgeQuayDist.fill(Infinity, 0, groups);
-  for (let j = 0; j < list.n; j++) {
-    const g = list.group[j];
-    const sx = list.sx[j];
-    const sz = list.sz[j];
-    const dx = list.ex[j] - sx;
-    const dz = list.ez[j] - sz;
-    let t = ((px - sx) * dx + (pz - sz) * dz) / (dx * dx + dz * dz);
-    if (t < 0) t = 0;
-    else if (t > 1) t = 1;
-    const f = list.w0[j] + (list.w1[j] - list.w0[j]) * t;
-    const cxp = sx + dx * t;
-    const czp = sz + dz * t;
-    const d = Math.hypot(px - cxp, pz - czp) / f;
-    if (d < edgeQuayDist[g]) {
-      edgeQuayDist[g] = d;
-      edgeQuayFactor[g] = f;
-      edgeQuayX[g] = cxp;
-      edgeQuayZ[g] = czp;
-    }
-  }
-  const sum = edgeSmoothMin(edgeQuayDist, groups);
+  scanPieces(list, px, pz, true);
+  edgeSmoothMin(edgeDist, list.groups);
+  const sum = runSmoothWeights(list.runs, list.groups);
   let qf = 0;
   let ux = 0;
   let uz = 0;
-  for (let g = 0; g < groups; g++) {
-    if (edgeWeight[g] === 0) continue;
-    qf += edgeWeight[g] * edgeQuayFactor[g];
-    const vx = edgeQuayX[g] - px;
-    const vz = edgeQuayZ[g] - pz;
+  for (let r = 0; r < list.runs; r++) {
+    if (runWeight[r] === 0) continue;
+    qf += runWeight[r] * runFactor[r];
+    const vx = runFootX[r] - px;
+    const vz = runFootZ[r] - pz;
     const vl = Math.hypot(vx, vz);
     if (vl > 1e-9) {
-      ux += (edgeWeight[g] * vx) / vl;
-      uz += (edgeWeight[g] * vz) / vl;
+      ux += (runWeight[r] * vx) / vl;
+      uz += (runWeight[r] * vz) / vl;
     }
   }
   riverQuay.factor = qf / sum;
@@ -751,6 +831,7 @@ const pointSeg = (px: number, pz: number, ax: number, az: number, bx: number, bz
 
 export const clearRiverField = (): void => {
   roadCapCache.clear();
+  gorgeSurfaceCache.clear();
   edgeCrossings.clear();
   riverCellLists.clear();
   lastRiverCellList = null;

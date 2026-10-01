@@ -110,6 +110,7 @@ self.onmessage = (e: MessageEvent) => {
     const heights = new Float32Array(count);
     const biomeSdf = new Float32Array(count * slots);
     const biomePresence = new Float32Array(count * slots);
+    const riverbedSdf = new Float32Array(count * slots);
     const riverBed = new Float32Array(count);
     const distRoad = new Float32Array(count);
     const distFreeway = new Float32Array(count);
@@ -126,6 +127,7 @@ self.onmessage = (e: MessageEvent) => {
         for (let s = 0; s < slots; s++) {
           biomeSdf[i * slots + s] = result.biomeSdf[s];
           biomePresence[i * slots + s] = result.biomePresence[s];
+          riverbedSdf[i * slots + s] = result.riverbedSdf[s];
         }
         riverBed[i] = result.riverBedDistance;
         distRoad[i] = result.distanceToRoadCenter;
@@ -143,6 +145,7 @@ self.onmessage = (e: MessageEvent) => {
       heights.buffer,
       biomeSdf.buffer,
       biomePresence.buffer,
+      riverbedSdf.buffer,
       riverBed.buffer,
       distRoad.buffer,
       distFreeway.buffer,
@@ -158,6 +161,7 @@ self.onmessage = (e: MessageEvent) => {
         heights,
         biomeSdf,
         biomePresence,
+        riverbedSdf,
         slots,
         riverBed,
         distRoad,

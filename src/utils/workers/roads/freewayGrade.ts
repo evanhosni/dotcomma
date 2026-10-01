@@ -11,6 +11,7 @@
  * and between the belt and a run leaving it. Steep grades and cuts stay: they are the terrain's.
  */
 
+import { smoothstep } from "../../math/_math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
@@ -93,7 +94,10 @@ const runGrade = (run: FreewayRun, s: number): number => {
   }
   return sum / wsum;
 };
-const gradeSkip: number[] = [];
+/** Per candidate, the share of its weight it keeps (gradeShares). */
+const gradeShare: number[] = [];
+/** 1 for a candidate whose leg an earlier candidate already lists (every wall is listed both ways). */
+const gradeRepeat: number[] = [];
 const gradeRuns: FreewayRun[] = [];
 const gradeRunW: number[] = [];
 const gradeRunS: number[] = [];
@@ -113,6 +117,63 @@ const worldAlongShift = (k: number, wx: number, wz: number): number => {
   const tl2 = tx * tx + tz * tz;
   return tl2 > 1e-12 ? ((wx - c.x) * tx + (wz - c.z) * tz) / tl2 : 0;
 };
+/** A leg past an end it shares with another leg gives way to that leg over this far (warped units). */
+const SHARED_END_FADE = 8;
+/** How far the point lies past a candidate leg's end at (ex, ez) along the leg (0 when it projects
+ *  inside the leg, or the end is not this leg's). */
+const pastEnd = (k: number, px: number, pz: number, ex: number, ez: number): number => {
+  const { seg } = segCandidates;
+  const sx = seg[k * 4];
+  const sz = seg[k * 4 + 1];
+  const tx = seg[k * 4 + 2];
+  const tz = seg[k * 4 + 3];
+  const l = Math.hypot(tx - sx, tz - sz);
+  if (l < 1e-9) return 0;
+  const u = ((px - sx) * (tx - sx) + (pz - sz) * (tz - sz)) / l;
+  if (Math.abs(sx - ex) < 1e-6 && Math.abs(sz - ez) < 1e-6) return Math.max(0, -u);
+  if (Math.abs(tx - ex) < 1e-6 && Math.abs(tz - ez) < 1e-6) return Math.max(0, u - l);
+  return 0;
+};
+/** Each candidate within FREEWAY_SMIN_K's reach keeps a share of its weight (gradeShare): the same leg
+ *  listed twice (every wall is) counts once, and a leg the point lies PAST the end of, where another leg
+ *  ends too, gives way to that leg as far as it lies further past it than the other does (1 −
+ *  smoothstep(0, SHARED_END_FADE, its excess)). A leg the point projects inside of keeps all of it; two
+ *  legs it lies past (the outer side of a bend) share by how far past each it lies. Dropping such a leg
+ *  outright where the other leg covered it, and counting the first-listed one where both were past their
+ *  ends, flipped legs on lines through the vertex — 1.14u of grade at (-11039, 9514), 0.27u beside a
+ *  belt corner at (-11123, 9734). */
+const gradeShares = (px: number, pz: number, n: number, dmin: number): void => {
+  const { d, seg } = segCandidates;
+  for (let k = 0; k < n; k++) {
+    gradeRepeat[k] = 0;
+    for (let o = 0; o < k && gradeRepeat[k] === 0; o++) if (sameLeg(seg, o, k)) gradeRepeat[k] = 1;
+  }
+  // (The first-listed copy of a leg within reach is the one counted.)
+  for (let k = 0; k < n; k++) {
+    gradeShare[k] = d[k] - dmin < FREEWAY_SMIN_K ? 1 : 0;
+    for (let o = 0; o < k && gradeShare[k] > 0; o++) if (gradeShare[o] > 0 && sameLeg(seg, o, k)) gradeShare[k] = 0;
+  }
+  for (let k = 0; k < n; k++) {
+    if (gradeShare[k] === 0) continue;
+    for (let end = 0; end < 2; end++) {
+      const ex = seg[k * 4 + end * 2];
+      const ez = seg[k * 4 + end * 2 + 1];
+      const past = pastEnd(k, px, pz, ex, ez);
+      if (past <= 0) continue;
+      for (let o = 0; o < n; o++) {
+        if (o === k || gradeRepeat[o] === 1 || sameLeg(seg, o, k) || !endsAt(seg, o, ex, ez)) continue;
+        gradeShare[k] *= 1 - smoothstep(0, SHARED_END_FADE, past - pastEnd(o, px, pz, ex, ez));
+      }
+    }
+  }
+};
+const endsAt = (seg: number[], o: number, ex: number, ez: number): boolean =>
+  (Math.abs(seg[o * 4] - ex) < 1e-6 && Math.abs(seg[o * 4 + 1] - ez) < 1e-6) || (Math.abs(seg[o * 4 + 2] - ex) < 1e-6 && Math.abs(seg[o * 4 + 3] - ez) < 1e-6);
+const sameLeg = (seg: number[], a: number, b: number): boolean => {
+  const near = (i: number, j: number) => Math.abs(seg[a * 4 + i] - seg[b * 4 + j]) < 1e-6 && Math.abs(seg[a * 4 + i + 1] - seg[b * 4 + j + 1]) < 1e-6;
+  return (near(0, 0) && near(2, 2)) || (near(0, 2) && near(2, 0));
+};
+
 /** The grade of the freeway(s) nearest a warped point (px, pz) off the city — world (wx, wz) — or NaN
  *  with none in reach. `withRuns` false (far visual LODs) sees the city belt alone. Clobbers the
  *  wall-pass scratch: call it before the vertex's own wall pass. */
@@ -135,32 +196,18 @@ export const freewayGradeAt = (px: number, pz: number, wx: number, wz: number, c
   }
   const n = segCandidates.n;
   if (n === 0) return NaN;
-  const { d, t, seg, x, z, run, along } = segCandidates;
+  const { d, t, seg, run, along } = segCandidates;
   let dmin = Infinity;
   for (let k = 0; k < n; k++) dmin = Math.min(dmin, d[k]);
   let sum = 0;
   let wsum = 0;
+  // A leg the point lies past the end of, where another leg ends, is that leg's (gradeShares): counted
+  // at full weight too it would vary the blend across the road.
+  gradeShares(px, pz, n, dmin);
   for (let k = 0; k < n; k++) {
-    gradeSkip[k] = 1;
-    if (d[k] - dmin >= FREEWAY_SMIN_K) continue;
-    // A projection clamped to a segment's end that another segment ending there projects INSIDE of is
-    // that segment's point (the nearer one): counting it too would vary the blend across the road.
-    if (t[k] === 0 || t[k] === 1) {
-      const ex = t[k] === 0 ? seg[k * 4] : seg[k * 4 + 2];
-      const ez = t[k] === 0 ? seg[k * 4 + 1] : seg[k * 4 + 3];
-      let covered = false;
-      for (let o = 0; o < n && !covered; o++) {
-        if (o === k || t[o] <= 0 || t[o] >= 1) continue;
-        if ((Math.abs(seg[o * 4] - ex) < 1e-6 && Math.abs(seg[o * 4 + 1] - ez) < 1e-6) || (Math.abs(seg[o * 4 + 2] - ex) < 1e-6 && Math.abs(seg[o * 4 + 3] - ez) < 1e-6)) covered = true;
-      }
-      if (covered) continue;
-    }
-    // One place counted once (a wall listed twice, the outer side of a bend).
-    let dup = false;
-    for (let o = 0; o < k && !dup; o++) if (gradeSkip[o] === 0 && Math.abs(x[o] - x[k]) + Math.abs(z[o] - z[k]) < 1e-3) dup = true;
-    if (dup) continue;
-    gradeSkip[k] = 0;
+    if (gradeShare[k] === 0) continue;
     const h = 1 - (d[k] - dmin) / FREEWAY_SMIN_K;
+    const h2 = h * h * gradeShare[k];
     const r = run[k];
     const shift = worldAlongShift(k, wx, wz);
     if (r) {
@@ -175,13 +222,13 @@ export const freewayGradeAt = (px: number, pz: number, wx: number, wz: number, c
         gradeRunW.push(0);
         gradeRunS.push(0);
       }
-      gradeRunW[slot] += h * h;
-      gradeRunS[slot] += h * h * (along[k] + shift);
+      gradeRunW[slot] += h2;
+      gradeRunS[slot] += h2 * (along[k] + shift);
       continue;
     }
     const segLen = Math.hypot(seg[k * 4 + 2] - seg[k * 4], seg[k * 4 + 3] - seg[k * 4 + 1]) || 1;
-    sum += h * h * segmentGrade(seg[k * 4], seg[k * 4 + 1], seg[k * 4 + 2], seg[k * 4 + 3], t[k] + shift / segLen);
-    wsum += h * h;
+    sum += h2 * segmentGrade(seg[k * 4], seg[k * 4 + 1], seg[k * 4 + 2], seg[k * 4 + 3], t[k] + shift / segLen);
+    wsum += h2;
   }
   for (let o = 0; o < gradeRuns.length; o++) {
     sum += gradeRunW[o] * runGrade(gradeRuns[o], gradeRunS[o] / gradeRunW[o]);

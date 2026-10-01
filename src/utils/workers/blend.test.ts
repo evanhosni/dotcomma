@@ -265,6 +265,7 @@ describe("junctions of three or more zones", () => {
   it("with a river in reach, the carved terrain stays continuous across them too", () => {
     const rv = OVERWORLD_CONFIG.river;
     let withRiver = 0;
+    let withCity = 0;
     for (const { a, b } of junctionCrossings(8000, 7)) {
       const va = computeVertexDataRaw(a.x, a.z);
       const ha = va.height;
@@ -272,12 +273,13 @@ describe("junctions of three or more zones", () => {
       const cityA = va.biomeId === CITY_BIOME_ID;
       const vb = computeVertexDataRaw(b.x, b.z);
       if (!inReach && !(vb.distanceToRiverCenter < rv.halfWidth + rv.bank)) continue;
-      // A city wall's river side is the city's own quay terrain (its branch), not a zone input.
-      if (cityA || vb.biomeId === CITY_BIOME_ID) continue;
       withRiver++;
+      // A city wall too: its river side (the quay, a drowned belt) meets the neighbor's (seams.test.ts).
+      if (cityA || vb.biomeId === CITY_BIOME_ID) withCity++;
       expect(Math.abs(ha - vb.height)).toBeLessThan(0.05);
     }
     expect(withRiver).toBeGreaterThan(200);
+    expect(withCity).toBeGreaterThan(20);
   });
 });
 

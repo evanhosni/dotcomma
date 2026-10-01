@@ -256,7 +256,6 @@ interface BiomeMixInput {
   baseFunctionOf: (string | null)[];
   slotRegions?: number[];
   slotHalves?: number[];
-  bedGroupOf: number[];
 }
 
 /** Slot k's color `c<k>`: its region base faded into its own frag by presence. */
@@ -268,8 +267,7 @@ const biomeColorGLSL = (k: number, { biomes, baseFunctionOf, slotRegions }: Biom
           if (p${k} > 0.001) { ${biomes[k].name}_frag(); c${k} = mix(c${k}, gl_FragColor, p${k}); }`;
 };
 
-/** The per-pixel biome cross-fade: each tier claims `remaining × weight`, softer tiers split the rest;
- *  a slot's weight also feeds its riverbed group (`bedW<g>`). */
+/** The per-pixel biome cross-fade: each tier claims `remaining × weight`, softer tiers split the rest. */
 const biomeMixGLSL = (input: BiomeMixInput): string[] => {
   const halfOf = (k: number) => input.slotHalves?.[k] ?? 1;
   const tiers = crispnessTiers(input.slotsWithMaterial, halfOf);
@@ -284,7 +282,6 @@ const biomeMixGLSL = (input: BiomeMixInput): string[] => {
           ${biomeColorGLSL(k, input)}
           blended += c${k} * (w${k} * tierScale);
           weightSum += w${k} * tierScale;
-          bedW${input.bedGroupOf[k]} += w${k} * tierScale;
         }`,
           )
           .join("\n        ")}
@@ -293,13 +290,35 @@ const biomeMixGLSL = (input: BiomeMixInput): string[] => {
   );
 };
 
-/** River BED and BANKS: the riverbed from the channel out to the bank's edge with a short fade into the
- *  ground beyond (the Water system draws the surface) — each biome's own bed, cross-faded by the same
- *  weights as the ground, so a bed changes across a biome wall with no edge. It yields where the CITY's
- *  road field says pavement (a quay's asphalt, curb and 4u sidewalk band, so the sidewalk along a river
- *  is as wide as along any road) and on steep banks (a mountainside keeps its rock). */
-const riverBedGLSL = (bedKeys: string[], cityIdx: number): string => `if (vRiverBedDistance < RIVER_BED_REACH) {
+/** The riverbed groups' weights `bedW<g>`, from the RIVERBED's own slot distances (vRiverbedSdf — the
+ *  biome walls' feathers floored at RIVER_BED_TEXTURE_HALF) in the same crispness tiers as the ground:
+ *  by the ground's own weights the bed's texture switched within 1u beside the crisp city. */
+const riverbedWeightsGLSL = (slotCount: number, bedGroupOf: number[], bedHalves: number[] | undefined): string => {
+  const slots = Array.from({ length: slotCount }, (_, k) => k);
+  const tiers = crispnessTiers(slots, (k) => bedHalves?.[k] ?? 1);
+  return tiers
+    .map(
+      (tier, t) => `{
+        ${tier.map((k) => `float r${k} = smoothstep(-1.0, 1.0, ${slotOf("vRiverbedSdf", k)});`).join("\n        ")}
+        float bedTierSum = ${tier.map((k) => `r${k}`).join(" + ")};
+        float bedTierScale = bedRemaining * (bedTierSum >= 1.0 ? 1.0 / bedTierSum : 1.0);
+        ${tier.map((k) => `bedW${bedGroupOf[k]} += r${k} * bedTierScale;`).join("\n        ")}
+        ${t < tiers.length - 1 ? "bedRemaining *= max(0.0, 1.0 - bedTierSum);" : ""}
+      }`,
+    )
+    .join("\n        ");
+};
+
+/** River BED and BANKS: the riverbed from the channel out to the bank's edge, fading into the ground
+ *  beyond over RIVER_BED_BLEND_WIDTH (the Water system draws the surface) — each biome's own bed,
+ *  cross-faded softly across biome walls (riverbedWeightsGLSL). It yields where the CITY's road field
+ *  says pavement (a quay's asphalt, curb and 4u sidewalk band, crisp: the sidewalk along a river is as
+ *  wide as along any road) and on steep banks (a mountainside keeps its rock). */
+const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number[] | undefined, cityIdx: number): string => `if (vRiverBedDistance < RIVER_BED_REACH) {
         vec2 bedUV = fract(vWorldUv);
+        ${bedKeys.map((_, g) => `float bedW${g} = 0.0;`).join(" ")}
+        float bedRemaining = 1.0;
+        ${riverbedWeightsGLSL(bedGroupOf.length, bedGroupOf, bedHalves)}
         vec3 bed = vec3(0.0);
         float bedSum = 0.0;
         ${bedKeys.map((_, g) => `if (bedW${g} > ${BIOME_WEIGHT_VISIBLE}) { bed += ${riverbedSampleGLSL(g, bedKeys)} * bedW${g}; bedSum += bedW${g}; }`).join("\n        ")}
@@ -381,11 +400,13 @@ export namespace _material {
       defines?: Record<string, string>;
       /** Per slot, HALF the material feather (crispness order). Unset = one tier. */
       slotHalves?: number[];
+      /** Per slot, HALF the riverbed texture's feather (vRiverbedSdf's scale; crispness order). */
+      bedSlotHalves?: number[];
       /** Per slot, the index into `regions` of the biome's region (its base material). */
       slotRegions?: number[];
     } = {},
   ): Promise<THREE.ShaderMaterial> => {
-    const { riverTexture, slotRiverbeds = [], riverbedTextures = new Map(), varyingDeclarations = [], defines = {}, slotHalves, slotRegions } = options;
+    const { riverTexture, slotRiverbeds = [], riverbedTextures = new Map(), varyingDeclarations = [], defines = {}, slotHalves, bedSlotHalves, slotRegions } = options;
     // uNightBlend and the lamp-grid uniforms are SHARED objects so every terrain material dims in lockstep.
     const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS };
 
@@ -402,7 +423,7 @@ export namespace _material {
     for (const [file, texture] of riverbedTextures) combinedUniforms[riverbedUniformOf(file)] = { value: texture };
 
     const { functions, baseFunctionOf, slotsWithMaterial } = await collectFragFunctions(biomes, regions, combinedUniforms);
-    const blendCalls = biomeMixGLSL({ biomes, slotsWithMaterial, baseFunctionOf, slotRegions, slotHalves, bedGroupOf });
+    const blendCalls = biomeMixGLSL({ biomes, slotsWithMaterial, baseFunctionOf, slotRegions, slotHalves });
 
     const cityIdx = biomes.findIndex((b) => b.id === CITY_BIOME_ID);
     const cityCorridor = cityCorridorGLSL(cityIdx >= 0 && slotsWithMaterial.includes(cityIdx) ? biomes[cityIdx].name : null);
@@ -429,13 +450,12 @@ export namespace _material {
       vec4 blended = vec4(0.0);
       float weightSum = 0.0;
       float remaining = 1.0;
-      ${bedKeys.map((_, g) => `float bedW${g} = 0.0;`).join(" ")}
       ${blendCalls.join("\n      ")}
       // At a vertex the own biome's sdf is ≥ 0 (weight ≥ 0.5); inside a coarse triangle only the far
       // LODs' clamped fields keep the sum from vanishing (LODLevel.clampBlendFields) — the max is a guard.
       gl_FragColor = blended / max(weightSum, 1e-4);
 
-      ${riverBedGLSL(bedKeys, cityIdx)}
+      ${riverBedGLSL(bedKeys, bedGroupOf, bedSlotHalves, cityIdx)}
 
       ${cityCorridor}
 

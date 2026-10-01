@@ -15,9 +15,19 @@ export const FREEWAY_CORRIDOR_OUTER = 9.5;
 
 /** The riverbed PAINT's edge, as insets from RIVER_BED_REACH (riverBedDistance, factor-1 units): the
  *  terrain shader covers the ground with the bed out to REACH − FULL and fades it out by REACH − FADE,
- *  and the foliage worker thins plants out against the same edge. */
-export const RIVER_BED_FULL_INSET = 3;
+ *  and the foliage worker thins plants out across the same fade. The fade is RIVER_BED_BLEND_WIDTH wide
+ *  (9–22u real with the width factor): natural ground grades into the bed instead of stopping on a
+ *  line. City pavement never fades (the shader's pavement mask; the quay's bed distance is inset by
+ *  FULL, so the sand is whole right past its sidewalk) — a long fade there read as the sidewalk
+ *  smearing into the riverbed. */
 export const RIVER_BED_FADE_INSET = 1;
+export const RIVER_BED_BLEND_WIDTH = 9;
+export const RIVER_BED_FULL_INSET = RIVER_BED_FADE_INSET + RIVER_BED_BLEND_WIDTH;
+
+/** Each biome's riverbed texture cross-fades into its neighbor's over at least this HALF width (real
+ *  units) across a biome wall, whatever the biomes' own feathers: the bed is not its biome's ground,
+ *  and beside the crisp city (a 1u half) the bed's sand met the snow's gravel on a hard line. */
+export const RIVER_BED_TEXTURE_HALF = 8;
 
 /** The riverbed paint yields to the ground beneath it on steep banks: fully painted up to START,
  *  gone by END (slope from the world normal, degrees) — a mountainside rising out of a river keeps

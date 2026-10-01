@@ -17,6 +17,7 @@
  * smoothstep per PIXEL, so a 1–3u feather survives 17.5u quads without aliasing.
  */
 
+import { RIVER_BED_TEXTURE_HALF } from "../../world/shaders/constants";
 import { CellCache } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import type { DomainConfig, SerializedRegion, Wall, Zone } from "./types";
@@ -94,11 +95,14 @@ export let zoneFinal = new Float64Array(0);
 export let zoneMinDist = new Float64Array(0);
 export let biomeSdf = new Float64Array(0);
 export let biomePresence = new Float64Array(0);
+/** biomeSdf for the RIVERBED's texture (riverbedSdfAt): each wall's half floored at RIVER_BED_TEXTURE_HALF. */
+export let riverbedSdf = new Float64Array(0);
 /** The buffers computeVertexData RETURNS. Distinct from the scratch because the flatten-pad
  *  step recurses into computeVertexData for pad candidates AFTER the outer vertex's pass:
  *  returning the scratch would ship a candidate's distances to the shader. */
 export let biomeSdfResult = new Float64Array(0);
 export let biomePresenceResult = new Float64Array(0);
+export let riverbedSdfResult = new Float64Array(0);
 /** The own zone's walls in the current pass (edge floor): distance, and the other side's heightHalf. */
 let ownWallD = new Float64Array(0);
 let ownWallHalf = new Float64Array(0);
@@ -107,6 +111,36 @@ let ownWallHalf = new Float64Array(0);
  *  drops the paint). */
 export let ownWallDistance = Infinity;
 export let ownWallAlong = 0;
+
+/** A copy of the wall pass's results (saveWallPass), for an evaluation that must leave the vertex in
+ *  progress as it found it (riverNetwork's gorgeRise). */
+export interface WallPassStash {
+  weights: Float64Array;
+  final: Float64Array;
+  minDist: Float64Array;
+  sdf: Float64Array;
+  presence: Float64Array;
+  distance: number;
+  along: number;
+}
+export const saveWallPass = (): WallPassStash => ({
+  weights: zoneWeights.slice(),
+  final: zoneFinal.slice(),
+  minDist: zoneMinDist.slice(),
+  sdf: biomeSdf.slice(),
+  presence: biomePresence.slice(),
+  distance: ownWallDistance,
+  along: ownWallAlong,
+});
+export const restoreWallPass = (s: WallPassStash): void => {
+  zoneWeights.set(s.weights);
+  zoneFinal.set(s.final);
+  zoneMinDist.set(s.minDist);
+  biomeSdf.set(s.sdf);
+  biomePresence.set(s.presence);
+  ownWallDistance = s.distance;
+  ownWallAlong = s.along;
+};
 
 /** Interns the config's zones and sizes the wall-pass scratch. */
 export const initZones = (config: DomainConfig): void => {
@@ -154,6 +188,8 @@ export const initZones = (config: DomainConfig): void => {
   biomeSdfResult = new Float64Array(biomeSlotIds.length);
   biomePresence = new Float64Array(biomeSlotIds.length);
   biomePresenceResult = new Float64Array(biomeSlotIds.length);
+  riverbedSdf = new Float64Array(biomeSlotIds.length);
+  riverbedSdfResult = new Float64Array(biomeSlotIds.length);
   biomeSlotBlendHalves = biomeSlotBlendHalvesOf(config);
   const byHalf = new Map<number, Zone[]>();
   for (const z of zones) {
@@ -231,6 +267,9 @@ export const biomeWeightOf = (sdf: ArrayLike<number>, biomeIds: readonly number[
 };
 
 // ── The wall pass ─────────────────────────────────────────────────────────
+
+/** Per biome slot, the riverbed texture's half feather (its crispness order in the shader). */
+export const riverbedSlotHalvesOf = (config: DomainConfig): number[] => biomeSlotBlendHalvesOf(config).map((h) => Math.max(h, RIVER_BED_TEXTURE_HALF));
 
 /** Fills zoneWeights (height indicators, unnormalized), zoneMinDist, biomeSdf and
  *  biomePresence for (px, pz) in zone `own`; sets ownWallDistance/ownWallAlong. */
@@ -352,6 +391,47 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
     if (v > biomePresence[z.slot]) biomePresence[z.slot] = v;
   }
   if (biomePresence[own.slot] === -BIOME_SDF_FAR) biomePresence[own.slot] = BIOME_SDF_FAR;
+};
+
+/** The walls whose material feather is narrower than the riverbed's (RIVER_BED_TEXTURE_HALF): the
+ *  crisp city's. Per wall list. */
+const narrowWallsCache = new WeakMap<Wall[], Wall[]>();
+const narrowWallsOf = (walls: Wall[]): Wall[] => {
+  let narrow = narrowWallsCache.get(walls);
+  if (!narrow) narrowWallsCache.set(walls, (narrow = walls.filter((w) => w.a !== w.b && w.materialHalf > 0 && w.materialHalf < RIVER_BED_TEXTURE_HALF)));
+  return narrow;
+};
+
+/** biomeSdf's twin for the RIVERBED's texture into `out`, from the vertex's `sdf`: the same walls and
+ *  signs with each wall's half floored at RIVER_BED_TEXTURE_HALF. Only the narrow walls differ, and a
+ *  slot's value is a min (own) or max (foreign) over its walls, so their floored terms re-applied over
+ *  `sdf` give exactly the pass with every half floored — a pass over the few city walls in reach. */
+export const riverbedSdfAt = (px: number, pz: number, walls: Wall[], own: Zone, sdf: ArrayLike<number>, out: Float64Array): void => {
+  for (let i = 0; i < out.length; i++) out[i] = sdf[i];
+  const narrow = narrowWallsOf(walls);
+  const ownBiome = own.biome.id;
+  for (let i = 0; i < narrow.length; i++) {
+    const w = narrow[i];
+    const dx = w.ex - w.sx;
+    const dz = w.ez - w.sz;
+    const lenSq = dx * dx + dz * dz;
+    let t = lenSq > 0 ? ((px - w.sx) * dx + (pz - w.sz) * dz) / lenSq : 0;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+    const r = Math.hypot(px - w.sx - t * dx, pz - w.sz - t * dz) / RIVER_BED_TEXTURE_HALF;
+    const a = w.a.slot;
+    const b = w.b.slot;
+    if (w.a.biome.id === ownBiome) {
+      if (r < out[a]) out[a] = r;
+      if (-r > out[b]) out[b] = -r;
+    } else if (w.b.biome.id === ownBiome) {
+      if (r < out[b]) out[b] = r;
+      if (-r > out[a]) out[a] = -r;
+    } else {
+      if (-r > out[a]) out[a] = -r;
+      if (-r > out[b]) out[b] = -r;
+    }
+  }
 };
 
 // ── Dome depth (BiomeDomeConfig) ──────────────────────────────────────────

@@ -43,6 +43,8 @@ const cityBlockElevation = (
 export interface CityTerrain {
   roadDistance: number; // to the nearest road centerline, in street units
   relativeElevation: number; // relative to the regional base (computeVertexData adds it back)
+  /** The curb dip relativeElevation includes: a shore lift is applied UNDER it (computeVertexData). */
+  curbDip: number;
   freewayDistance: number; // real units to the nearest freeway centerline (lane paint)
   freewayAlong: number; // dash-phase coordinate along that freeway
   freewayReal: number; // real units to the nearest arterial or belt centerline, junction zones included
@@ -73,6 +75,13 @@ const CITY_WATERFRONT_ALIGN_HI = Math.cos((30 * Math.PI) / 180);
 const CITY_WATERFRONT_PENALTY = 45;
 /** The smooth minimum's reach where the belt turns onto the waterfront: a rounded corner. */
 const CITY_WATERFRONT_FILLET = 30;
+/** Off the city the waterfront line is pushed away by this many units per unit outside the wall: on
+ *  the wall it is the city's, so the two halves meet, and it never runs on into the neighbor. */
+const CITY_WATERFRONT_OUTSIDE_PUSH = 3;
+/** The waterfront line comes into play as a drowned wall's share (wf) grows past CITY_WATERFRONT_ONSET:
+ *  below it the line is pushed up to CITY_WATERFRONT_ABSENT off, past any belt distance (real units). */
+const CITY_WATERFRONT_ONSET = 0.1;
+const CITY_WATERFRONT_ABSENT = 1e4;
 
 /** Whether the city wall nearest a rim cell's center lies in a river's footprint (as far as its
  *  belt's river-side curb, findWaterfrontBelt's measure). From the river pieces' geometry alone —
@@ -160,7 +169,7 @@ const wallDrownedAlong = (w: Wall, t: number): number => {
  *  Where a city wall lies in a river's footprint, the belt runs along the water's straight edge
  *  instead, its river-side curb on the bank (bank + freewayWidth from the centerline), and rejoins the
  *  belt where the wall comes out of the water — one road, one set of lanes. Off the city (`inCity`
- *  false) only the drowned belt is taken away. Writes waterfrontBelt: `distance`, the real distance to
+ *  false) the waterfront line is pushed off with the distance from the wall (CITY_WATERFRONT_OUTSIDE_PUSH). Writes waterfrontBelt: `distance`, the real distance to
  *  that road's centerline (the belt's own where no wall is drowned); `waterfront`, how far a drowned
  *  wall is in play (0–1); `onWaterfront`, whether the waterfront line is the nearer part. The vertex's
  *  own river piece list must be current (riverQuayAt ran for it). */
@@ -178,9 +187,11 @@ const findWaterfrontBelt =(wx: number, wz: number, walls: Wall[], beltDistance: 
   if (beltDistance > CITY_WATERFRONT_READ && Math.abs(quay.distance - (reach * quay.factor + fw)) > CITY_WATERFRONT_READ) return;
   let dry = Infinity;
   let wf = 0;
-  // Past this a wall changes nothing: the nearest wall alone keeps the belt within beltDistance +
-  // the penalty (and a waterfront needs its wall nearer still).
+  // Past this a wall changes nothing: the nearest wall alone keeps the belt within beltDistance + the
+  // penalty. A drowned wall's waterfront fades out over CITY_WATERFRONT_FADE before it (cut off there, the
+  // waterfront switched on at once: 1.9u of plateau at (-954, 1034)).
   const farthest = beltDistance + CITY_WATERFRONT_PENALTY;
+  const bank = reach * quay.factor;
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
     // Each wall is listed twice, endpoint-swapped.
@@ -205,21 +216,31 @@ const findWaterfrontBelt =(wx: number, wz: number, walls: Wall[], beltDistance: 
       dry = Math.min(dry, dist);
       continue;
     }
-    const bank = reach * quay.factor;
-    const near = 1 - smoothstep(quay.distance + bank, quay.distance + bank + CITY_WATERFRONT_FADE, dist);
+    const near = (1 - smoothstep(quay.distance + bank, quay.distance + bank + CITY_WATERFRONT_FADE, dist)) * (1 - smoothstep(farthest - CITY_WATERFRONT_FADE, farthest, dist));
     wf = Math.max(wf, drowned * near);
     dry = Math.min(dry, dist + CITY_WATERFRONT_PENALTY * drowned);
   }
-  // Off the city only the drowned wall's belt goes: the waterfront line would run on along the river
-  // past the city's corner, into the grass.
-  if (wf <= 0 || !inCity) {
+  if (wf <= 0) {
     waterfrontBelt.distance = dry;
     return;
   }
-  const line = Math.abs(quay.distance - (reach * quay.factor + fw)) + CITY_WATERFRONT_PENALTY * (1 - wf);
+  // Off the city the line is pushed away with the distance from the wall: it would run on along the
+  // river past the city's corner, into the grass.
+  // Where the waterfront barely starts (wf → 0) the line is pushed out of play: 45u off at most, it took
+  // the belt over the moment any wall was drowned at all — 0.3u curb steps along that line.
+  const fadeIn = CITY_WATERFRONT_ABSENT * (1 - smoothstep(0, CITY_WATERFRONT_ONSET, wf));
+  const line = Math.abs(quay.distance - (reach * quay.factor + fw)) + CITY_WATERFRONT_PENALTY * (1 - wf) + fadeIn + (inCity ? 0 : CITY_WATERFRONT_OUTSIDE_PUSH * beltDistance);
   waterfrontBelt.distance = smoothMin(dry, line, CITY_WATERFRONT_FILLET);
   waterfrontBelt.waterfront = wf;
   waterfrontBelt.onWaterfront = line < dry;
+};
+
+/** The belt's distance from a point OFF the city (real units, from the nearest city wall's
+ *  `beltDistance`): the city's own measure, its waterfront line fading off the wall, so where the river
+ *  drowns a wall the outer half is pushed off it exactly as the inner half is. riverQuayAt must have run. */
+export const drownedBeltDistance = (wx: number, wz: number, walls: Wall[], beltDistance: number, quay: RiverQuaySample): number => {
+  findWaterfrontBelt(wx, wz, walls, beltDistance, quay, false);
+  return waterfrontBelt.distance;
 };
 
 // ── Blocks: shapes and cells ──────────────────────────────────────────
@@ -767,6 +788,14 @@ const addArterialConstraint = (vx: number, vz: number, d: CityDistrict, freewayT
  *  recovers from CITY_BELT_RECOVER_NORM, earlier than an arterial's: as a partner in every chamfer
  *  along the rim, the squashed distance would eat every block corner beside it into plaza. Returns the
  *  belt's real distance. */
+/** The belt constraint's field at the current vertex (addBeltConstraint). */
+let lastBeltField = 0;
+/** At the wall the city's road field is the belt's — what the neighbor side reads there — falling off
+ *  at this many street units per real unit inside it: steeper than the belt's own field ever climbs
+ *  (CITY_ARTERIAL_RECOVER_SLOPE), so it only acts where a drowned wall's belt moved onto the
+ *  waterfront — a street running into such a wall dipped its curb against a neighbor with no road at
+ *  all (0.3u). Elsewhere the belt's field IS the nearest constraint at the wall. */
+const CITY_WALL_FIELD_FALLOFF = CITY_ARTERIAL_RECOVER_SLOPE + 1;
 const addBeltConstraint = (warped: PointXZ, walls: Wall[], biomeBoundaryDist: number, quay: RiverQuaySample, freewayToStreetScale: number): number => {
   findWaterfrontBelt(warped.x, warped.z, walls, biomeBoundaryDist, quay, true);
   const beltReal = waterfrontBelt.distance;
@@ -775,6 +804,7 @@ const addBeltConstraint = (warped: PointXZ, walls: Wall[], biomeBoundaryDist: nu
     (beltReal - CITY_BELT_RECOVER_NORM / freewayToStreetScale) * CITY_ARTERIAL_RECOVER_SLOPE + CITY_BELT_RECOVER_NORM
   );
   addWorldConstraint(beltField, NaN, 0);
+  lastBeltField = beltField;
   return beltReal;
 };
 
@@ -915,7 +945,9 @@ export const getCityTerrain = (
   // grade all the way to the wall: the value zoneBiomeHeight continues past it, so the neighbor's
   // height ramp starts from the freeway surface with no step.
   const freewayGrade = city.maxBlockElevation * 0.5;
-  const freewayRamp = smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, arterials.real) * smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, beltReal);
+  // By the wall itself too where a drowned wall's belt moved onto the waterfront: the city outside its
+  // zone is AT grade (zoneBiomeHeight), and a plateau running into the river met it 1.5u off.
+  const freewayRamp = smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, arterials.real) * smoothstep(CITY_FREEWAY_RAMP_START, CITY_FREEWAY_RAMP_END, Math.min(beltReal, biomeBoundaryDist));
   elevation = freewayGrade + (elevation - freewayGrade) * freewayRamp;
   // Roundabout island: its own flat plateau, blended in under the inner ring road.
   if (roundabout.inside) {
@@ -926,6 +958,7 @@ export const getCityTerrain = (
 
   let roadDistance = chamferedRoadDistance();
   if (cell.label < 0) roadDistance = 0; // biome-edge cells are all road (the rim ring road)
+  roadDistance = Math.max(roadDistance, lastBeltField - CITY_WALL_FIELD_FALLOFF * biomeBoundaryDist);
   // On the river side of the quay the field becomes the quay's own. The lerp runs inside the quay's
   // asphalt band, where both fields are ≤ 7, so nothing steps. Freeways are NOT exempt: an arterial
   // ends at the quay like a street, and a deck lands on the quay's pavement like an abutment. After
@@ -935,12 +968,14 @@ export const getCityTerrain = (
 
   // The curb dip is full across the belt, wall included — the neighbor side of the belt
   // (computeVertexData step 5) dips by the same formula, so the road meets itself at the wall.
-  elevation -= city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, roadDistance));
+  const curbDip = city.curbHeight * (1 - smoothstep(city.roadWidth - 2, city.roadWidth, roadDistance));
+  elevation -= curbDip;
 
   measureLanePaint(beltReal, biomeWallAlong, city);
   return {
     roadDistance,
     relativeElevation: elevation,
+    curbDip,
     freewayDistance: lanePaint.distance,
     freewayAlong: lanePaint.along,
     freewayReal: Math.min(arterials.real, beltReal),

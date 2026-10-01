@@ -3,7 +3,7 @@ import { _curvature } from "../../vfx/curvature";
 import { _material } from "../../utils/material/_material";
 import { _quantization } from "../../vfx/quantization";
 import { getAllBiomes } from "../../utils/utils";
-import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf } from "../../utils/workers/vertexCompute";
+import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
 import { glslFloat, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
@@ -13,7 +13,7 @@ import terrainVertexBody from "../shaders/vertex.glsl";
 // The raw .glsl asset can't import the shared chunks, so they are prepended here.
 const vertexShader = `${_quantization.QUANTIZE_GLSL}\n${_curvature.CURVE_GLSL}\n${terrainVertexBody}`;
 
-/** Two vec4 attributes carry the per-biome signed distances (and two more the presences). */
+/** Two vec4 attributes carry the per-biome signed distances (two more the presences, two the riverbed's). */
 export const MAX_BIOME_SLOTS = 8;
 
 /** Combines every active region's base and biome fragment shader into the one terrain material. */
@@ -56,12 +56,15 @@ export const getMaterial = async () => {
     riverbedTextures,
     defines,
     slotHalves: biomeSlotBlendHalvesOf(config),
+    bedSlotHalves: riverbedSlotHalvesOf(config),
     slotRegions: biomeSlotRegionsOf(config),
     varyingDeclarations: [
       "varying vec4 vBiomeSdf0;",
       "varying vec4 vBiomeSdf1;",
       "varying vec4 vBiomePresence0;",
       "varying vec4 vBiomePresence1;",
+      "varying vec4 vRiverbedSdf0;",
+      "varying vec4 vRiverbedSdf1;",
       "varying float vRiverBedDistance;",
       "varying float vDistanceToRoadCenter;",
       "varying float vDistanceToFreewayCenter;",

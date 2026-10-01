@@ -57,24 +57,33 @@ name what each step consumes, what it produces, and what earlier result it repla
    looked up per vertex. Each biome cell took its region from the region-grid cell nearest the
    cell's SITE (`zoneOfRawSite`: `getRegionGrid` → `nearestCell`, then a seeded biome roll from that
    region's list). A zone is a (region, biome) pair.
-2. **The river field.** `riverFieldAt` ([`rivers/riverField.ts`](../utils/workers/rivers/riverField.ts))
+2. **The river field.** Off the city, the nearest city wall is measured first (pure geometry). Then
+   `riverFieldAt` ([`rivers/riverField.ts`](../utils/workers/rivers/riverField.ts))
    writes `riverSample`: distance in factor-1 units, the width factor, and the water surface. It is
-   measured from a meandered point, and it smooth-mins confluences. Building a cell's piece list
-   (first query in a cell) evaluates the terrain at every piece end (`riverSurfaceAt`). The surface
+   measured from a meandered point, and it smooth-mins confluences. The factor and surface come from
+   each run's PLAINLY nearest piece (the nearest by factor-1 distance jumps between pieces where the
+   width varies), weighted across runs by the smooth-min weights. Building a cell's piece list
+   (first query in a cell) evaluates the terrain at every piece end (`riverSurfaceAt`); a GORGE's piece
+   ends (a joined gap) instead run straight and downhill between its two waters (`gorgeSurfaces`). The surface
    is capped under any freeway crossing (`roadCrossingCap`: 5u under the lower landing, sampled along
    the road itself, and easing back up along the river at `RIVER_CAP_GRADE`, 6u per piece). On the bank it also writes the BED
    LIMIT (`bedLimit`): how far out the bed reaches before its bank first gets steep, interpolated from
-   per-station marches (lazy, cached per station and direction; each march evaluates the terrain).
+   per-station marches (lazy, cached per station and direction; each march evaluates the terrain). In
+   a city and within 6u of its wall the limit is found past the reach too, as far as the quay rule can
+   still paint the bed (`RIVER_BED_LIMIT_PAST`).
    Far-dry vertices call `noRiverSample` instead.
 3. **The nearest freeway, off the city only.** `nearestFreewayRun` finds the inter-city runs
    ([`roads/freewayNetwork.ts`](../utils/workers/roads/freewayNetwork.ts)); it is skipped in a water
    zone and on far LODs. `findNearestCityWall` finds the belt seen from outside. Together they give
-   `roadReal`, a smooth minimum of the two.
+   `roadReal`, a smooth minimum of the two. Near a river the belt's distance is the city's own measure
+   (`drownedBeltDistance`): off a wall the river drowns it is pushed away as on the city's side.
 4. **The road grade**, only where step 5 will use it (`roadReal < freewayWidth + FREEWAY_GRADE_RAMP`,
    or out to its widened approach shoulder in a cell with decks and while decks are enumerated).
    `freewayGradeAt` ([`roads/freewayGrade.ts`](../utils/workers/roads/freewayGrade.ts)) samples the
    centerline terrain every 8u with that point's OWN wall pass (`terrainOnlyAt`), smooths it along
-   runs, and blends it over the nearby segments.
+   runs, and blends it over the nearby segments. A leg the vertex lies past the end of, where another
+   leg ends, gives way to that leg continuously (`gradeShares`): on the outer side of a bend the legs
+   share by how far past each the vertex lies.
 5. **The wall pass.** `accumulateWallFields` ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)) runs
    one loop over the zone walls:
    - **Height indicator per zone:** `smoothstep(-h_b, +h_a, s)` across each wall, from each side's
@@ -126,8 +135,10 @@ same scratch buffers.
     6. Give a roundabout island its own plateau.
     7. Apply the pairwise chamfer (`chamferedRoadDistance`), giving the road distance. A rim cell
        (label −1) is all road.
-    8. On the river side of the quay, lerp the road field to the quay's own field.
-    9. Dip the curb (`curbHeight` under `roadWidth`).
+    8. On the wall the road field is at least the belt's (it falls off inward at 4 per unit), then on
+       the river side of the quay, lerp the road field to the quay's own field.
+    9. Dip the curb (`curbHeight` under `roadWidth`), returned as `curbDip` too: step 4 applies a
+       shore lift under it.
     10. Compute the lane-paint distances, blanked in junction zones (`measureLanePaint`).
 
     The result is kept as `ownCityTerrain`.
@@ -136,7 +147,8 @@ same scratch buffers.
 - **Paint distances in the city.** Right after the loop, a city vertex takes `distanceToRoadCenter`,
   `distanceToFreewayCenter` and `freewayAlong` from `getCityTerrain`. A run merging into the belt
   blanks the lane paint. `riverBedDistance` is capped by the quay's straight bank edge
-  (`QUAY_BED_INSET`).
+  (`QUAY_BED_INSET` = `RIVER_BED_FULL_INSET`), never below where the bed is whole; just outside the
+  city's wall the same rule hands over to the river's own distance within 6u.
 - **Overrides:** nothing yet. This step is the terrain before water, roads and pads.
 
 ### Step 4: water
@@ -144,10 +156,17 @@ same scratch buffers.
 1. **The lake.** `lakeSurface` returns the lake level where a water zone has weight, or NaN. It also
    stores the shore state (level, distance to the nearest water wall).
 2. **The shore lift.** `shoreLift` lifts land within 160u of a water wall onto `level + SHORE_RISE`,
-   fading out over 250u. Only land lower than that is raised. In a water zone where a neighbor still
+   fading out over 250u, and with the level kernel's weight where it nears the end of its support.
+   Only land lower than that is raised. A city vertex's curb dip is applied under the lift, as the
+   belt's outer half dips under its lifted grade. In a water zone where a neighbor still
    has weight, the blend is instead held at least at the bowl's own height (`bowlFloor`), which on the
    wall is that same shore height, so the two sides meet.
-3. **The river channel** (`carveRiverChannel`), where `distanceToRiver < halfWidth + bank`. The
+3. **The bed limit** (`capRiverBed`): wherever `riverBedDistance` is inside the reach (a city's quay
+   rule reports it there past the field's own reach), past step 2's `bedLimit` it reads as out of reach,
+   fading over `RIVER_BED_CAP_FADE` inward of it, so the bed ends at its first steep bank.
+4. **The river channel** (`carveRiverChannel`), where `distanceToRiver < halfWidth + bank`. Its
+   surface is first held up to a lake's level by the weight of crisp land there
+   (`riverSurfaceBesideCrispShore`): the city draws no lake on its side of the wall. The
    channel is FORCED, not min'ed:
    - inside the half-width, a parabola from `surface − depth×√factor` up to the rim
      (`surface + SHORE_RISE`);
@@ -159,9 +178,7 @@ same scratch buffers.
      bank), the river surface comes down to the lake level, and `riverBedDistance` is pushed out of
      reach. The share ramps to 0 at the shore height (`level + SHORE_RISE`), so dry land is carved as
      before.
-   - **The bed limit** (`capRiverBed`): `riverBedDistance` past step 2's `bedLimit` reads as out of
-     reach, fading over `RIVER_BED_CAP_FADE` inward of it, so the bed ends at its first steep bank.
-4. **The channel mask.** `channel` (0 in the channel, 1 on open ground) stops the city's lane paint
+5. **The channel mask.** `channel` (0 in the channel, 1 on open ground) stops the city's lane paint
    over the riverbed.
 
 - **Overrides:** the step-3 height, both the shore lift and the river carve. The city is carved
@@ -184,7 +201,9 @@ OUTER half, and writes its results to `offCityRoad`.
 - **The grade** (within `freewayWidth + 10`): `height += (grade − curb dip − height) × mask`. The
   mask is 0 in the river channel, so the grade overrides the step-4 banks but never fills the
   channel. The grade is step 2's `roadGrade`, or `blendedTerrainAt` at the centerline when none was
-  found.
+  found. The BELT's outer half beside a river is instead what the city's inner half is at the wall:
+  the grade, dipped by the quay-aware field (`beltQuayField`, the city's rule on the wall), carved by
+  the river like city ground, blended in by the same ramp.
 - **Lane paint:** `distanceToFreewayCenter` / `freewayAlong`, except in the channel, a merge mouth,
   or on a drowned belt wall.
 - **The approach** (`approachDelta`, `VertexResult.approachHeight`): the same grade and curb with no
@@ -243,6 +262,14 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
 - **Scratch:** the flood fill writes the result buffers, so the vertex's sdf and presence are saved
   and restored around it.
 
+### Last: the riverbed's texture distances
+
+- **Code:** `riverbedSdfAt` ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)), only within the bed's reach + 30u
+  (elsewhere the ground's `biomeSdf` is copied).
+- **What:** the vertex's `biomeSdf` with the few walls narrower than `RIVER_BED_TEXTURE_HALF` (the city's)
+  re-applied at that half — a slot's value is a min or max over its walls, so this IS the pass with every
+  half floored. It runs last, from the restored `biomeSdf`, so nothing clobbers it.
+
 ### Outputs (`VertexResult`, [`types.ts`](../utils/workers/types.ts))
 
 | field | meaning |
@@ -255,6 +282,7 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
 | `riverBedDistance` | the bed paint distance, in factor-1 units |
 | `distanceToRiverCenter` | the river distance, in factor-1 units |
 | `underDeck` | the deck footprint (1 under a deck, fading beside it) |
+| `riverbedSdf` | per biome slot, the riverbed texture's distances (`riverbedSdfAt`: `biomeSdf` with every wall's half floored at `RIVER_BED_TEXTURE_HALF`); the ground's copy away from any bed |
 | `biomeId`, `regionId`, `blend`, `distanceToBiomeBoundaryCenter` | the own zone, its height weight, and its nearest wall |
 
 ## 3. What gets uploaded
@@ -264,7 +292,7 @@ The terrain worker ships per vertex:
 | array | contents |
 |---|---|
 | `heights` | the height |
-| `biomeSdf`, `biomePresence` | `count × slots`, interleaved |
+| `biomeSdf`, `biomePresence`, `riverbedSdf` | `count × slots`, interleaved |
 | `riverBed` | `riverBedDistance` |
 | `distRoad` | `distanceToRoadCenter` |
 | `distFreeway` | `distanceToFreewayCenter` |
@@ -278,7 +306,7 @@ The main thread (`TerrainRenderer.tsx`) writes these arrays into the geometry. I
 
 | attribute | from |
 |---|---|
-| `biomeSdf0`, `biomeSdf1`, `biomePresence0`, `biomePresence1` | vec4 × 2 each, up to 8 slots (`MAX_BIOME_SLOTS`) |
+| `biomeSdf0`, `biomeSdf1`, `biomePresence0`, `biomePresence1`, `riverbedSdf0`, `riverbedSdf1` | vec4 × 2 each, up to 8 slots (`MAX_BIOME_SLOTS`) |
 | `riverBedDistance` | `riverBed` |
 | `distanceToRoadCenter` | `distRoad` |
 | `distanceToFreewayCenter` | `distFreeway` |
@@ -320,15 +348,18 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
    2. A slot whose share is 0.002 or less is skipped entirely; no texture is sampled for it.
    3. Otherwise the biome's color is its REGION's `<region>_base_frag`, mixed into its own
       `<biome>_frag` by `smoothstep(0, 1, presence)`. At a biome's edge the region base shows.
-   4. The colors sum by weight, and each weight also feeds its riverbed group's weight (`bedW*`).
+   4. The colors sum by weight.
 2. **Normalize:** `blended / weightSum`.
 3. **The river bed and banks**, where `vRiverBedDistance < RIVER_BED_REACH`:
    1. Each biome's riverbed texture (its `<Material riverbed>`, else the domain's river texture) is
-      cross-faded by the SAME biome weights, so the bed changes across a biome wall with no edge.
+      cross-faded by its OWN weights (`bedW*`, from `vRiverbedSdf` in the same crispness tiers), each
+      wall's feather at least `RIVER_BED_TEXTURE_HALF` (8u) wide: by the ground's weights the bed's
+      texture snapped within 1u beside the crisp city.
    2. The bed is darkened toward the channel.
-   3. It replaces the ground out to `RIVER_BED_REACH − 3` and fades into it by `RIVER_BED_REACH − 1`,
-      except where the CITY's road field says pavement (the city's weight × the road band up to
-      `ROAD_HALF_WIDTH + 5`): a quay's asphalt, curb and sidewalk stay.
+   3. It replaces the ground out to `RIVER_BED_REACH − RIVER_BED_FULL_INSET` (10) and fades into it
+      over `RIVER_BED_BLEND_WIDTH` (9 factor-1 units) by `RIVER_BED_REACH − 1`, except where the CITY's
+      road field says pavement (the city's weight × the road band up to `ROAD_HALF_WIDTH + 5`): a quay's
+      asphalt, curb and sidewalk stay crisp.
    4. On a steep bank the bed fades out by slope (`RIVER_BED_SLOPE_START_DEG` → `_END_DEG`, 30° → 40°,
       from `vWorldNormal`), so a mountainside rising out of the water keeps its own ground. Beyond
       the first steep bank it does not come back: step 4 already capped `riverBedDistance` there.
@@ -356,7 +387,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 | 2d | wall pass | `accumulateWallFields` | indicators | sdf, presence | – |
 | 3 | zones × (region base + biome × presence), crisp tiers | `combineZoneWeights`, `zoneBiomeHeight` | ✔ | – | – |
 | 3′ | city plateaus, roads, curb dip, quay | `getCityTerrain` | ✔ | road field, lane paint, bed cap | – |
-| 4a | lake level + shore lift | `lakeSurface`, `shoreLift` | ✔ | water | step 3 |
+| 4a | lake level + shore lift (the city's curb under it) | `lakeSurface`, `shoreLift` | ✔ | water | step 3 |
 | 4b | river channel + banks, mouth, bed limit | `carveRiverChannel`, `riverMouthShare`, `capRiverBed` | ✔ | water, bed | steps 3–4a |
 | 5 | off-city freeway grade, curb dip, road field | `gradeOffCityFreeway` | ✔ | road field, lane paint | 4b (not in the channel) |
 | 6 | flatten pads | `applyFlattenPads` | ✔ | – | 3–5 |
@@ -365,7 +396,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 | 8 | road fragments | `inRoadFragment` | – | road field, lane, bed | 3′, 5, 7 |
 | GPU 1–2 | per-biome base→own by presence, crisp-tier weights | generated frag | – | ✔ | – |
 | GPU 0 | LOD cross-fade discard (fade twin only) | generated frag | – | ✔ | – |
-| GPU 3 | riverbed per biome (not on steep banks) | generated frag | – | ✔ | biome mix (not city pavement) |
+| GPU 3 | riverbed per biome, its own soft weights (not on steep banks) | generated frag | – | ✔ | biome mix (not city pavement) |
 | GPU 4 | city/freeway corridor + lane dashes | `city_frag` | – | ✔ | biome mix + bed |
 | GPU 5–8 | night dim, lamp glow, point lights, dither | generated frag | – | ✔ | everything |
 | VS | quantize, curvature | `vertex.glsl` | visual only | – | – |

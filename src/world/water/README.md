@@ -13,10 +13,14 @@ the player walks on the river or lake bed.
   `lakeLevelAt` so that two lake cells of one body share one level with no step between them. The
   lake bed is built relative to that level: `SHORE_RISE` above it at the shore, descending to
   `depth` below it inside. Land near a lake is raised to the shore height by `shoreLift`, so dry
-  ground never sits below the water beside it.
+  ground never sits below the water beside it. The lift fades out with the level kernel's weight
+  (`SHORE_LEVEL_FADE_WEIGHT`) where land within the clamp lies beyond every water site's support:
+  cut off there, the lift dropped a 33u cliff into the desert at (-523, 277).
 - **Rivers** ([`utils/workers/rivers/riverField.ts`](../../utils/workers/rivers/riverField.ts)): the surface follows
   the terrain along the river's centerline, minus `RIVER_SURFACE_BELOW`, and eases onto the lake
-  level near a mouth. See the Rivers section of the
+  level near a mouth. A vertex reads it (and the width factor) off the PLAINLY nearest piece of each
+  run of a river, never the nearest by width-normalized distance, which jumped between pieces where
+  the width varies (10.9u of water beside a pond). See the Rivers section of the
   [workers README](../../utils/workers/README.md).
 - **Mouths** (`riverMouthShare` in [`lakes.ts`](../../utils/workers/lakes.ts)): wherever the ground
   before the river lies under a lake's water, the river only deepens it. There is no bank rim, and

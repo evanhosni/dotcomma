@@ -10,6 +10,8 @@ export interface ChunkBuildResult {
   /** count × slots, interleaved per vertex (world/terrain/material.ts owns the slot → biome mapping). */
   biomeSdf: Float32Array;
   biomePresence: Float32Array;
+  /** count × slots: the riverbed texture's slot distances (VertexResult.riverbedSdf). */
+  riverbedSdf: Float32Array;
   slots: number;
   riverBed: Float32Array;
   distRoad: Float32Array;

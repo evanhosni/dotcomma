@@ -31,6 +31,13 @@ const SHORE_CLAMP_FADE = 250;
  *  around it). */
 let shoreLevel = NaN;
 let shoreDWater = Infinity;
+/** How far the level's kernel reaches the point (lakeLevelAt's weight): the lift fades out with it
+ *  (SHORE_LEVEL_FADE_WEIGHT), since past the last water site's support no level exists. */
+let shoreFade = 1;
+/** Below this kernel weight (one site 600u off) the shore lift fades out: land within the clamp of a
+ *  water wall but beyond every water site's reach lost its whole lift at once — a 33u cliff at (-523, 277). */
+const SHORE_LEVEL_FADE_WEIGHT = 0.04;
+let lastLevelWeight = 0;
 /** In a water zone where a neighbor still has weight: the bowl's own height, which the blend may
  *  not dip under. On the wall that is the shore height the land side is lifted onto, so the two
  *  sides meet: without it a lower neighbor's share (desert salt beside the ocean) left the lake
@@ -40,11 +47,41 @@ export const shoreLift = (h: number): number => {
   if (!Number.isNaN(bowlFloor)) return h < bowlFloor ? bowlFloor : h;
   if (Number.isNaN(shoreLevel)) return h;
   const shore = shoreLevel + SHORE_RISE;
-  return h < shore ? h + (shore - h) * (1 - smoothstep(SHORE_CLAMP_FULL, SHORE_CLAMP_FULL + SHORE_CLAMP_FADE, shoreDWater)) : h;
+  if (!(h < shore)) return h;
+  const lift = 1 - smoothstep(SHORE_CLAMP_FULL, SHORE_CLAMP_FULL + SHORE_CLAMP_FADE, shoreDWater);
+  return h + (shore - h) * (shoreFade === 1 ? lift : lift * shoreFade);
 };
-/** The last lakeSurface's shore inputs: the lake level and the distance to its nearest water wall
- *  (NaN / Infinity where no lake is within the clamp's reach, or the point is IN the water). */
-export const lastShore = (): { level: number; dWater: number } => ({ level: shoreLevel, dWater: shoreDWater });
+/** The last lakeSurface's shore inputs: the lake level, the distance to its nearest water wall
+ *  (NaN / Infinity where no lake is within the clamp's reach, or the point is IN the water) and how far
+ *  the level reaches it (1, fading to 0 where the level's support ends). */
+export const lastShore = (): { level: number; dWater: number; fade: number } => ({ level: shoreLevel, dWater: shoreDWater, fade: shoreFade });
+
+/** The shore state lakeSurface leaves (saveShore / restoreShore: riverNetwork's gorgeRise). */
+export const saveShore = (): number[] => [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel];
+export const restoreShore = (s: number[]): void => {
+  [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel] = s;
+};
+
+/** The last lakeSurface's level where its point is IN a water zone (NaN elsewhere). */
+let ownWaterLevel = NaN;
+/** A river's surface at the last lakeSurface's point (its wall pass still current), held up to the
+ *  lake's level by the weight of the CRISP land there (the city): its side of the wall draws no lake (its
+ *  wall pass gives the water no weight), so a surface under the level — interpolated toward a piece end
+ *  in the lake, sunk there under the lakebed — showed as river water, carved, 14u under the lake beside
+ *  it (3064, 1310). On the land side the hold fades out with the shore lift; on the lake side it is the
+ *  crisp zone's weight, 1 at the wall from both sides, so the two meet there. Elsewhere unchanged. */
+export const riverSurfaceBesideCrispShore = (surface: number): number => {
+  let crisp = 0;
+  for (let i = 0; i < zones.length; i++) if (zones[i].crisp && !zones[i].biome.water) crisp += zoneFinal[i];
+  if (!(crisp > 0)) return surface;
+  let level = ownWaterLevel;
+  let hold = crisp;
+  if (Number.isNaN(level)) {
+    level = shoreLevel;
+    hold = crisp * (1 - smoothstep(SHORE_CLAMP_FULL, SHORE_CLAMP_FULL + SHORE_CLAMP_FADE, shoreDWater)) * shoreFade;
+  }
+  return surface < level ? surface + (level - surface) * hold : surface;
+};
 
 /** How much of a river's channel rules at a point are a MOUTH's: 1 where the ground before the river
  *  (`ground`, shore lift applied) lies under the lake drawn there (`lakeLevel`, NaN when none), 0 from
@@ -82,6 +119,7 @@ export const lakeLevelAt = (warped: PointXZ, grid: VoronoiCell[]): number => {
     sum += w * lakeCellLevel(cell, zone);
     weight += w;
   }
+  lastLevelWeight = weight;
   return weight > 0 ? sum / weight : NaN;
 };
 
@@ -92,9 +130,12 @@ export const lakeLevelAt = (warped: PointXZ, grid: VoronoiCell[]): number => {
 export const lakeSurface = (warped: PointXZ, ctx: BiomeContext, own: Zone): number => {
   shoreLevel = NaN;
   shoreDWater = Infinity;
+  shoreFade = 1;
   bowlFloor = NaN;
+  ownWaterLevel = NaN;
   if (own.biome.water) {
     const level = lakeLevelAt(warped, ctx.grid);
+    ownWaterLevel = level;
     if (zoneFinal[own.index] < 1 && !Number.isNaN(level)) {
       const presence = sstep01(zoneMinDist[own.index] / own.heightPresenceWidth);
       bowlFloor = level + SHORE_RISE - (own.biome.water.depth + SHORE_RISE) * presence;
@@ -113,6 +154,7 @@ export const lakeSurface = (warped: PointXZ, ctx: BiomeContext, own: Zone): numb
   if (Number.isNaN(level)) return NaN;
   shoreLevel = level;
   shoreDWater = dWater;
+  if (lastLevelWeight < SHORE_LEVEL_FADE_WEIGHT) shoreFade = smoothstep(0, SHORE_LEVEL_FADE_WEIGHT, lastLevelWeight);
   return waterInReach ? level : NaN;
 };
 
