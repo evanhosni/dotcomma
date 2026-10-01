@@ -2,93 +2,26 @@
 
 ## How it works
 
-Every road that enters a river's footprint (the channel plus its banks) is carried on a deck from
-dry road on one bank to dry road on the other. Roads and rivers are both computed analytically, so
-decks are found geometrically: nothing probes the terrain to find them. Bridges are DRESSING: they
-have no per-bridge component and are built per 256u chunk.
+Every road that enters a river's footprint (channel plus banks) is carried on a deck from dry road to dry road. Roads and rivers are analytic, so decks are found geometrically, never by probing terrain. Bridges are dressing: built per chunk, no per-bridge component.
 
-**Placement** ([`utils/workers/bridges/`](../../../utils/workers/bridges), entry
-[`freewayBridges.ts`](../../../utils/workers/bridges/freewayBridges.ts) `getFreewayBridges`, served by
-the `bridges` entry of [`../enumerators.ts`](../enumerators.ts)), one module per step:
-1. **Road paths** (`roadPaths.ts`). Every road near a river is sampled on a fixed lattice, so every
-   chunk samples it the same way. That covers the inter-city runs, each city's belt and the city
-   arterials.
-2. **Wet items** (`wetItems.ts`). Each stretch of a path inside a river footprint becomes a candidate deck,
-   extended onto the dry road on both sides (*landed* ends). Where the road itself ends in the
-   water, the end is *open*.
-3. **Joins** (`wetItems.ts`). Open ends that meet end-to-end become one chain if the join is nearly straight. An
-   open end beside another deck's middle becomes a T onto it. An open end with nothing there
-   drops its chain.
-4. **Rules** (`rules.ts`, applied in `deckBuilder.ts`). A deck must cross a river centerline at no less than `BRIDGE_MIN_CROSSING` (40°),
-   must not follow the shore for longer than `BRIDGE_MAX_ALONG_SHORE`, and must not turn more than
-   `BRIDGE_MAX_TURN`. A T must meet its host at no less than `BRIDGE_MIN_T_ANGLE`. A road that
-   fails the rules gets no deck; in a city it ends at the quay.
-5. **Crossings of their own** (`crossings.ts`, `mouths.ts`): city rivers also get street-width
-   decks at least every `FILL_STEP` (350u), and every freeway mouth that reaches a river gets a deck.
-6. Decks are built lazily (`deckBuilder.ts`, finished in `finishDeck.ts`): only the chains whose
-   midpoint is in the queried chunk. That chunk owns the deck. The search window grows through
-   `BRIDGE_WINDOWS` only when a chain touches the window's edge.
+**Placement** ([../../../utils/workers/bridges/](../../../utils/workers/bridges), entry `getFreewayBridges` in `freewayBridges.ts`, served by the `bridges` enumerator):
+1. `roadPaths.ts` — samples every nearby road (inter-city runs, city belts, arterials) on a fixed lattice.
+2. `wetItems.ts` — each wet stretch of a path becomes a candidate deck, extended onto dry road (landed ends) or left open where the road ends in water; open ends join end-to-end or tee onto another deck, and unresolved ones drop their chain.
+3. `rules.ts` / `deckBuilder.ts` — `BRIDGE_MIN_CROSSING`, `BRIDGE_MAX_ALONG_SHORE`, `BRIDGE_MAX_TURN`, `BRIDGE_MIN_T_ANGLE`; a road that fails gets no deck.
+4. `crossings.ts` / `mouths.ts` — extra street decks across city rivers (every `FILL_STEP`) and at freeway mouths.
+5. `deckBuilder.ts` / `finishDeck.ts` — only chains whose midpoint is in the queried chunk are built (that chunk owns them); the window widens through `BRIDGE_WINDOWS` when needed. `finishDeck.ts` and `wallJoins.ts` open and join parapets where decks merge.
 
-The deck's shape every consumer lofts (ramps, arch, stations, cross-sections, crotch fillets) is
-`deckGeometry.ts`; where a world point lies against the drawn slab is `drawnSlab.ts`; shared
-dimensions and rule thresholds are `constants.ts`, the types `types.ts`. `severed.ts` is the
-census tests and probes use: every freeway stretch a river severs.
+Shared deck shape is `deckGeometry.ts`, slab tests `drawnSlab.ts`, constants `constants.ts`, the result type `FreewayBridge` in `types.ts`.
 
-A `FreewayBridge` carries its midpoint, end heights, world `path`, `width`, `camber` (arch),
-`piers`, parapet `gaps` and lane `paint`. The gaps (`finishDeck.ts`) keep every wall on the OUTER edge
-of merged decks: a wall opens over pavement, wherever it lies inside another merged deck's drawn slab
-(fillets included), and where only a stub under 4u would be left. Where two merged decks' walls then end
-at one corner, one runs on to the other (`wallJoins.ts`, `wallJoins` on the deck, owned decks only): along
-its own slab's edge while that is the merged outer edge, else straight along its own line to the other's
-inner face (a butt joint with a small overlap, not a miter), never over pavement and never off the slabs.
-A run-on is drawn and collided over the slab, so the slab, its stations and the ground cut stay as they
-are; a wall that overshoots into the other deck's roadway (a T end's tip) is left as it is. The lane paint
-continues each landed end's road at that road's dash rate (`bridgeLaneAlong`).
+**Terrain**: `deckGround.ts` (via `getFreewayBridgesNear`) cuts the ground under each deck, sets `underDeck` (keeps grass and actors out) and lays each landed end's flat approach (`approachHeight`, `bridgeApproachAt`; ramp `bridgeRampAt`).
 
-**Terrain interplay.** `computeVertexData` step 7 (`utils/workers/bridges/deckGround.ts`) asks
-`getFreewayBridgesNear` for every deck reaching its cell and cuts the ground under exactly those
-decks, just below the deck top. `VertexResult.underDeck` keeps grass and actors out from under
-them. A landed end's APPROACH is its road flat across at its own grade (`VertexResult.approachHeight`,
-laid by `bridgeApproachAt`): the river's bank gives way to the road there, not the road to the bank, so
-the end sits on a planar road wherever the river meets it (`deckApproach.test.ts`). A landed end ramps into the road (`bridgeRampAt`); a landed CUT end meets it flush, and between the
-cut and the road's asphalt the ground paints as asphalt, across the deck's width only where that road
-lies ahead (`bridgeMouthFieldAt` in `drawnSlab.ts`), so no curb, sidewalk or sand shows at the seam and
-the road's curb beside the deck stays where it was. Just inward of a cut the ground is filled up to the
-slab, and under the slab the mouth's asphalt reaches in, but both keep off the slab's real side edges
-(`bridgeSideIn`), where a terrain triangle reaches the ground beside the deck: at an oblique cut's acute
-corner on a curving deck they stood beside it as a stepped wall of ground painted as pavement.
+**This folder**:
+- [bridgeSpec.ts](bridgeSpec.ts) — Three-free dimensions and builders: `bridgeRibbon` (slab + parapets as one lofted ribbon), `bridgePierColumns`, `bridgeColliderPoints`; `BRIDGES_SPEC` feeds client and server colliders.
+- [Bridges.tsx](Bridges.tsx) — `useSolidDressing`; per chunk one ribbon mesh (`buildDeckRibbonMesh`), one pier mesh (`buildPierMesh`), colliders within `BRIDGE_COLLIDER_DISTANCE`. Mounted once in the city biome; covers bridges everywhere.
+- [deckMaterial.ts](deckMaterial.ts) — the deck looks like the city road it carries.
 
-**Rendering and colliders** (this folder):
-- [`bridgeSpec.ts`](bridgeSpec.ts): Three-free. Deck thickness, parapet height and pier size,
-  `BRIDGE_PLACEMENT`, and the geometry builders: `bridgeRibbon` (the slab and two parapets lofted
-  along the path as one ribbon), `bridgePierColumns` (up to the drawn slab's underside), and
-  `bridgeColliderPoints` (one body per chord with a triangle mesh of exactly what the ribbon draws
-  there: the slab and each standing wall; then one closed prism body per wall join). `BRIDGES_SPEC` (listed in [`../catalog.ts`](../catalog.ts)) is what the
-  client and the server (`server/src/game/physics/obstacles.ts`) both build colliders from.
-- [`Bridges.tsx`](Bridges.tsx): the dressing component, on the base's `useSolidDressing`. Per chunk it
-  builds ONE merged ribbon mesh (`buildDeckRibbonMesh`, relative to the chunk center for float
-  precision), one instanced mesh of piers (`buildPierMesh`), and colliders within
-  `BRIDGE_COLLIDER_DISTANCE` (140u). It is mounted once, in the city biome
-  (`world/domains/overworld/regions/city/biomes/city/biome.tsx`), and covers bridges outside the
-  city too.
-- [`deckMaterial.ts`](deckMaterial.ts): the deck looks like the terrain's city road (same texture
-  tiling, gutters, dashed lanes, fake shading, night dim, lamp glow), so it reads as the road
-  carried over the river. It is drawn a few depth steps toward the camera (`polygonOffset`): the ground
-  under a deck's ends lies only 0.08u below its top, and far away the depth buffer let it win.
+## How to add another
 
-## How to use/add
+N/A — every road/river crossing gets a deck automatically.
 
-N/A. Every road/river crossing gets a deck automatically, and new roads and rivers are picked up
-without changes. Knobs:
-- Deck look: `BRIDGE_DECK_THICKNESS`, `BRIDGE_PARAPET_HEIGHT`, `BRIDGE_PIER_SIZE` in
-  [`bridgeSpec.ts`](bridgeSpec.ts). Colors are in [`deckMaterial.ts`](deckMaterial.ts).
-- Placement: `DEFAULT_BRIDGE_PLACEMENT` in `utils/workers/bridges/constants.ts` (`abutment`,
-  `archChance`, `maxCamber`, `pierSpacing`, `pierLateral`), the only placement there is: the terrain
-  cut and the server read it, so `<Bridges/>` takes no placement props.
-- Which crossings get decks: the `BRIDGE_*` rule constants in `utils/workers/bridges/constants.ts`
-  (and each step module's own), and the matching `RIVER_ROAD_*` constants in
-  `utils/workers/rivers/riverRoadLayer.ts`, which decide where a river yields to a road instead.
-- Distances: `BRIDGE_RENDER_DISTANCE` / `BRIDGE_COLLIDER_DISTANCE` in [`Bridges.tsx`](Bridges.tsx), or
-  `renderDistance` / `colliderDistance` on the `<Dressing>` group.
-- Tests: [`bridgeSpec.test.ts`](bridgeSpec.test.ts), `utils/workers/bridges/bridgeRules.test.ts`,
-  `bridges/deckGround.test.ts`, `bridges/deckApproach.test.ts`, `bridges/deckMouth.test.ts`, `bridges/wallJoins.test.ts`, `bridges/severedFreeways.test.ts`, `roads/cityFeatures.test.ts`.
+Tune: `BRIDGE_DECK_THICKNESS`, `BRIDGE_PARAPET_HEIGHT`, `BRIDGE_PIER_SIZE` ([bridgeSpec.ts](bridgeSpec.ts)); `DEFAULT_BRIDGE_PLACEMENT` and the `BRIDGE_*` rules (`utils/workers/bridges/constants.ts`); `BRIDGE_RENDER_DISTANCE` / `BRIDGE_COLLIDER_DISTANCE` ([Bridges.tsx](Bridges.tsx)).

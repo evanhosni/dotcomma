@@ -20,8 +20,8 @@ variants per vertex:
 | variant | used by | what it skips |
 |---|---|---|
 | `computeVertexData` | LOD1–2 (they have colliders), the spawn, foliage and dressing workers, the main thread's padded lookups ([`terrain/vertexData.ts`](terrain/vertexData.ts) `getVertexData`, the dressing worker's `getVertexSample`), the server's heightfields and bodies ([`server/src/game/physics/terrain.ts`](../../server/src/game/physics/terrain.ts), `groundBody.ts`, `freeBody.ts`) | nothing |
-| `computeVertexDataFar(x, z, rivers)` | visual-only LODs (`!hasCollider`: LOD3–5) | flatten pads, bridge decks, road fragments, the inter-city freeway RUNS (the belt stays); with `rivers = false` (`carvesRivers: false`, LOD4–5) also the river field: no channel, river water, bed paint or quay |
-| `computeVertexDataRaw` ([`flattenPads.ts`](../utils/workers/flattenPads.ts)) | pad candidates, the road-fragment flood fill, sparse scans, the main thread's `getVertexDataRaw` pre-filter | flatten pads, bridge decks, road fragments |
+| `computeVertexDataFar(x, z, rivers)` | visual-only LODs (`!hasCollider`: LOD3–5) | flatten pads, bridge decks, road fragments, block islands, the inter-city freeway RUNS (the belt stays); with `rivers = false` (`carvesRivers: false`, LOD4–5) also the river field: no channel, river water, bed paint or quay |
+| `computeVertexDataRaw` ([`flattenPads.ts`](../utils/workers/flattenPads.ts)) | pad candidates, the road-fragment and block-island flood fills, sparse scans, the main thread's `getVertexDataRaw` pre-filter | flatten pads, bridge decks, road fragments, block islands |
 
 `computeVertexDataFar` is `computeVertexDataRaw` with two flags set (`farVisual`, `farDry`), so
 every "raw" skip below applies to it too. Before the loop the worker calls
@@ -124,7 +124,9 @@ same scratch buffers.
     after `riverQuayAt` fills the straight river field. The city branch runs in this order (the
     order is part of the output: city cells are cached by first query):
     1. Pick the district and rotate into its local frame.
-    2. Look up the block-grid cell and its 3×3 labels (`readNeighborLabels`).
+    2. Look up the block-grid cell and its 3×3 labels (`readNeighborLabels`). A cell's label comes from
+       its survey (`cellSurvey`, cached per cell): a REMNANT, one the edge roads (belt, arterials, quays)
+       leave too little of, takes a full neighbor's label, so its land joins that block.
     3. Collect the road constraints: merged cell-boundary segments (`addBoundaryStreets`, not inside
        a roundabout's ring); the shape feature (`addShapeFeature`: a triangle super-cell's diagonal, a
        roundabout ring); the arterial field (`addArterialConstraint`: district boundaries, recovering
@@ -133,8 +135,7 @@ same scratch buffers.
     4. Interpolate the plateau heights bilinearly (`plateauElevation`).
     5. Ramp toward the mid-plateau freeway grade near arterials and the belt.
     6. Give a roundabout island its own plateau.
-    7. Apply the pairwise chamfer (`chamferedRoadDistance`), giving the road distance. A rim cell
-       (label −1) is all road.
+    7. Apply the pairwise chamfer (`chamferedRoadDistance`), giving the road distance.
     8. On the wall the road field is at least the belt's (it falls off inward at 4 per unit), then on
        the river side of the quay, lerp the road field to the quay's own field.
     9. Dip the curb (`curbHeight` under `roadWidth`), returned as `curbDip` too: step 4 applies a
@@ -161,9 +162,10 @@ same scratch buffers.
    belt's outer half dips under its lifted grade. In a water zone where a neighbor still
    has weight, the blend is instead held at least at the bowl's own height (`bowlFloor`), which on the
    wall is that same shore height, so the two sides meet.
-3. **The bed limit** (`capRiverBed`): wherever `riverBedDistance` is inside the reach (a city's quay
-   rule reports it there past the field's own reach), past step 2's `bedLimit` it reads as out of reach,
-   fading over `RIVER_BED_CAP_FADE` inward of it, so the bed ends at its first steep bank.
+3. **The bed limit** (`capRiverBed`): off the city, wherever `riverBedDistance` is inside the reach,
+   past step 2's `bedLimit` it reads as out of reach, fading over `RIVER_BED_CAP_FADE` inward of it,
+   so the bed ends at its first steep bank. Not in a city: its ground past the edge roads is the bank,
+   and its pavement keeps the bed off through the shader's pavement mask.
 4. **The river channel** (`carveRiverChannel`), where `distanceToRiver < halfWidth + bank`. Its
    surface is first held up to a lake's level by the weight of crisp land there
    (`riverSurfaceBesideCrispShore`): the city draws no lake on its side of the wall. The
@@ -261,6 +263,21 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
   removed, and `riverBedDistance` is forced into the bed. The HEIGHT is untouched.
 - **Scratch:** the flood fill writes the result buffers, so the vertex's sdf and presence are saved
   and restored around it.
+
+### Step 8b: block islands
+
+- **Code:** `blockIslandAt` ([`roads/roadFragments.ts`](../utils/workers/roads/roadFragments.ts)).
+  It applies on the padded path to city vertices whose 3×3 cells an edge road reaches (`nearEdge`).
+- **What it finds:** block land (curb, sidewalk, plaza, and the road's curb dip ramp around it) with no
+  point in a building's band, in a piece of at most about 2250u², by a flood fill on a 6u lattice of
+  raw evaluations (step 8's fragments count as bank there). A vertex goes with the removed piece its
+  land reaches in a straight line, unless it also reaches one that stays.
+- **Overrides:** where the piece's rim is mostly road, the road field becomes `10 − field` (plain
+  asphalt, continuous at the ramp's foot) and the HEIGHT the road's own around it (raw road heights 8
+  ways, inverse fourth-power weighted); where it is more than twice as much riverbed as road, the road
+  field is raised to 13 and `riverBedDistance` forced into the bed, like step 8. A piece between the
+  two stays.
+- **Scratch:** saved and restored around the flood fill, as in step 8.
 
 ### Last: the riverbed's texture distances
 
@@ -394,6 +411,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 | 7 | deck mouth / cut / fill / paint-off / mouth paint | `cutGroundUnderDecks` | ✔ | road, lane, water | 3–6 |
 | 7b | lane paint ends before undecked rivers | step 7b | – | lane paint | 3′, 5 |
 | 8 | road fragments | `inRoadFragment` | – | road field, lane, bed | 3′, 5, 7 |
+| 8b | block islands | `blockIslandAt` | road's height | road field, bed | 3′, 8 |
 | GPU 1–2 | per-biome base→own by presence, crisp-tier weights | generated frag | – | ✔ | – |
 | GPU 0 | LOD cross-fade discard (fade twin only) | generated frag | – | ✔ | – |
 | GPU 3 | riverbed per biome, its own soft weights (not on steep banks) | generated frag | – | ✔ | biome mix (not city pavement) |

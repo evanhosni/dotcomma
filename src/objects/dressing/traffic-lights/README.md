@@ -2,17 +2,13 @@
 
 ## How it works
 
-Signals at some city street intersections. Each one has a pole on a sidewalk corner, a mast arm, and a 3-lamp head facing the intersection.
+Signals at some city street intersections: a pole on a sidewalk corner, a mast arm, and a lamp head facing the intersection.
 
-- **Placement:** the `trafficLights` enumerator → `getCityTrafficLightPoints` in [../../../utils/workers/roads/cityFeatures.ts](../../../utils/workers/roads/cityFeatures.ts). It takes district grid corners where three or more differently-labelled blocks meet, skipping rim, roundabout and arterial corners, and keeps a seeded `chance` fraction of them. The pole walks diagonally out from the corner until the road field says sidewalk. A point is owned by its corner's world position, so chunks never duplicate one.
-- **Art:** two InstancedMeshes per chunk: the body (base, pole, arm, head) and the lamps (3 per signal).
-- **Animation:** lamps switch **chaotically**, not in a green → yellow → red cycle. Each hold is a random 0.2–1.5s, then the lamp jumps to either other state. Lamp colors are per-instance color writes. Each signal also registers a lamp-glow source whose color follows its state, so the pavement washes red/yellow/green at night ([../../../lighting/lampGlow.ts](../../../lighting/lampGlow.ts)).
-- **Colliders:** `TRAFFIC_LIGHTS_SPEC` in [signalSpec.ts](signalSpec.ts) (listed in [../catalog.ts](../catalog.ts)): `SIGNAL_COLLIDER_PARTS` within the dressing collider distance (90u). The server builds the same ones from that spec.
+- **Placement**: the `trafficLights` enumerator → `getCityTrafficLightPoints` ([../../../utils/workers/roads/cityFeatures.ts](../../../utils/workers/roads/cityFeatures.ts)): district grid corners where several differently-labelled blocks meet (not roundabout or arterial corners), kept by a seeded `chance` from `SIGNAL_PLACEMENT`; the pole walks out from the corner to the sidewalk. Owned by the corner's position.
+- **Art** ([TrafficLights.tsx](TrafficLights.tsx)): two InstancedMeshes per chunk (body, lamps).
+- **Animation**: lamps switch chaotically on random holds via per-instance colors, driven through `registry.forEachAlive`; each signal is a lamp-glow source whose color follows its state.
+- **Colliders**: `TRAFFIC_LIGHTS_SPEC` ([signalSpec.ts](signalSpec.ts), `SIGNAL_COLLIDER_PARTS`); the server builds the same.
 
-Files: [TrafficLights.tsx](TrafficLights.tsx), [signalSpec.ts](signalSpec.ts) (Three-free sizes, colliders, `SIGNAL_PLACEMENT` and the collider spec).
+## How to add another
 
-## How to use/add
-
-Mount `<TrafficLights />` in the city biome's `<Dressing>`. Props: `renderDistance` (default 340), `colliderDistance`.
-
-The signal `chance` (0.45) lives in `SIGNAL_PLACEMENT` ([signalSpec.ts](signalSpec.ts)) only: the server places its colliders from the spec, so the component takes no placement props.
+N/A — one instance covers every intersection. Mount `<TrafficLights />` once in the city biome's `<Dressing>` (props: `renderDistance`, `colliderDistance`); tune `chance` in `SIGNAL_PLACEMENT`.

@@ -679,10 +679,22 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
       if (keep <= 0) return f;
       return f + (Math.max(f, edgeField(keep)) - f) * smoothstep(0, 1, -depth);
     };
+    // Where the asphalt in front of the cut ends at a lateral offset: between two columns that reach the
+    // road's asphalt, interpolated between their centers — per column it stepped 1u sideways at every
+    // column, and an oblique road edge in front of the deck came out sawtoothed. A column with none keeps
+    // its −1 (beside the road, its curb stays).
+    const topAt = (lat: number): number => {
+      const own = m.reach[Math.max(0, Math.min(n - 1, Math.floor((lat + half) / col)))];
+      const fi = (lat + half) / col - 0.5;
+      const i0 = Math.max(0, Math.min(n - 1, Math.floor(fi)));
+      const i1 = Math.min(n - 1, i0 + 1);
+      if (own < 0 || m.reach[i0] < 0 || m.reach[i1] < 0) return own;
+      return m.reach[i0] + (m.reach[i1] - m.reach[i0]) * Math.max(0, Math.min(1, fi - i0));
+    };
     // How far column i's asphalt lies from the point along the deck (0: the point is in it; Infinity: none).
     const off = (i: number): number => {
-      const top = m.reach[i];
-      if (top < 0) return Infinity;
+      if (m.reach[i] < 0) return Infinity;
+      const top = topAt(Math.max(-half + i * col, Math.min(-half + (i + 1) * col, l)));
       const lo = lowOf(i);
       return depth < lo ? lo - depth : depth > top ? depth - top : 0;
     };
@@ -691,7 +703,7 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
     if (gap(c) === 0 && off(c) === 0) {
       // In the mouth: how deep, to its nearest edge (the deck's side, the column's ends, a column beside
       // it whose asphalt does not reach this depth).
-      let inside = Math.min(half + MOUTH_SIDE_OUT - Math.abs(l), depth - lowOf(c), m.reach[c] - depth);
+      let inside = Math.min(half + MOUTH_SIDE_OUT - Math.abs(l), depth - lowOf(c), topAt(Math.max(-half, Math.min(half, l))) - depth);
       for (let j = Math.max(0, c - span); j <= Math.min(n - 1, c + span); j++) {
         if (off(j) !== 0) inside = Math.min(inside, Math.max(0, Math.abs(l - (-half + (j + 0.5) * col)) - col / 2));
       }

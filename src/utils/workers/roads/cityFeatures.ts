@@ -428,8 +428,7 @@ export function getCityTrafficLightPoints(
           const B = cityCellAtLocal(ix, iz - 1, d);
           const C = cityCellAtLocal(ix - 1, iz, d);
           const D = cityCellAtLocal(ix, iz, d);
-          // Rim cells and roundabout territory never get signals.
-          if (A.label < 0 || B.label < 0 || C.label < 0 || D.label < 0) continue;
+          // Roundabout territory never gets signals.
           if (
             A.shape === CITY_SHAPE_CIRCLE ||
             B.shape === CITY_SHAPE_CIRCLE ||
@@ -511,6 +510,9 @@ export interface CityFreewaySidePoint {
  *  near a crossing freeway (junctionClear) or melted into road drop out. With
  *  `withNext` each point carries its successor so wires span chunk borders.
  *  Belt candidates depend on the query center's wall set — keep chunk size consistent. */
+/** The plaza band's start (the city shader's sidewalk ends at ROAD_HALF_WIDTH + 5). */
+const SIDE_POINT_MAX_FIELD = 12;
+
 export function getCityFreewaySidePoints(
   minX: number,
   minZ: number,
@@ -525,6 +527,9 @@ export function getCityFreewaySidePoints(
   const city = domainConfig.cityConfig;
   const freewayToStreetScale = city.roadWidth / city.freewayWidth;
   const minField = lateral * freewayToStreetScale - 1.5; // reject points melted into road
+  // …and points past the sidewalk band: where the belt runs off its wall onto the waterfront, a point
+  // offset from the wall stood in a block's plaza.
+  const maxField = SIDE_POINT_MAX_FIELD;
   const out: CityFreewaySidePoint[] = [];
 
   type Candidate = { x: number; y: number; z: number; dirX: number; dirZ: number } | null;
@@ -551,7 +556,7 @@ export function getCityFreewaySidePoints(
     // Stay clear of the belt corridor (arterials empty into it).
     if (vd.distanceToBiomeBoundaryCenter < city.freewayWidth + junctionClear)
       return null;
-    if (vd.distanceToRoadCenter < minField) return null;
+    if (vd.distanceToRoadCenter < minField || vd.distanceToRoadCenter >= maxField) return null;
     return { x: px, y: vd.height, z: pz, dirX: ux, dirZ: uz };
   };
 
@@ -635,7 +640,7 @@ export function getCityFreewaySidePoints(
     const vd = computeVertexData(mx, mz);
     if (vd.biomeId !== CITY_BIOME_ID || vd.distanceToRiverCenter < riverKeepOff() || vd.underDeck > 0) return null;
     if (Math.abs(vd.distanceToBiomeBoundaryCenter - o) > 2.5) return null; // drift / wrong side
-    if (vd.distanceToRoadCenter < minField) return null;
+    if (vd.distanceToRoadCenter < minField || vd.distanceToRoadCenter >= maxField) return null;
     // Yield to the arterials teeing into the belt.
     if (cityArterialDist(mx, mz, getCityDistrict(mx, mz)) < city.freewayWidth + junctionClear)
       return null;

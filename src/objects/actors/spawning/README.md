@@ -2,41 +2,15 @@
 
 ## How it works
 
-This is how actors get placed and mounted. It covers actors only: dressing and foliage stream whole chunks instead.
+Places and mounts actors (dressing and foliage stream whole chunks instead).
 
-**Registration.** Each entry of a biome spec's `actors` is registered by `<Biome>` as a descriptor (`describeActor(spec)` + the mount's overrides) with the domain store. [collectDescriptors.ts](collectDescriptors.ts) gathers them from the committed regions and **dedupes them by `id`** (the last one wins). That is why a second placement of the same kind with different settings is its own spec with its own id (e.g. `GRASS_BUILDING_SPEC`).
+- **Registration**: `<Biome>` registers each `actors` entry as a descriptor; [collectDescriptors.ts](collectDescriptors.ts) gathers them and dedupes by `id`.
+- **Placement** ([../../../utils/workers/spawn.worker.ts](../../../utils/workers/spawn.worker.ts), client [spawnWorker.ts](spawnWorker.ts)): per `SPAWN_CHUNK_SIZE` chunk and descriptor, a seeded density grid roll (`rollDensityCell`, [../../../utils/workers/densityGrid.ts](../../../utils/workers/densityGrid.ts), shared with flatten pads and dressing), then the filters (`biomeIds`, `heightRange`, `slopeRange`, `roadDistanceRange`, never in a river), then `footprint` spacing against every accepted point in `priority` order (`spacingOverrides` per id). `flattenGround` actors take their points from the flatten-pad engine so each stands on its pad.
+- Results are cached in the worker and on the client; requests are time-budgeted (`SPAWN_BUDGET_MS`) and nearest-first, and the pool never waits on them.
+- **Mounting** ([ActorPool.tsx](ActorPool.tsx)): per descriptor, points inside the spawn radius (`renderDistance` + half `footprint`) mount, actors past the despawn radius (or `despawnDistance`) unmount, and a self-destroyed actor cannot respawn inside the immediate radius (or `immediateRadius`). Ids are position-based, so nothing duplicates. The pool also drives `driveActorFrames`.
 
-**Placement** ([../../../utils/workers/spawn.worker.ts](../../../utils/workers/spawn.worker.ts), client [spawnWorker.ts](spawnWorker.ts)). The world is split into 250u chunks (`SPAWN_CHUNK_SIZE`, [utils/workers/constants.ts](../../../utils/workers/constants.ts), shared by the worker and this client). For each chunk, each descriptor:
-1. Lays a density grid over the chunk and rolls every cell with a seed built from the descriptor `id` and the cell. `density` sets the odds and `clustering` drops cells in clumps. This roll lives in [../../../utils/workers/densityGrid.ts](../../../utils/workers/densityGrid.ts), shared with the flatten pads and dressing.
-2. Samples the terrain at the candidate and applies the filters: `biomeIds`, `heightRange`, `slopeRange`, `roadDistanceRange`. Rivers (channel and banks) are always excluded.
-3. Rejects the candidate if it falls within `footprint` of an already accepted point of any descriptor (a shared spatial hash). `spacingOverrides` sets the distance to specific other ids. Descriptors are placed in `priority` order: a low number is placed first and wins space.
+## How to add another
 
-`flattenGround: true` actors (buildings) take their points from the flatten-pad engine in `vertexCompute.ts` instead, so each one stands exactly on a pad the terrain flattened for it.
+N/A — nothing to add; set the knobs above on an actor's spec ([../README.md](../README.md)). Changing an `id` or a placement knob moves every instance.
 
-Results are cached per chunk in the worker and again on the client, so steady-state batches do not round-trip. Each worker request is time-budgeted (`SPAWN_BUDGET_MS`) and sorted nearest-first. The pool never waits for it: every batch mounts from what is already cached while at most one request fills in the rest. (Awaiting it would hold every mount behind up to 100ms of new chunks; the shared TaskQueue's priorities keep the main thread in order instead.)
-
-**Mounting** ([ActorPool.tsx](ActorPool.tsx)). Every few frames the pool compares cached points against the camera, per descriptor:
-- **spawn radius** = `renderDistance + footprint / 2`. Points inside it mount.
-- **despawn radius** = spawn radius × 1.2 (or `despawnDistance`). Mounted actors beyond it unmount.
-- **immediate radius** = spawn radius × 0.5 (or `immediateRadius`). An actor that removed itself (walked off, faded out) cannot **re**spawn inside this radius. A first spawn is allowed at any distance.
-
-Ids are position-based (`x_z_descriptorId`), so an actor can never be duplicated. Nothing is permanently despawned. The pool also subscribes the one shared actor frame driver (`driveActorFrames`).
-
-Placement is a pure function of the seed, the descriptor and the terrain, so every client sees the same actors in the same places.
-
-## How to use/add
-
-N/A. You don't add to this system. You set knobs on a descriptor ([../README.md](../README.md)):
-
-| knob | effect |
-|---|---|
-| `density` | expected instances per 1,000,000 sq units, before filters and spacing |
-| `footprint` | spacing radius. Often the real limiter when density is high. |
-| `clustering` | 0 = uniform, 1 = heavily clumped |
-| `priority` | 0–100, low placed first (default 50) |
-| `biomeIds`, `heightRange`, `slopeRange`, `roadDistanceRange` | placement filters. An actor's `biomeIds` are the biomes whose spec lists it (never set by hand); dressing/foliage: unset = every biome. |
-| `renderDistance`, `despawnDistance`, `immediateRadius` | the radii above |
-
-Changing an actor's `id`, or any of these knobs, moves every instance of it.
-
-System-wide tuning: `MIN_FRAMES_BETWEEN_BATCHES` and `MAX_MOUNTS_PER_BATCH` in [ActorPool.tsx](ActorPool.tsx), and `SPAWN_BUDGET_MS` in [spawnWorker.ts](spawnWorker.ts).
+System tuning: `MIN_FRAMES_BETWEEN_BATCHES`, `MAX_MOUNTS_PER_BATCH` ([ActorPool.tsx](ActorPool.tsx)), `SPAWN_BUDGET_MS`.

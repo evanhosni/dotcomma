@@ -409,7 +409,9 @@ describe("rivers through the city", () => {
         // Between the channel and the quay's inner curb nothing can be placed: every placement
         // filter rejects the river's footprint (the field itself is uncapped there, see CITY_QUAY_INNER_CAP).
         if (riverReal < quay - CITY.roadWidth) expect(vd.distanceToRiverCenter).toBeLessThan(river.halfWidth + river.bank);
-        if (Math.abs(riverReal - quay) < 6) minAtQuay = Math.min(minAtQuay, vd.distanceToRoadCenter);
+        // Within 10u: the quay is offset by riverQuayAt's smoothed width factor, not the segment's (7.9u
+        // past it here, where only the old all-road rim cells used to put a road at the segment's offset).
+        if (Math.abs(riverReal - quay) < 10) minAtQuay = Math.min(minAtQuay, vd.distanceToRoadCenter);
         if (!Number.isNaN(vd.waterHeight) && vd.height < vd.waterHeight) underwater++;
         // The quay road and everything behind it stand above the river's surface.
         if (riverReal >= quay - CITY.roadWidth) expect(vd.height).toBeGreaterThan(surface);

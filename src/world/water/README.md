@@ -2,65 +2,16 @@
 
 ## How it works
 
-Water is a flat surface that the CPU places at a known height. Waves, glints and the shoreline
-fade are all done in the shader. There is no simulation, and physics does not know water exists:
-the player walks on the river or lake bed.
+Water is a flat surface placed by the CPU; waves and shore fade are shader-only. Physics ignores it.
 
-**Where the water height comes from** (the height pipeline, `utils/workers/`):
-- **Lakes** ([`utils/workers/lakes.ts`](../../utils/workers/lakes.ts)): a biome whose spec has
-  `water: { depth }` is a lake. The ocean region's `lake` biome is the only one today. Its water
-  LEVEL is the region base at the cell's site minus 1.5, blended across neighboring water cells by
-  `lakeLevelAt` so that two lake cells of one body share one level with no step between them. The
-  lake bed is built relative to that level: `SHORE_RISE` above it at the shore, descending to
-  `depth` below it inside. Land near a lake is raised to the shore height by `shoreLift`, so dry
-  ground never sits below the water beside it. The lift fades out with the level kernel's weight
-  (`SHORE_LEVEL_FADE_WEIGHT`) where land within the clamp lies beyond every water site's support:
-  cut off there, the lift dropped a 33u cliff into the desert at (-523, 277).
-- **Rivers** ([`utils/workers/rivers/riverField.ts`](../../utils/workers/rivers/riverField.ts)): the surface follows
-  the terrain along the river's centerline, minus `RIVER_SURFACE_BELOW`, and eases onto the lake
-  level near a mouth. A vertex reads it (and the width factor) off the PLAINLY nearest piece of each
-  run of a river, never the nearest by width-normalized distance, which jumped between pieces where
-  the width varies (10.9u of water beside a pond). See the Rivers section of the
-  [workers README](../../utils/workers/README.md).
-- **Mouths** (`riverMouthShare` in [`lakes.ts`](../../utils/workers/lakes.ts)): wherever the ground
-  before the river lies under a lake's water, the river only deepens it. There is no bank rim, and
-  the water is the lake's level. The share ramps from 1 at the level to 0 at the shore height, so
-  ground under the water stays under it and the river's water never stands on the dry beach. This
-  is what opens a mouth into the sea: before it, the rim (`surface + SHORE_RISE`) stood a dry levee
-  in the water around the mouth's pond.
-- Both end up in `VertexResult.waterHeight`, which is `NaN` where no water is in reach.
+- **Lakes** ([../../utils/workers/lakes.ts](../../utils/workers/lakes.ts)): a biome with `water: { depth }`. Its level is the region base at the cell site minus `LAKE_SURFACE_BELOW_BASE`, blended across neighboring water cells (`lakeLevelAt`). The bed is built relative to that level (`SHORE_RISE` at the shore); `shoreLift` raises nearby land so it never sits below the water.
+- **Rivers** ([../../utils/workers/rivers/riverField.ts](../../utils/workers/rivers/riverField.ts)): the surface follows the terrain along the centerline minus `RIVER_SURFACE_BELOW`; `riverMouthShare` merges a river into lake water at its mouth.
+- Both produce `VertexResult.waterHeight` (`NaN` when no water is near).
+- **Mesh:** a chunk with water gets a child mesh on the same pooled grid (`ensureWaterMesh` in [../terrain/TerrainRenderer.tsx](../terrain/TerrainRenderer.tsx), filled by `writeWaterBuffers`), sharing the chunk's LOD fades and disposal (`releaseWater`). Dry vertices are pushed below the ground; wet ones carry `waterDepth`.
+- **Material** ([waterMaterial.ts](waterMaterial.ts)): one shared `getWaterMaterial()`, clock advanced by `tickWater()`. Vertex swell + curvature; fragment `worldFbm` normals, fresnel, glint, depth color, alpha fade at the shore, night dim and dither.
 
-**The mesh** ([`world/terrain/TerrainRenderer.tsx`](../terrain/TerrainRenderer.tsx) `ensureWaterMesh`, filled by `writeWaterBuffers` in [`chunkGeometry.ts`](../terrain/chunkGeometry.ts)):
-a terrain chunk whose worker result has `waterHeights` gets a second mesh on the same pooled grid.
-That mesh is a CHILD of the chunk plane (`Chunk.water`), so it shares the chunk's LOD swaps,
-visibility and disposal (`releaseWater`). Wet vertices sit at the water height and carry a
-`waterDepth` attribute (water minus ground). Dry vertices are pushed below the ground by at least
-one vertex spacing, so the surface disappears there.
+## How to add another
 
-**The material** ([`waterMaterial.ts`](waterMaterial.ts)): one shared `ShaderMaterial`
-(`getWaterMaterial()`), with its clock advanced once per frame by `tickWater()` from
-TerrainRenderer.
-- Vertex: a small two-wave swell scaled by depth, plus the terrain's precision-safe wrapped
-  position and world curvature. Wave lengths (70u, 50u) divide `WORLD_WRAP`.
-- Fragment: two scrolling `worldFbm` normal octaves, fresnel, sun glint, a shallow-to-deep color
-  ramp over 14u, and an alpha fade over the last 2.5u of depth (a hard cut outlines the LOD
-  triangles along every shore). It also applies the night dim and dither. Pixels with depth ≤ 0.02
-  are discarded.
+1. In a biome's `spec.ts`, set `water: { depth }`, `joinable: true`, and usually `prohibitRoads: true` (template: `src/world/domains/overworld/regions/ocean/biomes/lake/`).
 
-## How to use/add
-
-**Add a new lake-type biome** (a pond, a marsh):
-1. In the biome's `spec.ts`, set `water: { depth: <units below the level> }` and
-   `joinable: true` (so adjacent cells form one body). Usually also set `prohibitRoads: true`
-   (keeps inter-city freeways off it).
-2. Nothing else. The level, bed, shore lift, river mouths and water mesh all follow from `water`.
-   `riverBanks.test.ts` checks that every mouth opens into the lake.
-   See `src/world/domains/overworld/regions/ocean/biomes/lake/` for the template.
-
-**Tune the look:** the color constants, `0.18 * swell`, and the alpha fade `smoothstep(0.02, 2.5, …)`
-in [`waterMaterial.ts`](waterMaterial.ts). A new world-space wavelength must divide
-`WORLD_WRAP` (4200), or the surface will show a seam every 4200 units.
-
-**Tune the levels:** `LAKE_SURFACE_BELOW_BASE` and `SHORE_RISE` in
-[`lakes.ts`](../../utils/workers/lakes.ts), and `RIVER_SURFACE_BELOW` in
-[`rivers/riverNetwork.ts`](../../utils/workers/rivers/riverNetwork.ts). These change the terrain everywhere.
+Tune: colors and fades in [waterMaterial.ts](waterMaterial.ts) (wavelengths must divide `WORLD_WRAP`); `LAKE_SURFACE_BELOW_BASE`, `SHORE_RISE` in `lakes.ts`; `RIVER_SURFACE_BELOW` in `rivers/riverNetwork.ts`.
