@@ -29,7 +29,7 @@ import { capRiverBed, clearRiverField, noRiverQuay, noRiverSample, riverFieldAt,
 import { CITY_QUAY_INNER_CAP, type CityTerrain, clearCityCaches, drownedBeltDistance, getCityTerrain, wallDrownedAt } from "./roads/cityTerrain";
 import { FREEWAY_GRADE_RAMP, clearFreewayGrades, freewayGradeAt } from "./roads/freewayGrade";
 import { FREEWAY_SMIN_K, type WallNetwork, clearNetworkCache, nearestFreewayRun, nearestRun, networkOf, smoothMin } from "./roads/freewayNetwork";
-import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, clearRoadFragments, inRoadFragment } from "./roads/roadFragments";
+import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, ISLAND_LAND_FIELD, TO_BANK, TO_ROAD, blockIslandAt, clearRoadFragments, islandRoad, inRoadFragment } from "./roads/roadFragments";
 import type { BiomeContext, DomainConfig, RiverParams, SerializedRegion, VertexResult, Wall, Zone } from "./types";
 import { clearVoronoiCaches, getBiomeContext, cityWallsOf } from "./voronoi";
 import {
@@ -536,8 +536,10 @@ export function computeVertexData(x: number, z: number): VertexResult {
   const waterBand = riverWaterBand(river);
   const riverSurface = distanceToRiver < riverReach ? riverSurfaceBesideCrispShore(riverSample.surface) : NaN;
   // The bed ends where its bank first gets too steep going outward, never to resume beyond — wherever
-  // the paint reaches (a city's quay rule paints past the field's reach).
-  if (riverBedDistance < riverReach) riverBedDistance = capRiverBed(riverBedDistance, riverSample.bedLimit);
+  // the paint reaches. Not in a city: past the city's edge roads its ground is the bank, and capped,
+  // its plaza showed as grey tongues on the sand; its pavement keeps the bed off by itself (the shader's
+  // pavement mask). Capped only inside the river's footprint, the paint's edge stepped along that line.
+  if (riverBedDistance < riverReach && city === null) riverBedDistance = capRiverBed(riverBedDistance, riverSample.bedLimit);
   let mouth = 0;
   if (!Number.isNaN(riverSurface)) {
     // A river MOUTH (riverMouthShare): over the lakebed the channel only deepens the ground and the
@@ -623,6 +625,17 @@ export function computeVertexData(x: number, z: number): VertexResult {
   ) {
     distanceToRoadCenter = Math.max(distanceToRoadCenter, FRAGMENT_REMOVED_FIELD);
     distanceToFreewayCenter = 99999;
+    riverBedDistance = Math.min(riverBedDistance, riverReach - RIVER_BED_FULL_INSET);
+  }
+  // Step 8b: block islands — city land no building could stand on, too small to be a block, goes the
+  // way most of its rim does: road (the field reflected about the foot of the curb's dip ramp, so it
+  // meets the road around it, at the road's own height there), or the river's bank like a fragment.
+  const island = decksKnown && city !== null && city.nearEdge ? blockIslandAt(x, z, riverBedDistance, distanceToRoadCenter, waterHeight > height, sdfOut, presenceOut) : 0;
+  if (island === TO_ROAD) {
+    if (!Number.isNaN(islandRoad.height)) height = islandRoad.height;
+    distanceToRoadCenter = Math.max(0, 2 * ISLAND_LAND_FIELD - distanceToRoadCenter);
+  } else if (island === TO_BANK) {
+    distanceToRoadCenter = Math.max(distanceToRoadCenter, FRAGMENT_REMOVED_FIELD);
     riverBedDistance = Math.min(riverBedDistance, riverReach - RIVER_BED_FULL_INSET);
   }
 
