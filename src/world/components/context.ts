@@ -1,31 +1,16 @@
 import { createContext, useContext, type Context } from "react";
+import { reportContentError } from "../../utils/contentError";
 import { AnyActorDescriptor } from "../../objects/actors/spawning/types";
-import type { TerrainNoiseParams } from "../../utils/workers/vertexCompute";
-import { BiomeNoiseConfig, BiomeSpec, BiomeWaterConfig, MaterialData, RegionSpec, RiverbedMaterial, TerrainParams } from "../types";
+import { BiomeSpec, MaterialData, RegionSpec, RegionSpecBase, RiverbedMaterial, TerrainParams } from "../types";
 
 // Registration store behind the <Domain> tree. Map insertion order = JSX order,
 // which voronoi assignment depends on (regions AND biomes).
 
-export interface RegionRecord {
-  id: number;
-  name: string;
-  baseNoise?: TerrainNoiseParams;
-  blendWidth?: number;
-  heightBlendWidth?: number;
-  riverProbability?: number;
-}
+/** A region's own spec fields (its biomes register themselves). */
+export type RegionRecord = RegionSpecBase;
 
-export interface BiomeRecord {
-  id: number;
-  name: string;
-  joinable: boolean;
-  blendWidth?: number;
-  heightBlendWidth?: number;
-  water?: BiomeWaterConfig;
-  prohibitRoads?: boolean;
-  prohibitRivers?: boolean;
-  noise?: BiomeNoiseConfig;
-}
+/** A biome's spec fields minus its `actors` (registered separately, per mount). */
+export type BiomeRecord = Omit<BiomeSpec, "actors">;
 
 export interface SkyboxSettings {
   topColor: string;
@@ -82,12 +67,6 @@ export const BiomeContext = createContext<{ biomeId: number; regionId: number } 
 export const RegionSlotContext = createContext<RegionSpec | null>(null);
 export const BiomeSlotContext = createContext<BiomeSpec | null>(null);
 
-/** Structural mistakes throw in development and log in production. */
-export const reportHierarchyError = (message: string): void => {
-  if (process.env.NODE_ENV === "production") console.error(message);
-  else throw new Error(message);
-};
-
 export const useDomainStore = (component: string): DomainStore => {
   const store = useContext(DomainStoreContext);
   if (!store) throw new Error(`<${component}> must be mounted inside <Domain>`);
@@ -99,7 +78,7 @@ export const useSpecSlot = <S extends { id: number; name: string }>(Slot: Contex
   const expected = useContext(Slot);
   // By id + name, not identity: a hot-reloaded spec module is a new object.
   if (expected && expected.id === spec.id && expected.name === spec.name) return;
-  reportHierarchyError(
+  reportContentError(
     expected
       ? `<${what} spec={${spec.name}}> is mounted where the spec list has "${expected.name}" — fix the component map in ${parent}`
       : `<${what} spec={${spec.name}}> must be rendered from its parent's spec list (${parent}), not mounted directly`,

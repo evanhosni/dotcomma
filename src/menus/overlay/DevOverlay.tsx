@@ -1,22 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useDevContext } from "../../context/DevContext";
-import { DevContextType } from "../../context/types";
+import { DEV_TOGGLES } from "../../context/constants";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 import { HUD_COLOR, PANEL_CSS } from "./styles";
-
-type DevFlag = { [K in keyof DevContextType]: DevContextType[K] extends boolean ? K : never }[keyof DevContextType];
-
-interface DevToggle {
-  label: string;
-  flag: DevFlag;
-  set: (dev: DevContextType, on: boolean) => void;
-}
-
-/** One checkbox per entry, in panel order. */
-const TOGGLES: readonly DevToggle[] = [
-  { label: "noclip", flag: "noclip", set: (dev, on) => dev.setNoclip(on) },
-  { label: "physics debug", flag: "physicsDebug", set: (dev, on) => dev.setPhysicsDebug(on) },
-];
 
 const paintCheckbox = (input: HTMLInputElement): void => {
   input.style.background = input.checked ? HUD_COLOR : "transparent";
@@ -69,8 +55,8 @@ export const DevOverlay = () => {
     title.style.cssText = "margin-bottom:4px;";
     panel.appendChild(title);
 
-    inputsRef.current = TOGGLES.map(({ label, set }) => {
-      const checkbox = createCheckbox(label, (checked) => set(devRef.current, checked));
+    inputsRef.current = DEV_TOGGLES.map(({ label, flag }) => {
+      const checkbox = createCheckbox(label, (checked) => devRef.current.setToggle(flag, checked));
       panel.appendChild(checkbox.row);
       return checkbox.input;
     });
@@ -88,15 +74,16 @@ export const DevOverlay = () => {
     if (panelRef.current) panelRef.current.style.display = dev.devMode ? "block" : "none";
   }, [dev.devMode]);
 
-  // Devmode turning off resets the toggles externally.
-  const flags = TOGGLES.map(({ flag }) => dev[flag]);
+  // Devmode turning off resets the toggles externally. One character per flag: re-syncs on any change.
+  const flagsKey = DEV_TOGGLES.map(({ flag }) => (dev[flag] ? "1" : "0")).join("");
   useEffect(() => {
     inputsRef.current.forEach((input, i) => {
-      if (input.checked === flags[i]) return;
-      input.checked = flags[i];
+      const on = devRef.current[DEV_TOGGLES[i].flag];
+      if (input.checked === on) return;
+      input.checked = on;
       paintCheckbox(input);
     });
-  }, flags);
+  }, [flagsKey]);
 
   return null;
 };

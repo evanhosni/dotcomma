@@ -22,6 +22,12 @@ every shader attribute comes from the height pipeline in
 - [`vertexData.ts`](vertexData.ts): runs the same height pipeline on the main thread (`getVertexData`,
   `getVertexDataRaw`, `ensureVertexCompute`). The player backstop, respawn and the address resolver
   use it.
+- [`chunkGeometry.ts`](chunkGeometry.ts): a chunk's mesh buffers — the grid + skirt layout, the
+  geometry pool (`acquireGeometry` / `releaseGeometry`, per LOD) and how a worker result fills them
+  (`writeTerrainBuffers`, `writeWaterBuffers`).
+- [`terrainWorker.ts`](terrainWorker.ts): the terrain worker client (`requestChunkBuild`) and its
+  result type `ChunkBuildResult`.
+- [`chunkIndex.ts`](chunkIndex.ts): `ChunkIndex`, the coarse overlap grid `LodSwapper` queries.
 - [`types.ts`](types.ts): `Chunk` (key, center, mesh, water mesh, collider body, LOD).
 
 **The LOD quadtree** (`computeDesiredChunks`, [`lodQuadtree.ts`](lodQuadtree.ts)). The world is tiled by LOD5 roots (3360u). A root
@@ -48,7 +54,7 @@ down to 420u chunks, which become LOD1 inside 420u and LOD2 outside it.
    one per `FAR_BUILD_INTERVAL_MS` (250ms). That never opens a hole: an old chunk stays visible until
    its replacements are built. Each chunk's main-thread finishing time is charged to the shared
    TaskQueue frame budget (`chargeFrameWork`), so queued work backs off after a heavy terrain frame.
-   `buildChunk` asks the terrain worker (`BUILD_CHUNK`) for heights, normals, collider heights, the
+   `buildChunk` asks the terrain worker (`requestChunkBuild`, message `BUILD_CHUNK`) for heights, normals, collider heights, the
    blend fields, road/river distances and water heights, then writes them into a pooled geometry
    (`acquireGeometry` / `releaseGeometry`, pooled per LOD).
 4. `processSwaps` starts the LOD swaps that are ready (next section). An old chunk stays drawn until
@@ -92,7 +98,9 @@ normals.
 LODs (`hasCollider: false`) also skip flatten pads in the worker.
 
 **Water.** A chunk with water in reach gets a child mesh on the same pooled grid. Dry vertices
-are pushed below the ground. See [Water](../water/README.md).
+are pushed below the ground. The water program is linked at mount (`warmPrograms`), not when the first water builds. See [Water](../water/README.md).
+
+**Matrices.** The terrain group, every chunk plane and its water compose once (`matrixAutoUpdate = false`; `buildChunk` re-composes after placing): with a composing parent every chunk's matrixWorld was recomputed each frame.
 
 **Loading gate.** The component sets `terrainLoaded` and `progress` in `GameContext`, and the
 Player waits for them. A new `playerSpawn` (fast travel) restarts the gate. `resetTerrainSystem()`
@@ -102,8 +110,9 @@ clears the module state when the domain switches.
 
 N/A. There is one terrain system, and the content it draws comes from regions and biomes. Knobs:
 - Ring sizes and mesh density: `LOD*_MAX_DISTANCE` and `LOD*_SEGMENTS` in [`lodConfig.ts`](lodConfig.ts).
-  Keep `LOD4_MAX_DISTANCE` near `CAMERA_FAR` (`src/player/Player.tsx`). LOD1 must stay the finest
+  `CAMERA_FAR` (`src/player/constants.ts`) must lie between the LOD4 and LOD5 rings; lodConfig.ts
+  throws in dev when it doesn't. LOD1 must stay the finest
   level, because the player's slope tuning was measured on it.
 - Seams at LOD boundaries: raise that level's `skirtDepth` in `LOD_LEVELS`.
-- Build smoothness vs. catch-up speed: `BUILD_BUDGET_MS` inside `updateTerrain` in
+- Build smoothness vs. catch-up speed: `BUILD_BUDGET_MS` at the top of
   [`TerrainRenderer.tsx`](TerrainRenderer.tsx).

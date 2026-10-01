@@ -10,15 +10,12 @@ Two React contexts. The types are in [types.ts](types.ts).
   - `playerSpawn`: the feet position from `<Domain playerSpawn>`, or from fast travel. `null` = the default sky drop.
 - **[DevContext.tsx](DevContext.tsx)** is mounted at the root ([index.tsx](../index.tsx)).
   - `devMode`: toggled with F1 and mirrored to `?devmode` so a refresh keeps it.
-  - `noclip`, `physicsDebug`: the devmode checkboxes. Turning devmode off resets them.
+  - one boolean per `DEV_TOGGLES` entry ([constants.ts](constants.ts)) — today `noclip`, `physicsDebug` — plus `setToggle(flag, on)`. Turning devmode off resets them all.
 
 Day/night has no context: read the module-level getters in [lighting/dayNight.ts](../lighting/dayNight.ts) from `useFrame`.
 
 ## How to use/add
 
 - **Read**: `const { terrainLoaded, playerPosition } = useGameContext();` or `const { devMode } = useDevContext();`.
-- **Add a dev toggle**:
-  1. Add the field and its setter to `DevContextType` in [types.ts](types.ts).
-  2. Add a `useState` in `DevContextProvider`, put it in the memoized value, and reset it in `toggleDevMode` when devmode turns off.
-  3. Add one `TOGGLES` entry (`label`, `flag`, `set`) in [menus/overlay/DevOverlay.tsx](../menus/overlay/DevOverlay.tsx) — the checkbox and its sync come with it.
+- **Add a dev toggle** — one line (was 3 files, 4 edits): append `{ flag: "myFlag", label: "my flag" }` to `DEV_TOGGLES` in [constants.ts](constants.ts). The checkbox, its state and its reset when devmode turns off come with it; read it anywhere with `const { myFlag } = useDevContext();` (set it from code with `setToggle("myFlag", on)`).
 - **Add game-wide state**: add it to `GameContextType` + `GameContextProvider`. Anything that changes per frame must be a ref or a mutable object, not `useState`, or every consumer re-renders every frame.

@@ -22,7 +22,7 @@ export const densityCellRange = (min: number, max: number, cellSize: number): [n
   Math.floor(max / cellSize),
 ];
 
-export interface DensityCandidate {
+interface DensityCandidate {
   x: number;
   z: number;
 }
@@ -49,12 +49,11 @@ export const rollDensityCell = (
  *  densityPoints.ts, which the spawn worker calls too; the foliage worker reads its height grid). The
  *  flatten-pad engine does not: a `flattenGround` actor's slopeRange is not applied.
  *  `riverKeepOff`: nothing is placed within this many factor-1 river units of a river centerline —
- *  the channel and its banks (the quay strip in a city is pavement, but its field sits inside the
- *  lamp band, so lamps stood on the sand and in the water). Nothing stands on or beside a bridge
- *  deck either (`underDeck`: its footprint + the cut's feather): the ground under a landed end's
- *  road carried the lamp band's field, and a street lamp stood in the middle of a deck.
- *  The flatten-pad engine evaluates RAW (no decks), so pads never see it — buildings' road band
- *  (≥ 23) never meets a deck anyway. */
+ *  the channel and its banks, whatever the road field says there (the quay's river-side field sits
+ *  inside the lamp band). Nothing stands on or beside a bridge deck either (`underDeck`: its
+ *  footprint + the cut's feather), where a landed end's road field would admit lamps. The flatten-pad
+ *  engine evaluates RAW (no decks), so pads never see it — buildings' road band (≥ 23) never meets a
+ *  deck anyway. */
 export const passesPlacementFilters = (
   vd: Pick<VertexResult, "biomeId" | "height" | "distanceToRoadCenter" | "distanceToRiverCenter" | "underDeck">,
   f: Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange">,

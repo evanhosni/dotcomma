@@ -248,37 +248,33 @@ export const addressOfPosition = (x: number, z: number): ResolvedAddress => desc
 
 const originRegionCell = (): GridCell => getPlaceInfo(0, 0).regionCell;
 
+/** Words decode; a type is that region's cell nearest the ORIGIN. */
+const resolveRegionCell = (part: Address["region"], regions: SerializedRegion[]): GridCell | null => {
+  if (part.words) return decodeWords(part.words);
+  const region = regions.find((r) => r.name === part.type);
+  return region ? findRegionCell(region.id, originRegionCell()) : null;
+};
+
+/** Words decode; a type is the nearest such biome to the region cell's site (in that region if it has
+ *  one); none = the biome cell the region cell's site stands in. */
+const resolveBiomeCell = (part: Address["biome"], regionCell: GridCell, regions: SerializedRegion[]): GridCell | null => {
+  const regionSite = getRegionCellSite(regionCell.ix, regionCell.iz);
+  const regionPlace = getPlaceInfo(regionSite.x, regionSite.z);
+  if (part?.words) return decodeWords(part.words);
+  if (!part?.type) return regionPlace.biomeCell;
+  const biome = regions.flatMap((r) => r.biomes).find((b) => b.name === part.type);
+  if (!biome) return null;
+  return findBiomeCell(biome.id, regionPlace.biomeCell, regionPlace.regionId) ?? findBiomeCell(biome.id, regionPlace.biomeCell);
+};
+
 /** Resolves an address against the INITIALIZED compute module (main thread: after
  *  world/terrain/vertexData's ensureVertexCompute). Word names win over type names
  *  (the URL is then corrected to the canonical path). */
 export const resolveAddress = (address: Address): ResolvedAddress | null => {
   const regions = getRegions();
-
-  // Region cell: words decode; a type is the nearest cell of that region to the ORIGIN.
-  let regionCell: GridCell | null = null;
-  if (address.region.words) {
-    regionCell = decodeWords(address.region.words);
-    if (!regionCell) return null;
-  } else {
-    const region = regions.find((r) => r.name === address.region.type);
-    if (!region) return null;
-    regionCell = findRegionCell(region.id, originRegionCell());
-    if (!regionCell) return null;
-  }
-
-  // Biome cell: words decode; a type is the nearest such biome to the region cell's site;
-  // none = the biome cell the region cell's site stands in.
-  const regionSite = getRegionCellSite(regionCell.ix, regionCell.iz);
-  const regionPlace = getPlaceInfo(regionSite.x, regionSite.z);
-  let biomeCell: GridCell | null = regionPlace.biomeCell;
-  if (address.biome?.words) {
-    biomeCell = decodeWords(address.biome.words);
-    if (!biomeCell) return null;
-  } else if (address.biome?.type) {
-    const biome = regions.flatMap((r) => r.biomes).find((b) => b.name === address.biome!.type);
-    if (!biome) return null;
-    biomeCell = findBiomeCell(biome.id, regionPlace.biomeCell, regionPlace.regionId) ?? findBiomeCell(biome.id, regionPlace.biomeCell);
-    if (!biomeCell) return null;
-  }
+  const regionCell = resolveRegionCell(address.region, regions);
+  if (!regionCell) return null;
+  const biomeCell = resolveBiomeCell(address.biome, regionCell, regions);
+  if (!biomeCell) return null;
   return describeBiomeCell(biomeCell);
 };

@@ -1,3 +1,4 @@
+import { reportContentError } from "../../../utils/contentError";
 import { AnimationChannel } from "./animation";
 import { Input } from "./input";
 import { Motion, type Vec3Like } from "./motion";
@@ -16,7 +17,7 @@ export type { Vec3Like };
  */
 
 /** One-shot flags written by useMouseEvents (client) or raised from a forwarded input (server). */
-export const MOUSE_ONE_SHOT_FLAGS = [
+const MOUSE_ONE_SHOT_FLAGS = [
   "__mouse_hover_enter",
   "__mouse_hover_leave",
   "__mouse_left_click",
@@ -36,7 +37,7 @@ export type MouseFlag = (typeof MOUSE_ONE_SHOT_FLAGS)[number];
 /** `__mouse_hover_enter` → `mouse-hover-enter`, the wire action name. */
 export const mouseActionOf = (flag: MouseFlag): string => flag.slice(2).replace(/_/g, "-");
 const FLAG_BY_ACTION = new Map<string, MouseFlag>(MOUSE_ONE_SHOT_FLAGS.map((f) => [mouseActionOf(f), f]));
-export const mouseFlagOf = (action: string): MouseFlag | undefined => FLAG_BY_ACTION.get(action);
+const mouseFlagOf = (action: string): MouseFlag | undefined => FLAG_BY_ACTION.get(action);
 
 interface ResolvedTransition {
   trigger: TriggerDef;
@@ -53,10 +54,7 @@ interface ConfigMaps {
 }
 
 /** A broken config is a typo that would otherwise silently never fire. */
-const reportConfigError = (message: string): void => {
-  if (process.env.NODE_ENV === "production") console.error(`[state machine] ${message}`);
-  else throw new Error(`[state machine] ${message}`);
-};
+const reportConfigError = (message: string): void => reportContentError(`[state machine] ${message}`);
 
 // Pure functions of the module-constant config — once per config, not per instance.
 const configMapsCache = new WeakMap<StateMachineConfig, ConfigMaps>();

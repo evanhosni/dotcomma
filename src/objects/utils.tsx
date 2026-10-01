@@ -18,6 +18,10 @@ export const createDefaultsGroup = <T extends object>(className: string) => {
   return { Group, useDefaults };
 };
 
+/** The entries of `props` that are set — so an unset prop never shadows a default it is spread over. */
+export const definedOnly = <T extends object>(props: T): Partial<T> =>
+  Object.fromEntries(Object.entries(props).filter(([, v]) => v !== undefined)) as Partial<T>;
+
 const syncWarned = new Set<string>();
 /** Dressing and foliage have no sync (deterministic scenery every client already agrees on). */
 export const warnUnsupportedSync = (className: string, serverSynced: boolean | undefined): void => {

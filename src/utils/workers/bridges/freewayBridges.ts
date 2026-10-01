@@ -42,17 +42,18 @@ import { riverPiecesNear, riverPiecesRaw, riversEnabled, riverWetReach } from ".
 import { BRIDGE_MAX_DEVIATION, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, deckWidth, warpMax } from "./constants";
 import { clearCrossingCaches, CROSSING_MID_REACH, crossingChain, findCrossings, resolveCrossingChain } from "./crossings";
 import { deckBuilder } from "./deckBuilder";
-import { finishDeck } from "./finishDeck";
+import { deckMerges, finishDeck } from "./finishDeck";
 import { clearMouthCaches, MOUTH_PAIR_MAX } from "./mouths";
 import { collectRoadPaths } from "./roadPaths";
 import type { BridgeChain, BridgePlacementParams, BridgeWindow, FreewayBridge, WindowScan } from "./types";
+import { joinMergeWalls } from "./wallJoins";
 import { findWetItems, linkWetItems } from "./wetItems";
 
 /** Roads and rivers are considered within ±window of the chunk center (warped). A chain with a sample
  *  within BRIDGE_EDGE_GUARD of the window's edge may differ from what a wider window sees: a chunk
  *  whose decks DEPEND on such a chain (a host, a child) retries with the next window, and at the last
- *  one the chain drops. MEASURED: a single 800 window splits T-junctions across chunks (a host and its
- *  child owned by different chunks each see the other cut off); one 2200 window costs ~100× per chunk. */
+ *  one the chain drops. (A single 800 window splits T-junctions across chunks — a host and its child
+ *  owned by different chunks each see the other cut off — and one 2200 window costs ~100× per chunk.) */
 const BRIDGE_WINDOWS = [900, 1800, 3200];
 
 /** Diagnostics of the last getFreewayBridges call (probes): every dropped chain says why; `window`
@@ -195,6 +196,18 @@ function bridgesInWindow(minX: number, minZ: number, maxX: number, maxZ: number,
       emitted.add(key);
       finishDeck(c, chains, build);
       out.push(deck);
+    }
+    // Wall joins read the partners' finished walls (finished here if their owner is another chunk, after
+    // every owned deck: finishing order changes no owned deck's gaps).
+    const chainOf = new Map<FreewayBridge, BridgeChain>();
+    for (const c of chains) if (c.deck) chainOf.set(c.deck, c);
+    for (const deck of out) {
+      const partners = deckMerges(deck) ?? [];
+      for (const p of partners) {
+        const pc = chainOf.get(p);
+        if (pc) finishDeck(pc, chains, build);
+      }
+      joinMergeWalls(deck, partners);
     }
   } catch (err) {
     if (err === WINDOW_TOO_SMALL) return null;

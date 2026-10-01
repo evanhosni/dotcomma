@@ -37,8 +37,8 @@ const RIVER_GRID_SIZE = 2800;
 const RIVER_GRID_SHIFT = { x: 1237, z: 811 };
 /** Sites ±6 cells around the query's river cell. Only TRUSTED triangles — circumcircle at least a
  *  cell inside the sites, so no site outside the window could fall in it — make edges: an edge is
- *  cached by its two sites, and one first built from a distorted border triangle had the wrong
- *  junctions everywhere after (MEASURED: a chunk's decks changed with what had been queried before). */
+ *  cached by its two sites, and one first built from a distorted border triangle would keep the
+ *  wrong junctions for everyone after (results would depend on query order). */
 const RIVER_GRID_RADIUS_CELLS = 6;
 /** Edges reaching the query's river cell ± this are emitted: ≥ what one query needs (a biome cell's
  *  reach; a bridge window reads every river cell it overlaps). */
@@ -65,11 +65,10 @@ const RIVER_FIZZLE_LENGTH = 300;
  *  symmetric, so the mouth never depends on which way the edge is walked. */
 const RIVER_MOUTH_REACH = 160;
 /** High ground: a piece is not built where its biome relief exceeds MAX_RELIEF (the mountain's
- *  rock), where the ground climbs faster than MAX_GRADE along it (the surface follows the terrain,
- *  and water visibly running up a slope was the complaint), or where it would sit on a ridge or
- *  across a hillside — its centerline MAX_RIDGE above both banks' outer edges, or the banks
- *  differing by more than MAX_CROSS_GRADE across the footprint (a perched channel that every road
- *  crossing it had to climb to, decks under the water). */
+ *  rock), where the ground climbs faster than MAX_GRADE along it (the surface follows the terrain:
+ *  water would visibly run up the slope), or where it would sit on a ridge or across a hillside — its
+ *  centerline MAX_RIDGE above both banks' outer edges, or the banks differing by more than
+ *  MAX_CROSS_GRADE across the footprint (a perched channel every road crossing it must climb to). */
 const RIVER_MAX_RELIEF = 40;
 const RIVER_MAX_GRADE = 0.2;
 const RIVER_MAX_RIDGE = 6;
@@ -78,10 +77,9 @@ const RIVER_MAX_CROSS_GRADE = 0.15;
 const RIVER_MIN_STRETCH = 300;
 /** Steep ground that is NOT the mountain's rock (grade, ridge, hillside) does not break a river over
  *  a gap up to this long whose both sides are river or water — two stretches of one river, or a
- *  stretch and the sea it runs into, so rivers connect to the water near them. MEASURED over a 40 km
- *  square: 159 of 201 gaps between stretches and 40 of 48 stretch ends short of the water along
- *  their edge were within this. The region bases (desert 260u over 1800u, snow 600u over 4000u)
- *  alone exceed the grade and hillside limits, so the rules cut ordinary rivers everywhere. */
+ *  stretch and the sea it runs into, so rivers connect to the water near them (over a 40 km square
+ *  this covers ~80% of such gaps). Needed because the region bases (desert 260u over 1800u, snow 600u
+ *  over 4000u) alone exceed the grade and hillside limits. */
 const RIVER_GAP_FILL = 800;
 /** The channel is measured from a meandered query point (±10u over ~90u), so a straight edge winds. */
 export const RIVER_MEANDER_AMP = 10;
@@ -242,8 +240,9 @@ const isWaterAt = (x: number, z: number): boolean => !!zoneAtWarped(x, z).biome.
 
 const RIVER_PROHIBIT_PROBES = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [0.71, 0.71], [-0.71, 0.71], [0.71, -0.71], [-0.71, -0.71]];
 
-export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
-  if (e.blocked) return e.blocked;
+/** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, near a prohibitRivers
+ *  biome, mountainous, or high/steep ground. */
+const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
   const n = e.count;
   const step = e.len / n;
   const heights = new Float64Array(n + 1);
@@ -290,9 +289,15 @@ export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
       }
     }
   }
-  // Steep (not mountainous) gaps up to RIVER_GAP_FILL between river and river, or river and water,
-  // are built: the river runs through to its other stretch or into the sea. Past the edge's end,
-  // the side is its junction: water when the junction lies in a water zone.
+  return blocked;
+};
+
+/** Steep (not mountainous) gaps up to RIVER_GAP_FILL between river and river, or river and water,
+ *  are built: the river runs through to its other stretch or into the sea. Past the edge's end, the
+ *  side is its junction: water when the junction lies in a water zone. */
+const fillRiverGaps = (e: RiverEdge, blocked: Uint8Array): void => {
+  const n = e.count;
+  const step = e.len / n;
   const sideOf = (k: number, junctionX: number, junctionZ: number): number =>
     k >= 0 && k < n ? blocked[k] : isWaterAt(junctionX, junctionZ) ? RIVER_BLOCK_WATER : RIVER_BLOCK_HIGH;
   const riverish = (code: number) => code === 0 || code === RIVER_BLOCK_WATER;
@@ -308,8 +313,13 @@ export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
     if ((i1 - i0 + 1) * step <= RIVER_GAP_FILL && riverish(before) && riverish(after)) blocked.fill(0, i0, i1 + 1);
     i0 = i1 + 1;
   }
-  // A short built stretch with unbuilt pieces on both sides would be a pond blob: not built either.
-  // (Per edge only — a stretch reaching a junction may continue into another river.)
+};
+
+/** A short built stretch with unbuilt pieces on both sides would be a pond blob: not built either.
+ *  Per edge only — a stretch reaching a junction may continue into another river. */
+const dropRiverBlobs = (e: RiverEdge, blocked: Uint8Array): void => {
+  const n = e.count;
+  const step = e.len / n;
   for (let i0 = 1; i0 < n; ) {
     if (blocked[i0] || !blocked[i0 - 1]) {
       i0++;
@@ -322,8 +332,16 @@ export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
     if (i1 + 1 < n && !waterBoth && (i1 - i0 + 1) * step < RIVER_MIN_STRETCH) blocked.fill(RIVER_BLOCK_HIGH, i0, i1 + 1);
     i0 = i1 + 1;
   }
+};
+
+/** Per piece of a river edge: 0 = built, else the RIVER_BLOCK_* reason. Cached on the edge. */
+export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
+  if (e.blocked) return e.blocked;
+  const blocked = classifyRiverPieces(e);
+  fillRiverGaps(e, blocked);
+  dropRiverBlobs(e, blocked);
   e.blocked = blocked;
-  riverDebug.pieces += n;
+  riverDebug.pieces += e.count;
   for (const b of blocked) riverDebug.blocked[b]++;
   return blocked;
 };

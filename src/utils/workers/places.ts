@@ -5,7 +5,7 @@ import type { PointXZ } from "../math/types";
 import { domainConfig } from "./computeConfig";
 import { unwarp, warp } from "./noise";
 import type { DomainConfig, GridCell, SerializedBiome, SerializedRegion } from "./types";
-import { distanceToWall, getBiomeContext, getRegionGrid, gridSite, nearestCell, rollRegion, rollZone } from "./voronoi";
+import { biomeSiteAt, distanceToWall, getBiomeContext, getRegionGrid, nearestCell, rawBiomeSiteAt, regionSiteAt } from "./voronoi";
 import { resolveHalf, sstep01 } from "./zoneBlend";
 
 let regionWeights = new Float64Array(0);
@@ -71,54 +71,51 @@ export function getPlaceInfo(x: number, z: number): PlaceInfo {
  *  so an address resolves whether or not anyone has ever been there. */
 export function getRegionOfCell(ix: number, iz: number): SerializedRegion {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
-  return rollRegion(gridSite(`${domainConfig.seed} - regionGrid`, ix, iz, domainConfig.regionGridSize), domainConfig.regions);
+  return regionSiteAt(ix, iz).region;
 }
 
 /** A region-grid cell's voronoi SITE in real world space (always inside the cell). */
 export function getRegionCellSite(ix: number, iz: number): PointXZ {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
-  const s = gridSite(`${domainConfig.seed} - regionGrid`, ix, iz, domainConfig.regionGridSize);
+  const s = regionSiteAt(ix, iz);
   return unwarp(s.x, s.z);
 }
 
 /** The zone (region + biome) a biome-grid cell rolled. */
 export function getZoneOfBiomeCell(ix: number, iz: number): { region: SerializedRegion; biome: SerializedBiome } {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
-  const site = gridSite(`${domainConfig.seed} - grid`, ix, iz, domainConfig.gridSize);
-  const zone = rollZone(site, getRegionGrid(site));
+  const zone = biomeSiteAt(ix, iz).zone;
   return { region: zone.region, biome: zone.biome };
 }
 
 /** A biome-grid cell's voronoi SITE in real world space — where travel to that cell lands. */
 export function getBiomeCellSite(ix: number, iz: number): PointXZ {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
-  const s = gridSite(`${domainConfig.seed} - grid`, ix, iz, domainConfig.gridSize);
+  const s = rawBiomeSiteAt(ix, iz);
   return unwarp(s.x, s.z);
 }
 
-/** Nearest region cell (square rings outward from `from`) that rolled `regionId`; null within maxRing. */
-export function findRegionCell(regionId: number, from: GridCell, maxRing = 64): GridCell | null {
+/** The first cell on square rings outward from `from` (each ring in ix-then-iz order) that passes
+ *  `test`; null within maxRing. */
+const findCellInRings = (from: GridCell, maxRing: number, test: (ix: number, iz: number) => boolean): GridCell | null => {
   for (let r = 0; r <= maxRing; r++) {
     for (let ix = from.ix - r; ix <= from.ix + r; ix++) {
       for (let iz = from.iz - r; iz <= from.iz + r; iz++) {
         if (Math.abs(ix - from.ix) !== r && Math.abs(iz - from.iz) !== r) continue;
-        if (getRegionOfCell(ix, iz).id === regionId) return { ix, iz };
+        if (test(ix, iz)) return { ix, iz };
       }
     }
   }
   return null;
-}
+};
 
-/** Nearest biome cell (rings outward) that rolled `biomeId` — inside `regionId` when given. */
-export function findBiomeCell(biomeId: number, from: GridCell, regionId?: number, maxRing = 40): GridCell | null {
-  for (let r = 0; r <= maxRing; r++) {
-    for (let ix = from.ix - r; ix <= from.ix + r; ix++) {
-      for (let iz = from.iz - r; iz <= from.iz + r; iz++) {
-        if (Math.abs(ix - from.ix) !== r && Math.abs(iz - from.iz) !== r) continue;
-        const zone = getZoneOfBiomeCell(ix, iz);
-        if (zone.biome.id === biomeId && (regionId === undefined || zone.region.id === regionId)) return { ix, iz };
-      }
-    }
-  }
-  return null;
-}
+/** Nearest region cell that rolled `regionId`. */
+export const findRegionCell = (regionId: number, from: GridCell, maxRing = 64): GridCell | null =>
+  findCellInRings(from, maxRing, (ix, iz) => getRegionOfCell(ix, iz).id === regionId);
+
+/** Nearest biome cell that rolled `biomeId` — inside `regionId` when given. */
+export const findBiomeCell = (biomeId: number, from: GridCell, regionId?: number, maxRing = 40): GridCell | null =>
+  findCellInRings(from, maxRing, (ix, iz) => {
+    const zone = getZoneOfBiomeCell(ix, iz);
+    return zone.biome.id === biomeId && (regionId === undefined || zone.region.id === regionId);
+  });

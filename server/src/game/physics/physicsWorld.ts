@@ -24,7 +24,7 @@ export const DEFAULT_WORK_BUDGET_MS = 8;
 
 let rapierReady: Promise<void> | null = null;
 /** The compat build embeds the WASM — no flags, no fetch. */
-export const initRapier = (): Promise<void> => (rapierReady ??= RAPIER.init());
+const initRapier = (): Promise<void> => (rapierReady ??= RAPIER.init());
 
 export class PhysicsWorld {
   readonly world: RAPIER.World;
@@ -86,8 +86,8 @@ export class PhysicsWorld {
   }
 
   /** Rapier only rebuilds its query structure inside step(), so a body stepped against
-   *  a chunk built THIS tick sweeps straight through it — MEASURED: a beeble fell 1u
-   *  into a just-built heightfield and sat wedged. Call after generation, before moving. */
+   *  a chunk built THIS tick sweeps straight through it (a beeble fell 1u
+   *  into a just-built heightfield and sat wedged). Call after generation, before moving. */
   ensureQueries(): void {
     if (!this.queriesDirty) return;
     this.world.updateSceneQueries();

@@ -20,12 +20,11 @@ const withServer = !args.has("--client-only");
 const withClient = !args.has("--server-only");
 const isWin = process.platform === "win32";
 
-// Own process group per child (detached): MEASURED, killing just `npm` left the
-// webpack dev server listening on :3000. Shutdown signals the direct child FIRST
-// so npm → tsx → server forward SIGTERM in order and the server finishes its
-// flush (signalling the whole group at once force-killed it mid-flush, also
-// measured), then the rest of the group after a grace period. Windows has no
-// groups — taskkill /T.
+// Own process group per child (detached): killing just `npm` leaves the webpack dev
+// server listening on :3000. Shutdown signals the direct child FIRST so npm → tsx →
+// server forward SIGTERM in order and the server finishes its flush (signalling the
+// whole group at once force-kills it mid-flush), then the rest of the group after a
+// grace period. Windows has no groups — taskkill /T.
 const spawnNpm = (cwd, npmArgs, extraEnv = {}) =>
   spawn("npm", npmArgs, { cwd, env: { ...process.env, ...extraEnv }, stdio: "pipe", shell: isWin, detached: !isWin });
 

@@ -6,7 +6,6 @@
  */
 
 import { seedRand } from "../../math/_math";
-import type { PointXZ } from "../../math/types";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import {
@@ -41,23 +40,22 @@ import { unwarp, warp } from "../noise";
 import { riverKeepOff } from "../rivers/riverNetwork";
 import type { Wall } from "../types";
 import { computeVertexData } from "../vertexCompute";
-import { getBiomeContext, getRegionGrid, isCanonicalWall, rollZone, wallsOfBiome } from "../voronoi";
+import { biomeSiteAt, getBiomeContext, isCanonicalWall, cityWallsOf } from "../voronoi";
 
 const cityCellAtLocal = (ix: number, iz: number, d: CityDistrict): CityCell => {
-  // Cache-first: the walls/noise context costs 2 FBMs + a voronoi lookup, and
-  // paying it on HITS made this the dominant cost of the dressing enumerations.
+  // Cache-first: the walls/noise context costs 2 FBMs + a voronoi lookup, too much to pay on hits.
   const cached = peekCityCell(ix, iz, d);
   if (cached) return cached;
 
   const gs = domainConfig!.cityConfig.gridSize;
   const w = cityLocalToWorld((ix + 0.5) * gs, (iz + 0.5) * gs, d);
-  return getCityCell(ix, iz, wallsOfBiome(getBiomeContext(warp(w.x, w.z)).zoneWalls, CITY_BIOME_ID), d);
+  return getCityCell(ix, iz, cityWallsOf(getBiomeContext(warp(w.x, w.z))), d);
 };
 
 /** The CITY walls (the belt) around a chunk: the biome context of its center. Belt candidates
  *  therefore depend on the query center's wall set — keep chunk size consistent. */
 const cityWallsAround = (minX: number, minZ: number, maxX: number, maxZ: number): Wall[] =>
-  wallsOfBiome(getBiomeContext(warp((minX + maxX) / 2, (minZ + maxZ) / 2)).zoneWalls, CITY_BIOME_ID);
+  cityWallsOf(getBiomeContext(warp((minX + maxX) / 2, (minZ + maxZ) / 2)));
 
 /** District-frame AABB of the chunk∩district overlap (padded by the wiggle amplitude); null when disjoint. */
 const cityChunkLocalAABB = (
@@ -125,8 +123,8 @@ export function getCityRoadMarkers(
     if (vd.biomeId !== CITY_BIOME_ID) return; // city biome only
     if (vd.distanceToRiverCenter < riverKeepOff() || vd.underDeck > 0) return;
     if (vd.distanceToRoadCenter > 2) return; // melted/chamfered zones drop out
-    // Strictly INSIDE the belt ring, one-sided: an abs-window corridor check
-    // LEAKED markers into the strip between the belt and the biome boundary.
+    // Strictly INSIDE the belt ring, one-sided (an abs-window corridor check would leak markers into
+    // the strip between the belt and the biome boundary).
     if (vd.distanceToBiomeBoundaryCenter < city.freewayWidth + 5) return;
     out.push({ x: mx, y: vd.height, z: mz, dirX, dirZ });
   };
@@ -352,8 +350,8 @@ export interface CitySitePoint {
   z: number;
 }
 
-/** The jittered voronoi SITE of every biome-grid cell in the bounds that rolled
- *  the city biome (same seeds as getBiomeGrid), warp-inverted to real world space. */
+/** The voronoi SITE of every biome-grid cell in the bounds that rolled the city biome,
+ *  warp-inverted to real world space. */
 export function getCityVoronoiSites(
   minX: number,
   minZ: number,
@@ -362,7 +360,6 @@ export function getCityVoronoiSites(
 ): CitySitePoint[] {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
   const gs = domainConfig.gridSize;
-  const seed = `${domainConfig.seed} - grid`;
   const out: CitySitePoint[] = [];
   // Pad one cell ring: the warp shifts sites by less than a cell.
   const ix0 = Math.floor(minX / gs) - 1;
@@ -372,11 +369,8 @@ export function getCityVoronoiSites(
 
   for (let ix = ix0; ix <= ix1; ix++) {
     for (let iz = iz0; iz <= iz1; iz++) {
-      const jitterX = seedRand(`${seed} - ${ix}X${iz}`);
-      const jitterZ = seedRand(`${seed} - ${ix}Z${iz}`);
-      const site: PointXZ = { x: (ix + jitterX) * gs, z: (iz + jitterZ) * gs };
-      const regionGrid = getRegionGrid(site);
-      if (rollZone(site, regionGrid).biome.id !== CITY_BIOME_ID) continue;
+      const site = biomeSiteAt(ix, iz);
+      if (site.zone.biome.id !== CITY_BIOME_ID) continue;
       const { x: wx, z: wz } = unwarp(site.x, site.z);
       // RAW height: the beacon floats heightOffset above anyway, and the padded path would build a pad tile per site.
       out.push({ key: `${ix},${iz}`, x: wx, y: computeVertexDataRaw(wx, wz).height, z: wz });
@@ -535,9 +529,9 @@ export function getCityFreewaySidePoints(
 
   type Candidate = { x: number; y: number; z: number; dirX: number; dirZ: number } | null;
 
-  // Ownership BEFORE validation: the belt scan visits every nearby wall for every
-  // city chunk, and validating unowned candidates made builds ~10× slower.
-  // Next-link lookups skip it — a successor usually lives in the neighbor chunk.
+  // Ownership BEFORE validation: the belt scan visits every nearby wall for every city chunk
+  // (validating unowned candidates is ~10× slower). Next-link lookups skip it — a successor usually
+  // lives in the neighbor chunk.
   const chunkOwns = (px: number, pz: number): boolean =>
     px >= minX && px < maxX && pz >= minZ && pz < maxZ;
 

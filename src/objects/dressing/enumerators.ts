@@ -35,7 +35,7 @@ const PROBE_WALL_REACH = 0.75;
 
 /** False when no point of `biomeIds` can lie in the chunk: its center is in another biome with no
  *  biome wall in reach. Unset/empty `biomeIds` = every biome. One padded height per call. */
-export const chunkMayHoldBiomes = (b: DressingBounds, biomeIds: readonly number[] | undefined): boolean => {
+const chunkMayHoldBiomes = (b: DressingBounds, biomeIds: readonly number[] | undefined): boolean => {
   if (!biomeIds || biomeIds.length === 0) return true;
   const vd = computeVertexData((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2);
   return !(!biomeIds.includes(vd.biomeId) && vd.distanceToBiomeBoundaryCenter > (b.maxX - b.minX) * PROBE_WALL_REACH);

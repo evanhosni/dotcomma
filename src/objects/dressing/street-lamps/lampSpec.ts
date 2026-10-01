@@ -16,7 +16,7 @@ export const LAMP_PARTS = {
   head: { w: 0.85, h: 0.3, d: 0.45, x: LAMP_HEAD_OFFSET_X, y: LAMP_POLE_HEIGHT - 0.35 },
 };
 
-export const lampYaw = (x: number, z: number): number => Math.abs(x * 7.13 + z * 3.71) % 6.283;
+const lampYaw = (x: number, z: number): number => Math.abs(x * 7.13 + z * 3.71) % 6.283;
 
 /** Pole collider is a touch proud of the drawn 0.22u so its corner can't be clipped. */
 export const LAMP_COLLIDER_PARTS: DressingColliderPart[] = [

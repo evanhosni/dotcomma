@@ -6,10 +6,11 @@ import type { BuildingAttributes } from "./types";
 // sealed collider, and its domain config derives the flatten pads from the placement here — a
 // building kind's shape and placement are defined once, in its spec.
 
-/** Every generation attribute (BuildingAttributes minus the shared actor ones) — the keys a mount
- *  must not override (spec.ts `mountOverridesOf`). The Record makes a new attribute a compile error
- *  until it is listed. */
-const HULL_KEY_SET: Record<Exclude<keyof BuildingAttributes, keyof ActorAttributes>, true> = {
+/** Every generation attribute (BuildingAttributes minus the shared actor ones): what Building.tsx
+ *  generates its plan from, and the keys a mount must not override (spec.ts `mountOverridesOf`). The
+ *  Record makes a new attribute a compile error until it is listed. */
+type BuildingHullKey = Exclude<keyof BuildingAttributes, keyof ActorAttributes>;
+const HULL_KEY_SET: Record<BuildingHullKey, true> = {
   exteriorSize: true,
   numberOfSides: true,
   palette: true,
@@ -29,7 +30,11 @@ const HULL_KEY_SET: Record<Exclude<keyof BuildingAttributes, keyof ActorAttribut
   windowLightIntensity: true,
   interiorColors: true,
 };
-export const BUILDING_HULL_KEYS = Object.keys(HULL_KEY_SET) as readonly (keyof BuildingAttributes)[];
+export const BUILDING_HULL_KEYS = Object.keys(HULL_KEY_SET) as readonly BuildingHullKey[];
+
+/** A building's default seed: its spawn position, rounded — so the client (Building.tsx) and the
+ *  server (physics/buildings.ts) generate the same plan for the same spot. */
+export const buildingSeedAt = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
 export const BUILDING_ATTRS: BuildingAttributes = {};
 
@@ -40,7 +45,7 @@ export const DOOR_INTERACT_REACH = 6;
 
 /** Max floors under a much taller shell (mechanical levels), a gentler lean so tall
  *  neighbors don't collide, most windows lit so towers read as busy from afar. */
-export const SKYSCRAPER_ATTRS: BuildingAttributes = {
+const SKYSCRAPER_ATTRS: BuildingAttributes = {
   stories: 6,
   roomCount: [3, 4, 5, 6],
   shellHeightRange: [70, 115],
@@ -49,8 +54,8 @@ export const SKYSCRAPER_ATTRS: BuildingAttributes = {
 };
 
 /** Buildings only place inside block interiors, so density is high to keep blocks
- *  packed — footprint spacing is the real limiter (1900 was tried and REVERTED: it
- *  visibly thinned the city). flattenGround: sloped block interiors otherwise clip floors. */
+ *  packed — footprint spacing is the real limiter (half this density visibly thins the
+ *  city). flattenGround: sloped block interiors otherwise clip floors. */
 export const BUILDING_SPEC: ActorSpec = {
   id: "building",
   component: "building",

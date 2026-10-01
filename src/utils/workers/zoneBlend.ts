@@ -5,8 +5,10 @@
  * with s the signed distance into a. Each side contributes its own half on its own
  * side, and I_a + I_b ≡ 1 along the wall, so a clean edge needs no normalization;
  * junctions do (three zones each ~0.5 → renormalized to a third). The vertex's own
- * zone takes the MIN over its walls, foreign zones the MAX over theirs — both
- * continuous, which is what keeps the picture free of per-triangle steps.
+ * zone takes the MIN over its walls, foreign zones the MAX over theirs, and the own MIN
+ * is floored near the zone's edge so the two meet there (the edge floor in
+ * accumulateWallFields) — continuous, which is what keeps the picture free of
+ * per-triangle steps.
  *
  * Heights use each zone's heightHalf (asymmetric: a crisp city keeps its plateau to
  * the wall and the soft neighbor ramps). The material uses the SMALLER side's feather
@@ -46,7 +48,7 @@ export const resolveHalf = (...widths: (number | undefined)[]): number => {
 
 export let zones: Zone[] = [];
 /** Zones by "region/biome". */
-export const zoneByKey = new Map<string, Zone>();
+const zoneByKey = new Map<string, Zone>();
 /** A region's zones in its biome order: what a biome roll indexes (no key string per lookup). */
 export const zonesByRegion = new Map<SerializedRegion, Zone[]>();
 let biomeSlotIds: number[] = [];
@@ -93,11 +95,13 @@ export let zoneMinDist = new Float64Array(0);
 export let biomeSdf = new Float64Array(0);
 export let biomePresence = new Float64Array(0);
 /** The buffers computeVertexData RETURNS. Distinct from the scratch because the flatten-pad
- *  step recurses into computeVertexData for pad candidates AFTER the outer vertex's pass,
- *  and returning the scratch shipped a candidate's distances to the shader (jagged wrong-
- *  texture patches and black slivers wherever a flatten tile was built mid-chunk). */
+ *  step recurses into computeVertexData for pad candidates AFTER the outer vertex's pass:
+ *  returning the scratch would ship a candidate's distances to the shader. */
 export let biomeSdfResult = new Float64Array(0);
 export let biomePresenceResult = new Float64Array(0);
+/** The own zone's walls in the current pass (edge floor): distance, and the other side's heightHalf. */
+let ownWallD = new Float64Array(0);
+let ownWallHalf = new Float64Array(0);
 /** The own zone's nearest wall in the last wall pass: its distance, and a pseudo-arc coordinate
  *  along it (the belt freeway's dash phase — jumps at wall joints, where the shader's fwidth guard
  *  drops the paint). */
@@ -239,6 +243,12 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
   ownWallDistance = Infinity;
   ownWallAlong = 0;
   const ownBiome = own.biome.id;
+  if (ownWallD.length < walls.length) {
+    ownWallD = new Float64Array(walls.length * 2);
+    ownWallHalf = new Float64Array(walls.length * 2);
+  }
+  let ownWalls = 0;
+  let ownEdge = Infinity;
 
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
@@ -269,6 +279,12 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
 
     // Height indicators (see the header).
     const span = a.heightHalf + b.heightHalf;
+    if (a === own || b === own) {
+      if (d < ownEdge) ownEdge = d;
+      ownWallD[ownWalls] = d;
+      ownWallHalf[ownWalls] = a === own ? b.heightHalf : a.heightHalf;
+      ownWalls++;
+    }
     if (a === own) {
       const ia = sstep01((d + b.heightHalf) / span);
       if (ia < zoneWeights[a.index]) zoneWeights[a.index] = ia;
@@ -307,6 +323,24 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
     }
   }
 
+  // The edge floor. Crossing a|b near a junction, a's OTHER walls switch from +d under the own
+  // MIN to −d under the foreign MAX: the census measured jumps of up to 0.28 of weight and 14u of
+  // height along every wall leaving a junction. So the own MIN is floored by the foreign MAX read
+  // at d − 2δ (δ = the own zone's nearest wall, where that reads +δ), which on the edge (δ = 0) IS
+  // the value the vertex across computes, lowered away over one own half-width so the floor only
+  // acts beside the edge (for the crisp city, 1u). Flooring the own side, not capping the foreign
+  // one: a cap reached the crisper tiers' claims and raised humps (a 6u bump beside a city corner);
+  // a higher own indicator only re-splits what the crisper tiers leave.
+  if (ownEdge < own.heightHalf) {
+    let floor = 0;
+    for (let k = 0; k < ownWalls; k++) {
+      const f = sstep01((ownWallHalf[k] - ownWallD[k] + 2 * ownEdge) / (own.heightHalf + ownWallHalf[k]));
+      if (f > floor) floor = f;
+    }
+    floor -= sstep01(ownEdge / own.heightHalf);
+    if (floor > zoneWeights[own.index]) zoneWeights[own.index] = floor;
+  }
+
   // Presence: how far inside its own boundary each biome is, in its own blend widths —
   // positive for the vertex's biome, negative (→ 0 in the shader) for every other.
   biomePresence.fill(-BIOME_SDF_FAR);
@@ -335,8 +369,8 @@ const siteDepthOf = (ix: number, iz: number, sx: number, sz: number, zone: Zone,
   if (!cache) siteDepths.set(zone, (cache = new CellCache<number>(16384)));
   let depth = cache.get(ix, iz);
   if (depth === undefined) {
-    // The site's own wall pass: the wall distance is identical from every grid window (MEASURED),
-    // so every worker caches the same value.
+    // The site's own wall pass: the wall distance is identical from every grid window, so every
+    // worker caches the same value.
     const walls = getBiomeContext({ x: sx, z: sz }).zoneWalls;
     let minSq = Infinity;
     for (let i = 0; i < walls.length; i++) {
@@ -391,6 +425,6 @@ const smoothDepthAt = (wx: number, wz: number, zone: Zone, cap: number): number 
 export const domeDepthAt = (wx: number, wz: number, zone: Zone, cap: number, wallDepth: number): number => {
   const smooth = smoothDepthAt(wx, wz, zone, cap);
   if (wallDepth === Infinity) return smooth;
-  const h =Math.max(0, Math.min(1, 0.5 + (0.5 * (smooth - wallDepth)) / DOME_SMOOTH));
+  const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (smooth - wallDepth)) / DOME_SMOOTH));
   return Math.max(0, smooth + (wallDepth - smooth) * h - DOME_SMOOTH * h * (1 - h));
 };

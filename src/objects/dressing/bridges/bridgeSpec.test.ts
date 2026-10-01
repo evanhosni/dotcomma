@@ -12,7 +12,7 @@ import { BRIDGE_DECK_THICKNESS, BRIDGE_PARAPET_HEIGHT, BRIDGE_PIER_SIZE, BRIDGE_
 
 // Bridge colliders against the drawn deck: one body per chord whose mesh IS what the ribbon draws there
 // — the slab's top, underside and edges, and each standing wall — so a player stands exactly on the
-// drawn top (pitched boxes left a twisting slab up to 6.7u off it, round 18) and meets a wall exactly
+// drawn top (a pitched box per chord sits up to 6.7u off a twisting slab) and meets a wall exactly
 // where one is drawn (a box running past a wall's visible end is an invisible wall in the roadway).
 // Client and server both mount bridgeColliderPoints.
 
@@ -63,8 +63,10 @@ describe("bridge colliders", () => {
     let checked = 0;
     for (const b of decks) {
       const sections = bridgeSections(b);
-      const points = bridgeColliderPoints(b);
-      expect(points.length).toBe(sections.length - 1);
+      const bodies = bridgeColliderPoints(b);
+      // One body per chord, then one per wall join.
+      expect(bodies.length).toBe(sections.length - 1 + (b.wallJoins?.length ?? 0));
+      const points = bodies.slice(0, sections.length - 1);
       points.forEach((p, i) => {
         const a = sections[i];
         const c = sections[i + 1];
@@ -113,8 +115,8 @@ describe("bridge colliders", () => {
         expect(g.t1).toBeGreaterThan(g.t0);
         expect(bridgeParapetAt(b, (g.t0 + g.t1) / 2, g.side)).toBe(false);
       }
-      const points = bridgeColliderPoints(b);
       const sections = bridgeSections(b);
+      const points = bridgeColliderPoints(b).slice(0, sections.length - 1);
       for (const [cut, chord, end] of [
         [b.trimStartAxis, points[0], sections[0]],
         [b.trimEndAxis, points[points.length - 1], sections[sections.length - 1]],
@@ -161,7 +163,7 @@ describe("bridge colliders", () => {
     let worst = 0;
     for (const b of decks) {
       const sections = bridgeSections(b);
-      const points = bridgeColliderPoints(b);
+      const points = bridgeColliderPoints(b).slice(0, sections.length - 1);
       points.forEach((p, i) => {
         const a = sections[i];
         const c = sections[i + 1];

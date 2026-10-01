@@ -7,14 +7,13 @@
 | read with | meaning |
 |---|---|
 | `getNightBlend()` | 0 = full day, 1 = full night |
-| `getDayNightPhase()` | `"day" \| "dusk" \| "night" \| "dawn"` |
 | `getWindowLightsProgress()` | 0..1. Ramps on after mid-dusk and off at dawn. Drives window lights, lamp emissive and lamp glow |
 | `getNightIndex()` | increments each nightfall, so a different set of windows lights each night |
 | `NIGHT_BLEND_UNIFORM` | the same blend as a shared shader uniform (`uNightBlend`) for unlit shaders; `nightDimGLSL()` darkens by `NIGHT_GROUND_DIM` |
 
 - `nightBlendAt(timeMs, dayMs, nightMs, transitionMs)` is the cycle curve itself (pure; DayNightCycle feeds it the server clock).
 - There is no React context for day/night: read the getters above from `useFrame`.
-- [DayNightLights.tsx](DayNightLights.tsx) is the scene's ambient light plus one directional light. Both dim with the blend, and the directional light swings from the sun to the moon. Only LIT materials (actors, buildings, dressing) see these lights. Unlit terrain and grass dim through `uNightBlend` instead.
+- [DayNightLights.tsx](DayNightLights.tsx) is the scene's ambient light plus one directional light, mounted by the overworld domain. Both dim with the blend, and the directional light swings from the sun to the moon. Only LIT materials (actors, buildings, dressing) see these lights. Unlit terrain and grass dim through `uNightBlend` instead.
 
 **Lamp glow** ([lampGlow.ts](lampGlow.ts)) is how street lamps and traffic signals light the ground at night. It uses **no real lights**:
 
@@ -22,7 +21,7 @@
 - Every ~20 frames the heads are written into a 64×64 **grid texture** centered on the camera. Each cell is 24u (`LAMP_CELL_SIZE`) and holds one head. If two heads share a cell, the first one registered wins.
 - Shaders read their 3×3 cell neighborhood (`lampGlowAccumGLSL`) and add a falloff of radius `LAMP_GLOW_RADIUS`. The cost is the same for any number of lamps.
 - Intensity follows `getWindowLightsProgress()`, so lamps come on with the windows.
-- `LampGlowDriver` (mounted once in [world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) runs `driveLampLighting` every frame while any head is registered. `driveLampLighting` is time-guarded, so the features that still call it themselves cost nothing extra.
+- `LampGlowDriver` (mounted once in [world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) runs `driveLampLighting` every frame while any head is registered.
 - Who receives the glow: the terrain (built into its material), every actor material (`prepareActorMaterial` calls `patchStandardMaterialLampGlow`), and bridge decks (they add `LAMP_GLOW_UNIFORMS_GLSL` + `lampGlowAccumGLSL` by hand).
 
 ## How to use/add
@@ -37,12 +36,11 @@ import { LAMP_COLOR_WARM, registerLampHeads } from "../../../lighting/lampGlow";
 const disposeHeads = registerLampHeads("my-feature", [
   { position: new THREE.Vector3(x, y + 5, z), color: LAMP_COLOR_WARM },
 ]);
-// With the dressing base: keep it on the chunk → useChunkRegistry((chunk) => chunk.disposeHeads()).
+// In a solid dressing feature: return it from build and release it in
+// useSolidDressing(spec, { onRemove: (chunk) => chunk.disposeHeads(), … }) — see street-lamps.
 ```
 
 Keys are generated, the grid is marked dirty, and the driver is already running. To recolor a head, call `setLampHeadColor(head, color)`, which marks the grid dirty.
-
-[street-lamps](../objects/dressing/street-lamps/StreetLamps.tsx) and [traffic-lights](../objects/dressing/traffic-lights/TrafficLights.tsx) still use the older hand-keyed API (`activeLampHeads.set` + `markLampGridDirty` + `unregisterLampHeads` + their own `driveLampLighting`). It keeps working, but don't copy it.
 
 ### Add a glow color
 

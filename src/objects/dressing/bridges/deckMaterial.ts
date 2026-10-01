@@ -21,8 +21,8 @@ export const createDeckMaterial = (): THREE.ShaderMaterial => {
     vertexColors: true,
     // The ground under a deck's ends is cut only BRIDGE_CUT_BELOW_TOP (0.08u) below its top, flush
     // at a landed seam; the depth buffer resolves that only within ~200u (near 0.1: a step is
-    // d² / (0.1 · 2²⁴), 0.1u at 400u), so beyond it the ground won the depth test in patches — "the
-    // floor clipping through" from above, gone up close (Evan, screenshot). Pulling the deck a few
+    // d² / (0.1 · 2²⁴), 0.1u at 400u), so beyond it the ground wins the depth test in patches — the
+    // floor clipping through from above, gone up close. Pulling the deck a few
     // depth steps toward the camera resolves every such tie in its favor at any distance; it moves
     // nothing that is really in front of it by more than those steps (a pixel or two far away).
     polygonOffset: true,

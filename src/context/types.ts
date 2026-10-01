@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { DEV_TOGGLES } from "./constants";
 
 export interface GameContextType {
   playerPosition: THREE.Vector3;
@@ -11,12 +12,13 @@ export interface GameContextType {
   setPlayerSpawn: (spawn: [number, number, number] | null) => void;
 }
 
-export interface DevContextType {
+export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
+/** One boolean per DEV_TOGGLES entry. */
+export type DevToggleFlags = Record<DevToggleFlag, boolean>;
+
+export type DevContextType = DevToggleFlags & {
   /** Toggled by F1; mirrored to the `?devmode` URL param so a refresh keeps it. */
   devMode: boolean;
-  noclip: boolean;
-  physicsDebug: boolean;
   toggleDevMode: () => void;
-  setNoclip: (noclip: boolean) => void;
-  setPhysicsDebug: (physicsDebug: boolean) => void;
-}
+  setToggle: (flag: DevToggleFlag, on: boolean) => void;
+};

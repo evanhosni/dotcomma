@@ -69,3 +69,11 @@ export interface SpawnPoint {
   biomeId: number;
   descriptorId: string;
 }
+
+/** A member component may carry a load-time PROGRAM WARM-UP (utils/warmPrograms.ts): ActorPool renders
+ *  `Warmup` once per distinct `warmupKey(descriptor)` as the domain mounts, so the first instance to
+ *  stream in mid-play does not link its shaders in that frame. */
+export interface ActorWarmupHooks {
+  Warmup?: React.FC<{ descriptor: AnyActorDescriptor }>;
+  warmupKey?: (descriptor: AnyActorDescriptor) => string;
+}

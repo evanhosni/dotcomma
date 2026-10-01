@@ -17,13 +17,13 @@ The roll is `floor(u × count)` over the list, **in order**. So the order of [in
 | sky | `<Skybox>`, mixed by position across region edges | optional `<Skybox>` override |
 | content | — | `actors` (spec: everything that spawns in the biome, and only there), `<Dressing>`, `<Foliage>` |
 
-**No hard edges.** At every wall between zones, height, material and sky all cross-fade into the neighbour (`utils/workers/zoneBlend.ts`; the long form is in CLAUDE.md "Blending"). Inside its `blendWidth` of an edge, a biome fades into its region's BASE material and base height (its "presence"). `blendWidth` / `heightBlendWidth` resolve biome → region → domain default (300). `blendWidth: 2` gives a crisp edge (the city). **Keep every width under 250** (half a biome cell), or presence never reaches 1 and the biome never fully appears.
+**No hard edges.** At every wall between zones, height, material and sky all cross-fade into the neighbour (`utils/workers/zoneBlend.ts`; the long form is in CLAUDE.md "Blending"). Inside its `blendWidth` of an edge, a biome fades into its region's BASE material and base height (its "presence"). `blendWidth` / `heightBlendWidth` resolve biome → region → domain default (300). `blendWidth: 2` gives a crisp edge (the city). Any width is allowed: a wider one is just a softer biome. A lone cell is about 500u across, so with a width past ~250 its centre never reaches full presence (its own height/texture stays partly blended with the base); joined cells of the same biome reach it further in.
 
 **One list, rendered.** Everything the server needs is DATA in `spec.ts` (Three-free): id, name, flags, noise, blend widths, the biome order, and a biome's `actors`. The JSX never restates it:
 - [../domain.tsx](../domain.tsx) renders `<Regions specs={OVERWORLD_REGIONS} components={{ city: CityRegion, … }}>`; [../config.ts](../config.ts) (the server's copy) is built from the same `OVERWORLD_REGIONS`.
 - A `region.tsx` is `<Region spec biomes={{ <biome name>: Component }}>`: `<Region>` registers the spec (its `baseNoise` included) and renders the biome components **in `spec.biomes` order**.
 - A `biome.tsx` is `<Biome spec>` + client-only children. `<Biome>` registers the spec (its `noise` included) and its `actors`.
-- The component maps must have exactly one entry per spec name, and a `<Region>`/`<Biome>` must be the spec its parent's list put there; both throw in dev otherwise. A config-only biome maps to `null`.
+- The component maps must have exactly one entry per spec name, and a `<Region>`/`<Biome>` must be the spec its parent's list put there; both throw in dev otherwise. A config-only biome (or region) maps to `null`: the bare `<Biome spec>` (`<Region spec>`) is rendered for it, so it needs no `.tsx` file (the home domain's `wire` biome and `home` region).
 - Ids and names are checked when the config is assembled ([../../domainConfig.ts](../../domainConfig.ts)): unique ids, unique names, names lowercase letters only (a name is the `/<region>/<biome>` address word and the `<name>_frag` shader function).
 
 **Materials** ([src/utils/material/_material.ts](../../../../utils/material/_material.ts)): every region and biome is compiled into ONE terrain shader.
@@ -55,7 +55,7 @@ Current regions (ids in each `spec.ts`; `world/constants.ts` keeps only the biom
      import type { BiomeSpec } from "../../../../../../types";
      export const FERN_BIOME: BiomeSpec = {
        id: 9, name: "fern", joinable: true,   // id unique in the domain; name = lowercase letters
-       // blendWidth: 150,          // optional, < 250
+       // blendWidth: 150,          // optional; wider = softer edge
        noise: { params: { type: "perlin", octaves: 3, persistence: 1, lacunarity: 1,
                           exponentiation: 1, height: 80, scale: 150 } },
        // water: { depth: 20 },     // a lake instead of noise

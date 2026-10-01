@@ -31,6 +31,9 @@ export namespace _spawnFade {
 
   export const clock = (): number => performance.now() / 1000;
 
+  /** The fade's ease (smoothstep); linearOf is its inverse. */
+  const ease = (t: number): number => t * t * (3 - 2 * t);
+
   /** Base materials draw fully visible; only twins ever carry another value. */
   const VISIBLE: THREE.IUniform<number> = { value: 1 };
 
@@ -147,8 +150,7 @@ export namespace _spawnFade {
 
     /** Eased visibility now; writes it to every twin on the ramp. */
     update(now: number): number {
-      const t = this.linearAt(now);
-      const v = t * t * (3 - 2 * t);
+      const v = ease(this.linearAt(now));
       if (v !== this.value) {
         this.value = v;
         this.twins.forEach((twin) => (twin.__spawnFadeUniform.value = v));
@@ -223,8 +225,7 @@ export namespace _spawnFade {
     /** Visibility now, without advancing anything. */
     value(now = clock()): number {
       if (!this.ramp) return 1;
-      const t = this.ramp.linearAt(now);
-      return t * t * (3 - 2 * t);
+      return ease(this.ramp.linearAt(now));
     }
 
     /** Toward visible, from `from` (default: wherever it is now). */

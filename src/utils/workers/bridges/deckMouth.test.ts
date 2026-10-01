@@ -144,8 +144,7 @@ describe("round-18 deck mouth, lane and profile rules", () => {
       }
     }
     expect(samples).toBeGreaterThan(1000);
-    // (Round 17 left 23% of these curb, sidewalk or sand. What is left is the curb line's own
-    // interpolation at a deck's corner.)
+    // (What is left is the curb line's own interpolation at a deck's corner.)
     expect(bad / samples).toBeLessThan(0.01);
   });
 
@@ -196,7 +195,6 @@ describe("round-18 deck mouth, lane and profile rules", () => {
       }
     }
     expect(painted).toBeGreaterThan(2);
-    // (Round 17: up to 60× the road's rate where a deck's two ends landed on different roads.)
     expect(worst).toBeLessThan(0.05);
   });
 
@@ -218,7 +216,6 @@ describe("round-18 deck mouth, lane and profile rules", () => {
         }
       }
     }
-    // (Round 17: 0.6 on the hillside deck, the cut's cross-fall eased out over 12u.)
     expect(kink).toBeLessThan(0.16);
     // …and the road in front of every landed cut end, as the LOD1 mesh draws it, bends by at most this.
     let bump = 0;
@@ -232,7 +229,6 @@ describe("round-18 deck mouth, lane and profile rules", () => {
         for (let k = 1; k + 1 < hs.length; k++) bump = Math.max(bump, Math.abs(hs[k + 1] - 2 * hs[k] + hs[k - 1]) / 4);
       }
     }
-    // (Round 17: 1.19 — the road held at the cut's height to 12u, then a wall to its own grade.)
     expect(bump).toBeLessThan(0.3);
   });
 });

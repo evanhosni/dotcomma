@@ -67,8 +67,8 @@ export const landedCut = (path: PointXZ[], cum: number[], which: 0 | 1, W: numbe
   if (landedCutMode === 2) return null;
   const L = cum[cum.length - 1];
   // Across the deck along the lateral axis the slab is drawn with (pathMiters, interpolated like
-  // axisAt): the leg's own normal put a corner a fraction off the drawn one, and the drawn edge rode the
-  // curb's last half unit past it (MEASURED).
+  // axisAt): the leg's own normal would put a corner a fraction off the drawn one, the drawn edge
+  // riding past the curb.
   const miters = pathMiters({ path: path.map((q, i) => ({ x: q.x, z: q.z, t: cum[i] / L })) } as FreewayBridge);
   const at = (sArc: number, lat: number): PointXZ => {
     const s = which === 0 ? sArc : L - sArc;
@@ -116,9 +116,9 @@ export const landedCut = (path: PointXZ[], cum: number[], which: 0 | 1, W: numbe
     return hi;
   };
   // …but not deep inside the river's banks where the road, carved down the bank with the terrain, falls
-  // steeply to it: a cut there landed the deck 15u under the road's crest, and the mouth in front of it
-  // stood as a wall of asphalt (Evan, 75.png). Such a cut moves out to the bank's edge, where the road is
-  // at its grade; a gentle bank keeps the cut on its pavement (flush, no ledge beside the deck).
+  // steeply to it (a cut there would land the deck far under the road's crest, the mouth in front of
+  // it a wall of asphalt). Such a cut moves out to the bank's edge, where the road is at its grade; a
+  // gentle bank keeps the cut on its pavement (flush, no ledge beside the deck).
   const bankEdge = (lat: number): number => {
     const limit = BRIDGE_PAVED_SHARE * L;
     const river = domainConfig!.river;
@@ -156,7 +156,7 @@ export const landedCut = (path: PointXZ[], cum: number[], which: 0 | 1, W: numbe
   const cfg = domainConfig!.cityConfig;
   const asphalt = (q: PointXZ): number => {
     const v = computeVertexData(q.x, q.z);
-    return v.height - cfg.curbHeight * smoothstep(cfg.roadWidth - 2, cfg.roadWidth, v.distanceToRoadCenter);
+    return v.approachHeight - cfg.curbHeight * smoothstep(cfg.roadWidth - 2, cfg.roadWidth, v.distanceToRoadCenter);
   };
   const gL = asphalt(PL);
   const gR = asphalt(PR);
@@ -181,7 +181,7 @@ export const landingOf = (b: FreewayBridge, which: 0 | 1): BridgeLanding => {
   const yEnd = which === 0 ? b.sy : b.ey;
   const half = b.width / 2;
   const lats = [-half, -half / 2, 0, half / 2, half];
-  const ground = lats.map((lat) => Math.min(computeVertexData(p.x + ax * lat, p.z + az * lat).height, yEnd - BRIDGE_CUT_BELOW_TOP));
+  const ground = lats.map((lat) => Math.min(computeVertexData(p.x + ax * lat, p.z + az * lat).approachHeight, yEnd - BRIDGE_CUT_BELOW_TOP));
   const slope = (ground[4] - ground[0]) / b.width;
   let lo = Infinity;
   lats.forEach((lat, i) => (lo = Math.min(lo, ground[i] - slope * lat)));

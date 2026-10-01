@@ -36,5 +36,3 @@ export const useGameContext = (): GameContextType => {
 
   return context;
 };
-
-export default GameContext;

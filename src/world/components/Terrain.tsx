@@ -1,6 +1,7 @@
 import { useContext, useLayoutEffect } from "react";
 import { TerrainParams } from "../types";
-import { BiomeContext, RegionContext, reportHierarchyError, useDomainStore } from "./context";
+import { BiomeContext, RegionContext, useDomainStore } from "./context";
+import { reportContentError } from "../../utils/contentError";
 
 export interface TerrainConfigProps extends Partial<TerrainParams> {}
 
@@ -12,7 +13,7 @@ export const Terrain = (params: TerrainConfigProps) => {
   const biome = useContext(BiomeContext);
   const region = useContext(RegionContext);
   if (biome || region) {
-    reportHierarchyError("<Terrain> is domain-scoped: set `baseNoise` in the region's spec.ts / `noise` in the biome's spec.ts");
+    reportContentError("<Terrain> is domain-scoped: set `baseNoise` in the region's spec.ts / `noise` in the biome's spec.ts");
   }
   // Stringified deps: inline JSX literals must not re-commit the world per parent render.
   const paramsKey = JSON.stringify(params);

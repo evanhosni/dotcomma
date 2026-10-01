@@ -35,7 +35,7 @@ export interface NpcBody {
 }
 
 /** Rounded so float noise doesn't re-publish every tick. */
-export const VEL_QUANTUM = 0.01;
+const VEL_QUANTUM = 0.01;
 export const quantizeVelocity = (v: number): number => Math.round(v / VEL_QUANTUM) * VEL_QUANTUM;
 
 export const SPAWN_CLEARANCE = 0.05;

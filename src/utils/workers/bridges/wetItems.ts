@@ -13,7 +13,7 @@ const BRIDGE_JUNCTION_REACH = 6;
 const BRIDGE_END_MEET = 10;
 
 /** Two open ends meeting continue as ONE deck only this close to straight (the directions into the
- *  two items at least this opposite: cos 35°); anything sharper was a V kink over the water. */
+ *  two items at least this opposite: cos 35°); anything sharper would be a V kink over the water. */
 const BRIDGE_JOIN_STRAIGHT_COS = Math.cos((35 * Math.PI) / 180);
 
 export const teeHostChain = (e: ChainEnd): BridgeChain | null => (e.kind === "tee" ? (e.hostChain ?? e.host?.chain ?? null) : null);

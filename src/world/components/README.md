@@ -16,7 +16,7 @@ World content is written as JSX, but these components render nothing visible. Ea
 ```
 
 **Specs are the data, components render them.** A region/biome's `spec.ts` (Three-free — the server's config is built from the same objects) holds everything the terrain needs: id, name, `baseNoise` / `noise`, water, flags, blend widths, the biome order and the biome's `actors`. The JSX only adds what is client-only (materials, sky, dressing, foliage), so the two cannot drift:
-- `<Regions specs components>` and `<Region biomes>` take a component map keyed by spec `name` and render it **in spec order** — JSX order can no longer disagree with the voronoi order. The map must have exactly one entry per spec (`null` for a config-only biome); a mismatch throws in dev.
+- `<Regions specs components>` and `<Region biomes>` take a component map keyed by spec `name` and render it **in spec order** — JSX order can no longer disagree with the voronoi order. The map must have exactly one entry per spec (`null` for a config-only biome or region, which renders the bare `<Biome spec>` / `<Region spec>` so its spec still registers); a mismatch throws in dev.
 - A `<Region>`/`<Biome>` asserts it is the spec its parent's list put at that position (by id + name), and throws in dev when mounted outside such a list.
 - `<Biome>` registers the spec's `actors` (placements of `ActorSpec`s with per-biome overrides) through [Actor.tsx](Actor.tsx): `describeActor(spec)` is the client descriptor (the member component the spec names, default `ModelActor`, plus every spec attribute), the mount's overrides win, and a kind the server has nothing to simulate defaults to `serverSynced: false`.
 

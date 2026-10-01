@@ -11,11 +11,11 @@
   - Blades thin out with the terrain material's biome **weight**, so a field dithers away across a biome edge instead of stopping on a line.
   - Plants stay off the **riverbed**: against the same `riverBedDistance` field and edge the terrain shader paints the bed by (`RIVER_BED_FULL_INSET`, `world/shaders/constants.ts`), density ramps from 0 where the bed fully covers the ground to full over `RIVER_BED_PLANT_RAMP` (8 factor-1 units), so the sand is bare and only a sparse fringe reaches its fade. The per-blade roll is a hash of the chunk seed and draw index, run after every other filter, so it only ever removes blades: a chunk with no ground inside the ramp is bit-identical to before.
   - The worker streams the result as `Float32Array`s straight into GPU instance attributes.
-- **Rendering:** one instanced billboard mesh per chunk, with one shader for every plant. The shader does camera-facing billboards, wind sway, per-instance distance fade, quantization, world curvature and night dimming.
+- **Rendering:** one instanced billboard mesh per chunk, with one shader for every plant. The shader does camera-facing billboards, wind sway, per-instance distance fade, quantization, world curvature and night dimming. Chunk meshes (and their group) compose their matrix once (`freezeStaticSubtree`), and the material's program is linked as the field mounts (`utils/warmPrograms.ts`), not when the first blades stream in.
 - **Spawn fade:** each chunk dithers in when it is added, like every game object ([../../vfx/spawnFade.ts](../../vfx/spawnFade.ts), a `SpawnFadeSet` over the chunk meshes). The per-blade distance shrink stays the fade OUT: the instance-count truncation is built on it.
 - **LOD:** the worker sorts instances by their fade distance, so a far chunk just draws a shorter prefix of its instances (`instanceCount`). There is also a mild density taper past 150u.
 
-`createFoliage(defaults)` returns a component. Precedence, as for `<Dressing>`: the mount's own props, then the enclosing `<Foliage>` group's (`renderDistance`), then the plant's defaults. Without an explicit `biomeIds`, a field restricts itself to the `<Biome>` it is mounted in (via `BiomeContext`). In dev, two different plant types mounted on one `seed` log an error.
+`createFoliage(defaults)` returns a component. Precedence, as for `<Dressing>`: the mount's own props, then the enclosing `<Foliage>` group's (`renderDistance`), then the plant's defaults. Without an explicit `biomeIds`, a field restricts itself to the `<Biome>` it is mounted in (via `BiomeContext`). Two different plant types mounted on one `seed` are a content error (throws outside production, `reportContentError`).
 
 The only plant today is grass, [grass/GrassField.tsx](grass/GrassField.tsx): a canvas-drawn blade texture plus `createFoliage({ seed: "grass", … })`.
 
@@ -31,7 +31,7 @@ Mount it in a biome's `<Foliage>` group (`src/world/domains/overworld/regions/<r
 </Foliage>
 ```
 
-### Add a plant type (e.g. a fern) — 1 new file + 1 mount (unchanged; now seed clashes are caught)
+### Add a plant type (e.g. a fern) — 1 new file + 1 mount (unchanged; a seed clash is now a dev error)
 
 1. Put the billboard image in `public/textures/fern.png`: a transparent PNG, upright, base at the bottom, near-white if you want `color` to tint it. Or draw it procedurally like [grass/GrassField.tsx](grass/GrassField.tsx).
 2. Create `src/objects/foliage/fern/FernField.tsx`:
@@ -57,6 +57,6 @@ Mount it in a biome's `<Foliage>` group (`src/world/domains/overworld/regions/<r
 
 Nothing else is needed: chunking, streaming, the shader, curvature, LOD and disposal come from the base.
 
-Two plants with the **same seed and density** land on identical points and grow through each other, so always give a new plant its own seed (dev logs an error when two plant types share one).
+Two plants with the **same seed and density** land on identical points and grow through each other, so always give a new plant its own seed (two plant types sharing one are a dev error).
 
 Only edit [Foliage.tsx](Foliage.tsx) for behavior no plant has yet (a new filter, a new shader term). Such a change applies to every plant. A new filter also goes into `FoliageChunkParams` ([foliageWorker.ts](foliageWorker.ts); the worker imports the same type).

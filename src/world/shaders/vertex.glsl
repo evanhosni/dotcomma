@@ -29,8 +29,8 @@ varying vec3 vWorldPosAbs;
 // the feather edge) and vBiomePresence* the signed distance to the biome's OWN
 // boundary in its blend widths — never a weight or an id. Signed distance
 // interpolates linearly, so the fragment shader's smoothsteps land a 1–3u feather
-// at pixel resolution even on 17.5u quads. A per-triangle `flat` biome id used to
-// live here; it is what produced staircase edges and stray outlines at every wall.
+// at pixel resolution even on 17.5u quads (a per-triangle `flat` biome id would
+// draw staircase edges and stray outlines at every wall).
 //
 // PRECISION (see CLAUDE.md, Coordinate Precision): NEVER form an absolute
 // world coordinate here — float32 swims the quantization grid past ~100k

@@ -92,15 +92,15 @@ export const bridgePaintAt = (b: FreewayBridge, t: number): boolean => !b.paint.
 
 /** The lane dashes' period in phase units: a dash while `mod(phase, period)` is under half of it (the
  *  city fragment shader and the deck material both hard-code 10). */
-export const LANE_DASH_PERIOD = 10;
+const LANE_DASH_PERIOD = 10;
 
 /** The lane-dash phase at arc fraction t: the terrain road's own at each landed end, continued along
  *  the deck at that road's own rate. Between two painted ends the rate eases from one end's to the
  *  other's and the phases only have to agree modulo a period: end 1's is run the way end 0's runs (a
  *  reversed dash pattern is the same pattern half a period on), and what is left over after whole
- *  periods — at most half of one — is spread over the deck. Blending the raw phases squeezed their
- *  difference — thousands of units where the ends land on different roads — into the deck's length,
- *  a dash every few decimetres (MEASURED: up to 60× the road's rate). */
+ *  periods — at most half of one — is spread over the deck. (Blending the raw phases would squeeze
+ *  their difference — thousands of units where the ends land on different roads — into the deck's
+ *  length: a dash every few decimetres.) */
 export const bridgeLaneAlong = (b: FreewayBridge, t: number): number => {
   const p = b.paint;
   const L = b.length;
@@ -156,14 +156,9 @@ export const axisAt = (b: FreewayBridge, miters: { x: number; z: number }[], t: 
   return { x: miters[k].x + (miters[k + 1].x - miters[k].x) * u, z: miters[k].z + (miters[k + 1].z - miters[k].z) * u };
 };
 
-/** Where the first SQUARE section beside a T end's oblique cut stands (arc fraction): just past the
- *  cut's farthest corner, so both slab edges advance from it to the cut — found against the real
- *  axes (the path may bend inside the sweep), BRIDGE_SWEEP_CLEAR to spare. The trimmed end itself
- *  when the end is not a T end. */
 /** Whether the one quad from an oblique cut (center c, axis ca) to a square section (p, axis pa) FOLDS
  *  over itself: its lateral lines rotate so fast that two of them cross inside it, where the ribbon's
- *  triangles overlapped and a point had two tops (MEASURED: 1.14 and 1.40 at one corner of an oblique
- *  landed cut). The bilinear map's Jacobian is linear in each parameter, so it is positive everywhere
+ *  triangles would overlap and a point have two tops. The bilinear map's Jacobian is linear in each parameter, so it is positive everywhere
  *  when it is at the four corners — here with a margin. `inward` +1 when the cut starts the deck. */
 const BRIDGE_SWEEP_FOLD = 0.3;
 const sweepFolds = (c: PointXZ, ca: BridgeTrimAxis, p: PointXZ, pa: PointXZ, inward: number, half: number): boolean => {
@@ -203,6 +198,10 @@ const quadDrawable = (c: PointXZ, ca: PointXZ, p: PointXZ, pa: PointXZ, inward: 
   const min = BRIDGE_SWEEP_CLEAR * half;
   return (a1 > min && a2 > min && a3 > min && a4 > min) || (a1 < -min && a2 < -min && a3 < -min && a4 < -min);
 };
+/** Where the first SQUARE section beside a T end's oblique cut stands (arc fraction): just past the
+ *  cut's farthest corner, so both slab edges advance from it to the cut — found against the real
+ *  axes (the path may bend inside the sweep), BRIDGE_SWEEP_CLEAR to spare. The trimmed end itself
+ *  when the end is not a T end. */
 const cutClearance = (b: FreewayBridge, which: 0 | 1): number => {
   const [t0, t1] = bridgeTrimRange(b);
   const end = which === 0 ? t0 : t1;
@@ -226,8 +225,8 @@ const cutClearance = (b: FreewayBridge, which: 0 | 1): number => {
 
 /** Over this much of the deck beside a cut end (a landed cut, a T) the cut's cross-fall — the road's
  *  or the host's grade across the deck — eases into the deck's own: with the next section flat, on a
- *  road climbing a hillside the slab's edge drops 3u within a unit of its cut (MEASURED, the terrain
- *  poking 2.4u through the deck). */
+ *  road climbing a hillside the slab's edge would drop units within a unit of its cut, the terrain
+ *  poking through the deck. */
 const BRIDGE_CUT_TWIST = 12;
 const BRIDGE_TWIST_EDGE_PITCH = 0.1;
 const BRIDGE_CUT_HOLD = 8;
@@ -453,8 +452,8 @@ export const bridgeSections = (b: FreewayBridge): BridgeSection[] => {
   // through).
   // Past a landed CUT end the cut's cross-fall is held BRIDGE_CUT_HOLD further, so the slab there lies
   // in one plane with the flush road in front: the terrain's triangles across the seam can follow both
-  // (a cross-fall easing from the square section on warps the slab under them, and they either rise
-  // through it or are lowered into a step in front of the cut — MEASURED on the LOD1 mesh).
+  // (a cross-fall easing from the square section on would warp the slab under them, and they would
+  // either rise through it or be lowered into a step in front of the cut).
   const hold = (which: 0 | 1): number => (b.landings?.[which]?.ramp === 0 ? BRIDGE_CUT_HOLD / b.length : 0);
   const c0 = b.trimStartAxis ? Math.min(cutClearance(b, 0) + hold(0), t1) : t0;
   const c1 = b.trimEndAxis ? Math.max(cutClearance(b, 1) - hold(1), c0) : t1;
@@ -479,8 +478,8 @@ export const bridgeSections = (b: FreewayBridge): BridgeSection[] => {
   const half = b.width / 2;
   // The twist from a cut's cross-fall into the deck's own runs at least BRIDGE_CUT_TWIST, and as far as
   // keeps the slab's EDGES from pitching more than BRIDGE_TWIST_EDGE_PITCH on average against its
-  // centerline: a hillside landing's 0.42 cross-fall eased out over 12u pitched the edges 0.55 — a
-  // lopsided, kinked slab (Evan, 73/76.png).
+  // centerline (a hillside landing's 0.42 cross-fall eased out over 12u would pitch the edges 0.55 —
+  // a lopsided, kinked slab).
   const twistOf = (cross: number): number => Math.min(Math.max(BRIDGE_CUT_TWIST, (Math.abs(cross) * half) / BRIDGE_TWIST_EDGE_PITCH), ((c1 - c0) * b.length) / 2);
   const cross0 = b.trimStartAxis ? b.trimStartAxis.slope - skew0 * pitchAt(c0) : 0;
   const cross1 = b.trimEndAxis ? b.trimEndAxis.slope - skew1 * pitchAt(c1) : 0;

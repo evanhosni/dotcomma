@@ -14,7 +14,7 @@ import { domainConfig } from "../computeConfig";
 import { unwarp, warp } from "../noise";
 import { riverKeepOff } from "../rivers/riverNetwork";
 import { computeVertexData } from "../vertexCompute";
-import { distanceToWall, getBiomeContext, wallsOfBiome } from "../voronoi";
+import { distanceToWall, getBiomeContext, cityWallsOf } from "../voronoi";
 import { type FreewayRun, freewayPointAt, getNetwork } from "./freewayNetwork";
 
 export interface FreewayLampParams {
@@ -44,7 +44,8 @@ export interface FreewayLampPoint {
 }
 
 /** The lateral offset is solved so the lamp stands at the TARGET road-field distance: the road is
- *  measured from a meandered point (±3u), so a fixed offset from the polyline wandered on and off the curb. */
+ *  measured from a meandered point (±3u), so a fixed offset from the polyline would wander on and off
+ *  the curb. */
 const LATERAL_ITERATIONS = 4;
 const LATERAL_TOLERANCE = 0.75;
 /** An offset that moved further than this from the nominal one found another road's verge. */
@@ -163,7 +164,7 @@ export function getFreewayRunLamps(minX: number, minZ: number, maxX: number, max
         continue;
       }
       // The belt, and the mouth where the run merges into it.
-      if (distanceToWall(at.wx, at.wz, wallsOfBiome(getBiomeContext({ x: at.wx, z: at.wz }).zoneWalls, CITY_BIOME_ID)) < p.beltClear) {
+      if (distanceToWall(at.wx, at.wz, cityWallsOf(getBiomeContext({ x: at.wx, z: at.wz }))) < p.beltClear) {
         reason = "belt";
         continue;
       }

@@ -1,7 +1,7 @@
 import type { ActorSpec, CapsuleColliderSpec } from "../spec";
 import { BEEBLE_SM } from "./stateMachine";
 
-export const BEEBLE_COLLIDER: CapsuleColliderSpec = {
+const BEEBLE_COLLIDER: CapsuleColliderSpec = {
   shape: "capsule",
   radius: 0.5,
   height: 2.4,

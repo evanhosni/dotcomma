@@ -8,7 +8,7 @@ import { getActiveRegions } from "../../world/domains/utils";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 import { PANEL_CSS } from "./styles";
 
-const BIOME_POLL_INTERVAL = 1; // seconds
+const BIOME_POLL_INTERVAL_S = 1;
 
 const GRAPH_WIDTH = 120;
 const GRAPH_HEIGHT = 30;
@@ -71,6 +71,54 @@ function drawGraph(ctx: CanvasRenderingContext2D, history: number[], maxVal: num
   ctx.stroke();
 }
 
+interface StatsPanel {
+  container: HTMLDivElement;
+  /** One value span per LABELS row. */
+  spans: HTMLSpanElement[];
+  /** Running averages (FPS, MS) and the peak counts (Mem). */
+  avgSpans: HTMLSpanElement[];
+  /** Held worst values (FPS low, MS high). */
+  spikeSpans: HTMLSpanElement[];
+  /** FPS, MS, Mem. */
+  graphs: { ctx: CanvasRenderingContext2D; history: number[] }[];
+}
+
+/** The panel's DOM: a label + value per row, the extra avg/spike spans and a graph under the first rows. */
+const createStatsPanel = (): StatsPanel => {
+  const container = document.createElement("div");
+  container.style.cssText = "order:1;" + PANEL_CSS;
+  const panel: StatsPanel = { container, spans: [], avgSpans: [], spikeSpans: [], graphs: [] };
+
+  LABELS.forEach((label, i) => {
+    if (i > 0) container.appendChild(document.createTextNode("\n"));
+    container.appendChild(document.createTextNode(label));
+    const span = document.createElement("span");
+    container.appendChild(span);
+    panel.spans.push(span);
+
+    if (i <= I_MEM) {
+      const avg = document.createElement("span");
+      avg.style.color = "rgba(0,255,0,0.55)";
+      container.appendChild(avg);
+      panel.avgSpans.push(avg);
+    }
+
+    if (i <= I_MS) {
+      const spike = document.createElement("span");
+      spike.style.color = "#f44";
+      container.appendChild(spike);
+      panel.spikeSpans.push(spike);
+    }
+
+    if (i <= I_MEM) {
+      const g = createGraph();
+      container.appendChild(g.canvas);
+      panel.graphs.push({ ctx: g.ctx, history: g.history });
+    }
+  });
+  return panel;
+};
+
 const OverlayHUD = () => {
   const { gl, camera } = useThree();
   const { progress, terrainLoaded } = useGameContext();
@@ -118,52 +166,15 @@ const OverlayHUD = () => {
   }, []);
 
   useEffect(() => {
-    const column = getOrCreateLeftColumn();
-
-    const container = document.createElement("div");
-    container.style.cssText = "order:1;" + PANEL_CSS;
-
-    const createdSpans: HTMLSpanElement[] = [];
-    const createdAvgSpans: HTMLSpanElement[] = [];
-    const createdSpikeSpans: HTMLSpanElement[] = [];
-    const createdGraphs: { ctx: CanvasRenderingContext2D; history: number[] }[] = [];
-
-    LABELS.forEach((label, i) => {
-      if (i > 0) container.appendChild(document.createTextNode("\n"));
-      container.appendChild(document.createTextNode(label));
-      const span = document.createElement("span");
-      container.appendChild(span);
-      createdSpans.push(span);
-
-      if (i <= I_MEM) {
-        const avg = document.createElement("span");
-        avg.style.color = "rgba(0,255,0,0.55)";
-        container.appendChild(avg);
-        createdAvgSpans.push(avg);
-      }
-
-      if (i <= I_MS) {
-        const spike = document.createElement("span");
-        spike.style.color = "#f44";
-        container.appendChild(spike);
-        createdSpikeSpans.push(spike);
-      }
-
-      if (i <= I_MEM) {
-        const g = createGraph();
-        container.appendChild(g.canvas);
-        createdGraphs.push({ ctx: g.ctx, history: g.history });
-      }
-    });
-
-    spans.current = createdSpans;
-    avgSpans.current = createdAvgSpans;
-    spikeSpans.current = createdSpikeSpans;
-    graphs.current = createdGraphs;
-    column.appendChild(container);
+    const panel = createStatsPanel();
+    spans.current = panel.spans;
+    avgSpans.current = panel.avgSpans;
+    spikeSpans.current = panel.spikeSpans;
+    graphs.current = panel.graphs;
+    getOrCreateLeftColumn().appendChild(panel.container);
 
     return () => {
-      container.remove();
+      panel.container.remove();
     };
   }, []);
 
@@ -207,7 +218,7 @@ const OverlayHUD = () => {
     if (geometries > memGraphMax.current) memGraphMax.current = geometries;
 
     biomePoll.current += delta;
-    if (biomePoll.current >= BIOME_POLL_INTERVAL) {
+    if (biomePoll.current >= BIOME_POLL_INTERVAL_S) {
       biomePoll.current = 0;
       const pos = camera.position;
       const regions = getActiveRegions();

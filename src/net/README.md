@@ -27,7 +27,7 @@ The full NPC sync design (who simulates, interpolation, animation timing, input)
 
 ### Sync an NPC
 
-You write no networking code. Follow "Wiring a NEW NPC" in [NPC_TRACKING.md](../../NPC_TRACKING.md) §6: a state machine, a spec, one catalog line and one line in a biome spec's `actors`. Any actor is synced by default. Set `serverSynced: false` on its placement to run it locally.
+You write no networking code. Follow "Wiring a NEW NPC" in [NPC_TRACKING.md](../../NPC_TRACKING.md) §6: a state machine, a spec and one line in a biome spec's `actors`. Any actor is synced by default. Set `serverSynced: false` on its placement to run it locally.
 
 ### Store something per player
 

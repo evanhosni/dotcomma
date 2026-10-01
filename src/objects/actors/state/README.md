@@ -67,7 +67,7 @@ The worked example is [../beeble/stateMachine.ts](../beeble/stateMachine.ts).
      ],
    };
    ```
-2. Reference it from the NPC's `spec.ts` (`stateMachine: FROG_SM`) and catalog the spec ([../README.md](../README.md), "An NPC").
+2. Reference it from the NPC's `spec.ts` (`stateMachine: FROG_SM`) and place the spec in a biome ([../README.md](../README.md), "An NPC").
 
 Rules that keep it working on the server:
 - Import Three only as `import type`.

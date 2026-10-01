@@ -1,3 +1,4 @@
+import { RootState, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -6,6 +7,7 @@ import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
 import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
+import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
 import { framePhaseFromCoords } from "../../../utils/utils";
 import { prepareActorMaterial, useActorLifecycle } from "../Actor";
 import {
@@ -17,10 +19,10 @@ import {
   releaseProceduralBuildingAssets,
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
-import { addFarDoor, FarDoor, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
+import { addFarDoor, FarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
-import { DOOR_INTERACT_REACH } from "./spec";
-import { BuildingAttributes, BuildingProps } from "./types";
+import { BUILDING_HULL_KEYS, buildingSeedAt, DOOR_INTERACT_REACH } from "./spec";
+import { BuildingAttributes, BuildingMaterials, BuildingProps } from "./types";
 
 const COLLIDER_DISTANCE = 120;
 const DISTANCE_CHECK_INTERVAL = 15; // frames
@@ -34,6 +36,7 @@ const LIVE_DISTANCE = 150;
  *  only buildings the player actually walks up to pay for an interior. */
 const INTERIOR_DISTANCE = 60;
 const DOOR_RAYCAST_DISTANCE = 30; // building distance under which the door raycast runs
+const DOOR_RAYCAST_INTERVAL_FRAMES = 3;
 const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
 const DOOR_SWING_RATE = 4;
 
@@ -118,100 +121,127 @@ prepareActorMaterial(DEFAULT_EXTERIOR, { skipQuantization: true });
 prepareActorMaterial(DOOR_MATERIAL, { skipQuantization: true });
 prepareActorMaterial(DEFAULT_INTERIOR, { skipQuantization: true, skipLampGlow: true });
 
+const DISTANCE_GATE_HYSTERESIS = 12;
+
+const buildQueue = new TaskQueue();
+
+// The FIRST building each frame writes the shared window-light uniforms and moves the far-door origin.
+let sharedStateTime = -1;
+const driveSharedBuildingState = (state: RootState): void => {
+  const time = state.clock.elapsedTime;
+  if (time === sharedStateTime) return;
+  sharedStateTime = time;
+  WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
+  NIGHT_SEED_UNIFORM.value = getNightIndex();
+  followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
+};
+
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 const _sphere = new THREE.Sphere();
 const _hits: THREE.Intersection[] = [];
 
-// The FIRST building each frame writes the shared window-light uniforms.
-let sharedUniformsTime = -1;
+/** The door leaf under the screen-center ray within DOOR_INTERACT_REACH, or −1. */
+const raycastHoveredDoor = (camera: THREE.Camera, doorMeshes: (THREE.Mesh | null)[]): number => {
+  let hover = -1;
+  _raycaster.setFromCamera(_center, camera);
+  _raycaster.far = DOOR_INTERACT_REACH;
+  for (let i = 0; i < doorMeshes.length; i++) {
+    const mesh = doorMeshes[i];
+    if (!mesh) continue;
+    const geo = mesh.geometry;
+    if (geo.boundingSphere === null) geo.computeBoundingSphere();
+    _sphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
+    if (!_raycaster.ray.intersectsSphere(_sphere)) continue;
+    _hits.length = 0;
+    if (_raycaster.intersectObject(mesh, false, _hits).length > 0) {
+      hover = i;
+      break;
+    }
+  }
+  _raycaster.far = Infinity;
+  return hover;
+};
 
-const DISTANCE_GATE_HYSTERESIS = 12;
+/** Eases every hinge toward its open/closed angle, mirrored onto its far-door instance. Returns
+ *  whether any is still moving. */
+const swingDoors = (
+  hinges: (THREE.Group | null)[],
+  doorsOpen: boolean[],
+  farDoors: FarDoor[] | null,
+  delta: number,
+): boolean => {
+  let stillMoving = false;
+  for (let i = 0; i < hinges.length; i++) {
+    const hinge = hinges[i];
+    if (!hinge) continue;
+    const target = doorsOpen[i] ? DOOR_OPEN_ANGLE : 0;
+    const diff = target - hinge.rotation.y;
+    if (Math.abs(diff) < 1e-3) {
+      if (diff !== 0) hinge.rotation.y = target;
+    } else {
+      hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
+      stillMoving = true;
+    }
+    const far = farDoors?.[i];
+    if (far) setFarDoorAngle(far, hinge.rotation.y);
+  }
+  return stillMoving;
+};
 
-const buildQueue = new TaskQueue();
+/** This building's doors as far-door instances (farDoors.ts), at their current swing. */
+const addFarDoorsOf = (
+  scene: THREE.Scene,
+  assets: ProceduralBuildingAssets,
+  coordinates: THREE.Vector3Tuple,
+  hinges: (THREE.Group | null)[],
+  doorsOpen: boolean[],
+  fade: number,
+): FarDoor[] =>
+  assets.doors.map((d, i) =>
+    addFarDoor(
+      scene,
+      {
+        x: coordinates[0] + d.position[0],
+        y: coordinates[1] + d.position[1],
+        z: coordinates[2] + d.position[2],
+        yaw: d.yaw,
+        width: d.width,
+        leafCenter: assets.doorLeaf.center,
+        leafSize: assets.doorLeaf.size,
+        color: assets.doorLeaf.color,
+      },
+      hinges[i]?.rotation.y ?? (doorsOpen[i] ? DOOR_OPEN_ANGLE : 0),
+      fade,
+    ),
+  );
 
-// The FIRST building each frame moves the far-door origin.
-let farDoorOriginTime = -1;
-
-export const Building = ({
-  id,
-  descriptorId,
-  serverSynced,
-  coordinates,
-  seed,
-  exteriorSize,
-  numberOfSides,
-  palette,
-  accentColors,
-  accentChance,
-  windowShapes,
-  windowCount,
-  windowSize,
-  maxLean,
-  shellHeightRange,
-  stories,
-  roomCount,
-  doorCount,
-  doorSize,
-  ceilingHeight,
-  windowLightChance,
-  windowLightIntensity,
-  interiorColors,
-  materials,
-  renderDistance,
-  colliderDistance = COLLIDER_DISTANCE,
-  despawnDistance,
-  onDestroy,
-  children,
-}: BuildingProps) => {
-  const resolvedSeed =
-    seed !== undefined ? String(seed) : `${Math.round(coordinates[0])}_${Math.round(coordinates[2])}`;
+export const Building = (props: BuildingProps) => {
+  const {
+    id,
+    descriptorId,
+    serverSynced,
+    coordinates,
+    seed,
+    materials,
+    renderDistance,
+    colliderDistance = COLLIDER_DISTANCE,
+    despawnDistance,
+    onDestroy,
+    children,
+  } = props;
+  const resolvedSeed = seed !== undefined ? String(seed) : buildingSeedAt(coordinates[0], coordinates[2]);
   const { world, rapier } = useRapier();
 
-  // Stringified key so inline array props don't rebuild assets on parent
-  // renders; memoized because every door click re-render paid the stringify.
+  // Every generation attribute (BUILDING_HULL_KEYS — a new knob is picked up here automatically), keyed
+  // by its JSON so inline array props don't rebuild assets on parent renders; memoized because every
+  // door-click re-render would pay the stringify (the deps ARE the hull values, one per key).
+  const hullValues = BUILDING_HULL_KEYS.map((key) => props[key]);
   const { opts: buildOptions, key: optionsKey } = useMemo(() => {
-    const opts: BuildingAttributes = {
-      exteriorSize,
-      numberOfSides,
-      palette,
-      accentColors,
-      accentChance,
-      windowShapes,
-      windowCount,
-      windowSize,
-      maxLean,
-      shellHeightRange,
-      stories,
-      roomCount,
-      doorCount,
-      doorSize,
-      ceilingHeight,
-      windowLightChance,
-      windowLightIntensity,
-      interiorColors,
-    };
-    return { opts, key: JSON.stringify(opts) };
-  }, [
-    exteriorSize,
-    numberOfSides,
-    palette,
-    accentColors,
-    accentChance,
-    windowShapes,
-    windowCount,
-    windowSize,
-    maxLean,
-    shellHeightRange,
-    stories,
-    roomCount,
-    doorCount,
-    doorSize,
-    ceilingHeight,
-    windowLightChance,
-    windowLightIntensity,
-    interiorColors,
-  ]);
+    const opts: Record<string, unknown> = {};
+    BUILDING_HULL_KEYS.forEach((key, i) => (opts[key] = hullValues[i]));
+    return { opts: opts as BuildingAttributes, key: JSON.stringify(opts) };
+  }, hullValues);
   const [assets, setAssets] = useState<ProceduralBuildingAssets | null>(() =>
     peekProceduralBuildingAssets(resolvedSeed, optionsKey),
   );
@@ -282,7 +312,7 @@ export const Building = ({
   const interiorWantedRef = useRef(false);
   const [interior, setInterior] = useState<THREE.BufferGeometry | null>(null);
   const interiorGroupRef = useRef<THREE.Group>(null);
-  const doorFrameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 3));
+  const doorRaycastFrameRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], DOOR_RAYCAST_INTERVAL_FRAMES));
 
   // Doors are SERVER-owned replicated state { doors: boolean[] }: a click
   // sends "door:<i>", the server toggles + broadcasts, every client applies.
@@ -302,17 +332,7 @@ export const Building = ({
     nearDistance: LIVE_DISTANCE,
     freezeMatrices: true,
     onFrame: (state, delta, ctx) => {
-      const time = state.clock.elapsedTime;
-      if (time !== sharedUniformsTime) {
-        sharedUniformsTime = time;
-        WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
-        NIGHT_SEED_UNIFORM.value = getNightIndex();
-      }
-
-      if (time !== farDoorOriginTime) {
-        farDoorOriginTime = time;
-        followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
-      }
+      driveSharedBuildingState(state);
 
       // Same test as the base's near gate (same distance, same frames), so "live" is exactly
       // "matrices unfrozen" and a real leaf never swings under a frozen matrix.
@@ -327,23 +347,7 @@ export const Building = ({
           farDoorsRef.current.forEach(removeFarDoor);
           farDoorsRef.current = null;
         } else if (!live && !farDoorsRef.current && assets) {
-          farDoorsRef.current = assets.doors.map((d, i) =>
-            addFarDoor(
-              state.scene,
-              {
-                x: coordinates[0] + d.position[0],
-                y: coordinates[1] + d.position[1],
-                z: coordinates[2] + d.position[2],
-                yaw: d.yaw,
-                width: d.width,
-                leafCenter: assets.doorLeaf.center,
-                leafSize: assets.doorLeaf.size,
-                color: assets.doorLeaf.color,
-              },
-              hingeRefs.current[i]?.rotation.y ?? (doorsOpenRef.current[i] ? DOOR_OPEN_ANGLE : 0),
-              ctx.spawnFade,
-            ),
-          );
+          farDoorsRef.current = addFarDoorsOf(state.scene, assets, coordinates, hingeRefs.current, doorsOpenRef.current, ctx.spawnFade);
         }
         if (!interiorWantedRef.current && ctx.distanceSq < INTERIOR_DISTANCE * INTERIOR_DISTANCE) {
           interiorWantedRef.current = true;
@@ -357,26 +361,9 @@ export const Building = ({
         for (const far of farDoors) setFarDoorFade(far, ctx.spawnFade);
       }
 
-      if (doorFrameRef.current++ % 3 === 0) {
-        let hover = -1;
-        if (ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE) {
-          _raycaster.setFromCamera(_center, state.camera);
-          _raycaster.far = DOOR_INTERACT_REACH;
-          for (let i = 0; i < doorMeshRefs.current.length; i++) {
-            const mesh = doorMeshRefs.current[i];
-            if (!mesh) continue;
-            const geo = mesh.geometry;
-            if (geo.boundingSphere === null) geo.computeBoundingSphere();
-            _sphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
-            if (!_raycaster.ray.intersectsSphere(_sphere)) continue;
-            _hits.length = 0;
-            if (_raycaster.intersectObject(mesh, false, _hits).length > 0) {
-              hover = i;
-              break;
-            }
-          }
-          _raycaster.far = Infinity;
-        }
+      if (doorRaycastFrameRef.current++ % DOOR_RAYCAST_INTERVAL_FRAMES === 0) {
+        const hover =
+          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? raycastHoveredDoor(state.camera, doorMeshRefs.current) : -1;
         if (hover !== hoverDoorRef.current) {
           if (hover >= 0 && hoverDoorRef.current < 0) showCursor();
           if (hover < 0 && hoverDoorRef.current >= 0) hideCursor();
@@ -387,22 +374,7 @@ export const Building = ({
       // Skipped once settled: the asymptotic lerp otherwise writes rotation.y
       // (Euler→quaternion trig) on every door of every building forever.
       if (doorsMovingRef.current) {
-        let stillMoving = false;
-        for (let i = 0; i < hingeRefs.current.length; i++) {
-          const hinge = hingeRefs.current[i];
-          if (!hinge) continue;
-          const target = doorsOpenRef.current[i] ? DOOR_OPEN_ANGLE : 0;
-          const diff = target - hinge.rotation.y;
-          if (Math.abs(diff) < 1e-3) {
-            if (diff !== 0) hinge.rotation.y = target;
-          } else {
-            hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
-            stillMoving = true;
-          }
-          const far = farDoorsRef.current?.[i];
-          if (far) setFarDoorAngle(far, hinge.rotation.y);
-        }
-        doorsMovingRef.current = stillMoving;
+        doorsMovingRef.current = swingDoors(hingeRefs.current, doorsOpenRef.current, farDoorsRef.current, delta);
       }
     },
   });
@@ -572,3 +544,19 @@ export const Building = ({
     </group>
   );
 };
+
+/** Load-time program warm-up (utils/warmPrograms.ts): the shell, door and interior materials the
+ *  descriptor resolves, and the shared far-door mesh. */
+const BuildingWarmup = ({ descriptor }: { descriptor: { materials?: BuildingMaterials } }) => {
+  const scene = useThree((state) => state.scene);
+  const exterior = descriptor.materials?.exterior ?? DEFAULT_EXTERIOR;
+  const interior = descriptor.materials?.interior ?? DEFAULT_INTERIOR;
+  useEffect(
+    () => warmPrograms(scene, [meshTemplate(exterior), meshTemplate(DOOR_MATERIAL), meshTemplate(interior), farDoorWarmTemplate()]),
+    [scene, exterior, interior],
+  );
+  return null;
+};
+Building.Warmup = BuildingWarmup;
+Building.warmupKey = (descriptor: { materials?: BuildingMaterials }) =>
+  `${descriptor.materials?.exterior?.uuid ?? "default"}|${descriptor.materials?.interior?.uuid ?? "default"}`;

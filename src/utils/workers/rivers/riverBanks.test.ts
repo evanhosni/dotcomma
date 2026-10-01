@@ -6,7 +6,7 @@
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { LAKE_BIOME } from "../../../world/domains/overworld/regions/ocean/biomes/lake/spec";
 import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp } from "../vertexCompute";
-import { riverPiecesNear } from "./riverNetwork";
+import { RIVER_BLOCK_WATER, riverEdgeBlocked, riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 
 const config = OVERWORLD_CONFIG;
 
@@ -99,6 +99,36 @@ describe("river banks", () => {
     expect(edges.size).toBeGreaterThan(50);
     // Some mountain gaps remain (the rock): the test must see them to mean anything.
     expect(gaps).toBeGreaterThan(0);
+  });
+
+  it("open into the lake at a mouth: no bank rim in the water, no river water above the lake's", () => {
+    // A mouth: a built piece whose next piece along its edge lies deep in water. Around each, wherever
+    // the lake covers the river-free ground, the river may only deepen it — its rim stood a levee in
+    // the water between the river and the lake.
+    const mouths: { x: number; z: number }[] = [];
+    for (const p of riverPiecesNear(-8400, -8400, 8400, 8400, 0)) {
+      if (mouths.length >= 8 || !riverPieceBuilt(p)) continue;
+      const blocked = riverEdgeBlocked(p.edge);
+      if (blocked[p.index + 1] === RIVER_BLOCK_WATER) mouths.push(unwarp(p.ex, p.ez));
+      else if (blocked[p.index - 1] === RIVER_BLOCK_WATER) mouths.push(unwarp(p.sx, p.sz));
+    }
+    expect(mouths.length).toBeGreaterThan(4);
+    const reach = config.river.halfWidth + config.river.bank;
+    let lakebed = 0;
+    for (const m of mouths) {
+      for (let x = m.x - 240; x <= m.x + 240; x += 12) {
+        for (let z = m.z - 240; z <= m.z + 240; z += 12) {
+          const v = computeVertexData(x, z);
+          if (!(v.distanceToRiverCenter < reach)) continue;
+          const lake = computeVertexDataFar(x, z, false);
+          if (!(lake.waterHeight > lake.height)) continue;
+          lakebed++;
+          expect(v.height).toBeLessThanOrEqual(lake.height + 1e-6);
+          expect(v.waterHeight).toBeCloseTo(lake.waterHeight, 6);
+        }
+      }
+    }
+    expect(lakebed).toBeGreaterThan(500);
   });
 
   it("are absent from the far LODs that skip the river field: no water, no bed paint, no trench", () => {

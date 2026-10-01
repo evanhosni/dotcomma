@@ -33,18 +33,19 @@ top-level initializer (`bridges/constants.ts` is a leaf for exactly that reason)
 
 | module | what it owns |
 |---|---|
-| [`vertexCompute.ts`](vertexCompute.ts) | `initCompute`, `computeVertexData` / `computeVertexDataFar` (far LODs: no pads, runs or rivers), `blendedTerrainAt` / `terrainOnlyAt`, `freewayDistanceAt`, and the public re-exports |
+| [`vertexCompute.ts`](vertexCompute.ts) | `initCompute`, `computeVertexData` / `computeVertexDataFar` (far LODs: no pads, runs or rivers), its step helpers (`zoneBiomeHeight`, `carveRiverChannel`, `gradeOffCityFreeway`), `blendedTerrainAt` / `terrainOnlyAt`, `freewayDistanceAt`, and the public re-exports |
 | [`types.ts`](types.ts) | `DomainConfig`, `VertexResult`, `Zone`, `Wall`, `VoronoiCell`, `BiomeContext` |
 | [`computeConfig.ts`](computeConfig.ts) | The live `domainConfig` binding every module reads |
+| [`constants.ts`](constants.ts) | Constants a worker and its client must agree on (`SPAWN_CHUNK_SIZE`) |
 | [`noise.ts`](noise.ts) | Seeded simplex/perlin noise, `terrainNoise` (FBM), `biomeNoiseHeight`, the road warp `warp` / `unwarp` |
-| [`voronoi.ts`](voronoi.ts) | The region grid (3000u) and biome grid (500u): jittered sites, per-cell rolls, the 5×5 window, Delaunay, zone walls (`getZoneWalls`, `wallsOfBiome`), `getBiomeContext` |
+| [`voronoi.ts`](voronoi.ts) | The region grid (3000u) and biome grid (500u): jittered sites, per-cell rolls, the 5×5 window, Delaunay, the per-cell site caches (`regionSiteAt`, `rawBiomeSiteAt`, `biomeSiteAt`), zone walls (`getZoneWalls`, `cityWallsOf`), `getBiomeContext` |
 | [`zoneBlend.ts`](zoneBlend.ts) | Zones, `accumulateWallFields` (the wall pass), `combineZoneWeights`, the biome slots the shader reads (`biomeSlotsOf`, `combineSlotWeights`) |
 | [`cellCache.ts`](cellCache.ts) | `CellCache` (nested numeric maps) and `dropOldestHalf`, the eviction rule for every hot cache |
-| [`places.ts`](places.ts) | Place queries (`getPlaceInfo`, `findBiomeCell`, cell sites), used by the sky, the address bar and fast travel. Not called per vertex |
+| [`places.ts`](places.ts) | Place queries (`getPlaceInfo`, `findRegionCell` / `findBiomeCell`, cell sites and rolls from voronoi.ts's site caches), used by the sky, the address bar and fast travel. Not called per vertex |
 | [`lakes.ts`](lakes.ts) | Lake level and shore lift. See [Water](../../world/water/README.md) |
 | [`flattenPads.ts`](flattenPads.ts) | Flatten pads (below) and `computeVertexDataRaw` |
 | [`rivers/`](rivers) | [`riverNetwork.ts`](rivers/riverNetwork.ts) (the river grid, `getRiverSegments`), [`riverRoadLayer.ts`](rivers/riverRoadLayer.ts) (where roads win), [`riverField.ts`](rivers/riverField.ts) (the per-vertex field). See Rivers below |
-| [`roads/`](roads) | [`freewayNetwork.ts`](roads/freewayNetwork.ts) (`getNetwork`, `networkOf`), [`freewayGrade.ts`](roads/freewayGrade.ts), [`cityTerrain.ts`](roads/cityTerrain.ts), [`cityFeatures.ts`](roads/cityFeatures.ts), [`roadFragments.ts`](roads/roadFragments.ts). See Freeways below |
+| [`roads/`](roads) | [`freewayNetwork.ts`](roads/freewayNetwork.ts) (`getNetwork`, `networkOf`), [`freewayGrade.ts`](roads/freewayGrade.ts), [`cityTerrain.ts`](roads/cityTerrain.ts), [`cityFeatures.ts`](roads/cityFeatures.ts), [`roadFragments.ts`](roads/roadFragments.ts), [`runLamps.ts`](roads/runLamps.ts). See Freeways below |
 | [`bridges/`](bridges) | Bridge decks: [`freewayBridges.ts`](bridges/freewayBridges.ts) is the entry (`getFreewayBridges`); road paths, wet items, rules, deck builder, deck geometry, drawn slab, crossings, mouths, the census (`severed.ts`) and the ground cut (`deckGround.ts`) each have a module. See [Bridges](../../objects/dressing/bridges/README.md) |
 | [`densityGrid.ts`](densityGrid.ts) | The one density-grid roll + placement filters, shared by the spawn worker, the flatten pads and dressing (they must agree to the bit) |
 | [`densityPoints.ts`](densityPoints.ts) | `generateDensityPoints`: one chunk's stateless density-placed points (the `densityPoints` dressing enumerator, the server's lamp colliders) and `slopeDegreesAt` |
@@ -80,8 +81,19 @@ the rivers.
   Rivers combine by a smooth minimum, which rounds confluences, and are measured from a meandered
   point, which makes channels wind. `riverQuayAt` / `riverStraightNear` give the un-meandered
   distance that the city's quay roads follow.
+- **Where the bed ends** (`riverField.ts`, `capRiverBed`): the bed paint is connected to its river.
+  Marches out from STATIONS every 12.5u along an edge (both sides, and a fan past a piece's end)
+  walk the carved bank under the full river field and stop at the first step steeper than
+  `RIVER_BED_SLOPE_START_DEG`. That distance is the bed's limit; past it the vertex reads as out of
+  the bed's reach, fading over `RIVER_BED_CAP_FADE`, so the bed never resumes where a bank flattens
+  again further out. Marches are lazy (only stations some bank vertex needs) and cached per station
+  and direction, so every chunk agrees. Flat banks are unchanged.
 - The channel carve itself is step 4 of `computeVertexData`. Every placement filter keeps objects
   off rivers through `riverKeepOff()` (`densityGrid.ts`).
+- **Mouths** (step 4, `riverMouthShare` in [`lakes.ts`](lakes.ts)): where the river-free ground lies
+  under a lake's water, the river only deepens it. Its rim and bank are not forced, its surface is
+  the lake's level, and its bed paint yields to the lake's. Before this, the rim stood a dry levee in
+  the water between the river and the sea at three mouths in four.
 
 ### Freeways and city roads
 
@@ -101,7 +113,8 @@ the rivers.
 - **City dressing enumerators** ([`roads/cityFeatures.ts`](roads/cityFeatures.ts)): road markers,
   traffic lights, freeway-side poles, city-light sites and run markers. They are deterministic, and
   each point belongs to the chunk that contains it, so no point is duplicated. The dressing worker
-  serves them.
+  serves them. The inter-city runs' street lamps are [`roads/runLamps.ts`](roads/runLamps.ts)
+  (`getFreewayRunLamps`), on the same rules.
 - **Road fragments** ([`roads/roadFragments.ts`](roads/roadFragments.ts)): a piece of road a river
   has cut off from every other road, too small for anything to stand on, is drawn as the river's
   bank.
@@ -125,10 +138,13 @@ well as fill them, so the raw height is not a lower bound on the real ground. (A
 
 **Add a biome with bespoke height code** (like the city):
 1. Add its id to `src/world/constants.ts`. Workers cannot import biome folders.
-2. In `zoneBiomeHeight` ([`vertexCompute.ts`](vertexCompute.ts)), add a branch
+2. Leave `noise` out of the biome's `spec.ts` (a noise config wins over any branch).
+3. In `zoneBiomeHeight` ([`vertexCompute.ts`](vertexCompute.ts)), after the noise branch, add
    `if (zone.biome.id === MY_BIOME_ID) return myHeight(x, z) * presence;`. Put the height code in
-   its own module here and import it.
-3. Add a case to [`blend.test.ts`](blend.test.ts) if the biome's edge must match its neighbors.
+   its own module here (as the city's is in [`roads/cityTerrain.ts`](roads/cityTerrain.ts)) and
+   import it. It must be a pure function of position and the config; any cache it keeps is cleared
+   in `initCompute`.
+4. Add a case to [`blend.test.ts`](blend.test.ts) if the biome's edge must match its neighbors.
 
 **Add a water biome:** `water: { depth }` in the biome spec. See [Water](../../world/water/README.md).
 

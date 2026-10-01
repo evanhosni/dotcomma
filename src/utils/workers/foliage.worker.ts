@@ -41,7 +41,6 @@ const bladeHash = (seed: number, index: number): number => {
 };
 
 /** Fast deterministic PRNG — one seedrandom call per chunk, cheap draws per blade. */
-
 const mulberry32 = (a: number) => () => {
   a |= 0;
   a = (a + 0x6d2b79f5) | 0;
@@ -50,7 +49,7 @@ const mulberry32 = (a: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-// Reused across chunks: a 32k-blade chunk allocated ~2.5MB of scratch garbage per request.
+// Reused across chunks: a 32k-blade chunk needs ~2.5MB of scratch per request.
 const SCRATCH_OFFSETS = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
 const SCRATCH_BLADE_DATA = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
 const SCRATCH_FADE_KEYS = new Float32Array(MAX_INSTANCES_PER_CHUNK);
@@ -145,7 +144,7 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
       heights[i] = vd.height;
       biomeWeights[i] = biomeIds ? biomeWeightOf(vd.biomeSdf, biomeIds) : 1;
       roadDistances[i] = vd.distanceToRoadCenter;
-      // Nor under a bridge deck: the ground there is cut just below the deck's top, and blades grew through it.
+      // Nor under a bridge deck: the ground there is cut just below the deck's top.
       submerged[i] = (!Number.isNaN(vd.waterHeight) && vd.waterHeight > vd.height - 0.3) || vd.underDeck > 0 ? 1 : 0;
       riverBed[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
       if (riverBed[i] < rampEnd) nearRiverBed = true;
@@ -180,6 +179,44 @@ const cacheGrid = (key: string, grid: FoliageGrid): void => {
   gridCache.set(key, grid);
 };
 
+/** Whether any of `biomeIds` is visible (terrain material weight) at the chunk's center or corners:
+ *  if not, there is nothing to place. */
+const biomesVisibleInChunk = (minX: number, minZ: number, size: number, biomeIds: number[]): boolean => {
+  for (const [px, pz] of [[0.5, 0.5], [0, 0], [1, 0], [0, 1], [1, 1]]) {
+    const vd = computeVertexData(minX + px * size, minZ + pz * size);
+    if (biomeWeightOf(vd.biomeSdf, biomeIds) > MIN_BIOME_WEIGHT) return true;
+  }
+  return false;
+};
+
+/** The first `count` placed blades in DESCENDING per-instance fade key (the shader's
+ *  fract(phase * 1.618 + tint * 12.9898)), copied out of the scratch: the main thread truncates
+ *  instanceCount to the blades whose fade hasn't zeroed. The LOD taper silently biases if this order
+ *  changes. */
+const packByFadeKey = (placed: number, count: number): { offsets: Float32Array; instanceData: Float32Array } => {
+  const offsets = SCRATCH_OFFSETS;
+  const instanceData = SCRATCH_BLADE_DATA;
+  const fadeKey = SCRATCH_FADE_KEYS;
+  for (let i = 0; i < placed; i++) {
+    const v = instanceData[i * 3] * 1.618 + instanceData[i * 3 + 2] * 12.9898;
+    fadeKey[i] = v - Math.floor(v);
+  }
+  const order = SCRATCH_ORDER;
+  orderByFadeKey(fadeKey, placed, count, order);
+  const outOffsets = new Float32Array(count * 3);
+  const outBladeData = new Float32Array(count * 3);
+  for (let k = 0; k < count; k++) {
+    const i = order[k];
+    outOffsets[k * 3] = offsets[i * 3];
+    outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
+    outOffsets[k * 3 + 2] = offsets[i * 3 + 2];
+    outBladeData[k * 3] = instanceData[i * 3];
+    outBladeData[k * 3 + 1] = instanceData[i * 3 + 1];
+    outBladeData[k * 3 + 2] = instanceData[i * 3 + 2];
+  }
+  return { offsets: outOffsets, instanceData: outBladeData };
+};
+
 const EMPTY_RESULT = () => ({
   count: 0,
   total: 0,
@@ -201,24 +238,13 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
   const minZ = chunkZ * size;
 
   // Blades follow the terrain material's BIOME WEIGHT (the cross-fade), not the cell
-  // id: a hard stop on the cell line under a 300u texture fade read as an edge.
+  // id: a hard stop on the cell line under a 300u texture fade would read as an edge.
   const hasBiomes = !!params.biomeIds && params.biomeIds.length > 0;
   const biomeIds = hasBiomes ? params.biomeIds : undefined;
   const gridKey = `${size}|${biomeIds ? biomeIds.join(",") : ""}|${chunkX},${chunkZ}`;
   let grid = takeCachedGrid(gridKey); // only non-empty chunks are cached: a hit skips the probe
   if (!grid) {
-    // Probe: the requested biomes invisible at the center and all four corners → nothing to place.
-    if (biomeIds) {
-      let visible = false;
-      for (const [px, pz] of [[0.5, 0.5], [0, 0], [1, 0], [0, 1], [1, 1]]) {
-        const vd = computeVertexData(minX + px * size, minZ + pz * size);
-        if (biomeWeightOf(vd.biomeSdf, biomeIds) > MIN_BIOME_WEIGHT) {
-          visible = true;
-          break;
-        }
-      }
-      if (!visible) return EMPTY_RESULT();
-    }
+    if (biomeIds && !biomesVisibleInChunk(minX, minZ, size, biomeIds)) return EMPTY_RESULT();
     grid = sampleGrid(minX, minZ, size, biomeIds);
     cacheGrid(gridKey, grid);
   }
@@ -319,40 +345,18 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     if (y > maxY) maxY = y;
   }
 
-  // DESCENDING per-instance fade key (the shader's fract(phase * 1.618 + tint *
-  // 12.9898)) so the main thread can truncate instanceCount to the blades whose
-  // fade hasn't zeroed. The LOD taper silently biases if this order changes.
-  const fadeKey = SCRATCH_FADE_KEYS;
-  for (let i = 0; i < placed; i++) {
-    const v = instanceData[i * 3] * 1.618 + instanceData[i * 3 + 2] * 12.9898;
-    fadeKey[i] = v - Math.floor(v);
-  }
   const count = Math.min(placed, Math.ceil(placed * band));
-  const order = SCRATCH_ORDER;
-  orderByFadeKey(fadeKey, placed, count, order);
-  const outOffsets = new Float32Array(count * 3);
-  const outBladeData = new Float32Array(count * 3);
-  for (let k = 0; k < count; k++) {
-    const i = order[k];
-    outOffsets[k * 3] = offsets[i * 3];
-    outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
-    outOffsets[k * 3 + 2] = offsets[i * 3 + 2];
-    outBladeData[k * 3] = instanceData[i * 3];
-    outBladeData[k * 3 + 1] = instanceData[i * 3 + 1];
-    outBladeData[k * 3 + 2] = instanceData[i * 3 + 2];
-  }
-
+  const packed = packByFadeKey(placed, count);
   return {
     count,
     total: placed,
     // Over ALL placed blades, so the chunk's culling sphere doesn't change with its band.
     minY: placed > 0 ? minY : 0,
     maxY: placed > 0 ? maxY : 0,
-    offsets: outOffsets,
-    instanceData: outBladeData,
+    offsets: packed.offsets,
+    instanceData: packed.instanceData,
   };
 };
-
 
 self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
