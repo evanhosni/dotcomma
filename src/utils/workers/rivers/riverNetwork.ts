@@ -8,7 +8,8 @@
  *     region's riverProbability), is cut into RIVER_SEGMENT_LENGTH pieces, and a piece is NOT built
  *     deep in water (the mouth runs RIVER_MOUTH_REACH into the basin), near a prohibitRivers biome,
  *     or on high/steep ground (nor a short blob between such pieces) — steep but not mountainous
- *     ground only where it runs longer than RIVER_GAP_FILL or not between river and water. A river
+ *     ground only where it runs longer than RIVER_GAP_FILL or not between river and water; a high run
+ *     into a junction the river goes on through is a GORGE where its ridge is low (junctionGorgesAt). A river
  *     ends in a pond where a piece is not built, and in a pond or a fizzle at a natural end (a
  *     junction no other built river leaves). Widths are per junction, growing toward the ocean.
  *  2. The road layer (riverRoadLayer.ts) — where a freeway meets a river no deck may carry, the road
@@ -27,10 +28,28 @@ import { seedRand, smoothstep } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
+import { lakeSurface, restoreShore, saveShore } from "../lakes";
 import { biomeNoiseHeight, terrainNoise, unwarp } from "../noise";
 import type { DomainConfig, SerializedRegion } from "../types";
-import { biomeSiteAt, getRegionGrid, nearestBiomeSite, nearestCell, regionSiteAt, zoneAtWarped } from "../voronoi";
-import { sstep01 } from "../zoneBlend";
+import { blendedTerrainAt } from "../vertexCompute";
+import {
+  biomeSiteAt,
+  getBiomeContext,
+  getRegionGrid,
+  nearestBiomeSite,
+  nearestCell,
+  regionSiteAt,
+  zoneAtWarped,
+} from "../voronoi";
+import {
+  accumulateWallFields,
+  combineZoneWeights,
+  restoreWallPass,
+  saveWallPass,
+  sstep01,
+  zoneFinal,
+  zoneWeights,
+} from "../zoneBlend";
 import { clearRiverRoadLayer, riverPieceSuppressed } from "./riverRoadLayer";
 
 const RIVER_GRID_SIZE = 2800;
@@ -81,6 +100,15 @@ const RIVER_MIN_STRETCH = 300;
  *  this covers ~80% of such gaps). Needed because the region bases (desert 260u over 1800u, snow 600u
  *  over 4000u) alone exceed the grade and hillside limits. */
 const RIVER_GAP_FILL = 800;
+/** A GORGE is built through a gap of high ground or tall relief that is not the mountain's rock —
+ *  inside an edge where the gap fill left it, or at a JUNCTION (an edge's run into a junction where
+ *  another river goes on, or where another edge's run comes out of its river), up to RIVER_GAP_FILL in
+ *  all — when the REAL ground rises less than this above the straight line between the two water
+ *  surfaces it joins (gorgeRise). MEASURED over an 80 km square: the gaps like image 86 rise up to 24,
+ *  the shortest ridge like 87 left out 29.8. */
+const RIVER_GORGE_MAX_RISE = 25;
+/** The ridge rise is sampled this often along a junction gap (real units). */
+const RIVER_GORGE_RISE_STEP = 10;
 /** The channel is measured from a meandered query point (±10u over ~90u), so a straight edge winds. */
 export const RIVER_MEANDER_AMP = 10;
 export const RIVER_MEANDER_SCALE = 90;
@@ -130,6 +158,13 @@ export interface RiverEdge {
   wB: number;
   /** Per piece: 0 = built, else the RIVER_BLOCK_* reason. null until needed. */
   blocked: Uint8Array | null;
+  /** `blocked` before the junction gaps are joined (the edge on its own). null until needed. */
+  ownBlocked: Uint8Array | null;
+  /** Per piece: 1 where its relief rule (RIVER_BLOCK_MOUNTAIN) is the mountain's ROCK (a domed
+   *  biome), 0 where it is a tall but ordinary relief (dunes, hills). Set with ownBlocked. */
+  rock: Uint8Array | null;
+  /** The gorges built through its gaps (riverEdgeBlocked). */
+  gorges: RiverGorge[];
   /** Width factor at each piece end (count + 1), end shapes included. null until emitted. */
   widths: Float64Array | null;
   /** Road layer, lazily per piece (-1 = not evaluated). */
@@ -145,6 +180,27 @@ export interface RiverEdge {
   nearRoads: number;
 }
 
+/** A junction gap built as a gorge (riverEdgeBlocked): the edge's piece ends `from` (where its own
+ *  river stops) through `to` (its junction end, 0 or count) carry a surface interpolated linearly from
+ *  the water at (bx, bz) to the junction's — the river's surface at (jx, jz) where a river goes on
+ *  through the junction, else the point `share` of the way along the joined pair's straight line from
+ *  the water at (px, pz) to the water at (qx, qz), the same for every gorge of the junction
+ *  (riverField's gorgeSurface). Warped. */
+export interface RiverGorge {
+  from: number;
+  to: number;
+  bx: number;
+  bz: number;
+  jx: number;
+  jz: number;
+  pair: boolean;
+  px: number;
+  pz: number;
+  qx: number;
+  qz: number;
+  share: number;
+}
+
 interface RiverCellEntry {
   segments: RiverSegment[];
   edges: RiverEdge[];
@@ -154,6 +210,8 @@ const NO_RIVERS: RiverCellEntry = { segments: [], edges: [] };
 const riverCache = new Map<string, RiverCellEntry>();
 const riverEdges = new Map<string, RiverEdge>();
 const riverJunctionWidths = new Map<string, number>();
+const riverWindows = new Map<string, RiverWindow>();
+const junctionGorges = new Map<string, Map<string, RiverGorge>>();
 export let riversEnabled = false;
 let riverKeepByRegion = new Map<number, number>();
 let riverOceanRegions = new Set<number>();
@@ -163,12 +221,19 @@ export const initRivers = (config: DomainConfig): void => {
   riverCache.clear();
   riverEdges.clear();
   riverJunctionWidths.clear();
+  riverWindows.clear();
+  junctionGorges.clear();
   clearRiverRoadLayer();
   riverKeepByRegion = new Map(
-    config.regions.map((r) => [r.id, Math.min(1, RIVER_KEEP_PER_PROBABILITY * (r.riverProbability ?? config.river.defaultProbability))]),
+    config.regions.map((r) => [
+      r.id,
+      Math.min(1, RIVER_KEEP_PER_PROBABILITY * (r.riverProbability ?? config.river.defaultProbability)),
+    ]),
   );
   riversEnabled = [...riverKeepByRegion.values()].some((p) => p > 0);
-  riverOceanRegions = new Set(config.regions.filter((r) => r.biomes.length > 0 && r.biomes.every((b) => !!b.water)).map((r) => r.id));
+  riverOceanRegions = new Set(
+    config.regions.filter((r) => r.biomes.length > 0 && r.biomes.every((b) => !!b.water)).map((r) => r.id),
+  );
   riversProhibitedSomewhere = config.regions.some((r) => r.biomes.some((b) => b.prohibitRivers));
 };
 
@@ -210,6 +275,8 @@ const riverJunctionWidth = (key: string, x: number, z: number): number => {
 // ~20km window): the zone's region base plus its biome relief, faded in by the distance to its
 // cell's edge like the real presence.
 let proxyRelief = 0;
+/** Whether the last riverTerrainProxy's zone is a domed biome (the mountain's rock). */
+let proxyRock = false;
 const riverTerrainProxy = (wx: number, wz: number): number => {
   const own = nearestBiomeSite(wx, wz);
   const zone = own.zone;
@@ -217,6 +284,7 @@ const riverTerrainProxy = (wx: number, wz: number): number => {
   const base = terrainNoise(zone.baseNoise, world.x, world.z);
   proxyRelief = 0;
   const cfg = domainConfig!.biomeNoiseConfigs[zone.biome.id];
+  proxyRock = !!cfg?.dome;
   if (!cfg || zone.biome.water) return base;
   let edge = Infinity;
   const d0 = (wx - own.x) ** 2 + (wz - own.z) ** 2;
@@ -238,7 +306,17 @@ const riverTerrainProxy = (wx: number, wz: number): number => {
 
 const isWaterAt = (x: number, z: number): boolean => !!zoneAtWarped(x, z).biome.water;
 
-const RIVER_PROHIBIT_PROBES = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [0.71, 0.71], [-0.71, 0.71], [0.71, -0.71], [-0.71, -0.71]];
+const RIVER_PROHIBIT_PROBES = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [0.71, 0.71],
+  [-0.71, 0.71],
+  [0.71, -0.71],
+  [-0.71, -0.71],
+];
 
 /** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, near a prohibitRivers
  *  biome, mountainous, or high/steep ground. */
@@ -247,10 +325,13 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
   const step = e.len / n;
   const heights = new Float64Array(n + 1);
   const reliefs = new Float64Array(n + 1);
+  const rockAt = new Uint8Array(n + 1);
   for (let k = 0; k <= n; k++) {
     heights[k] = riverTerrainProxy(e.ax + e.ux * k * step, e.az + e.uz * k * step);
     reliefs[k] = proxyRelief;
+    rockAt[k] = proxyRock ? 1 : 0;
   }
+  e.rock = new Uint8Array(n);
   const reach = riverKeepOff();
   const blocked = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
@@ -267,7 +348,10 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
     } else if (
       riversProhibitedSomewhere &&
       // The whole footprint of a pond end must stay clear of the biome.
-      RIVER_PROHIBIT_PROBES.some(([px, pz]) => zoneAtWarped(mx + px * r * RIVER_POND_FACTOR, mz + pz * r * RIVER_POND_FACTOR).biome.prohibitRivers)
+      RIVER_PROHIBIT_PROBES.some(
+        ([px, pz]) =>
+          zoneAtWarped(mx + px * r * RIVER_POND_FACTOR, mz + pz * r * RIVER_POND_FACTOR).biome.prohibitRivers,
+      )
     ) {
       blocked[i] = RIVER_BLOCK_PROHIBITED;
     } else {
@@ -280,6 +364,8 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
       const right = riverTerrainProxy(mx + e.uz * r, mz - e.ux * r);
       if (Math.max(reliefs[i], reliefs[i + 1]) > RIVER_MAX_RELIEF) {
         blocked[i] = RIVER_BLOCK_MOUNTAIN;
+        e.rock[i] =
+          (reliefs[i] > RIVER_MAX_RELIEF && rockAt[i]) || (reliefs[i + 1] > RIVER_MAX_RELIEF && rockAt[i + 1]) ? 1 : 0;
       } else if (
         grade > RIVER_MAX_GRADE ||
         center - Math.max(left, right) > RIVER_MAX_RIDGE ||
@@ -329,17 +415,249 @@ const dropRiverBlobs = (e: RiverEdge, blocked: Uint8Array): void => {
     while (i1 + 1 < n && !blocked[i1 + 1]) i1++;
     // (Not a stretch joining water to water: it runs across the land between them.)
     const waterBoth = blocked[i0 - 1] === RIVER_BLOCK_WATER && blocked[i1 + 1] === RIVER_BLOCK_WATER;
-    if (i1 + 1 < n && !waterBoth && (i1 - i0 + 1) * step < RIVER_MIN_STRETCH) blocked.fill(RIVER_BLOCK_HIGH, i0, i1 + 1);
+    if (i1 + 1 < n && !waterBoth && (i1 - i0 + 1) * step < RIVER_MIN_STRETCH)
+      blocked.fill(RIVER_BLOCK_HIGH, i0, i1 + 1);
     i0 = i1 + 1;
   }
 };
 
-/** Per piece of a river edge: 0 = built, else the RIVER_BLOCK_* reason. Cached on the edge. */
-export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
-  if (e.blocked) return e.blocked;
+/** The edge on its own: its pieces classified, its gaps filled, its blobs dropped. Cached on the edge. */
+const riverEdgeOwnBlocked = (e: RiverEdge): Uint8Array => {
+  if (e.ownBlocked) return e.ownBlocked;
   const blocked = classifyRiverPieces(e);
   fillRiverGaps(e, blocked);
   dropRiverBlobs(e, blocked);
+  e.ownBlocked = blocked;
+  return blocked;
+};
+
+const pieceEndX = (e: RiverEdge, k: number): number => e.ax + e.ux * k * (e.len / e.count);
+const pieceEndZ = (e: RiverEdge, k: number): number => e.az + e.uz * k * (e.len / e.count);
+
+/** Whether piece i of the edge on its own may be cut through by a gorge: high ground, or a tall
+ *  relief that is not the mountain's rock (the dunes' run 50–200u: by the relief rule alone every
+ *  dune was "mountain", and a river ended in two ponds across a 19u rise, image 88). */
+const gorgeable = (e: RiverEdge, i: number): boolean => {
+  const b = riverEdgeOwnBlocked(e)[i];
+  return b === RIVER_BLOCK_HIGH || (b === RIVER_BLOCK_MOUNTAIN && e.rock![i] === 0);
+};
+
+/** How many gorgeable pieces run from junction A (or B) of the edge on its own into a built piece: 0
+ *  where the piece at the junction is built, -1 where the run meets anything else (water, the
+ *  mountain's rock, a prohibited biome) or never meets a built piece. */
+const junctionRun = (e: RiverEdge, atA: boolean): number => {
+  const b = riverEdgeOwnBlocked(e);
+  const n = e.count;
+  let k = 0;
+  while (k < n && gorgeable(e, atA ? k : n - 1 - k)) k++;
+  return k < n && b[atA ? k : n - 1 - k] === 0 ? k : -1;
+};
+
+/** A junction gap's centerline from its river end to the junction (piece ends, warped, flat x, z). */
+const junctionGapPath = (e: RiverEdge, atA: boolean, k: number): number[] => {
+  const path: number[] = [];
+  for (let q = k; q >= 0; q--) {
+    const i = atA ? q : e.count - q;
+    path.push(pieceEndX(e, i), pieceEndZ(e, i));
+  }
+  return path;
+};
+
+/** The REAL ground at a warped point — the zone-blended terrain with its shore, as a river surface
+ *  samples it (riverField's riverSurfaceAt) — for gorgeRise, whose caller saves and restores the
+ *  wall pass and the shore state around it. The proxy read the ridges wrong by up to 35u (dunes beside
+ *  another region's base, the snow's slopes): a gorge is decided on the terrain it cuts. */
+const gorgeGroundAt = (wx: number, wz: number): number => {
+  const warped = { x: wx, z: wz };
+  const ctx = getBiomeContext(warped);
+  accumulateWallFields(wx, wz, ctx.zoneWalls, ctx.zone);
+  combineZoneWeights(zoneWeights, zoneFinal);
+  lakeSurface(warped, ctx, ctx.zone);
+  const world = unwarp(wx, wz);
+  return blendedTerrainAt(world.x, world.z, ctx.zone, ctx);
+};
+
+/** How far the real ground rises along a gap's centerline (flat x, z, from one water's end to the
+ *  other's) above the straight line between the two water surfaces. Runs wherever the network is
+ *  built — mid-vertex too (a city's waterfront asks for the pieces near a wall) — so it leaves the
+ *  wall pass and the shore state as it found them. */
+const gorgeRise = (path: number[]): number => {
+  const pass = saveWallPass();
+  const shore = saveShore();
+  const m = path.length / 2;
+  let total = 0;
+  for (let i = 1; i < m; i++) total += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1]);
+  const g0 = gorgeGroundAt(path[0], path[1]);
+  const g1 = gorgeGroundAt(path[m * 2 - 2], path[m * 2 - 1]);
+  let rise = -Infinity;
+  let along = 0;
+  for (let i = 1; i < m; i++) {
+    const ax = path[i * 2 - 2];
+    const az = path[i * 2 - 1];
+    const l = Math.hypot(path[i * 2] - ax, path[i * 2 + 1] - az);
+    const steps = Math.max(1, Math.ceil(l / RIVER_GORGE_RISE_STEP));
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const g = gorgeGroundAt(ax + (path[i * 2] - ax) * t, az + (path[i * 2 + 1] - az) * t);
+      rise = Math.max(rise, g - (g0 + (g1 - g0) * ((along + l * t) / total)));
+    }
+    along += l;
+  }
+  restoreWallPass(pass);
+  restoreShore(shore);
+  return rise + RIVER_SURFACE_BELOW;
+};
+
+/** The edges carrying a river at a junction, from the window of the river cell holding it (which
+ *  triangulates it, and its neighbors, deep inside: trusted) — never a cell entry, which would build
+ *  the network around it. */
+const riverJunctionEdges = (junction: string, jx: number, jz: number): RiverEdge[] => {
+  const w = riverWindowAt(
+    Math.floor((jx - RIVER_GRID_SHIFT.x) / RIVER_GRID_SIZE),
+    Math.floor((jz - RIVER_GRID_SHIFT.z) / RIVER_GRID_SIZE),
+  );
+  const t = w.junctionKey.indexOf(junction);
+  const out: RiverEdge[] = [];
+  if (t < 0 || !w.trusted[t]) return out;
+  for (let h = t * 3; h < t * 3 + 3; h++) {
+    const o = w.halfedges[h];
+    if (o === -1 || !w.trusted[Math.floor(o / 3)]) continue;
+    const k1 = w.siteKey(w.tri[h]);
+    const k2 = w.siteKey(w.tri[h % 3 === 2 ? h - 2 : h + 1]);
+    const key = k1 < k2 ? `${k1}~${k2}` : `${k2}~${k1}`;
+    let e = riverEdges.get(key);
+    if (!e) {
+      const built = newRiverEdge(key, w, t, Math.floor(o / 3));
+      if (!built) continue;
+      riverEdges.set(key, (e = built));
+    }
+    out.push(e);
+  }
+  return out;
+};
+
+/** THE JUNCTION GAPS of a junction (RIVER_GORGE_MAX_RISE), by edge key: each edge's high run into the
+ *  junction that is built as a gorge. Where a river goes on through the junction, a run whose ridge is
+ *  low enough joins it; else the runs of two edges together, up to RIVER_GAP_FILL, whose ridge is low
+ *  enough join each other, and the lowest such pair sets the junction's water for every gorge there.
+ *  Decided from the edges on their own (riverEdgeOwnBlocked), so a pure function of the junction. */
+const junctionGorgesAt = (junction: string, jx: number, jz: number): Map<string, RiverGorge> => {
+  let gorges = junctionGorges.get(junction);
+  if (gorges) return gorges;
+  if (junctionGorges.size > 4096) dropOldestHalf(junctionGorges);
+  gorges = new Map();
+  const edges = riverJunctionEdges(junction, jx, jz).sort((a, b) => (a.key < b.key ? -1 : 1));
+  const atA = edges.map((e) => e.keyA === junction);
+  const runs = edges.map((e, i) => junctionRun(e, atA[i]));
+  const lens = edges.map((e, i) => (runs[i] * e.len) / e.count);
+  const gap = (i: number) => runs[i] > 0 && lens[i] <= RIVER_GAP_FILL;
+  const gorgeOf = (i: number, pair: boolean, p = -1, q = -1): RiverGorge => {
+    const e = edges[i];
+    const from = atA[i] ? runs[i] : e.count - runs[i];
+    const to = atA[i] ? 0 : e.count;
+    const end = (j: number, xz: 0 | 1) =>
+      j < 0 ? NaN : (xz === 0 ? pieceEndX : pieceEndZ)(edges[j], atA[j] ? runs[j] : edges[j].count - runs[j]);
+    return {
+      from,
+      to,
+      bx: pieceEndX(e, from),
+      bz: pieceEndZ(e, from),
+      jx: pieceEndX(e, to),
+      jz: pieceEndZ(e, to),
+      pair,
+      px: end(p, 0),
+      pz: end(p, 1),
+      qx: end(q, 0),
+      qz: end(q, 1),
+      share: pair ? lens[p] / (lens[p] + lens[q]) : 0,
+    };
+  };
+  if (runs.some((r) => r === 0)) {
+    edges.forEach((_, i) => {
+      if (gap(i) && gorgeRise(junctionGapPath(edges[i], atA[i], runs[i])) < RIVER_GORGE_MAX_RISE)
+        gorges!.set(edges[i].key, gorgeOf(i, false));
+    });
+  } else {
+    let best: [number, number, number] | null = null;
+    const joined = new Set<number>();
+    for (let i = 0; i < edges.length; i++) {
+      for (let j = i + 1; j < edges.length; j++) {
+        if (!gap(i) || !gap(j) || lens[i] + lens[j] > RIVER_GAP_FILL) continue;
+        const pi = junctionGapPath(edges[i], atA[i], runs[i]);
+        const pj = junctionGapPath(edges[j], atA[j], runs[j]);
+        const back: number[] = [];
+        for (let s = pj.length - 4; s >= 0; s -= 2) back.push(pj[s], pj[s + 1]);
+        const rise = gorgeRise([...pi, ...back]);
+        if (!(rise < RIVER_GORGE_MAX_RISE)) continue;
+        joined.add(i).add(j);
+        if (!best || rise < best[0]) best = [rise, i, j];
+      }
+    }
+    if (best) for (const i of joined) gorges.set(edges[i].key, gorgeOf(i, true, best[1], best[2]));
+  }
+  junctionGorges.set(junction, gorges);
+  return gorges;
+};
+
+/** Per piece of a river edge: 0 = built, else the RIVER_BLOCK_* reason — the edge on its own, its
+ *  junction gaps joined (junctionGorgesAt, recording the gorges). Cached on the edge. */
+export const riverEdgeBlocked = (e: RiverEdge): Uint8Array => {
+  if (e.blocked) return e.blocked;
+  const own = riverEdgeOwnBlocked(e);
+  let blocked = own;
+  for (const atA of [true, false]) {
+    const k = junctionRun(e, atA);
+    if (k <= 0 || (k * e.len) / e.count > RIVER_GAP_FILL) continue;
+    const g = junctionGorgesAt(
+      atA ? e.keyA : e.keyB,
+      pieceEndX(e, atA ? 0 : e.count),
+      pieceEndZ(e, atA ? 0 : e.count),
+    ).get(e.key);
+    if (!g) continue;
+    if (blocked === own) blocked = own.slice();
+    blocked.fill(0, atA ? 0 : e.count - k, atA ? k : e.count);
+    e.gorges.push(g);
+    riverDebug.gorgePieces += k;
+  }
+  // Gaps INSIDE the edge the gap fill left (fillRiverGaps fills high ground alone, at any rise): a run
+  // of gorgeable pieces between two built ones, up to RIVER_GAP_FILL, whose ridge is low enough.
+  const n = e.count;
+  const step = e.len / n;
+  for (let i0 = 1; i0 < n; ) {
+    if (own[i0] === 0 || own[i0 - 1] !== 0) {
+      i0++;
+      continue;
+    }
+    let i1 = i0;
+    while (i1 + 1 < n && own[i1 + 1] !== 0) i1++;
+    const from = i0;
+    const to = i1 + 1;
+    i0 = to;
+    if (to >= n || (to - from) * step > RIVER_GAP_FILL) continue;
+    let ok = true;
+    for (let i = from; i < to && ok; i++) ok = gorgeable(e, i);
+    if (!ok) continue;
+    const path: number[] = [];
+    for (let k = from; k <= to; k++) path.push(pieceEndX(e, k), pieceEndZ(e, k));
+    if (!(gorgeRise(path) < RIVER_GORGE_MAX_RISE)) continue;
+    if (blocked === own) blocked = own.slice();
+    blocked.fill(0, from, to);
+    e.gorges.push({
+      from,
+      to,
+      bx: pieceEndX(e, from),
+      bz: pieceEndZ(e, from),
+      jx: pieceEndX(e, to),
+      jz: pieceEndZ(e, to),
+      pair: false,
+      px: NaN,
+      pz: NaN,
+      qx: NaN,
+      qz: NaN,
+      share: 0,
+    });
+    riverDebug.gorgePieces += to - from;
+  }
   e.blocked = blocked;
   riverDebug.pieces += e.count;
   for (const b of blocked) riverDebug.blocked[b]++;
@@ -363,7 +681,11 @@ const riverEdgeWidths = (e: RiverEdge, continuesAt: (junction: string) => boolea
   const widths = new Float64Array(e.count + 1);
   for (let k = 0; k <= e.count; k++) widths[k] = e.wA + (e.wB - e.wA) * (k / e.count);
   const naturalEnd = (junction: string): number =>
-    continuesAt(junction) ? RIVER_END_NONE : seedRand(`${domainConfig!.seed} - river end ${junction}`) < 0.5 ? RIVER_END_POND : RIVER_END_FIZZLE;
+    continuesAt(junction)
+      ? RIVER_END_NONE
+      : seedRand(`${domainConfig!.seed} - river end ${junction}`) < 0.5
+        ? RIVER_END_POND
+        : RIVER_END_FIZZLE;
   for (let i0 = 0; i0 < e.count; ) {
     if (blocked[i0]) {
       i0++;
@@ -407,7 +729,10 @@ const triangulateRiverWindow = (cx: number, cz: number): RiverWindow => {
     for (let iz = cz - R; iz <= cz + R; iz++) {
       siteIx.push(ix);
       siteIz.push(iz);
-      coords.push(RIVER_GRID_SHIFT.x + (ix + seedRand(`${seed} - river - ${ix}X${iz}`)) * G, RIVER_GRID_SHIFT.z + (iz + seedRand(`${seed} - river - ${ix}Z${iz}`)) * G);
+      coords.push(
+        RIVER_GRID_SHIFT.x + (ix + seedRand(`${seed} - river - ${ix}X${iz}`)) * G,
+        RIVER_GRID_SHIFT.z + (iz + seedRand(`${seed} - river - ${ix}Z${iz}`)) * G,
+      );
     }
   }
   const delaunay = new Delaunator(coords);
@@ -424,8 +749,17 @@ const triangulateRiverWindow = (cx: number, cz: number): RiverWindow => {
   const safeZ0 = RIVER_GRID_SHIFT.z + (cz - R + 1) * G;
   const safeZ1 = RIVER_GRID_SHIFT.z + (cz + R) * G;
   for (let t = 0; t < tri.length / 3; t++) {
-    const s = [tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]].sort((p, q) => siteIx[p] - siteIx[q] || siteIz[p] - siteIz[q]);
-    const [ax, az, bx, bz, qx, qz] = [coords[s[0] * 2], coords[s[0] * 2 + 1], coords[s[1] * 2], coords[s[1] * 2 + 1], coords[s[2] * 2], coords[s[2] * 2 + 1]];
+    const s = [tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]].sort(
+      (p, q) => siteIx[p] - siteIx[q] || siteIz[p] - siteIz[q],
+    );
+    const [ax, az, bx, bz, qx, qz] = [
+      coords[s[0] * 2],
+      coords[s[0] * 2 + 1],
+      coords[s[1] * 2],
+      coords[s[1] * 2 + 1],
+      coords[s[2] * 2],
+      coords[s[2] * 2 + 1],
+    ];
     const ad = ax * ax + az * az;
     const bd = bx * bx + bz * bz;
     const qd = qx * qx + qz * qz;
@@ -439,6 +773,18 @@ const triangulateRiverWindow = (cx: number, cz: number): RiverWindow => {
     trusted.push(jx - rad >= safeX0 && jx + rad <= safeX1 && jz - rad >= safeZ0 && jz + rad <= safeZ1);
   }
   return { tri, halfedges: delaunay.halfedges, siteKey, junctionKey, junctionX, junctionZ, trusted };
+};
+
+/** A river cell's window (triangulateRiverWindow), cached: the cell entries and the junction gaps share it. */
+const riverWindowAt = (cx: number, cz: number): RiverWindow => {
+  const key = `${cx},${cz}`;
+  let w = riverWindows.get(key);
+  if (!w) {
+    if (riverWindows.size >= 16) dropOldestHalf(riverWindows);
+    w = triangulateRiverWindow(cx, cz);
+    riverWindows.set(key, w);
+  }
+  return w;
 };
 
 /** The edge `key` between junctions ja | jb of a window, or null where it rolls dry (its region's
@@ -466,6 +812,9 @@ const newRiverEdge = (key: string, w: RiverWindow, ja: number, jb: number): Rive
     wA: riverJunctionWidth(junctionKey[ja], junctionX[ja], junctionZ[ja]),
     wB: riverJunctionWidth(junctionKey[jb], junctionX[jb], junctionZ[jb]),
     blocked: null,
+    ownBlocked: null,
+    rock: null,
+    gorges: [],
     widths: null,
     along: new Int8Array(count).fill(-1),
     suppressed: new Int8Array(count).fill(-1),
@@ -490,7 +839,7 @@ export const riverCellEntry = (warped: PointXZ): RiverCellEntry => {
   if (riverCache.size >= RIVER_CACHE_MAX) dropOldestHalf(riverCache);
   if (riverEdges.size > 16384) dropOldestHalf(riverEdges);
 
-  const grid = triangulateRiverWindow(cx, cz);
+  const grid = riverWindowAt(cx, cz);
   const { tri, halfedges: half, siteKey, trusted } = grid;
   const x0 = RIVER_GRID_SHIFT.x + cx * G - RIVER_TRUST_MARGIN;
   const x1 = RIVER_GRID_SHIFT.x + (cx + 1) * G + RIVER_TRUST_MARGIN;
@@ -520,7 +869,8 @@ export const riverCellEntry = (warped: PointXZ): RiverCellEntry => {
     }
     const bx = e.ax + e.ux * e.len;
     const bz = e.az + e.uz * e.len;
-    if (Math.max(e.ax, bx) >= x0 && Math.min(e.ax, bx) <= x1 && Math.max(e.az, bz) >= z0 && Math.min(e.az, bz) <= z1) emitted.push(e);
+    if (Math.max(e.ax, bx) >= x0 && Math.min(e.ax, bx) <= x1 && Math.max(e.az, bz) >= z0 && Math.min(e.az, bz) <= z1)
+      emitted.push(e);
   }
 
   // A junction continues the river when another built river leaves it (its piece there is built).
@@ -528,8 +878,10 @@ export const riverCellEntry = (warped: PointXZ): RiverCellEntry => {
     const blocked = riverEdgeBlocked(e);
     return !blocked[junction === e.keyA ? 0 : e.count - 1];
   };
-  const continuesAt = (self: RiverEdge) => (junction: string): boolean =>
-    (atJunction.get(junction) ?? []).some((other) => other !== self && builtAt(other, junction));
+  const continuesAt =
+    (self: RiverEdge) =>
+    (junction: string): boolean =>
+      (atJunction.get(junction) ?? []).some((other) => other !== self && builtAt(other, junction));
 
   const entry: RiverCellEntry = { segments: [], edges: [] };
   for (const e of emitted) {
@@ -559,7 +911,14 @@ export const riverCellEntry = (warped: PointXZ): RiverCellEntry => {
 export const getRiverSegments = (warped: PointXZ): RiverSegment[] => riverCellEntry(warped).segments;
 
 /** Network-build diagnostics (probes): pieces blocked per reason, over every edge built. */
-export const riverDebug = { pieces: 0, blocked: [0, 0, 0, 0, 0], along: 0, undeckable: 0, retracted: 0 };
+export const riverDebug = {
+  pieces: 0,
+  blocked: [0, 0, 0, 0, 0],
+  gorgePieces: 0,
+  along: 0,
+  undeckable: 0,
+  retracted: 0,
+};
 
 /** A built piece in the shape the per-vertex field and the bridges consume; resolveRiverPiece
  *  applies the road layer (which only ever removes pieces). */
@@ -577,13 +936,37 @@ export interface RiverPiece {
 }
 
 /** The network's pieces around a point within `pad` of a box, BEFORE the road layer. */
-export const riverPiecesRaw = (warped: PointXZ, minX: number, minZ: number, maxX: number, maxZ: number, pad: number): RiverPiece[] => {
+export const riverPiecesRaw = (
+  warped: PointXZ,
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number,
+  pad: number,
+): RiverPiece[] => {
   const entry = riverCellEntry(warped);
   const out: RiverPiece[] = [];
   for (let j = 0; j < entry.segments.length; j++) {
     const s = entry.segments[j];
-    if (Math.max(s.sx, s.ex) < minX - pad || Math.min(s.sx, s.ex) > maxX + pad || Math.max(s.sz, s.ez) < minZ - pad || Math.min(s.sz, s.ez) > maxZ + pad) continue;
-    out.push({ sx: s.sx, sz: s.sz, ex: s.ex, ez: s.ez, w0: s.w0, w1: s.w1, edge: entry.edges[j], index: s.index, resolved: false, suppressed: false });
+    if (
+      Math.max(s.sx, s.ex) < minX - pad ||
+      Math.min(s.sx, s.ex) > maxX + pad ||
+      Math.max(s.sz, s.ez) < minZ - pad ||
+      Math.min(s.sz, s.ez) > maxZ + pad
+    )
+      continue;
+    out.push({
+      sx: s.sx,
+      sz: s.sz,
+      ex: s.ex,
+      ez: s.ez,
+      w0: s.w0,
+      w1: s.w1,
+      edge: entry.edges[j],
+      index: s.index,
+      resolved: false,
+      suppressed: false,
+    });
   }
   return out;
 };
@@ -630,15 +1013,22 @@ export const riverPieceEnds = (p: RiverPiece): [boolean, boolean] => {
 /** Whether a raw piece is built once the road layer has had its say (the per-vertex field's set). */
 export const riverPieceBuilt = (p: RiverPiece): boolean => resolveRiverPiece(p);
 
-export const riverPiecesIn = (warped: PointXZ, minX: number, minZ: number, maxX: number, maxZ: number, pad: number): RiverPiece[] =>
-  riverPiecesRaw(warped, minX, minZ, maxX, maxZ, pad).filter(resolveRiverPiece);
+export const riverPiecesIn = (
+  warped: PointXZ,
+  minX: number,
+  minZ: number,
+  maxX: number,
+  maxZ: number,
+  pad: number,
+): RiverPiece[] => riverPiecesRaw(warped, minX, minZ, maxX, maxZ, pad).filter(resolveRiverPiece);
 
 /** The widest a river's footprint (+ meander) can reach from its centerline, real units. */
 export const riverMaxReach = (): number => riverKeepOff() * RIVER_WIDTH_MAX * RIVER_POND_FACTOR + RIVER_MEANDER_AMP;
 
 /** The widest a river's WET field (riverSample.distance < halfWidth + bank) reaches from a raw
  *  piece, real units: the smooth minimum's dip, the widest width factor, the meander in both axes. */
-export const riverWetReach = (): number => (riverKeepOff() + RIVER_FILLET / 4) * RIVER_WIDTH_MAX * RIVER_POND_FACTOR + 2 * RIVER_MEANDER_AMP;
+export const riverWetReach = (): number =>
+  (riverKeepOff() + RIVER_FILLET / 4) * RIVER_WIDTH_MAX * RIVER_POND_FACTOR + 2 * RIVER_MEANDER_AMP;
 
 /** Raw pieces from every river cell a warped box (+ pad) overlaps, each once (a cell emits whole
  *  edges, so an edge seen from one cell is complete). */
@@ -646,8 +1036,16 @@ export const riverPiecesNear = (x0: number, z0: number, x1: number, z1: number, 
   const G = RIVER_GRID_SIZE;
   const out: RiverPiece[] = [];
   const seen = new Set<string>();
-  for (let ix = Math.floor((x0 - pad - RIVER_GRID_SHIFT.x) / G); ix <= Math.floor((x1 + pad - RIVER_GRID_SHIFT.x) / G); ix++) {
-    for (let iz = Math.floor((z0 - pad - RIVER_GRID_SHIFT.z) / G); iz <= Math.floor((z1 + pad - RIVER_GRID_SHIFT.z) / G); iz++) {
+  for (
+    let ix = Math.floor((x0 - pad - RIVER_GRID_SHIFT.x) / G);
+    ix <= Math.floor((x1 + pad - RIVER_GRID_SHIFT.x) / G);
+    ix++
+  ) {
+    for (
+      let iz = Math.floor((z0 - pad - RIVER_GRID_SHIFT.z) / G);
+      iz <= Math.floor((z1 + pad - RIVER_GRID_SHIFT.z) / G);
+      iz++
+    ) {
       const cell = { x: RIVER_GRID_SHIFT.x + (ix + 0.5) * G, z: RIVER_GRID_SHIFT.z + (iz + 0.5) * G };
       const fresh = new Set<string>();
       for (const p of riverPiecesRaw(cell, x0, z0, x1, z1, pad)) {

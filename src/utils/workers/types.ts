@@ -150,6 +150,10 @@ export interface VertexResult {
    *  width — the shader's PRESENCE is smoothstep(0, 1, v): 0 at the biome's edge (the
    *  region's base material shows), 1 one blend width inside. Shared scratch: copy. */
   biomePresence: Float64Array;
+  /** Per BIOME SLOT: biomeSdf for the riverbed's texture, each wall's half floored at
+   *  RIVER_BED_TEXTURE_HALF (zoneBlend.ts), so the bed cross-fades softly even beside the crisp
+   *  city. Shared scratch: copy. */
+  riverbedSdf: Float64Array;
 }
 
 /** A (region, biome) pair — the unit the height blend works in. Interned at init so

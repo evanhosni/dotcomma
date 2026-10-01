@@ -165,33 +165,39 @@ const SCALAR_FIELDS = [
   ["freewayAlong", "freewayAlong"],
 ] as const;
 
-/** Biome slots ride in two vec4 attributes each for sdf and presence (≤ MAX_BIOME_SLOTS, material.ts asserts). */
+/** Biome slots ride in two vec4 attributes each for sdf, presence and the riverbed's sdf (≤ MAX_BIOME_SLOTS, material.ts asserts). */
 const writeBiomeSlots = (geom: THREE.BufferGeometry, lod: LODLevel, result: ChunkBuildResult, mainVertCount: number): void => {
-  const { biomeSdf, biomePresence, slots } = result;
+  const { biomeSdf, biomePresence, riverbedSdf, slots } = result;
   const sdf0 = ensureAttribute(geom, "biomeSdf0", 4);
   const sdf1 = ensureAttribute(geom, "biomeSdf1", 4);
   const pres0 = ensureAttribute(geom, "biomePresence0", 4);
   const pres1 = ensureAttribute(geom, "biomePresence1", 4);
+  const bed0 = ensureAttribute(geom, "riverbedSdf0", 4);
+  const bed1 = ensureAttribute(geom, "riverbedSdf1", 4);
   const clampBlend = lod.clampBlendFields;
   for (let i = 0; i < mainVertCount; i++) {
     for (let s = 0; s < MAX_BIOME_SLOTS; s++) {
       let v = s < slots ? biomeSdf[i * slots + s] : -BIOME_SDF_FAR;
       let p = s < slots ? biomePresence[i * slots + s] : -BIOME_SDF_FAR;
+      let b = s < slots ? riverbedSdf[i * slots + s] : -BIOME_SDF_FAR;
       if (clampBlend) {
         v = v < -1 ? -1 : v > 1 ? 1 : v;
         p = p < 0 ? 0 : p > 1 ? 1 : p;
+        b = b < -1 ? -1 : b > 1 ? 1 : b;
       }
       if (s < 4) {
         sdf0[i * 4 + s] = v;
         pres0[i * 4 + s] = p;
+        bed0[i * 4 + s] = b;
       } else {
         sdf1[i * 4 + (s - 4)] = v;
         pres1[i * 4 + (s - 4)] = p;
+        bed1[i * 4 + (s - 4)] = b;
       }
     }
   }
   const perimeterIndices = getPerimeterIndices(lod.segments);
-  for (const arr of [sdf0, sdf1, pres0, pres1]) copyEdgeToSkirt(arr, 4, perimeterIndices, mainVertCount);
+  for (const arr of [sdf0, sdf1, pres0, pres1, bed0, bed1]) copyEdgeToSkirt(arr, 4, perimeterIndices, mainVertCount);
 };
 
 /** Fills a terrain chunk's geometry from its worker result: heights (the skirt hangs `skirtDepth`
@@ -227,7 +233,7 @@ export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, r
   normals.set(result.normals, 0);
   copyEdgeToSkirt(normals, 3, perimeterIndices, mainVertCount);
 
-  for (const name of ["biomeSdf0", "biomeSdf1", "biomePresence0", "biomePresence1", ...SCALAR_FIELDS.map(([a]) => a)]) {
+  for (const name of ["biomeSdf0", "biomeSdf1", "biomePresence0", "biomePresence1", "riverbedSdf0", "riverbedSdf1", ...SCALAR_FIELDS.map(([a]) => a)]) {
     (geom.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
   }
   geom.attributes.position.needsUpdate = true;
