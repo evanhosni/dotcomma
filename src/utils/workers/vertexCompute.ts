@@ -539,7 +539,11 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // the paint reaches. Not in a city: past the city's edge roads its ground is the bank, and capped,
   // its plaza showed as grey tongues on the sand; its pavement keeps the bed off by itself (the shader's
   // pavement mask). Capped only inside the river's footprint, the paint's edge stepped along that line.
-  if (riverBedDistance < riverReach && city === null) riverBedDistance = capRiverBed(riverBedDistance, riverSample.bedLimit);
+  // Just outside the wall the cap comes in over BELT_FIELD_HANDOFF, so the paint does not step there.
+  if (riverBedDistance < riverReach && city === null) {
+    const capped = capRiverBed(riverBedDistance, riverSample.bedLimit);
+    riverBedDistance += (capped - riverBedDistance) * (quayBeside ? smoothstep(0, BELT_FIELD_HANDOFF, nearestCityWall.wall) : 1);
+  }
   let mouth = 0;
   if (!Number.isNaN(riverSurface)) {
     // A river MOUTH (riverMouthShare): over the lakebed the channel only deepens the ground and the
@@ -621,7 +625,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
   if (
     decksKnown &&
     distanceToRiver < riverReach + FRAGMENT_RIVER_REACH &&
-    inRoadFragment(x, z, city !== null, riverBedDistance, distanceToRoadCenter, distanceToBiomeBoundary, waterHeight > height, sdfOut, presenceOut)
+    // (A sliver thinner than the lattice goes too, but not at a deck's mouth: its asphalt is the deck's.)
+    inRoadFragment(x, z, city !== null, riverBedDistance, distanceToRoadCenter, distanceToBiomeBoundary, waterHeight > height, sdfOut, presenceOut, !deckEndNear(cellDecks, x, z))
   ) {
     distanceToRoadCenter = Math.max(distanceToRoadCenter, FRAGMENT_REMOVED_FIELD);
     distanceToFreewayCenter = 99999;

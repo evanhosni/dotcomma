@@ -76,6 +76,7 @@ export const getMaterial = async () => {
       "varying vec3 vWorldNormal;",
       "varying vec3 vWorldPosWrapped;",
       "varying vec3 vWorldPosAbs;",
+      "varying float vSkirt;",
     ],
   });
 

@@ -8,6 +8,7 @@ attribute float riverBedDistance;
 attribute float distanceToRoadCenter;
 attribute float distanceToFreewayCenter;
 attribute float freewayAlong;
+attribute float skirtDrop;
 varying vec4 vBiomeSdf0;
 varying vec4 vBiomeSdf1;
 varying vec4 vBiomePresence0;
@@ -25,6 +26,11 @@ varying float vHeight;
 varying vec3 vWorldNormal;
 varying vec3 vWorldPosWrapped;
 varying vec3 vWorldPosAbs;
+varying float vSkirt;
+
+// The opaque program and its LOD-fade twin must place a vertex on the same pixel: without the
+// qualifier a fast-math compiler (Apple/Metal) may evaluate the position differently per program.
+invariant gl_Position;
 
 // quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
 // by world/terrain/material.ts.
@@ -61,17 +67,24 @@ void main() {
 
   vec3 worldPos = quantizeWorldPos(wrapOrigin + localWorld);
 
-  vWorldUv = worldPos.xz / 26.25;
-  vWorldPosWrapped = worldPos;
+  // A SKIRT is shaded at the edge it hangs from (every attribute is already the edge's copy), so
+  // where a seam's gap or crack shows it, it reads as that ground. Shaded at its own depth (up to
+  // 1000u below) it was not: height-based paint (the mountain's snow line) drew it as rock.
+  vec3 shadeLift = vec3(0.0, skirtDrop, 0.0);
+  vec3 shadePos = worldPos + shadeLift;
+  vSkirt = skirtDrop > 0.0 ? 1.0 : 0.0;
+
+  vWorldUv = shadePos.xz / 26.25;
+  vWorldPosWrapped = shadePos;
 
   // Unwrapped: ONLY for comparing against CPU-side absolute positions (lamp
   // grid, point lights). Never for tiling, quantization or fwidth() guards.
-  vWorldPosAbs = chunkOrigin + localWorld;
+  vWorldPosAbs = chunkOrigin + localWorld + shadeLift;
 
   vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
   vWorldNormal = worldNormal;
   vSlopeAngle = 1.0 - abs(worldNormal.y);
-  vHeight = worldPos.y;
+  vHeight = shadePos.y;
 
   vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldPos - wrapOrigin);
   gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);

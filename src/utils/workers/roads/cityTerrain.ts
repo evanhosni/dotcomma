@@ -66,9 +66,12 @@ export const CITY_QUAY_INNER_CAP = 60;
 
 // ── The waterfront (the belt carried along a river) ───────────────────
 
-/** A belt wall counts as DROWNED (the river's footprint reaches over it) out to this past where its
- *  river-side curb is just dry (bank + freewayWidth), fading in over it (real units). */
-const CITY_WATERFRONT_FADE = 30;
+/** A belt wall counts as DROWNED (the river's footprint reaches over it) across this window centered
+ *  where its river-side curb is just dry (bank + freewayWidth), fading in over it (real units). Over 30u
+ *  past that line, where a wall leaves the river at an angle its share rose 0.17 in 5u, and the belt's
+ *  push past CITY_WATERFRONT_BELT_HOLD tore its outer edge into spikes of curb and sand (screenshot 97);
+ *  over 60u past it, dry walls beside a river mouth gave their belt way to a block's tip (103). */
+const CITY_WATERFRONT_FADE = 60;
 /** How far from a road's centerline its distance still matters to the city (real units): the
  *  belt's field has recovered well past the block band, and its paint and grade are long gone. */
 const CITY_WATERFRONT_READ = 80;
@@ -104,7 +107,7 @@ export const wallDrownedAt = (px: number, pz: number, wallDx = NaN, wallDz = NaN
   if (!(riverStraight.distance < Infinity)) return 0;
   const rv = domainConfig!.river;
   const edge = (rv.halfWidth + rv.bank) * riverStraight.factor + domainConfig!.cityConfig.freewayWidth;
-  const drowned = 1 - smoothstep(edge, edge + CITY_WATERFRONT_FADE, riverStraight.distance);
+  const drowned = 1 - smoothstep(edge - CITY_WATERFRONT_FADE / 2, edge + CITY_WATERFRONT_FADE / 2, riverStraight.distance);
   if (Number.isNaN(wallDx)) return drowned;
   // Only a wall running ALONG the river: a belt crossing it is decked, not drowned (its closest
   // point to a vertex beside the crossing lies in the channel).

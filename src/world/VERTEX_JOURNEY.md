@@ -164,8 +164,9 @@ same scratch buffers.
    wall is that same shore height, so the two sides meet.
 3. **The bed limit** (`capRiverBed`): off the city, wherever `riverBedDistance` is inside the reach,
    past step 2's `bedLimit` it reads as out of reach, fading over `RIVER_BED_CAP_FADE` inward of it,
-   so the bed ends at its first steep bank. Not in a city: its ground past the edge roads is the bank,
-   and its pavement keeps the bed off through the shader's pavement mask.
+   so the bed ends at its first steep bank. Not in a city (its ground past the edge roads is the bank,
+   and its pavement keeps the bed off through the shader's pavement mask), and just outside the wall
+   the cap comes in over `BELT_FIELD_HANDOFF`, so the paint does not step across it.
 4. **The river channel** (`carveRiverChannel`), where `distanceToRiver < halfWidth + bank`. Its
    surface is first held up to a lake's level by the weight of crisp land there
    (`riverSurfaceBesideCrispShore`): the city draws no lake on its side of the wall. The
@@ -233,7 +234,8 @@ OUTER half, and writes its results to `offCityRoad`.
   height takes step 5's `approachDelta`, so the road is flat across at its grade and the bank gives
   way to it, gated off in the channel (`halfWidth` → the water band).
 - **The mouth.** In front of a landed cut end the ground lies flush with the slab out to the chunk's cut
-  margin, then eases back to the road's own height over 16u (height only). Past that margin the road
+  margin, then eases back to the road's own height over 16u (height only). The curb's rise follows the
+  field the mouth paints (last item), never a step where the mouth ends. Past that margin the road
   in front of a cut end is never cut toward the slab's corner.
 - **The cut.** Under and beside every drawn slab, the ground is cut to just below it
   (`bridgeTriangleCap`). It stays above any drawn water, or drops the water where the slab is lower.
@@ -258,7 +260,8 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
   It applies on the padded path near rivers.
 - **What it finds:** road land that a river has cut off into a piece of at most about 5000u². The
   piece is found by a flood fill on an 8u lattice of raw evaluations, and it does not count as a
-  fragment if a deck lands on it.
+  fragment if a deck lands on it. A road vertex whose lattice square has no road corner at all goes
+  too (a speck thinner than the lattice), except at a deck's mouth.
 - **Overrides:** the road field is raised to 13 (no pavement, no lamp band), the lane paint is
   removed, and `riverBedDistance` is forced into the bed. The HEIGHT is untouched.
 - **Scratch:** the flood fill writes the result buffers, so the vertex's sdf and presence are saved
