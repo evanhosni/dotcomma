@@ -6,9 +6,9 @@ import type { ChunkBuildResult } from "./terrainWorker";
 
 // A chunk's mesh buffers: a (segments + 1)² grid in PlaneGeometry's layout (rotated to y-up by the
 // plane) plus a SKIRT ring hanging below the perimeter, pooled per LOD and refilled from each worker
-// result. Skirt vertices copy their edge vertex's attributes and normals, and `skirtDrop` (how far a
-// vertex hangs below its edge: 0 on the grid and the skirt's top ring) lets the vertex shader shade the
-// skirt AT its edge — a skirt seen through a seam crack then reads as the ground it hangs from.
+// result. Skirt vertices copy their edge vertex's attributes and normals; `skirtDrop` (how far a vertex
+// hangs below its edge: 0 on the grid and the skirt's top ring) is what the devmode "tint skirts" toggle
+// paints by (world/shaders/skirtTint.ts).
 
 /** Clockwise loop of main-grid edge vertex indices (4 × segments). */
 const perimeterCache = new Map<number, number[]>();

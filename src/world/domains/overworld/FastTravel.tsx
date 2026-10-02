@@ -1,4 +1,4 @@
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import { useGameContext } from "../../../context/GameContext";
 import { getPlaceInfo } from "../../../objects/dressing/dressingWorker";
@@ -23,6 +23,8 @@ export const FastTravel = () => {
   const pollInFlight = useRef(false);
   const currentKey = useRef<string | null>(null);
 
+  const camera = useThree((state) => state.camera);
+  const scene = useThree((state) => state.scene);
   useEffect(() => {
     let cancelled = false;
 
@@ -60,14 +62,14 @@ export const FastTravel = () => {
       if (cancelled) return;
       await landAt(x, z);
     };
-    (window as any).__dotcomma = { travelTo };
+    (window as any).__dotcomma = { travelTo, camera, scene };
 
     return () => {
       cancelled = true;
       window.removeEventListener(ADDRESS_TRAVEL_EVENT, onTravel);
       delete (window as any).__dotcomma;
     };
-  }, [setPlayerSpawn, setTerrainLoaded, setProgress]);
+  }, [camera, scene, setPlayerSpawn, setTerrainLoaded, setProgress]);
 
   useFrame((_, delta) => {
     if (pollInFlight.current) return;
