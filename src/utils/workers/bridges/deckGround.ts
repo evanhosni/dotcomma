@@ -137,11 +137,17 @@ export const cutGroundUnderDecks = (decks: FreewayBridge[], x: number, z: number
     mouthDepth = bridgeMouth.depth;
     mouthTop = bridgeMouth.top;
   }
+  // The curb's own rise comes off only where the slab holds the ground; elsewhere it follows the field
+  // the mouth paints (7e, below). Taken off across the whole mouth, it came back in a 0.26u step where
+  // the mouth's reach ended, which the fake directional shading drew as a dark streak on the road
+  // (screenshot 102).
+  const cfg = domainConfig!.cityConfig;
+  const curbDipOf = (field: number): number => cfg.curbHeight * (1 - smoothstep(cfg.roadWidth - 2, cfg.roadWidth, field));
+  let hold = 0;
   if (mouth > 0) {
-    const cfg = domainConfig!.cityConfig;
-    const asphalt = g.height - cfg.curbHeight * smoothstep(cfg.roadWidth - 2, cfg.roadWidth, g.roadField);
-    const hold = mouth * (1 - smoothstep(deckCutMargin, deckCutMargin + DECK_MOUTH_EASE, mouthDepth));
-    g.height = asphalt + (mouthTop + BRIDGE_CUT_FLUSH - asphalt) * hold + (g.height - asphalt) * (1 - mouth);
+    const asphalt = g.height - cfg.curbHeight + curbDipOf(g.roadField);
+    hold = mouth * (1 - smoothstep(deckCutMargin, deckCutMargin + DECK_MOUTH_EASE, mouthDepth));
+    g.height = asphalt + (mouthTop + BRIDGE_CUT_FLUSH - asphalt) * hold + (g.height - asphalt) * (1 - hold);
   }
   let underDeck = 0;
   // The fill under a cut end's seam (its height and weight), and every cap the vertex is under (the fill
@@ -211,6 +217,9 @@ export const cutGroundUnderDecks = (decks: FreewayBridge[], x: number, z: number
   for (let i = 0; i < decks.length; i++) mouthField = Math.min(mouthField, bridgeMouthFieldAt(decks[i], x, z, deckCutMargin, DECK_MOUTH_FIELD, groundRoadField));
   if (mouthField < g.roadField + DECK_MOUTH_FILLET) {
     const h = Math.max(0, DECK_MOUTH_FILLET - Math.abs(mouthField - g.roadField)) / DECK_MOUTH_FILLET;
-    g.roadField = Math.min(g.roadField, mouthField) - (h * h * DECK_MOUTH_FILLET) / 4;
+    const painted = Math.min(g.roadField, mouthField) - (h * h * DECK_MOUTH_FILLET) / 4;
+    // (Not under the slab: the ground there is the cut's, and the slab's corners stand on it.)
+    g.height -= (curbDipOf(painted) - curbDipOf(g.roadField)) * (1 - hold) * (1 - underDeck);
+    g.roadField = painted;
   }
 };

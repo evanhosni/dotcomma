@@ -705,7 +705,9 @@ export const bridgeMouthFieldAt = (b: FreewayBridge, x: number, z: number, inwar
       // it whose asphalt does not reach this depth).
       let inside = Math.min(half + MOUTH_SIDE_OUT - Math.abs(l), depth - lowOf(c), topAt(Math.max(-half, Math.min(half, l))) - depth);
       for (let j = Math.max(0, c - span); j <= Math.min(n - 1, c + span); j++) {
-        if (off(j) !== 0) inside = Math.min(inside, Math.max(0, Math.abs(l - (-half + (j + 0.5) * col)) - col / 2));
+        // A column beside the road bounds the mouth sideways; one that reaches the road's asphalt does
+        // through topAt (by its own top, the curb came back a column wide at every step of the tops).
+        if (m.reach[j] < 0) inside = Math.min(inside, Math.max(0, Math.abs(l - (-half + (j + 0.5) * col)) - col / 2));
       }
       field = Math.min(field, sideClipped(Math.max(asphalt, edge - MOUTH_CURB_SLOPE * inside), depth));
       continue;

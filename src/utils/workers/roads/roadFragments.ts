@@ -205,8 +205,10 @@ const latticeVerdict = (lat: PieceLattice, ix: number, iz: number): number => {
 };
 
 /** Whether a land point lies in a removed piece (TO_ROAD / TO_BANK; STAYS when not): every land
- *  corner of its lattice square does. */
-const pieceRemovedAt = (lat: PieceLattice, x: number, z: number): number => {
+ *  corner of its lattice square does. With `bare`, also where no corner is land: a road there is
+ *  narrower than the lattice's diagonal (11.3u, under any road's own width) — a speck of a removed
+ *  piece's corridor fringe left standing on the bank. */
+const pieceRemovedAt = (lat: PieceLattice, x: number, z: number, bare = false): number => {
   const ix = Math.floor(x / lat.cell);
   const iz = Math.floor(z / lat.cell);
   let removed = STAYS;
@@ -215,13 +217,13 @@ const pieceRemovedAt = (lat: PieceLattice, x: number, z: number): number => {
     if (v === STAYS) return STAYS;
     if (v === TO_ROAD || v === TO_BANK) removed = v;
   }
-  return removed;
+  return removed === STAYS && bare ? TO_ROAD : removed;
 };
 
 /** pieceRemovedAt for the current vertex. The flood fill evaluates other points (and may enumerate a
  *  cell's decks, which writes the result buffers), so the vertex's slot fields `sdf` / `presence` are
  *  kept aside around it. */
-const inRemovedPiece = (lat: PieceLattice, x: number, z: number, sdf: Float64Array, presence: Float64Array): number => {
+const inRemovedPiece = (lat: PieceLattice, x: number, z: number, sdf: Float64Array, presence: Float64Array, bare: boolean): number => {
   if (evaluatingPieces) return STAYS;
   if (pieceSdfSave.length !== sdf.length) pieceSdfSave = new Float64Array(sdf.length);
   if (piecePresenceSave.length !== presence.length) piecePresenceSave = new Float64Array(presence.length);
@@ -229,7 +231,7 @@ const inRemovedPiece = (lat: PieceLattice, x: number, z: number, sdf: Float64Arr
   piecePresenceSave.set(presence);
   evaluatingPieces = true;
   try {
-    return pieceRemovedAt(lat, x, z);
+    return pieceRemovedAt(lat, x, z, bare);
   } finally {
     evaluatingPieces = false;
     sdf.set(pieceSdfSave);
@@ -248,11 +250,12 @@ export const inRoadFragment = (
   submerged: boolean,
   sdf: Float64Array,
   presence: Float64Array,
+  bare: boolean,
 ): boolean => {
   const land = isRoadLand(inCity, riverBedDistance, roadField);
   const nearBelt = inCity ? biomeBoundaryDistance < domainConfig!.cityConfig.freewayWidth + FRAGMENT_BELT_REACH : true;
   if (!land || !nearBelt || submerged) return false;
-  return inRemovedPiece(fragments, x, z, sdf, presence) !== STAYS;
+  return inRemovedPiece(fragments, x, z, sdf, presence, bare) !== STAYS;
 };
 
 /** Whether the straight line from (x, z) to (px, pz) stays on block land (islands.land), sampled

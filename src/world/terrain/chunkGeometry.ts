@@ -6,7 +6,9 @@ import type { ChunkBuildResult } from "./terrainWorker";
 
 // A chunk's mesh buffers: a (segments + 1)² grid in PlaneGeometry's layout (rotated to y-up by the
 // plane) plus a SKIRT ring hanging below the perimeter, pooled per LOD and refilled from each worker
-// result. Skirt vertices copy their edge vertex's attributes and normals.
+// result. Skirt vertices copy their edge vertex's attributes and normals; `skirtDrop` (how far a vertex
+// hangs below its edge: 0 on the grid and the skirt's top ring) is what the devmode "tint skirts" toggle
+// paints by (world/shaders/skirtTint.ts).
 
 /** Clockwise loop of main-grid edge vertex indices (4 × segments). */
 const perimeterCache = new Map<number, number[]>();
@@ -34,6 +36,7 @@ const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: nu
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const uvs = new Float32Array(totalVerts * 2);
+  const skirtDrops = new Float32Array(totalVerts);
 
   const halfSize = chunkSize / 2;
   for (let iz = 0; iz < n; iz++) {
@@ -79,6 +82,7 @@ const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: nu
     positions[(skirtBotStart + i) * 3] = positions[srcIdx * 3];
     positions[(skirtBotStart + i) * 3 + 1] = positions[srcIdx * 3 + 1];
     positions[(skirtBotStart + i) * 3 + 2] = -skirtDepth;
+    skirtDrops[skirtBotStart + i] = skirtDepth;
     normals[(skirtTopStart + i) * 3 + 2] = 1;
     normals[(skirtBotStart + i) * 3 + 2] = 1;
     uvs[(skirtTopStart + i) * 2] = uvs[srcIdx * 2];
@@ -105,6 +109,7 @@ const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: nu
   geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   geom.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geom.setAttribute("skirtDrop", new THREE.BufferAttribute(skirtDrops, 1));
   geom.setIndex(new THREE.BufferAttribute(indexArray, 1));
   return geom;
 };

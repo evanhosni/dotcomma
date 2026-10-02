@@ -3,4 +3,6 @@
 export const DEV_TOGGLES = [
   { flag: "noclip", label: "noclip" },
   { flag: "physicsDebug", label: "physics debug" },
+  { flag: "tintSkirts", label: "tint skirts" },
+  { flag: "noLodFade", label: "no LOD fade" },
 ] as const;

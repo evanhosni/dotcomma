@@ -8,6 +8,7 @@ attribute float riverBedDistance;
 attribute float distanceToRoadCenter;
 attribute float distanceToFreewayCenter;
 attribute float freewayAlong;
+attribute float skirtDrop;
 varying vec4 vBiomeSdf0;
 varying vec4 vBiomeSdf1;
 varying vec4 vBiomePresence0;
@@ -25,6 +26,7 @@ varying float vHeight;
 varying vec3 vWorldNormal;
 varying vec3 vWorldPosWrapped;
 varying vec3 vWorldPosAbs;
+varying float vSkirt;
 
 // quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
 // by world/terrain/material.ts.
@@ -60,6 +62,8 @@ void main() {
   vec3 localWorld = mat3(modelMatrix) * position;
 
   vec3 worldPos = quantizeWorldPos(wrapOrigin + localWorld);
+
+  vSkirt = skirtDrop > 0.0 ? 1.0 : 0.0;
 
   vWorldUv = worldPos.xz / 26.25;
   vWorldPosWrapped = worldPos;

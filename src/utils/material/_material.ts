@@ -7,6 +7,7 @@ import { Biome, MaterialData, Region, RiverbedMaterial } from "../../world/types
 import { CITY_BIOME_ID } from "../../world/constants";
 import commonShader from "../../world/shaders/common.glsl";
 import { LOD_FADE_DEFINE, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "../../world/shaders/lodFade";
+import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "../../world/shaders/skirtTint";
 import {
   FREEWAY_CORRIDOR_INNER,
   FREEWAY_CORRIDOR_OUTER,
@@ -408,7 +409,7 @@ export namespace _material {
   ): Promise<THREE.ShaderMaterial> => {
     const { riverTexture, slotRiverbeds = [], riverbedTextures = new Map(), varyingDeclarations = [], defines = {}, slotHalves, bedSlotHalves, slotRegions } = options;
     // uNightBlend and the lamp-grid uniforms are SHARED objects so every terrain material dims in lockstep.
-    const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS };
+    const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS, [SKIRT_TINT_UNIFORM]: skirtTintUniform };
 
     // The scene point lights' struct/array uniforms are written by the renderer (material.lights),
     // so they must NOT go through the scalar declaration generator.
@@ -469,6 +470,8 @@ export namespace _material {
 
       // Slow gradients band into rings at 8 bits without the dither.
       ${ditherGLSL("gl_FragColor.rgb")}
+
+      ${SKIRT_TINT_GLSL}
     }
   `;
 

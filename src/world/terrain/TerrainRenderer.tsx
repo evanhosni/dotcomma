@@ -14,7 +14,9 @@ import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
 import { acquireGeometry, releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
 import { LODLevel } from "./lodConfig";
 import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
-import { FADE_OPAQUE_HI, LodSwapper, SwapHooks } from "./lodSwaps";
+import { FADE_OPAQUE_HI, LOD_FADE_SECONDS, LodSwapper, SwapHooks } from "./lodSwaps";
+import { skirtTintUniform } from "../shaders/skirtTint";
+import { useDevContext } from "../../context/DevContext";
 import { ensureTerrainWorker, requestChunkBuild, resetTerrainWorker } from "./terrainWorker";
 import { Chunk, TerrainProps } from "./types";
 
@@ -215,6 +217,15 @@ export const TerrainRenderer = () => {
    *  opaque terrain its early depth test), and the mesh that links that program during the load. */
   const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
   const fadeWarmRef = React.useRef<{ mesh: THREE.Mesh; drawn: boolean } | null>(null);
+
+  // Devmode seam diagnostics (terrain/README.md).
+  const { tintSkirts, noLodFade } = useDevContext();
+  useEffect(() => {
+    skirtTintUniform.value = tintSkirts ? 1 : 0;
+  }, [tintSkirts]);
+  useEffect(() => {
+    swapper.fadeSeconds = noLodFade ? 0 : LOD_FADE_SECONDS;
+  }, [noLodFade]);
 
   // A new spawn (fast travel) restarts the loading gate: the stale remaining=0 would
   // otherwise flip terrainLoaded back on before the first pass around the new position.
