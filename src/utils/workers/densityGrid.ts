@@ -55,11 +55,13 @@ export const rollDensityCell = (
  *  engine evaluates RAW (no decks), so pads never see it — buildings' road band (≥ 23) never meets a
  *  deck anyway. */
 export const passesPlacementFilters = (
-  vd: Pick<VertexResult, "biomeId" | "height" | "distanceToRoadCenter" | "distanceToRiverCenter" | "underDeck">,
+  vd: Pick<VertexResult, "biomeId" | "height" | "distanceToRoadCenter" | "distanceToRiverCenter" | "underDeck" | "waterHeight">,
   f: Pick<GameObjectAttributes, "biomeIds" | "heightRange" | "roadDistanceRange">,
   riverKeepOff: number,
 ): boolean => {
-  if (vd.distanceToRiverCenter < riverKeepOff || vd.underDeck > 0) return false;
+  // Nothing stands under water: past a river's keep-off, the land a river merges into a lake beside it
+  // (lakes.ts riverLakeMerge) is lakebed.
+  if (vd.distanceToRiverCenter < riverKeepOff || vd.underDeck > 0 || vd.waterHeight > vd.height) return false;
   if (f.biomeIds && f.biomeIds.length > 0 && !f.biomeIds.includes(vd.biomeId)) return false;
   if (f.heightRange && (vd.height < f.heightRange[0] || vd.height > f.heightRange[1])) return false;
   if (

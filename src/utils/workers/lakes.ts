@@ -14,7 +14,7 @@ import type { PointXZ } from "../math/types";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { terrainNoise, unwarp } from "./noise";
-import type { BiomeContext, VoronoiCell, Zone } from "./types";
+import type { BiomeContext, RiverParams, VoronoiCell, Zone } from "./types";
 import { ZONE_WEIGHT_EPS, sstep01, zoneFinal, zoneMinDist, zones } from "./zoneBlend";
 
 const LAKE_SURFACE_BELOW_BASE = 1.5;
@@ -55,15 +55,22 @@ export const shoreLift = (h: number): number => {
  *  (NaN / Infinity where no lake is within the clamp's reach, or the point is IN the water) and how far
  *  the level reaches it (1, fading to 0 where the level's support ends). */
 export const lastShore = (): { level: number; dWater: number; fade: number } => ({ level: shoreLevel, dWater: shoreDWater, fade: shoreFade });
+/** The last lakeSurface's point's SIGNED distance to its nearest water wall: + on land, − in a water zone,
+ *  clamped to ±SHORE_REACH — past it no wall is measured (land) or every wall is far (water), so the
+ *  clamp keeps it 1-Lipschitz for a river piece to interpolate between its ends. */
+export const SHORE_REACH = SHORE_CLAMP_FULL + SHORE_CLAMP_FADE;
+export const lastShoreDistance = (): number => Math.max(-SHORE_REACH, Math.min(SHORE_REACH, Number.isNaN(ownWaterLevel) ? shoreDWater : -ownWaterDist));
 
 /** The shore state lakeSurface leaves (saveShore / restoreShore: riverNetwork's gorgeRise). */
-export const saveShore = (): number[] => [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel];
+export const saveShore = (): number[] => [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel, ownWaterDist];
 export const restoreShore = (s: number[]): void => {
-  [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel] = s;
+  [shoreLevel, shoreDWater, shoreFade, lastLevelWeight, bowlFloor, ownWaterLevel, ownWaterDist] = s;
 };
 
 /** The last lakeSurface's level where its point is IN a water zone (NaN elsewhere). */
 let ownWaterLevel = NaN;
+/** …and its distance to its own zone's nearest wall (the shore). */
+let ownWaterDist = Infinity;
 /** A river's surface at the last lakeSurface's point (its wall pass still current), held up to the
  *  lake's level by the weight of the CRISP land there (the city): its side of the wall draws no lake (its
  *  wall pass gives the water no weight), so a surface under the level — interpolated toward a piece end
@@ -92,6 +99,85 @@ export const riverSurfaceBesideCrispShore = (surface: number): number => {
  *  lake is drawn beside land only where the shore lift already holds the ground at the shore height. */
 export const riverMouthShare = (ground: number, lakeLevel: number): number =>
   Number.isNaN(lakeLevel) ? 0 : 1 - smoothstep(lakeLevel, lakeLevel + SHORE_RISE, ground);
+/** A river BESIDE a lake (riverLakeMerge): the dry land between them goes under the water when the
+ *  gap between the river's water band and the lake's wall is at most MERGE_GAP_FULL + half the band
+ *  (real units), none from MERGE_GAP_FADE more; it is sunk to the river channel's own floor (mergeFloor). */
+const MERGE_GAP_FULL = 40;
+const MERGE_GAP_FADE = 80;
+/** The band's share of that allowance stops growing here (a pond end's band reaches ~240u). */
+const MERGE_BAND_ALLOWANCE_MAX = 120;
+/** Ground this far over the shore height merges whole, from this plus MERGE_HIGH_FADE none: a real
+ *  ridge between river and lake (dunes, 30–80u) stays land. */
+const MERGE_HIGH_FULL = 10;
+const MERGE_HIGH_FADE = 10;
+/** The river's surface must not stand over the lake's level by more than this (fading over the second),
+ *  or the two waters would meet at a step: a river beside a lake is eased onto it (riverPieceEndSurface).
+ *  UNDER the level (a mouth's surface sinks into the lakebed) nothing is gated: the merged water is the
+ *  level there (a gate on it cut the share within 6u where a mouth's surface sinks: a 10u cliff). */
+const MERGE_SURFACE_TOLERANCE = 0.25;
+const MERGE_SURFACE_FADE = 0.5;
+/** Inside the lake the share fades out between these depths past its wall, where the bowl already
+ *  lies deeper than the floor (the lake's 90u blend: 14u under the level 50u in, 23u 70u in). */
+const MERGE_LAKE_IN = 60;
+const MERGE_LAKE_OUT = 100;
+/** A sliver between the two waters whatever its shape (the corner where a river turns into the lake,
+ *  where the straight-way test below does not hold): the land within this of both the river's water
+ *  band and the lake's wall merges, none from MERGE_CORNER_FADE more. */
+const MERGE_CORNER = 25;
+const MERGE_CORNER_FADE = 50;
+/** The level riverLakeMerge last merged into (NaN where its share is 0). */
+let mergeLevel = NaN;
+export const lastMergeLevel = (): number => mergeLevel;
+let mergeDepth = 0;
+/** The merged ground's floor: the river channel's own bottom (`depth·√factor` under the surface it is
+ *  eased onto), so the water over it is as deep and as opaque as the river's and the lake's — a shallow
+ *  floor showed the old levee's snow and sand through the water's 2.5u alpha fade as a pale sandbar.
+ *  The lake's bowl, deeper past its beach, wins the min toward the lake. */
+export const mergeFloor = (): number => mergeLevel - mergeDepth;
+
+/** How close a river's centerline (signed water-wall distance `centerShore`, width `factor`) is to a
+ *  lake for the land between to merge (riverLakeMerge): 1 to 0 over the gap's fade. `wide`: the
+ *  surface's own easing onto the level (riverSurface.ts), which is whole wherever the land may merge. */
+export const riverLakeCloseness = (centerShore: number, factor: number, river: RiverParams, wide: boolean): number => {
+  const band = (river.halfWidth + river.bank * 0.5) * factor;
+  const full = MERGE_GAP_FULL + Math.min(band, MERGE_BAND_ALLOWANCE_MAX) * 0.5 + (wide ? MERGE_GAP_FADE : 0);
+  return 1 - smoothstep(full, full + MERGE_GAP_FADE, centerShore - band);
+};
+
+/** How much of a point at the last lakeSurface's point is merged into the lake beside a river: 1 on
+ *  the land BETWEEN a river and a lake close beside it (and that river's lake-side channel and the
+ *  lake's own beach there), 0 on the river's far side, away from such a river, on high ground and
+ *  past the lake's beach. `ground` is the terrain before the river (shore lift applied), `distance` /
+ *  `factor` / `surface` the river field there, `centerShore` / `centerLevel` the signed water-wall
+ *  distance and the lake level at its centerline (riverSample.shore / level): the surface is judged
+ *  against the level it was eased onto there (the lake's own level tilts ~0.6u over 80u in places). Between-ness is the triangle inequality: a point on the straight
+ *  way from the centerline to the lake has river distance + its own wall distance = the centerline's
+ *  wall distance; on the far bank the excess is twice its offset. Every factor is continuous. */
+export const riverLakeMerge = (ground: number, distance: number, factor: number, surface: number, centerShore: number, centerLevel: number, river: RiverParams): number => {
+  mergeLevel = NaN;
+  const inWater = !Number.isNaN(ownWaterLevel);
+  const level = inWater ? ownWaterLevel : shoreLevel;
+  const s = inWater ? -ownWaterDist : shoreDWater;
+  if (Number.isNaN(level) || !(s < Infinity) || !(centerShore < Infinity)) return 0;
+  let m = riverLakeCloseness(centerShore, factor, river, false);
+  if (m <= 0) return 0;
+  const half = river.halfWidth * factor;
+  const straightWay = 1 - smoothstep(0.6 * half, 1.5 * half, distance * factor + s - centerShore);
+  const band = (river.halfWidth + river.bank * 0.5) * factor;
+  const corner = 1 - smoothstep(MERGE_CORNER, MERGE_CORNER + MERGE_CORNER_FADE, Math.max(0, distance * factor - band) + Math.max(0, s));
+  m *= Math.max(straightWay, corner);
+  if (m <= 0) return 0;
+  m *= 1 - smoothstep(MERGE_SURFACE_TOLERANCE, MERGE_SURFACE_TOLERANCE + MERGE_SURFACE_FADE, surface - centerLevel);
+  m *= 1 - smoothstep(MERGE_HIGH_FULL, MERGE_HIGH_FULL + MERGE_HIGH_FADE, ground - level - SHORE_RISE);
+  if (inWater) m *= 1 - smoothstep(MERGE_LAKE_IN, MERGE_LAKE_OUT, -s);
+  else if (shoreFade < 1) m *= shoreFade;
+  if (m > 0) {
+    mergeLevel = level;
+    mergeDepth = river.depth * Math.sqrt(factor);
+  }
+  return m;
+};
+
 // Numeric keys (cell ix, iz): a key string per water cell in reach was most of a shore vertex's level lookup.
 const lakeLevelCache = new Map<number, number>();
 const lakeCellLevel = (cell: VoronoiCell, zone: Zone): number => {
@@ -149,9 +235,11 @@ export const lakeSurface = (warped: PointXZ, ctx: BiomeContext, own: Zone): numb
   shoreFade = 1;
   bowlFloor = NaN;
   ownWaterLevel = NaN;
+  ownWaterDist = Infinity;
   if (own.biome.water) {
     const level = lakeLevelAt(warped, ctx.grid);
     ownWaterLevel = level;
+    ownWaterDist = zoneMinDist[own.index];
     if (zoneFinal[own.index] < 1 && !Number.isNaN(level)) {
       const presence = sstep01(zoneMinDist[own.index] / own.heightPresenceWidth);
       bowlFloor = level + SHORE_RISE - (own.biome.water.depth + SHORE_RISE) * presence;

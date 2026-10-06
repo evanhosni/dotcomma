@@ -8,6 +8,10 @@ import { RIVER_BED_FADE_INSET, RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_END_DEG, RI
 import { smoothstep } from "../../math/_math";
 import { biomeSlotsOf, combineSlotWeights, computeVertexData, computeVertexDataFar, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "../vertexCompute";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
+import { lastShoreDistance } from "../lakes";
+
+/** No river merges into a lake farther than this from its wall (riverLakeMerge: the widest gap). */
+const LAKE_MERGE_REACH = 300;
 
 const config = OVERWORLD_CONFIG;
 const reach = config.river.halfWidth + config.river.bank;
@@ -140,8 +144,8 @@ describe("riverbed paint", () => {
         for (let d = 0; d <= reach * f; d += 4) {
           const q = unwarp((p.sx + p.ex) / 2 - uz * d, (p.sz + p.ez) / 2 + ux * d);
           const v = computeVertexData(q.x, q.z);
-          // (Beside a lake the mouth hands the bed to the lake: not a flat bank.)
-          const lake = !Number.isNaN(computeVertexDataFar(q.x, q.z, false).waterHeight);
+          // (Beside a lake the mouth and the merge hand the bed to the lake: not a flat bank.)
+          const lake = !Number.isNaN(computeVertexDataFar(q.x, q.z, false).waterHeight) || lastShoreDistance() < LAKE_MERGE_REACH;
           ray.push({ bed: v.riverBedDistance, dr: v.distanceToRiverCenter, h: v.height, skip: v.biomeId === CITY_BIOME_ID || lake });
         }
         const flat = ray.every((s, i) => i === 0 || Math.abs(s.h - ray[i - 1].h) < 4 * Math.tan((25 * Math.PI) / 180));

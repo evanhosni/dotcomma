@@ -59,7 +59,8 @@ name what each step consumes, what it produces, and what earlier result it repla
    region's list). A zone is a (region, biome) pair.
 2. **The river field.** Off the city, the nearest city wall is measured first (pure geometry). Then
    `riverFieldAt` ([`rivers/riverField.ts`](../utils/workers/rivers/riverField.ts))
-   writes `riverSample`: distance in factor-1 units, the width factor, and the water surface. It is
+   writes `riverSample`: distance in factor-1 units, the width factor, the water surface, and the
+   centerline's signed distance to a water wall and the lake level there (step 4's merge). It is
    measured from a meandered point, and it smooth-mins confluences. The factor and surface come from
    each run's PLAINLY nearest piece (the nearest by factor-1 distance jumps between pieces where the
    width varies), weighted across runs by the smooth-min weights. Building a cell's piece list
@@ -182,6 +183,18 @@ same scratch buffers.
      bank), the river surface comes down to the lake level, and `riverBedDistance` is pushed out of
      reach. The share ramps to 0 at the shore height (`level + SHORE_RISE`), so dry land is carved as
      before.
+   - **Beside a lake** (`riverLakeMerge`, [`lakes.ts`](../utils/workers/lakes.ts)), off the city and
+     10–40u past any freeway's half-width and the city's own wall: where the river's water band comes
+     within `40 + min(band,120)/2` of a water wall (fading over 80u more; `riverSample.shore`, the
+     centerline's signed wall distance), the land BETWEEN the two — the vertex's river distance plus its
+     own wall distance exceeds the centerline's by under 0.6–1.5 half-widths, or it lies within 25–75u
+     of both the water band and the wall (the corner where the river turns in) — and the lake's beach
+     there sink to the river channel's floor (`level − depth·√factor`, min'ed). The water there is the
+     lake's level (in the band the river's surface eased onto it by the same share) and
+     `riverBedDistance` reads as the whole bed. Not on ground 10–20u over the shore height (a real
+     ridge) nor where the river's surface stands over the centerline's level (`riverSample.level`) by
+     more than 0.25–0.75u; the piece-end surface is already eased onto the level there
+     (`riverPieceEndSurface`, the same closeness 80u wider). The far bank is untouched.
 5. **The channel mask.** `channel` (0 in the channel, 1 on open ground) stops the city's lane paint
    over the riverbed.
 
@@ -411,7 +424,7 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
 | 3 | zones × (region base + biome × presence), crisp tiers | `combineZoneWeights`, `zoneBiomeHeight` | ✔ | – | – |
 | 3′ | city plateaus, roads, curb dip, quay | `getCityTerrain` | ✔ | road field, lane paint, bed cap | – |
 | 4a | lake level + shore lift (the city's curb under it) | `lakeSurface`, `shoreLift` | ✔ | water | step 3 |
-| 4b | river channel + banks, mouth, bed limit | `carveRiverChannel`, `riverMouthShare`, `capRiverBed` | ✔ | water, bed | steps 3–4a |
+| 4b | river channel + banks, mouth, bed limit, merge beside a lake | `carveRiverChannel`, `riverMouthShare`, `capRiverBed`, `riverLakeMerge` | ✔ | water, bed | steps 3–4a |
 | 5 | off-city freeway grade, curb dip, road field | `gradeOffCityFreeway` | ✔ | road field, lane paint | 4b (not in the channel) |
 | 6 | flatten pads | `applyFlattenPads` | ✔ | – | 3–5 |
 | 7 | deck mouth / cut / fill / paint-off / mouth paint | `cutGroundUnderDecks` | ✔ | road, lane, water | 3–6 |

@@ -17,7 +17,7 @@ import { accumulateWallFields, combineZoneWeights, zoneFinal, zoneWeights } from
 import { RIVER_FILLET, RIVER_MEANDER_AMP, RIVER_MEANDER_SCALE, riverMaxReach } from "./constants";
 import { RIVER_BED_CAP_FADE, RIVER_BED_LIMIT_PAST, bedLimitOfPiece, clearRiverBedLimits } from "./riverBedLimit";
 import { riverPiecesIn, riversEnabled } from "./riverNetwork";
-import { clearRiverSurfaces, riverPieceEndSurface, setShoreAt } from "./riverSurface";
+import { clearRiverSurfaces, riverPieceEndLevel, riverPieceEndShore, riverPieceEndSurface, setShoreAt } from "./riverSurface";
 import type { RiverPiece } from "./types";
 
 // ── Per-cell piece lists ───────────────────────────────────────────────
@@ -34,6 +34,12 @@ interface RiverCellList {
   w1: Float64Array;
   h0: Float64Array;
   h1: Float64Array;
+  /** The centerline's signed distance to its nearest water wall at both ends (riverPieceEndShore). */
+  d0: Float64Array;
+  d1: Float64Array;
+  /** …and the lake level there (riverPieceEndLevel). */
+  l0: Float64Array;
+  l1: Float64Array;
   /** The pieces themselves (the bed limits march from their stations). */
   pieces: RiverPiece[];
   group: Int32Array;
@@ -61,6 +67,10 @@ const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
     w1: new Float64Array(n),
     h0: new Float64Array(n),
     h1: new Float64Array(n),
+    d0: new Float64Array(n),
+    d1: new Float64Array(n),
+    l0: new Float64Array(n),
+    l1: new Float64Array(n),
     pieces,
     group: new Int32Array(n),
     groups: 0,
@@ -83,6 +93,10 @@ const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
     list.w1[j] = p.w1;
     list.h0[j] = riverPieceEndSurface(p, 0);
     list.h1[j] = riverPieceEndSurface(p, 1);
+    list.d0[j] = riverPieceEndShore(p, 0);
+    list.d1[j] = riverPieceEndShore(p, 1);
+    list.l0[j] = riverPieceEndLevel(p, 0);
+    list.l1[j] = riverPieceEndLevel(p, 1);
   }
   return list;
 };
@@ -113,8 +127,10 @@ const riverCellList = (px: number, pz: number): RiverCellList => {
 /** What the last riverFieldAt found. `distance` is in factor-1 units (Infinity when no river is in
  *  reach), `factor` the local width factor, `surface` the water surface on the centerline (NaN),
  *  `bedLimit` how far out the riverbed reaches here before its bank first gets too steep (factor-1;
- *  Infinity where no river is in reach — capRiverBed). */
-export const riverSample = { distance: Infinity, factor: 1, surface: NaN, bedLimit: Infinity };
+ *  Infinity where no river is in reach — capRiverBed), `shore` the centerline's signed distance to the
+ *  nearest water wall (riverPieceEndShore; Infinity where no river is in reach — riverLakeMerge) and
+ *  `level` the lake level there (riverPieceEndLevel). */
+export const riverSample = { distance: Infinity, factor: 1, surface: NaN, bedLimit: Infinity, shore: Infinity, level: NaN };
 /** What the last riverQuayAt found (see RiverQuaySample). */
 export const riverQuay: RiverQuaySample = { distance: Infinity, factor: 1, dirX: 1, dirZ: 0 };
 
@@ -134,6 +150,8 @@ let runPiece = new Int32Array(16);
 let runT = new Float64Array(16);
 let runFactor = new Float64Array(16);
 let runSurface = new Float64Array(16);
+let runShore = new Float64Array(16);
+let runLevel = new Float64Array(16);
 let runSideCos = new Float64Array(16);
 let runOutCos = new Float64Array(16);
 let runFootX = new Float64Array(16);
@@ -184,6 +202,8 @@ const ensureFieldScratch = (groups: number, runs: number): void => {
     runT = new Float64Array(size);
     runFactor = new Float64Array(size);
     runSurface = new Float64Array(size);
+    runShore = new Float64Array(size);
+    runLevel = new Float64Array(size);
     runSideCos = new Float64Array(size);
     runOutCos = new Float64Array(size);
     runFootX = new Float64Array(size);
@@ -197,12 +217,16 @@ export const noRiverSample = (): void => {
   riverSample.factor = 1;
   riverSample.surface = NaN;
   riverSample.bedLimit = Infinity;
+  riverSample.shore = Infinity;
+  riverSample.level = NaN;
 };
 
 /** What the last fieldFromList found (riverSample's fields). */
 let fieldDist = Infinity;
 let fieldFactor = 1;
 let fieldSurface = NaN;
+let fieldShore = Infinity;
+let fieldLevel = NaN;
 
 /** One pass over a piece list at a warped point (qx, qz): per edge its nearest distance in factor-1
  *  units (edgeDist, the field's distance), per run its own, and what the run's PLAINLY nearest piece
@@ -245,6 +269,8 @@ const scanPieces = (list: RiverCellList, qx: number, qz: number, forQuay: boolea
       runPiece[r] = j;
       runT[r] = t;
       runSurface[r] = list.h0[j] + (list.h1[j] - list.h0[j]) * t;
+      runShore[r] = list.d0[j] + (list.d1[j] - list.d0[j]) * t;
+      runLevel[r] = list.l0[j] + (list.l1[j] - list.l0[j]) * t;
       const l = Math.sqrt(l2);
       runSideCos[r] = real > 1e-9 ? (dx * oz - dz * ox) / (l * real) : 0;
       runOutCos[r] = real > 1e-9 ? Math.abs(ox * dx + oz * dz) / (l * real) : 0;
@@ -258,6 +284,8 @@ const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
   fieldDist = Infinity;
   fieldFactor = 1;
   fieldSurface = NaN;
+  fieldShore = Infinity;
+  fieldLevel = NaN;
   if (list.n === 0) return;
   const qx = px + RIVER_MEANDER_AMP * simplex2(px / RIVER_MEANDER_SCALE, pz / RIVER_MEANDER_SCALE);
   const qz = pz + RIVER_MEANDER_AMP * simplex2(pz / RIVER_MEANDER_SCALE + 7.31, px / RIVER_MEANDER_SCALE - 3.17);
@@ -266,14 +294,20 @@ const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
   const sum = runSmoothWeights(list.runs, list.groups);
   let wf = 0;
   let ws = 0;
+  let wd = 0;
+  let wl = 0;
   for (let r = 0; r < list.runs; r++) {
     if (runWeight[r] === 0) continue;
     wf += runWeight[r] * runFactor[r];
     ws += runWeight[r] * runSurface[r];
+    wd += runWeight[r] * runShore[r];
+    wl += runWeight[r] * runLevel[r];
   }
   fieldDist = smoothMinDist;
   fieldFactor = wf / sum;
   fieldSurface = ws / sum;
+  fieldShore = wd / sum;
+  fieldLevel = wl / sum;
 };
 
 /** The bank at warped point (px, pz) as step 4 carves it: the terrain there (its own wall pass and
@@ -321,6 +355,8 @@ export const riverFieldAt = (px: number, pz: number, besideCity = false, bedLimi
   riverSample.distance = fieldDist;
   riverSample.factor = fieldFactor;
   riverSample.surface = fieldSurface;
+  riverSample.shore = fieldShore;
+  riverSample.level = fieldLevel;
   if (!bedLimit) return;
   // The bed limit only matters on the bank (capRiverBed leaves anything RIVER_BED_CAP_FADE inside a limit
   // alone, and no limit lies inside the channel's half-width), and beside a city a little past it. The
@@ -363,13 +399,15 @@ export const riverDistanceAt = (px: number, pz: number): number => {
   if (d !== undefined) return d;
   const s = riverSample;
   const saved = lastRiverCellList;
-  const distance = s.distance, factor = s.factor, surface = s.surface, bedLimit = s.bedLimit;
+  const distance = s.distance, factor = s.factor, surface = s.surface, bedLimit = s.bedLimit, shore = s.shore, level = s.level;
   riverFieldAt(px, pz, false, false);
   d = s.distance;
   s.distance = distance;
   s.factor = factor;
   s.surface = surface;
   s.bedLimit = bedLimit;
+  s.shore = shore;
+  s.level = level;
   lastRiverCellList = saved;
   riverDistanceCache.set(px, pz, d);
   return d;

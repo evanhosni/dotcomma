@@ -5,10 +5,11 @@
  *  ground under the surface, and a second strip of water shows on the sand.) */
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { LAKE_BIOME } from "../../../world/domains/overworld/regions/ocean/biomes/lake/spec";
-import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp } from "../vertexCompute";
+import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp, warp } from "../vertexCompute";
 import { RIVER_BLOCK_WATER } from "./constants";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 import { riverEdgeBlocked } from "./riverPieceRules";
+import { lastShoreDistance } from "../lakes";
 
 const config = OVERWORLD_CONFIG;
 
@@ -131,6 +132,89 @@ describe("river banks", () => {
       }
     }
     expect(lakebed).toBeGreaterThan(500);
+  });
+
+  it("merge into a lake close beside them: no levee between, one water, the far bank kept", () => {
+    // A river running along an ocean shore ~30–130u off it, snow on the far side (Evan's screenshot): a
+    // strip of land stood between the two waters (1670 such 6u samples over the 3 km square around it).
+    // (Away from where it turns into the lake: its mouth's corners see both waters too.)
+    const cx = 9520;
+    const cz = -5330;
+    const half = 222;
+    const step = 6;
+    const n = (2 * half) / step + 1;
+    const { halfWidth, bank } = config.river;
+    const band = halfWidth + bank * 0.5;
+    const grid: { wet: number; h: number; w: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const v = computeVertexData(cx - half + j * step, cz - half + i * step);
+        const wet = v.waterHeight > v.height + 0.05;
+        // 1 = the river's water, 2 = the lake's
+        grid.push({ wet: !wet ? 0 : v.biomeId !== LAKE_BIOME.id && v.distanceToRiverCenter < band ? 1 : 2, h: v.height, w: v.waterHeight });
+      }
+    }
+    let levee = 0;
+    let wetPairs = 0;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const g = grid[i * n + j];
+        for (const [di, dj] of [[0, 1], [1, 0]]) {
+          if (i + di >= n || j + dj >= n) continue;
+          const o = grid[(i + di) * n + j + dj];
+          if (g.wet && o.wet) {
+            wetPairs++;
+            expect(Math.abs(g.w - o.w)).toBeLessThan(0.5);
+          }
+        }
+        if (g.wet) continue;
+        for (const [di, dj] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+          const first = (sign: number) => {
+            for (let k = 1; k <= 10; k++) {
+              const a = i + di * k * sign;
+              const b = j + dj * k * sign;
+              if (a < 0 || a >= n || b < 0 || b >= n) return 0;
+              if (grid[a * n + b].wet) return grid[a * n + b].wet;
+            }
+            return 0;
+          };
+          const a = first(1);
+          const b = first(-1);
+          if (a && b && a !== b) levee++;
+        }
+      }
+    }
+    expect(wetPairs).toBeGreaterThan(5000);
+    expect(levee).toBe(0);
+    // The far bank stands: across every piece here, on the side away from the lake, the bank past the
+    // water band is dry — away from the lake's wall (within ~75u of it is the corner where the river turns
+    // into the lake, which merges too).
+    let banks = 0;
+    const w = warp(cx, cz);
+    for (const p of riverPiecesNear(w.x - half, w.z - half, w.x + half, w.z + half, 0)) {
+      if (!riverPieceBuilt(p)) continue;
+      const len = Math.hypot(p.ex - p.sx, p.ez - p.sz);
+      const nx = -(p.ez - p.sz) / len;
+      const nz = (p.ex - p.sx) / len;
+      const mx = (p.sx + p.ex) / 2;
+      const mz = (p.sz + p.ez) / 2;
+      const lakeAt = (sign: number) => {
+        const q = unwarp(mx + nx * 250 * sign, mz + nz * 250 * sign);
+        return computeVertexDataFar(q.x, q.z, false).biomeId === LAKE_BIOME.id;
+      };
+      const away = lakeAt(1) && !lakeAt(-1) ? -1 : lakeAt(-1) && !lakeAt(1) ? 1 : 0;
+      if (!away) continue;
+      const f = Math.min(p.w0, p.w1);
+      for (let d = band * f + 8; d <= (halfWidth + bank) * f; d += 6) {
+        const q = unwarp(mx + nx * d * away, mz + nz * d * away);
+        computeVertexDataFar(q.x, q.z, false);
+        if (lastShoreDistance() < 100) continue;
+        const v = computeVertexData(q.x, q.z);
+        banks++;
+        expect(Number.isNaN(v.waterHeight) || v.waterHeight <= v.height + 1e-6).toBe(true);
+      }
+    }
+    expect(banks).toBeGreaterThan(20);
   });
 
   it("are absent from the far LODs that skip the river field: no water, no bed paint, no trench", () => {

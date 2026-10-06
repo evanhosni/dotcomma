@@ -8,7 +8,7 @@
 import { smoothstep } from "../../math/_math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
-import { lakeSurface, lastShore } from "../lakes";
+import { lakeSurface, lastShore, lastShoreDistance, riverLakeCloseness } from "../lakes";
 import { unwarp } from "../noise";
 import { getNetwork } from "../roads/freewayNetwork";
 import { blendedTerrainAt } from "../vertexCompute";
@@ -28,30 +28,36 @@ const RIVER_MOUTH_APPROACH = 250;
  *  land, never above it in the water — there the channel stays sunk under the lake, or its bank
  *  rule would raise a levee across the lakebed). Runs before the calling vertex's own wall pass (it
  *  clobbers the scratch), never recurses into rivers, and is cached per point. */
-const riverSurfaceCache = new Map<string, number>();
-const riverSurfaceAt = (wx: number, wz: number): number => {
+/** Per point: [surface, the signed distance to its nearest water wall (lakes.ts lastShoreDistance —
+ *  what riverLakeMerge measures a river's gap to a lake by), the lake level there (NaN where none), and
+ *  how far that level reaches it (0–1)]. */
+const riverPointCache = new Map<string, [number, number, number, number]>();
+const riverPointAt = (wx: number, wz: number): [number, number, number, number] => {
   const key = `${wx},${wz}`;
-  let h = riverSurfaceCache.get(key);
-  if (h === undefined) {
-    if (riverSurfaceCache.size > 16384) dropOldestHalf(riverSurfaceCache);
+  let point = riverPointCache.get(key);
+  if (point === undefined) {
+    if (riverPointCache.size > 16384) dropOldestHalf(riverPointCache);
     const warped = { x: wx, z: wz };
     const ctx = getBiomeContext(warped);
     accumulateWallFields(wx, wz, ctx.zoneWalls, ctx.zone);
     combineZoneWeights(zoneWeights, zoneFinal);
     const inLake = lakeSurface(warped, ctx, ctx.zone);
     const shore = lastShore();
+    const shoreDistance = lastShoreDistance();
     const world = unwarp(wx, wz);
-    h = blendedTerrainAt(world.x, world.z, ctx.zone, ctx, 0) - RIVER_SURFACE_BELOW;
+    let h = blendedTerrainAt(world.x, world.z, ctx.zone, ctx, 0) - RIVER_SURFACE_BELOW;
     if (ctx.zone.biome.water) {
       if (!Number.isNaN(inLake)) h = Math.min(h, inLake);
     } else if (!Number.isNaN(shore.level)) {
       const approach = smoothstep(0, RIVER_MOUTH_APPROACH, shore.dWater);
       h = shore.level + Math.max(0, h - shore.level) * (shore.fade === 1 ? approach : 1 - (1 - approach) * shore.fade);
     }
-    riverSurfaceCache.set(key, h);
+    point = [h, shoreDistance, ctx.zone.biome.water ? inLake : shore.level, ctx.zone.biome.water ? 1 : shore.fade];
+    riverPointCache.set(key, point);
   }
-  return h;
+  return point;
 };
+const riverSurfaceAt = (wx: number, wz: number): number => riverPointAt(wx, wz)[0];
 
 // ── Roads over the river ───────────────────────────────────────────────
 
@@ -243,8 +249,21 @@ export const riverPieceEndSurface = (p: RiverPiece, which: 0 | 1): number => {
   for (const g of p.edge.gorges) {
     if (k !== g.from && (k - g.from) * (k - g.to) <= 0) return gorgeSurfaces(p.edge, g)[Math.abs(k - g.from)];
   }
-  const h = which === 0 ? riverSurfaceAt(p.sx, p.sz) : riverSurfaceAt(p.ex, p.ez);
+  const [surface, shore, level, fade] = which === 0 ? riverPointAt(p.sx, p.sz) : riverPointAt(p.ex, p.ez);
+  let h = surface;
+  // Beside a lake close enough for the land between to merge (riverLakeMerge), the surface settles onto
+  // the lake's level, so the two waters meet without a step.
+  if (h > level) h = level + (h - level) * (1 - fade * riverLakeCloseness(shore, which === 0 ? p.w0 : p.w1, domainConfig!.river, true));
   return Math.min(h, roadCrossingCap(p.edge, p.index + which));
+};
+
+/** A piece end's centerline signed water-wall distance (riverSurfaceAt measures it with the surface). */
+export const riverPieceEndShore = (p: RiverPiece, which: 0 | 1): number => (which === 0 ? riverPointAt(p.sx, p.sz) : riverPointAt(p.ex, p.ez))[1];
+/** …and the lake level there (its terrain surface where none, so the field can blend it: no lake is
+ *  close enough there for riverLakeMerge to read it). */
+export const riverPieceEndLevel = (p: RiverPiece, which: 0 | 1): number => {
+  const point = which === 0 ? riverPointAt(p.sx, p.sz) : riverPointAt(p.ex, p.ez);
+  return Number.isNaN(point[2]) ? point[0] : point[2];
 };
 
 /** …and the terrain's own surface there, before any road crossing caps it (tests and probes). */
@@ -254,5 +273,5 @@ export const clearRiverSurfaces = (): void => {
   roadCapCache.clear();
   gorgeSurfaceCache.clear();
   edgeCrossings.clear();
-  riverSurfaceCache.clear();
+  riverPointCache.clear();
 };

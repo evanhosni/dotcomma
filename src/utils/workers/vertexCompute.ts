@@ -20,7 +20,7 @@ import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges"
 import { LANE_END_CLEAR, NO_DECKS, clearDeckCells, cutGroundUnderDecks, deckEndNear, deckGround, decksAround } from "./bridges/deckGround";
 import { domainConfig, setDomainConfig } from "./computeConfig";
 import { applyFlattenPads, computeVertexDataRaw, evaluatingPadCandidates, initFlattenPads, padsApplyIn } from "./flattenPads";
-import { SHORE_RISE, clearLakeCaches, lakeLevelAt, lakeSurface, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
+import { SHORE_RISE, clearLakeCaches, lakeLevelAt, lakeSurface, lastMergeLevel, mergeFloor, riverLakeMerge, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
 import { biomeNoiseHeight, terrainNoise, warp } from "./noise";
 import { initPlaces } from "./places";
 import { capRiverBed } from "./rivers/riverBedLimit";
@@ -78,6 +78,10 @@ const RIVERBED_SDF_MARGIN = 30;
 const QUAY_BED_INSET = RIVER_BED_FULL_INSET;
 /** The quay's riverbed paint distance at the vertex riverQuayAt last measured: its straight distance
  *  less QUAY_BED_INSET, never below where the bed is whole. */
+/** A river merges into the lake beside it (step 4) only this far (real units) past a freeway's
+ *  half-width, fully from the second: a road along the shore stays on dry ground, and so do its decks. */
+const MERGE_ROAD_NEAR = 10;
+const MERGE_ROAD_FAR = 40;
 const quayBedDistance = (): number => {
   const river = domainConfig!.river;
   return Math.max(riverQuay.distance / riverQuay.factor - QUAY_BED_INSET, river.halfWidth + river.bank - RIVER_BED_FULL_INSET);
@@ -240,6 +244,8 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
   const own = ctx.zone;
   const offCity = own.biome.id !== CITY_BIOME_ID;
   if (offCity) findNearestCityWall(cvx, cvz, cityWallsOf(ctx));
+  // The city's own wall, before a drowned belt is pushed off it (step 4's merge keeps clear of the city).
+  const cityWallAway = offCity ? nearestCityWall.distance : 0;
   if (farDry) noRiverSample();
   // In a city (and just outside its wall) the quay rule paints the bed a little past the field's
   // reach: the bed limit is wanted there too.
@@ -332,6 +338,7 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     const lifted = shoreLift(height + dip);
     if (lifted !== height + dip) height = lifted - dip;
   } else height = shoreLift(height);
+  const groundBeforeRiver = height;
   const riverReach = river.halfWidth + river.bank;
   const waterBand = riverWaterBand(river);
   const riverSurface = distanceToRiver < riverReach ? riverSurfaceBesideCrispShore(riverSample.surface) : NaN;
@@ -345,6 +352,8 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     riverBedDistance += (capped - riverBedDistance) * (quayBeside ? smoothstep(0, BELT_FIELD_HANDOFF, nearestCityWall.wall) : 1);
   }
   let mouth = 0;
+  // The river's water as drawn here (NaN outside its water band).
+  let riverWater = NaN;
   if (!Number.isNaN(riverSurface)) {
     // A river MOUTH (riverMouthShare): over the lakebed the channel only deepens the ground and the
     // water is the lake's — no bank rim, no surface above the lake's, no bed paint across the mouth.
@@ -356,7 +365,36 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
       if (surface > waterHeight) surface += (waterHeight - surface) * mouth;
       riverBedDistance += (Math.max(riverBedDistance, riverReach) - riverBedDistance) * mouth;
     } else height = carved;
-    if (distanceToRiver < waterBand) waterHeight = Number.isNaN(waterHeight) ? surface : Math.max(waterHeight, surface);
+    if (distanceToRiver < waterBand) {
+      riverWater = surface;
+      waterHeight = Number.isNaN(waterHeight) ? surface : Math.max(waterHeight, surface);
+    }
+  }
+  // A river BESIDE a lake (riverLakeMerge): the land between them, the river's lake-side bank and the
+  // lake's beach there go under the lake's level — one water, no levee. Never in a city or on a road
+  // (quays, the belt and a run along the shore stay dry, and with them every deck's landing).
+  // (roadReal is NaN where no road is in reach at all: the smooth minimum of two infinities.) The city's
+  // wall counts even where its belt is pushed off it (a waterfront): sunk beside it, the lake's beach
+  // stood 9u under the city's crisp edge.
+  const roadAway = Math.min(Number.isNaN(roadReal) ? Infinity : roadReal, cityWallAway);
+  if (city === null && riverSample.shore < Infinity && roadAway > fw + MERGE_ROAD_NEAR) {
+    const merge =
+      smoothstep(fw + MERGE_ROAD_NEAR, fw + MERGE_ROAD_FAR, roadAway) *
+      riverLakeMerge(groundBeforeRiver, distanceToRiver, riverFactor, riverSample.surface, riverSample.shore, riverSample.level, river);
+    if (merge > 0) {
+      height += (Math.min(height, mergeFloor()) - height) * merge;
+      // The water comes onto the lake's level with the share: in the river's band its own surface eased
+      // there; outside it the level, or where the river runs under the lake, that surface (under the
+      // ground) as the share fades — continuous wherever the share reaches 0, and the two agree at the
+      // band's edge (to the surface tolerance riverLakeMerge allows above the level).
+      const level = lastMergeLevel();
+      const merged = Number.isNaN(riverWater)
+        ? level + Math.min(0, riverSample.surface - level) * (1 - merge)
+        : riverWater + (level - riverWater) * merge;
+      waterHeight = Number.isNaN(lakeLevel) ? merged : Math.max(lakeLevel, merged);
+      // Painted as the river's bed, whole (what lies under the river beside it), never as the land.
+      riverBedDistance += (Math.min(riverBedDistance, riverReach - RIVER_BED_FULL_INSET) - riverBedDistance) * merge;
+    }
   }
   // 1 on open ground, 0 in the channel. The city's arterials and belt cross the river on decks: no
   // lane paint on the riverbed.
