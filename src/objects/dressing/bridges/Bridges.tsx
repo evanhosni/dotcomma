@@ -7,18 +7,17 @@ import {
   type BridgePierColumn,
   type BridgeRibbonBuffers,
 } from "./bridgeSpec";
-import { finalizeInstancedChunk, useDressingAssets, useSolidDressing } from "../Dressing";
+import { finalizeInstancedChunk, type SolidDressingProps, useDressingAssets, useSolidDressing } from "../Dressing";
 import type { DressingBounds } from "../types";
-import { DressingAttributes } from "../../types";
 import type { FreewayBridge } from "../../../utils/workers/vertexCompute";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { instancedTemplate, meshTemplate } from "../../../utils/warmPrograms";
 import { WORLD_WRAP } from "../../../world/shaders/constants";
 import { createDeckMaterial } from "./deckMaterial";
 
-const BRIDGE_RENDER_DISTANCE = 900;
+const DEFAULT_RENDER_DISTANCE = 900;
 /** Deck chords are one body each (~6u), so the walkable deck is solid only near the player. */
-const BRIDGE_COLLIDER_DISTANCE = 140;
+const DEFAULT_COLLIDER_DISTANCE = 140;
 
 /** ONE merged ribbon mesh for every deck of the chunk, stored relative to a float64 chunk origin
  *  (CLAUDE.md → Coordinate Precision). */
@@ -70,13 +69,11 @@ const buildPierMesh = (columns: BridgePierColumn[], geometry: THREE.BufferGeomet
   return piers;
 };
 
-/** Placement lives in bridgeSpec.ts only (the terrain cut and the server read it). */
-export interface BridgesProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
-
-/** Decks over every road a river crosses (placement: getFreewayBridges in the dressing worker).
+/** Decks over every road a river crosses (placement: getFreewayBridges in the dressing worker; it lives
+ *  in bridgeSpec.ts only — the terrain cut and the server read it).
  *  Per chunk: ONE merged ribbon mesh for every deck, one instanced mesh of pier columns, and the
  *  deck chords' pitched colliders. */
-export const Bridges = ({ renderDistance, colliderDistance }: BridgesProps) => {
+export const Bridges = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
   const assets = useDressingAssets(() => ({
     deckMaterial: createDeckMaterial(),
     pierMaterial: new THREE.MeshStandardMaterial({ color: 0x7c7c78, roughness: 0.95, metalness: 0 }),
@@ -85,9 +82,9 @@ export const Bridges = ({ renderDistance, colliderDistance }: BridgesProps) => {
 
   const { content } = useSolidDressing(BRIDGES_SPEC, {
     renderDistance,
-    defaultRenderDistance: BRIDGE_RENDER_DISTANCE,
+    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
     colliderDistance,
-    defaultColliderDistance: BRIDGE_COLLIDER_DISTANCE,
+    defaultColliderDistance: DEFAULT_COLLIDER_DISTANCE,
     build: (decks, _bodies, bounds) => {
       const group = new THREE.Group();
       group.add(buildDeckRibbonMesh(decks, bounds, assets.deckMaterial));

@@ -37,9 +37,11 @@
  */
 
 import { domainConfig } from "../computeConfig";
-import { warp } from "../noise";
-import { riverPiecesNear, riverPiecesRaw, riversEnabled, riverWetReach } from "../rivers/riverNetwork";
-import { BRIDGE_MAX_DEVIATION, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, deckWidth, warpMax } from "./constants";
+import { warp, warpMax } from "../noise";
+import { riverWetReach } from "../rivers/constants";
+import { riverPiecesNear, riverPiecesRaw, riversEnabled } from "../rivers/riverNetwork";
+import { BRIDGE_MAX_DEVIATION, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, deckWidth } from "./constants";
+import { clearPavedCache } from "./landings";
 import { clearCrossingCaches, CROSSING_MID_REACH, crossingChain, findCrossings, resolveCrossingChain } from "./crossings";
 import { deckBuilder } from "./deckBuilder";
 import { deckMerges, finishDeck } from "./finishDeck";
@@ -220,5 +222,6 @@ function bridgesInWindow(minX: number, minZ: number, maxX: number, maxZ: number,
 
 export const clearBridgeCaches = (): void => {
   clearCrossingCaches();
+  clearPavedCache();
   clearMouthCaches();
 };

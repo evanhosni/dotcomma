@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { SCREEN_DOOR_GLSL } from "./dither";
+import { chainMaterialPatch } from "./materialPatch";
 
 /**
  * SPAWN FADE (CLAUDE.md → vfx/spawnFade.ts): every game object dithers in when it appears
@@ -47,7 +48,7 @@ export namespace _spawnFade {
   `;
 
   /**
-   * Idempotent, chains onBeforeCompile. `perInstance`: the visibility is ALSO multiplied by an
+   * Idempotent. `perInstance`: the visibility is ALSO multiplied by an
    * `aSpawnFade` instanced attribute — for one mesh holding many independently spawned objects
    * (the far building doors). It is a different program, so only such meshes use it.
    */
@@ -56,12 +57,8 @@ export namespace _spawnFade {
     (material as any).__spawnFadePatched = true;
     const perInstance = !!options.perInstance;
 
-    const originalCacheKey = material.customProgramCacheKey?.bind(material);
-    material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + (perInstance ? "_spawnFadeInst" : "_spawnFade");
-
-    const prevOnBeforeCompile = material.onBeforeCompile;
-    material.onBeforeCompile = (shader, renderer) => {
-      prevOnBeforeCompile?.call(material, shader, renderer);
+    material.addEventListener("dispose", onBaseDispose);
+    chainMaterialPatch(material, perInstance ? "_spawnFadeInst" : "_spawnFade", (shader) => {
       shader.uniforms.uSpawnFade = VISIBLE;
       const visibility = perInstance ? "(uSpawnFade * vSpawnFade)" : "uSpawnFade";
       if (perInstance) {
@@ -74,10 +71,7 @@ export namespace _spawnFade {
         "void main() {",
         FRAGMENT_HEADER + (perInstance ? "varying float vSpawnFade;\n" : "") + "void main() {\n  " + discardGLSL(visibility),
       );
-    };
-
-    material.addEventListener("dispose", onBaseDispose);
-    material.needsUpdate = true;
+    });
   };
 
   // ─── twins ────────────────────────────────────────────────────────────────

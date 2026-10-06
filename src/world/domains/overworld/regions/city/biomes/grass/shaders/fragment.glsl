@@ -10,7 +10,7 @@ varying vec3 vWorldPosWrapped;
 
 void main() {
   vec2 adjustedUV = fract(vWorldUv);
-  float texScale = 1.0 / 26.25;
+  float texScale = 1.0 / TEXTURE_TILE;
 
   // One octave: it only nudges the slope threshold by ±0.05; three cost 12 sin() per fragment.
   float largeNoise = worldFbm(vWorldPosWrapped.xz, 0.005, 1);
@@ -28,15 +28,15 @@ void main() {
   float tri = smoothstep(0.3, 0.6, vSlopeAngle);
   vec4 terrainColor = vec4(0.0);
   if (grassWeight > 0.002) {
-    vec4 gc = tri < 0.01 ? texture2D(grasstexture, adjustedUV) : mix(texture2D(grasstexture, adjustedUV), triplanarSample(grasstexture, vWorldPosWrapped, vWorldNormal, texScale), tri);
+    vec4 gc = slopeBlendedSample(grasstexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += gc * grassWeight;
   }
   if (grassDirtWeight > 0.002) {
-    vec4 gdc = tri < 0.01 ? texture2D(grassdirttexture, adjustedUV) : mix(texture2D(grassdirttexture, adjustedUV), triplanarSample(grassdirttexture, vWorldPosWrapped, vWorldNormal, texScale), tri);
+    vec4 gdc = slopeBlendedSample(grassdirttexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += gdc * grassDirtWeight;
   }
   if (dirtWeight > 0.002) {
-    vec4 dc = tri < 0.01 ? texture2D(dirttexture, adjustedUV) : mix(texture2D(dirttexture, adjustedUV), triplanarSample(dirttexture, vWorldPosWrapped, vWorldNormal, texScale), tri);
+    vec4 dc = slopeBlendedSample(dirttexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += dc * dirtWeight;
   }
 

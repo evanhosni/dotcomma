@@ -2,7 +2,7 @@
  *  one chain when nearly straight, as a T onto a deck passing by, or not at all. */
 
 import { warp } from "../noise";
-import { riverFieldAt, riverSample } from "../rivers/riverField";
+import { riverDistanceAt } from "../rivers/riverField";
 import { BRIDGE_EDGE_GUARD, BRIDGE_MAX_DEVIATION, BRIDGE_TEE_OFF_HOST, BRIDGE_WET_MERGE, deckWidth, runRiverYield } from "./constants";
 import { dropShortLegs, filletCorners, polyPointAt, projectOnPolyline, simplifyPolyline } from "./polyline";
 import type { BridgeChain, BridgeWindow, ChainEnd, FreewayBridge, RoadPath, WetItem, WindowScan } from "./types";
@@ -72,10 +72,7 @@ export const findWetItems = (paths: RoadPath[], scan: WindowScan, abutment: numb
   for (const path of paths) {
     // The same field the terrain yields this road at (computeVertexData step 5, runRiverYield).
     const yieldAt = path.kind === "run" ? runRiverYield() : scan.reach;
-    const wetAt = (x: number, z: number): boolean => {
-      riverFieldAt(x, z);
-      return riverSample.distance < yieldAt;
-    };
+    const wetAt = (x: number, z: number): boolean => riverDistanceAt(x, z) < yieldAt;
     const n = path.wx.length;
     const cum = [0];
     for (let i = 1; i < n; i++) cum.push(cum[i - 1] + Math.hypot(path.x[i] - path.x[i - 1], path.z[i] - path.z[i - 1]));

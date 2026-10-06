@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { chainMaterialPatch } from "./materialPatch";
 
 /**
  * WORLD CURVATURE (CLAUDE.md → vfx/curvature.ts): a VERTEX effect on the camera-relative
@@ -43,19 +44,13 @@ export namespace _curvature {
     gl_Position = projectionMatrix * mvPosition;
   `;
 
-  /** Idempotent and order-independent with the other patchers: CHAINS onBeforeCompile (assigning
-   *  silently discards another patch's edits) and falls back to the raw projection line when
-   *  `_quantization` has already replaced `#include <project_vertex>`. */
+  /** Idempotent and order-independent with the other patchers: falls back to the raw projection line
+   *  when `_quantization` has already replaced `#include <project_vertex>`. */
   export const patchMaterial = (material: THREE.Material): void => {
     if ((material as any).__curvaturePatched) return;
     (material as any).__curvaturePatched = true;
 
-    const originalCacheKey = material.customProgramCacheKey?.bind(material);
-    material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + "_curved";
-
-    const prevOnBeforeCompile = material.onBeforeCompile;
-    material.onBeforeCompile = (shader, renderer) => {
-      prevOnBeforeCompile?.call(material, shader, renderer);
+    chainMaterialPatch(material, "_curved", (shader) => {
       shader.uniforms.uCurveStart = uniforms.uCurveStart;
       shader.uniforms.uCurveK = uniforms.uCurveK;
 
@@ -67,8 +62,6 @@ export namespace _curvature {
             "gl_Position = projectionMatrix * mvPosition;",
             "gl_Position = projectionMatrix * mvPosition;\n" + CURVE_STEP,
           );
-    };
-
-    material.needsUpdate = true;
+    });
   };
 }

@@ -1,16 +1,20 @@
-import { computeVertexData } from "../../../../src/utils/workers/vertexCompute";
-import { quantizeVelocity, SPAWN_CLEARANCE, type NpcBody, type Pose } from "./npcBody.js";
-import type { CapsuleShape } from "./walker.js";
+import { SPAWN_CLEARANCE, writeResolvedPose, type NpcBody, type Pose } from "./npcBody.js";
+import type { PhysicsWorld } from "./physicsWorld.js";
 
 /** `movement: "free"` (flyers, swimmers): velocity integrated as-is, no gravity, no
- *  ground, no Rapier body — always ready, costs the world nothing. */
+ *  ground, no Rapier body — costs the world nothing. It starts on the analytic ground
+ *  (asked like GroundBody's spawn: standing at `hintFeetY` until answered). */
 export class FreeBody implements NpcBody {
-  readonly ready = true;
   private readonly position: { x: number; y: number; z: number };
   private readonly lastPublishedPose: { x: number; y: number; z: number };
+  private spawnGround = NaN;
+  private spawned = false;
 
-  constructor(x: number, z: number, _shape: CapsuleShape) {
-    const y = computeVertexData(x, z).height + SPAWN_CLEARANCE;
+  constructor(pw: PhysicsWorld, x: number, z: number, hintFeetY: number) {
+    pw.heightAt(x, z, (h) => {
+      this.spawnGround = h;
+    });
+    const y = this.takeSpawnGround() ?? hintFeetY;
     this.position = { x, y, z };
     this.lastPublishedPose = { x, y, z };
   }
@@ -25,24 +29,30 @@ export class FreeBody implements NpcBody {
     return this.position.z;
   }
 
+  get ready(): boolean {
+    return this.spawned;
+  }
+
   step(dt: number, vx: number, vz: number, vy: number | null): void {
+    if (!this.spawned) {
+      const y = this.takeSpawnGround();
+      if (y === null) return;
+      this.position.y = y;
+    }
     this.position.x += vx * dt;
     this.position.y += (vy ?? 0) * dt;
     this.position.z += vz * dt;
   }
 
   resolvePose(dt: number, out: Pose): Pose {
-    out.x = this.position.x;
-    out.y = this.position.y;
-    out.z = this.position.z;
-    out.vx = quantizeVelocity((out.x - this.lastPublishedPose.x) / dt);
-    out.vy = quantizeVelocity((out.y - this.lastPublishedPose.y) / dt);
-    out.vz = quantizeVelocity((out.z - this.lastPublishedPose.z) / dt);
-    this.lastPublishedPose.x = out.x;
-    this.lastPublishedPose.y = out.y;
-    this.lastPublishedPose.z = out.z;
-    return out;
+    return writeResolvedPose(this.lastPublishedPose, this.position.x, this.position.y, this.position.z, dt, out);
   }
 
   dispose(): void {}
+
+  private takeSpawnGround(): number | null {
+    if (Number.isNaN(this.spawnGround)) return null;
+    this.spawned = true;
+    return this.spawnGround + SPAWN_CLEARANCE;
+  }
 }

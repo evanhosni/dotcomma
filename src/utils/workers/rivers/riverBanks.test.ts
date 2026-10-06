@@ -6,7 +6,9 @@
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { LAKE_BIOME } from "../../../world/domains/overworld/regions/ocean/biomes/lake/spec";
 import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp } from "../vertexCompute";
-import { RIVER_BLOCK_WATER, riverEdgeBlocked, riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
+import { RIVER_BLOCK_WATER } from "./constants";
+import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
+import { riverEdgeBlocked } from "./riverPieceRules";
 
 const config = OVERWORLD_CONFIG;
 

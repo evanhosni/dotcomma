@@ -6,7 +6,7 @@
 - A **region** owns a `baseNoise` (relief under all its biomes), a BASE material (`shaders/base.glsl`) and a `<Skybox>`. A **biome** owns its `noise` (or `water` for a lake), a fragment shader (`shaders/fragment.glsl`), its `actors`, and optional `<Dressing>`, `<Foliage>`, `<Skybox>`.
 - **No hard edges:** height, material and sky cross-fade at every wall (`accumulateWallFields` in `utils/workers/zoneBlend.ts`). Near its edge a biome fades into its region's base by its "presence". Widths (`blendWidth` / `heightBlendWidth`) resolve biome → region → `defaultBlendWidth`.
 - **Data vs JSX:** everything the server needs is in Three-free `spec.ts` files; [../config.ts](../config.ts) builds the server's config from `OVERWORLD_REGIONS`. `region.tsx` is `<Region spec biomes={{ name: Component }}>`; `biome.tsx` is `<Biome spec>` plus client-only children. Ids/names are checked in `../../domainConfig.ts` (unique; name = lowercase letters, used as the address word and `<name>_frag`).
-- **Materials:** every region/biome shader is merged into ONE terrain shader (`combineBiomeMaterials`, `utils/material/_material.ts`). Uniform and helper names are global across shaders; at most `MAX_BIOME_SLOTS` biomes per domain. See [../../../shaders/README.md](../../../shaders/README.md).
+- **Materials:** every region/biome shader is merged into ONE terrain shader (`combineBiomeMaterials`, `world/shaders/combineBiomeMaterials.ts`). Uniform and helper names are global across shaders; at most `MAX_BIOME_SLOTS` biomes per domain. See [../../../shaders/README.md](../../../shaders/README.md).
 - City heights are bespoke code (`utils/workers/roads/cityTerrain.ts`); the snow region shares [snow/riverbed.ts](snow/riverbed.ts).
 
 ## How to add another

@@ -1,4 +1,5 @@
-import { useGLTF } from "@react-three/drei";
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
+import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { RootState, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
@@ -10,6 +11,7 @@ import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANC
 import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
 import { createColliders } from "./colliders/collider";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import type { ModelColliders } from "./colliders/types";
 import { useKinematicMover } from "./kinematicMover";
 import {
   acquireModelClone,
@@ -22,14 +24,13 @@ import { DEFAULT_INTERACT_REACH, type ActorSimulationAttributes, type ModelAttri
 import { ActorProps, ActorWarmupHooks } from "./spawning/types";
 import { createMotionOutput } from "./state/motion";
 import { machineHasTrigger } from "./state/runner";
-import { useMouseEvents } from "./state/useMouseEvents";
+import { MOUSE_RAYCAST_INTERVAL_FRAMES, useMouseEvents } from "./state/useMouseEvents";
 import { useStateMachine } from "./state/useStateMachine";
 
 // Animation LOD: mixers pause while frustum-culled and run at half rate past this
 // fraction of the render distance; skipped time accumulates (capped) so loops stay continuous.
 const ANIM_HALF_RATE_FRACTION = 0.4;
 const MAX_ANIM_CATCHUP = 0.5;
-const MOUSE_THROTTLE_FRAMES = 3;
 
 const taskQueue = new TaskQueue();
 
@@ -69,13 +70,6 @@ export interface ModelActorProps extends ActorProps<ModelActorAttributes> {
   groupRef?: React.MutableRefObject<THREE.Group | null>;
   /** Runs after the machine ticked and before the body moves. */
   onFrame?: (state: RootState, delta: number, ctx: ActorFrameContext) => void;
-}
-
-interface ColliderState {
-  capsuleColliders: any[];
-  sphereColliders: any[];
-  boxColliders: any[];
-  trimeshColliders: any[];
 }
 
 export const ModelActor = ({
@@ -138,7 +132,7 @@ export const ModelActor = ({
   const mouse = useMouseEvents(machine, groupRef, {
     reach: interactReach,
     shouldGrowCursor: cursorOverride ?? hasClickTrigger,
-    framePhase: framePhaseFromCoords(coordinates[0], coordinates[2], MOUSE_THROTTLE_FRAMES),
+    framePhase: framePhaseFromCoords(coordinates[0], coordinates[2], MOUSE_RAYCAST_INTERVAL_FRAMES),
   });
   const localMotion = useRef(createMotionOutput()).current;
   const motion = machine ? machine.motion.out : localMotion;
@@ -148,7 +142,7 @@ export const ModelActor = ({
   // Half-rate parity is phase-offset per instance, or a whole batch skips the same frames.
   const animFrameParityRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 2) === 1);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [colliders, setColliders] = useState<ColliderState | null>(null);
+  const [colliders, setColliders] = useState<ModelColliders | null>(null);
 
   const hasColliders =
     colliders !== null &&
@@ -157,6 +151,28 @@ export const ModelActor = ({
       colliders.boxColliders.length +
       colliders.trimeshColliders.length >
       0;
+
+  /** Synced: the SERVER's channel, applied when the DELAYED render clock reaches its change time, so an
+   *  idle clip starts exactly as the interpolated body stops. Local: the machine's own channel. */
+  const applyAnimationChannel = (clone: PooledModelClone, state: RootState, ctx: ActorFrameContext, serverDriven: boolean): void => {
+    if (serverDriven) {
+      const anim = ctx.sync!.entity?.remote?.anim;
+      if (anim && ctx.syncRenderTime >= anim.changedAt) animPlayer.apply(clone, anim, ctx.syncRenderTime);
+    } else if (machine) {
+      animPlayer.apply(clone, machine.animation.state, state.clock.elapsedTime * 1000);
+    }
+  };
+
+  const advanceMixer = (mixer: THREE.AnimationMixer, delta: number, ctx: ActorFrameContext): void => {
+    animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
+    animFrameParityRef.current = !animFrameParityRef.current;
+    const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
+    const skipFarFrame = ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current;
+    if (ctx.visible && !skipFarFrame) {
+      mixer.update(animDeltaRef.current);
+      animDeltaRef.current = 0;
+    }
+  };
 
   const lifecycle = useActorLifecycle({
     id,
@@ -188,28 +204,8 @@ export const ModelActor = ({
       mover.step(delta, ctx, motion, serverDriven);
 
       if (!pooled) return;
-
-      // Synced: the SERVER's channel, applied when the DELAYED render clock reaches its
-      // change time, so an idle clip starts exactly as the interpolated body stops.
-      if (serverDriven) {
-        const anim = ctx.sync!.entity?.remote?.anim;
-        if (anim && ctx.syncRenderTime >= anim.changedAt) animPlayer.apply(pooled, anim, ctx.syncRenderTime);
-      } else if (machine) {
-        animPlayer.apply(pooled, machine.animation.state, state.clock.elapsedTime * 1000);
-      }
-
-      const mixer = pooled.mixer;
-      if (mixer && (machine || serverDriven || isPlaying)) {
-        animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
-        animFrameParityRef.current = !animFrameParityRef.current;
-        const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
-        const skipFarFrame =
-          ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current;
-        if (ctx.visible && !skipFarFrame) {
-          mixer.update(animDeltaRef.current);
-          animDeltaRef.current = 0;
-        }
-      }
+      applyAnimationChannel(pooled, state, ctx, serverDriven);
+      if (pooled.mixer && (machine || serverDriven || isPlaying)) advanceMixer(pooled.mixer, delta, ctx);
     },
   });
 
@@ -265,7 +261,7 @@ export const ModelActor = ({
     const task = async () => {
       try {
         const built = await createColliders(gltf as any, scale, rotation, wholeTrimesh, model, excludeColliderNames);
-        setColliders(built as ColliderState);
+        setColliders(built);
       } catch (error) {
         console.error("Error creating colliders:", error);
       }

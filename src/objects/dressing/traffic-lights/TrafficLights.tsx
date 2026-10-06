@@ -10,8 +10,7 @@ import {
   setLampHeadColor,
 } from "../../../lighting/lampGlow";
 import { instancedTemplate } from "../../../utils/warmPrograms";
-import { DressingAttributes } from "../../types";
-import { type ChunkWithPoints, instancedFromPoints, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
+import { type ChunkWithPoints, instancedFromPoints, type SolidDressingProps, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
 import { SIGNAL_ARM_LENGTH, SIGNAL_PARTS, SIGNAL_POLE_HEIGHT, TRAFFIC_LIGHTS_SPEC } from "./signalSpec";
 
 const DEFAULT_RENDER_DISTANCE = 340;
@@ -117,9 +116,7 @@ const stepSignalChunk = (chunk: SignalChunk, delta: number): void => {
 };
 
 /** Placement (the signal `chance`) lives in signalSpec.ts only (the server builds the colliders from it). */
-export interface TrafficLightsProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
-
-export const TrafficLights = ({ renderDistance, colliderDistance }: TrafficLightsProps) => {
+export const TrafficLights = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
   const assets = useDressingAssets(() => ({
     bodyGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.5, 0.4, 0.5).translate(0, 0.2, 0), // base

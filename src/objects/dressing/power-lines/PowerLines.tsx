@@ -1,9 +1,15 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import { DressingAttributes } from "../../types";
-import { finalizeInstancedChunk, instancedFromPoints, setInstanceTransform, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
+import {
+  finalizeInstancedChunk,
+  instancedFromPoints,
+  setInstanceTransform,
+  type SolidDressingProps,
+  useDressingAssets,
+  useSolidDressing,
+  yawFromDir,
+} from "../Dressing";
 import type { CityFreewaySidePoint } from "../../../utils/workers/vertexCompute";
-
 import {
   CROSSARM_DEPTH,
   CROSSARM_HALF_LENGTH,
@@ -25,9 +31,6 @@ const WIRE_ATTACH_POINTS: [number, number][] = [
   [UTILITY_POLE_HEIGHT - 0.72, -(CROSSARM_HALF_LENGTH - 0.25)],
   [UTILITY_POLE_HEIGHT - 0.05, 0],
 ];
-
-/** Placement lives in poleSpec.ts only (the server builds the colliders from it). */
-export interface PowerLinesProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
 
 /** Both ends' crossarm offsets use the starting pole's frame — the next pole's tangent differs
  *  by a few degrees of wiggle at most, invisible at pole height. */
@@ -74,8 +77,9 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
   }
 };
 
-/** Each pole owns the wire span to its `next` point, so runs stay continuous across chunk borders. */
-export const PowerLines = ({ renderDistance, colliderDistance }: PowerLinesProps) => {
+/** Each pole owns the wire span to its `next` point, so runs stay continuous across chunk borders.
+ *  Placement lives in poleSpec.ts only (the server builds the colliders from it). */
+export const PowerLines = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
   const assets = useDressingAssets(() => ({
     poleGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.3, UTILITY_POLE_HEIGHT, 0.3).translate(0, UTILITY_POLE_HEIGHT / 2, 0),

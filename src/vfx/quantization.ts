@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { chainMaterialPatch } from "./materialPatch";
 
 export namespace _quantization {
   export const uniforms = {
@@ -73,13 +74,8 @@ export namespace _quantization {
     const uniform: THREE.IUniform<number> =
       gridSize !== undefined ? { value: gridSize } : uniforms.uGridSize;
 
-    const originalCacheKey = material.customProgramCacheKey?.bind(material);
-    material.customProgramCacheKey = () => (originalCacheKey?.() ?? "") + "_quantized";
-
-    // Chain, don't assign: assigning discarded lampGlow's shader edits when quantization was applied second.
-    const prevOnBeforeCompile = material.onBeforeCompile;
-    material.onBeforeCompile = (shader, renderer) => {
-      prevOnBeforeCompile?.call(material, shader, renderer);
+    (material as any).__quantizationUniform = uniform;
+    chainMaterialPatch(material, "_quantized", (shader) => {
       shader.uniforms.uGridSize = uniform;
 
       shader.vertexShader = shader.vertexShader.replace(
@@ -96,10 +92,7 @@ export namespace _quantization {
         "#include <worldpos_vertex>",
         WORLDPOS_VERTEX_REPLACEMENT,
       );
-    };
-
-    (material as any).__quantizationUniform = uniform;
-    material.needsUpdate = true;
+    });
   };
 
   /** Set the global grid size. 0 = quantization disabled. */

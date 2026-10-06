@@ -10,7 +10,7 @@
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
  */
 
-import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, riverKeepOff } from "./vertexCompute";
+import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, outsideBiomes, riverKeepOff } from "./vertexCompute";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
 import { slopeDegreesAt } from "./densityPoints";
 import { SPAWN_CHUNK_SIZE } from "./constants";
@@ -161,6 +161,7 @@ const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunk
       if (!roll) continue;
       const { x, z } = roll;
       if (x < chunkMinX || x >= chunkMinX + SPAWN_CHUNK_SIZE || z < chunkMinZ || z >= chunkMinZ + SPAWN_CHUNK_SIZE) continue;
+      if (outsideBiomes(desc.biomeIds, x, z)) continue;
 
       const vd = computeVertexData(x, z);
       if (!passesPlacementFilters(vd, desc, riverKeepOff())) continue;

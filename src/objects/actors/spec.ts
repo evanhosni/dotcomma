@@ -82,15 +82,6 @@ export const INTERACT_REACH_SLACK = 3;
 export const serverInteractReachSq = (spec: ActorSpec | undefined): number =>
   ((spec?.interactReach ?? DEFAULT_INTERACT_REACH) + INTERACT_REACH_SLACK) ** 2;
 
-export const specsAgree = (a: ActorSpec, b: ActorSpec): boolean =>
-  a.stateMachine === b.stateMachine &&
-  (a.body ?? "fixed") === (b.body ?? "fixed") &&
-  (a.movement ?? "ground") === (b.movement ?? "ground") &&
-  (a.collider?.radius ?? DEFAULT_COLLIDER.radius) === (b.collider?.radius ?? DEFAULT_COLLIDER.radius) &&
-  (a.collider?.height ?? DEFAULT_COLLIDER.height) === (b.collider?.height ?? DEFAULT_COLLIDER.height) &&
-  (a.interactReach ?? DEFAULT_INTERACT_REACH) === (b.interactReach ?? DEFAULT_INTERACT_REACH) &&
-  JSON.stringify(a.hull ?? null) === JSON.stringify(b.hull ?? null);
-
 export const specNeedsServer = (s: ActorSpec): boolean =>
   s.stateMachine !== undefined || s.body === "kinematic" || s.hull !== undefined;
 

@@ -5,12 +5,14 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { distanceToSegment } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
-import { warp } from "../noise";
+import { warp, warpMax } from "../noise";
 import { riverFieldAt, riverSample } from "../rivers/riverField";
-import { type RiverEdge, riverEdgePiece, type RiverPiece, riverPiecesNear, riversEnabled, riverWetReach } from "../rivers/riverNetwork";
+import { riverWetReach } from "../rivers/constants";
+import { riverEdgePiece, riverPiecesNear, riversEnabled } from "../rivers/riverNetwork";
+import type { RiverEdge, RiverPiece } from "../rivers/types";
 import { riverEdgeNearRoads } from "../rivers/riverRoadLayer";
 import { zoneAtWarped } from "../voronoi";
-import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, DEFAULT_BRIDGE_PLACEMENT, runRiverYield, warpMax } from "./constants";
+import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, DEFAULT_BRIDGE_PLACEMENT, runRiverYield } from "./constants";
 import { bridgeWithinEnds } from "./deckGeometry";
 import { getFreewayBridgesNear } from "./freewayBridges";
 import { pavedAt } from "./landings";
@@ -172,7 +174,7 @@ export const getSeveredFreeways = (minX: number, minZ: number, maxX: number, max
       const n = path.wx.length;
       const wet: boolean[] = [];
       for (let i = 0; i < n; i++) {
-        riverFieldAt(path.wx[i], path.wz[i]);
+        riverFieldAt(path.wx[i], path.wz[i], false, false);
         let yieldAt = reach;
         if (path.kind === "run") {
           yieldAt = runRiverYield();
@@ -206,7 +208,7 @@ export const getSeveredFreeways = (minX: number, minZ: number, maxX: number, max
         // on beyond on walls too far from the river to be taken — dry land.)
         const ringOn = (i: number) => {
           if (path.kind !== "belt" || path.carried?.[i === 0 ? 0 : 1]) return false;
-          riverFieldAt(path.wx[i], path.wz[i]);
+          riverFieldAt(path.wx[i], path.wz[i], false, false);
           return riverSample.distance > reach - SEVERED_RING_EDGE;
         };
         const open0 = i0 === 0 && !path.landed?.[0] && !ringOn(0);

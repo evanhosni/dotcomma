@@ -142,59 +142,60 @@ export const CityLights = ({
     lastSelect.current.version = -1;
   }, [intensity, heightOffset]);
 
-  useFrame(({ camera }) => {
-    const camX = camera.position.x;
-    const camZ = camera.position.z;
-
+  /** Every RESCAN_DISTANCE of travel, refreshes the city sites within scanRadius (background work). */
+  const rescanSites = (camX: number, camZ: number): void => {
     const movedSq = lastScan.current
       ? (camX - lastScan.current.x) ** 2 + (camZ - lastScan.current.z) ** 2
       : Infinity;
-    if (!scanning.current && movedSq > RESCAN_DISTANCE * RESCAN_DISTANCE) {
-      scanning.current = true;
-      const sx = camX;
-      const sz = camZ;
-      scanQueue.addTask(async () => {
-        try {
-          const points = await getCityLightSites(sx - scanRadius, sz - scanRadius, sx + scanRadius, sz + scanRadius);
-          points.forEach((p) => sites.set(p.key, p));
-          sites.forEach((p, key) => {
-            if (Math.hypot(p.x - sx, p.z - sz) > scanRadius * 1.5) sites.delete(key);
-          });
-          lastScan.current = { x: sx, z: sz };
-          sitesVersion.current++;
-        } finally {
-          scanning.current = false;
-        }
-      });
-    }
+    if (scanning.current || !(movedSq > RESCAN_DISTANCE * RESCAN_DISTANCE)) return;
+    scanning.current = true;
+    const sx = camX;
+    const sz = camZ;
+    scanQueue.addTask(async () => {
+      try {
+        const points = await getCityLightSites(sx - scanRadius, sz - scanRadius, sx + scanRadius, sz + scanRadius);
+        points.forEach((p) => sites.set(p.key, p));
+        sites.forEach((p, key) => {
+          if (Math.hypot(p.x - sx, p.z - sz) > scanRadius * 1.5) sites.delete(key);
+        });
+        lastScan.current = { x: sx, z: sz };
+        sitesVersion.current++;
+      } finally {
+        scanning.current = false;
+      }
+    });
+  };
 
-    // Nearest-POOL_SIZE pick, recomputed only on RESELECT_DISTANCE travel or a site-set change.
+  /** Moves the pool onto the nearest POOL_SIZE sites (parking the rest), only after RESELECT_DISTANCE of
+   *  travel or a site-set change. */
+  const reassignLights = (camX: number, camZ: number): void => {
     const sel = lastSelect.current;
+    const moved = (camX - sel.x) ** 2 + (camZ - sel.z) ** 2 > RESELECT_DISTANCE * RESELECT_DISTANCE;
+    if (!moved && sel.version === sitesVersion.current) return;
+    sel.x = camX;
+    sel.z = camZ;
+    sel.version = sitesVersion.current;
+
     const assigned = nearestSitesRef.current;
-    if (
-      (camX - sel.x) ** 2 + (camZ - sel.z) ** 2 > RESELECT_DISTANCE * RESELECT_DISTANCE ||
-      sel.version !== sitesVersion.current
-    ) {
-      sel.x = camX;
-      sel.z = camZ;
-      sel.version = sitesVersion.current;
+    selectNearestSites(sites, camX, camZ, assigned, nearestSiteDistSq);
 
-      selectNearestSites(sites, camX, camZ, assigned, nearestSiteDistSq);
-
-      for (let i = 0; i < POOL_SIZE; i++) {
-        const light = lightRefs.current[i];
-        if (!light) continue;
-        const site = assigned[i];
-        const sprite = spriteRefs.current[i];
-        if (site) {
-          light.position.set(site.x, site.y + heightOffset, site.z);
-          if (sprite) sprite.position.copy(light.position);
-        } else {
-          light.position.set(0, PARK_Y, 0);
-        }
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const light = lightRefs.current[i];
+      if (!light) continue;
+      const site = assigned[i];
+      const sprite = spriteRefs.current[i];
+      if (site) {
+        light.position.set(site.x, site.y + heightOffset, site.z);
+        if (sprite) sprite.position.copy(light.position);
+      } else {
+        light.position.set(0, PARK_Y, 0);
       }
     }
+  };
 
+  /** Light intensities and the aura's opacity follow the night blend. */
+  const applyNightBlend = (): void => {
+    const assigned = nearestSitesRef.current;
     // Zero intensity by day lets every lit material's light loop skip the beacons.
     const nightBlend = getNightBlend();
     const litIntensity = intensity * nightBlend;
@@ -212,6 +213,12 @@ export const CityLights = ({
       const sprite = spriteRefs.current[i];
       if (sprite) sprite.visible = showAura && assigned[i] !== null;
     }
+  };
+
+  useFrame(({ camera }) => {
+    rescanSites(camera.position.x, camera.position.z);
+    reassignLights(camera.position.x, camera.position.z);
+    applyNightBlend();
   });
 
   return (

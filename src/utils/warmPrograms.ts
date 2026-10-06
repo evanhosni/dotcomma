@@ -7,7 +7,8 @@ import * as THREE from "three";
  * the MOUNT frame, which is still mid-play.
  *
  * Each template is drawn ONCE in the real scene — its lights are part of the program key — collapsed
- * to a point (a zero-scale holder: no fragments), then removed. A template must match the real object
+ * to a point (a zero-scale holder: no fragments), then removed; on three r158+ its programs are first
+ * linked off the main thread (compileAsync, see bindProgramCompiler). A template must match the real object
  * in everything that keys the program: the material, Mesh vs InstancedMesh, instanceColor, skinning,
  * morph targets. The class bases (dressing, foliage, actors, terrain) register theirs as they mount.
  */
@@ -64,11 +65,36 @@ export const reportUnwarmedPrograms = (object: THREE.Object3D, owner: string, fi
   });
 };
 
+/** three r158+ `compileAsync`: links through KHR_parallel_shader_compile, so the links of every template
+ *  queued in one load overlap on the driver's threads instead of blocking the main thread one by one
+ *  inside the draw (measured: two terrain programs of ~1s each, the load's longest tasks). */
+type AsyncCompiler = THREE.WebGLRenderer & {
+  compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera, targetScene?: THREE.Object3D | null) => Promise<unknown>;
+};
+
+let compiler: { renderer: AsyncCompiler; camera: THREE.Camera } | null = null;
+
+/** The canvas binds its renderer and camera once (CustomCanvas): templates are then compiled
+ *  asynchronously before their warm draw. Unbound, or on a three without compileAsync, the warm draw
+ *  links them itself. Returns the unbind. */
+export const bindProgramCompiler = (renderer: THREE.WebGLRenderer, camera: THREE.Camera): (() => void) => {
+  const bound = { renderer: renderer as AsyncCompiler, camera };
+  compiler = bound;
+  return () => {
+    if (compiler === bound) compiler = null;
+  };
+};
+
 /** `onDone` runs once every mesh in `templates` has been drawn and the holder has left the scene. The
  *  returned cancel takes the holder out undrawn (call it on unmount: its assets are about to be disposed). */
 export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[], onDone?: () => void): (() => void) => {
   const holder = new THREE.Group();
   holder.scale.setScalar(0);
+  const bound = compiler;
+  const compilesAhead = bound?.renderer.compileAsync !== undefined;
+  // Linking inside the draw instead, the templates draw one per frame, so their links never stack
+  // into one long task.
+  const waiting: THREE.Object3D[] = [];
   let pending = 0;
   let finished = false;
   const finish = () => {
@@ -78,7 +104,12 @@ export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[],
     holder.clear();
     onDone?.();
   };
+  const drawNext = () => {
+    const next = waiting.shift();
+    if (next && !finished) holder.add(next);
+  };
   for (const template of templates) {
+    let undrawn = 0;
     template.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
@@ -91,6 +122,7 @@ export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[],
         }
       }
       pending++;
+      undrawn++;
       const wasCulled = mesh.frustumCulled;
       mesh.frustumCulled = false;
       const prev = mesh.onAfterRender;
@@ -98,16 +130,30 @@ export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[],
         mesh.onAfterRender = prev;
         mesh.frustumCulled = wasCulled;
         prev.apply(this, args);
+        const templateDrawn = --undrawn === 0;
         // The render list is already built: leave the scene graph alone until the frame is done.
         if (--pending === 0) setTimeout(finish, 0);
+        else if (templateDrawn && !compilesAhead) setTimeout(drawNext, 0);
       };
     });
-    holder.add(template);
+    if (undrawn === 0) continue;
+    if (compilesAhead) holder.add(template);
+    else waiting.push(template);
   }
   if (pending === 0) {
     finish();
     return () => {};
   }
-  scene.add(holder);
+  if (bound && compilesAhead) {
+    // Compiled OUTSIDE the scene under the scene's lights (`targetScene`: they key the program), then
+    // drawn — by then its programs are linked and the draw only uploads.
+    bound.renderer.compileAsync!(holder, bound.camera, scene).then(
+      () => !finished && scene.add(holder),
+      () => !finished && scene.add(holder),
+    );
+  } else {
+    drawNext();
+    scene.add(holder);
+  }
   return finish;
 };

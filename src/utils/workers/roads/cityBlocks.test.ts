@@ -8,7 +8,7 @@ import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/poleSpec";
 import { computeVertexData, computeVertexDataRaw, initCompute } from "../vertexCompute";
-import { getCityFreewayEdgePoints } from "./cityFeatures";
+import { getCityFreewayEdgePoints } from "./freewaySidePoints";
 
 const STEP = 2;
 const X0 = 4950;

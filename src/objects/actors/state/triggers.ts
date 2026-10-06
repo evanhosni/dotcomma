@@ -1,3 +1,4 @@
+import { mouseActionOf, type MouseFlag } from "./runner";
 import { TriggerDef, TriggerFn } from "./types";
 
 export function playerWithinRange(range: number): TriggerDef {
@@ -36,16 +37,13 @@ export function randomInterval(
   maxSeconds: number
 ): TriggerDef {
   const timerKey = `__timer_${id}`;
+  const rollSeconds = () => minSeconds + Math.random() * (maxSeconds - minSeconds);
   return {
     id,
     evaluate: (ctx) => {
-      if (ctx.blackboard[timerKey] === undefined) {
-        ctx.blackboard[timerKey] =
-          minSeconds + Math.random() * (maxSeconds - minSeconds);
-      }
+      if (ctx.blackboard[timerKey] === undefined) ctx.blackboard[timerKey] = rollSeconds();
       if (ctx.stateElapsed >= ctx.blackboard[timerKey]) {
-        ctx.blackboard[timerKey] =
-          minSeconds + Math.random() * (maxSeconds - minSeconds);
+        ctx.blackboard[timerKey] = rollSeconds();
         return true;
       }
       return false;
@@ -64,28 +62,29 @@ export function always(id: string = "always"): TriggerDef {
   };
 }
 
-/** Mouse triggers read the one-shot flags forwarded inputs raise (input.ts decides whose input it is on each side). */
-function mouseTrigger(id: string, flagKey: string, defaultDistance: number) {
+/** Mouse triggers read the one-shot flags forwarded inputs raise (input.ts decides whose input it is on each
+ *  side); the trigger id is the flag's wire action (`mouse-left-click`), which machineHasTrigger looks up. */
+function mouseTrigger(flag: MouseFlag, defaultDistance: number) {
+  const id = mouseActionOf(flag);
   return (distance: number = defaultDistance): TriggerDef => {
     const distanceSq = distance * distance;
     return {
       id,
-      evaluate: (ctx) =>
-        !!ctx.blackboard[flagKey] && ctx.playerDistanceSq <= distanceSq,
+      evaluate: (ctx) => !!ctx.blackboard[flag] && ctx.playerDistanceSq <= distanceSq,
     };
   };
 }
 
-export const onMouseHoverEnter = mouseTrigger("mouse-hover-enter", "__mouse_hover_enter", 50);
-export const onMouseHoverLeave = mouseTrigger("mouse-hover-leave", "__mouse_hover_leave", 50);
-export const onMouseLeftClick = mouseTrigger("mouse-left-click", "__mouse_left_click", 30);
-export const onMouseRightClick = mouseTrigger("mouse-right-click", "__mouse_right_click", 30);
-export const onMouseLeftClickDown = mouseTrigger("mouse-left-click-down", "__mouse_left_click_down", 30);
-export const onMouseRightClickDown = mouseTrigger("mouse-right-click-down", "__mouse_right_click_down", 30);
-export const onMouseLeftClickUp = mouseTrigger("mouse-left-click-up", "__mouse_left_click_up", 30);
-export const onMouseRightClickUp = mouseTrigger("mouse-right-click-up", "__mouse_right_click_up", 30);
-export const onMouseScroll = mouseTrigger("mouse-scroll", "__mouse_scroll", 30);
-export const onMouseScrollUp = mouseTrigger("mouse-scroll-up", "__mouse_scroll_up", 30);
-export const onMouseScrollDown = mouseTrigger("mouse-scroll-down", "__mouse_scroll_down", 30);
-export const onMouseDoubleClick = mouseTrigger("mouse-double-click", "__mouse_double_click", 30);
-export const onMouseMiddleClick = mouseTrigger("mouse-middle-click", "__mouse_middle_click", 30);
+export const onMouseHoverEnter = mouseTrigger("__mouse_hover_enter", 50);
+export const onMouseHoverLeave = mouseTrigger("__mouse_hover_leave", 50);
+export const onMouseLeftClick = mouseTrigger("__mouse_left_click", 30);
+export const onMouseRightClick = mouseTrigger("__mouse_right_click", 30);
+export const onMouseLeftClickDown = mouseTrigger("__mouse_left_click_down", 30);
+export const onMouseRightClickDown = mouseTrigger("__mouse_right_click_down", 30);
+export const onMouseLeftClickUp = mouseTrigger("__mouse_left_click_up", 30);
+export const onMouseRightClickUp = mouseTrigger("__mouse_right_click_up", 30);
+export const onMouseScroll = mouseTrigger("__mouse_scroll", 30);
+export const onMouseScrollUp = mouseTrigger("__mouse_scroll_up", 30);
+export const onMouseScrollDown = mouseTrigger("__mouse_scroll_down", 30);
+export const onMouseDoubleClick = mouseTrigger("__mouse_double_click", 30);
+export const onMouseMiddleClick = mouseTrigger("__mouse_middle_click", 30);

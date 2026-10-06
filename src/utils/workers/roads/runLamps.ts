@@ -12,7 +12,8 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_INNER, FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warp } from "../noise";
-import { riverKeepOff } from "../rivers/riverNetwork";
+import { riverKeepOff } from "../rivers/constants";
+import { NO_ROAD_DISTANCE } from "./cityRoadField";
 import { computeVertexData } from "../vertexCompute";
 import { distanceToWall, getBiomeContext, cityWallsOf } from "../voronoi";
 import { type FreewayRun, freewayPointAt, getNetwork } from "./freewayNetwork";
@@ -147,7 +148,7 @@ export function getFreewayRunLamps(minX: number, minZ: number, maxX: number, max
     // The road beside it: drawn, painted (no merge mouth, no lane end before an undecked river), no deck.
     const c = unwarp(cx, cz);
     const road = computeVertexData(c.x, c.z);
-    if (road.biomeId === CITY_BIOME_ID || road.underDeck > 0 || road.distanceToRoadCenter > 2 || road.distanceToFreewayCenter > 99990) return fail("road");
+    if (road.biomeId === CITY_BIOME_ID || road.underDeck > 0 || road.distanceToRoadCenter > 2 || road.distanceToFreewayCenter >= NO_ROAD_DISTANCE) return fail("road");
     if (road.distanceToRiverCenter < keepOff * DECK_RIVER_REACH) {
       for (const ds of [-DECK_ALONG_CLEAR, DECK_ALONG_CLEAR]) {
         const q = freewayPointAt(run, s + ds);

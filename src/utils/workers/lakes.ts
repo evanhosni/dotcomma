@@ -92,9 +92,10 @@ export const riverSurfaceBesideCrispShore = (surface: number): number => {
  *  lake is drawn beside land only where the shore lift already holds the ground at the shore height. */
 export const riverMouthShare = (ground: number, lakeLevel: number): number =>
   Number.isNaN(lakeLevel) ? 0 : 1 - smoothstep(lakeLevel, lakeLevel + SHORE_RISE, ground);
-const lakeLevelCache = new Map<string, number>();
+// Numeric keys (cell ix, iz): a key string per water cell in reach was most of a shore vertex's level lookup.
+const lakeLevelCache = new Map<number, number>();
 const lakeCellLevel = (cell: VoronoiCell, zone: Zone): number => {
-  const key = `${cell.ix},${cell.iz}`;
+  const key = cell.ix * 4194304 + cell.iz;
   let level = lakeLevelCache.get(key);
   if (level === undefined) {
     if (lakeLevelCache.size > 4096) dropOldestHalf(lakeLevelCache);
@@ -106,6 +107,11 @@ const lakeCellLevel = (cell: VoronoiCell, zone: Zone): number => {
 };
 /** Water level at a warped point, or NaN when no water cell is within reach. */
 export const lakeLevelAt = (warped: PointXZ, grid: VoronoiCell[]): number => {
+  // A vertex asks twice for its own point (a water zone's height, then lakeSurface): the last answer.
+  if (warped.x === lastLevelX && warped.z === lastLevelZ && grid === lastLevelGrid) {
+    lastLevelWeight = lastLevelW;
+    return lastLevel;
+  }
   const reach = domainConfig!.gridSize * LAKE_LEVEL_REACH_CELLS;
   let sum = 0;
   let weight = 0;
@@ -120,8 +126,18 @@ export const lakeLevelAt = (warped: PointXZ, grid: VoronoiCell[]): number => {
     weight += w;
   }
   lastLevelWeight = weight;
-  return weight > 0 ? sum / weight : NaN;
+  lastLevelX = warped.x;
+  lastLevelZ = warped.z;
+  lastLevelGrid = grid;
+  lastLevelW = weight;
+  lastLevel = weight > 0 ? sum / weight : NaN;
+  return lastLevel;
 };
+let lastLevelX = NaN;
+let lastLevelZ = NaN;
+let lastLevelGrid: VoronoiCell[] | null = null;
+let lastLevelW = 0;
+let lastLevel = NaN;
 
 /** The lake surface at the point of the last wall pass (NaN where no lake is drawn), and the shore
  *  clamp inputs shoreLift reads: land within SHORE_CLAMP_FULL of a water wall is lifted onto the
@@ -158,4 +174,7 @@ export const lakeSurface = (warped: PointXZ, ctx: BiomeContext, own: Zone): numb
   return waterInReach ? level : NaN;
 };
 
-export const clearLakeCaches = (): void => lakeLevelCache.clear();
+export const clearLakeCaches = (): void => {
+  lakeLevelCache.clear();
+  lastLevelGrid = null;
+};

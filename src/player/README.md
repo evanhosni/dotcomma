@@ -5,9 +5,9 @@
 [Player.tsx](Player.tsx) is the first-person kinematic capsule (size in [spec.ts](spec.ts): `PLAYER_HEIGHT`, `PLAYER_RADIUS`) under pointer-lock controls, mounted once by `CustomCanvas` so it survives domain switches. Each frame:
 
 1. **Input**: [useInput.tsx](useInput.tsx) keeps held keys (`InputState`, `KEY_BINDINGS`); movement follows the camera's flattened axes.
-2. **Hold at spawn**: while `terrainLoaded` is false the capsule is pinned at `playerSpawn` (GameContext) — how domain switches and fast travel move the player.
+2. **Hold at spawn**: while `terrainLoaded` is false the capsule is pinned `SPAWN_DROP_HEIGHT` (100u) above `playerSpawn` (GameContext), then falls once the ground exists — so a spawn inside a building lands on it, never inside it. This is how domain switches and fast travel move the player.
 3. **Move**: noclip flies freely; otherwise `stepCharacter` from [physics/characterMovement.ts](../physics/characterMovement.ts) resolves all movement at `WALK_SPEED` / `SPRINT_SPEED`.
-4. **Safety nets** against the analytic terrain height: a periodic backstop that lifts the capsule if it is below the surface, a stuck escape, and a fall reset. `resolveEmbeddedSurface` confirms the cheap raw height with the padded height before acting.
+4. **Safety nets** ([groundSafetyNets.ts](groundSafetyNets.ts), `useGroundSafetyNets`) against the analytic terrain height: a periodic backstop that lifts the capsule if it is below the surface, a stuck escape, and a fall reset. `resolveEmbeddedSurface` confirms the cheap raw height with the padded height before acting.
 5. **Camera** follows the capsule; `playerPosition` (GameContext) is updated for streaming, the address bar and networking ([net/players/LocalPlayerSync.tsx](../net/players/LocalPlayerSync.tsx)).
 
 ## How to add another

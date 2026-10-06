@@ -74,7 +74,7 @@ void main() {
   vec3 shadePos = worldPos + shadeLift;
   vSkirt = skirtDrop > 0.0 ? 1.0 : 0.0;
 
-  vWorldUv = shadePos.xz / 26.25;
+  vWorldUv = shadePos.xz / TEXTURE_TILE;
   vWorldPosWrapped = shadePos;
 
   // Unwrapped: ONLY for comparing against CPU-side absolute positions (lamp

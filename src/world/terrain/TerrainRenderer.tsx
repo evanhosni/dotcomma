@@ -2,25 +2,33 @@ import { useRapier } from "@react-three/rapier";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useEffect, useState } from "react";
 import * as THREE from "three";
+import { useDevContext } from "../../context/DevContext";
 import { useGameContext } from "../../context/GameContext";
+import type { PointXZ } from "../../utils/math/types";
 import { traceEvent } from "../../utils/spikeTrace";
 import { chargeFrameWork, isMachineStruggling } from "../../utils/task-queue/TaskQueue";
-import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
-import type { PointXZ } from "../../utils/math/types";
-import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { createLodFadeMaterial, getMaterial } from "./material";
-import { getWaterMaterial, tickWater } from "../water/waterMaterial";
 import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
-import { acquireGeometry, releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
+import { skirtTintUniform } from "../shaders/skirtTint";
+import { getWaterMaterial, tickWater } from "../water/waterMaterial";
+import {
+  adoptEarlyRequest,
+  dropEarlyRequests,
+  prefetchQueuedBuilds,
+  prefetchTerrainAround,
+  requestBuildOf,
+  resetBuildRequests,
+  setTerrainLoading,
+} from "./buildRequests";
+import { releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
+import { createChunkPlane, ensureWaterMesh, generateColliders, releaseWater, syncLodFade } from "./chunkObjects";
 import { LODLevel } from "./lodConfig";
 import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
 import { FADE_OPAQUE_HI, LOD_FADE_SECONDS, LodSwapper, SwapHooks } from "./lodSwaps";
-import { skirtTintUniform } from "../shaders/skirtTint";
-import { useDevContext } from "../../context/DevContext";
-import { ensureTerrainWorker, requestChunkBuild, resetTerrainWorker } from "./terrainWorker";
-import { Chunk, TerrainProps } from "./types";
+import { createLodFadeMaterial, getMaterial } from "./material";
+import { ensureTerrainWorker, resetTerrainWorker } from "./terrainWorker";
+import { Chunk, TerrainState } from "./types";
 
-const terrain: TerrainProps = {
+const terrain: TerrainState = {
   group: new THREE.Group(),
   chunks: new Map(),
   activeChunk: null,
@@ -62,49 +70,6 @@ let lastSortZ = Infinity;
 const FAR_BUILD_INTERVAL_MS = 250;
 let lastFarBuildAt = -Infinity;
 
-/** A chunk's dither range into whichever material draws it (the fade variant, or the water): three
- *  uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
- *  mesh writes its own range right before its draw. The opaque terrain material has no uLodFade. */
-const syncLodFade =
-  (chunk: Chunk) =>
-  (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, _camera: THREE.Camera, _geometry: THREE.BufferGeometry, material: THREE.Material) => {
-    const uniform = (material as THREE.ShaderMaterial).uniforms?.[LOD_FADE_UNIFORM];
-    if (!uniform) return;
-    const range = uniform.value as THREE.Vector2;
-    if (range.x === chunk.fadeLo && range.y === chunk.fadeHi) return;
-    range.set(chunk.fadeLo, chunk.fadeHi);
-    (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
-  };
-
-/** A zero-area triangle: drawing it links a program and rasterizes nothing. */
-const FADE_WARM_GEOMETRY = new THREE.BufferGeometry();
-FADE_WARM_GEOMETRY.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
-
-/** Drops a chunk's water surface back into the geometry pool (it shares the terrain's LOD family). */
-const releaseWater = (chunk: Chunk) => {
-  if (!chunk.water) return;
-  chunk.plane.remove(chunk.water);
-  releaseGeometry(chunk.lod, chunk.water.geometry);
-  chunk.water = null;
-};
-
-/** The chunk's water mesh: a CHILD of its plane, so it shares the transform, visibility and LOD swaps. */
-const ensureWaterMesh = (chunk: Chunk): THREE.Mesh => {
-  if (chunk.water) return chunk.water;
-  const water = new THREE.Mesh(acquireGeometry(chunk.lod), getWaterMaterial());
-  water.castShadow = false;
-  water.receiveShadow = false;
-  water.renderOrder = 10;
-  water.matrixAutoUpdate = false; // identity under its plane
-  // Warmed with its plane like every streamed mesh: the first water in view otherwise compiled the
-  // water program and uploaded its buffers at the frame the player turned to it.
-  uploadOnFirstDraw(water);
-  water.onBeforeRender = syncLodFade(chunk);
-  chunk.plane.add(water);
-  chunk.water = water;
-  return water;
-};
-
 /** Domain-switch teardown of the MODULE state that survives a remount. The
  *  geometry pool is kept: pooled geometries are fully rewritten on acquire. */
 export const resetTerrainSystem = () => {
@@ -119,6 +84,7 @@ export const resetTerrainSystem = () => {
   terrain.chunks.clear();
   terrain.activeChunk = null;
   terrain.queuedToBuild.length = 0;
+  resetBuildRequests();
   swapper.reset();
   queueDirty = false;
   cachedDesired = null;
@@ -165,20 +131,6 @@ const isFarBuildDeferred = (lod: LODLevel, terrainLoaded: boolean): boolean => {
   return false;
 };
 
-/** A new chunk's plane, hidden until its swap draws it and static once placed (buildChunk re-composes it). */
-const createChunkPlane = (lod: LODLevel, material: THREE.Material): THREE.Mesh => {
-  const plane = new THREE.Mesh(acquireGeometry(lod), material);
-  plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
-  plane.castShadow = false;
-  // receiveShadow left on would recompile every terrain program the day a light casts a shadow.
-  plane.receiveShadow = false;
-  plane.rotation.x = -Math.PI / 2;
-  plane.matrixAutoUpdate = false;
-  plane.updateMatrix();
-  uploadOnFirstDraw(plane);
-  return plane;
-};
-
 const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: THREE.Material): Chunk => {
   const plane = createChunkPlane(lod, material);
   const chunk: Chunk = {
@@ -186,7 +138,7 @@ const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: 
     offset: { x: offset.x, z: offset.z },
     plane: plane,
     water: null,
-    rebuildIterator: null,
+    request: adoptEarlyRequest(chunkKey),
     colliderBody: null,
     lod: lod,
     built: false,
@@ -204,28 +156,13 @@ const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: 
   return chunk;
 };
 
-export const TerrainRenderer = () => {
-  const { camera, scene } = useThree();
-  const { world, rapier } = useRapier();
+/** The loading bar and the terrain gate: progress follows the build queue until it first drains, which
+ *  opens the gate. Returns the reporter the update pass calls with the queue's length. */
+const useLoadingGate = (): ((remaining: number) => void) => {
+  const { terrainLoaded, setProgress, setTerrainLoaded, playerSpawn } = useGameContext();
   const [remainingChunks, setRemainingChunks] = useState<number | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
-  const [terrainMaterial, setTerrainMaterial] = useState<THREE.ShaderMaterial | null>(null);
-  const { terrainLoaded, setProgress, setTerrainLoaded, playerSpawn } = useGameContext();
   const lastRemainingRef = React.useRef<number>(-1);
-  const isUpdatingTerrain = React.useRef(false);
-  /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
-   *  opaque terrain its early depth test), and the mesh that links that program during the load. */
-  const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
-  const fadeWarmRef = React.useRef<{ mesh: THREE.Mesh; drawn: boolean } | null>(null);
-
-  // Devmode seam diagnostics (terrain/README.md).
-  const { tintSkirts, noLodFade } = useDevContext();
-  useEffect(() => {
-    skirtTintUniform.value = tintSkirts ? 1 : 0;
-  }, [tintSkirts]);
-  useEffect(() => {
-    swapper.fadeSeconds = noLodFade ? 0 : LOD_FADE_SECONDS;
-  }, [noLodFade]);
 
   // A new spawn (fast travel) restarts the loading gate: the stale remaining=0 would
   // otherwise flip terrainLoaded back on before the first pass around the new position.
@@ -236,7 +173,52 @@ export const TerrainRenderer = () => {
   }, [playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
 
   useEffect(() => {
+    setTerrainLoading(!terrainLoaded);
+    if (!terrainLoaded) {
+      if (remainingChunks !== null) {
+        setProgress(1 - remainingChunks / totalChunks);
+      }
+      if (remainingChunks === 0) {
+        setTerrainLoaded(true);
+        dropEarlyRequests();
+      }
+    }
+  }, [remainingChunks, terrainLoaded]);
+
+  // Only the loading bar needs this; after terrainLoaded a re-render per queue change is waste.
+  return (remaining) => {
+    if (remaining === lastRemainingRef.current || terrainLoaded) return;
+    lastRemainingRef.current = remaining;
+    if (remainingChunks === null) setTotalChunks(remaining);
+    setRemainingChunks(remaining);
+  };
+};
+
+export const TerrainRenderer = () => {
+  const { camera, scene } = useThree();
+  const { world, rapier } = useRapier();
+  const [terrainMaterial, setTerrainMaterial] = useState<THREE.ShaderMaterial | null>(null);
+  const { terrainLoaded, playerSpawn } = useGameContext();
+  const reportRemaining = useLoadingGate();
+  const isUpdatingTerrain = React.useRef(false);
+  /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
+   *  opaque terrain its early depth test). */
+  const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+
+  // Devmode seam diagnostics (terrain/README.md).
+  const { tintSkirts, noLodFade } = useDevContext();
+  useEffect(() => {
+    skirtTintUniform.value = tintSkirts ? 1 : 0;
+  }, [tintSkirts]);
+  useEffect(() => {
+    swapper.fadeSeconds = noLodFade ? 0 : LOD_FADE_SECONDS;
+  }, [noLodFade]);
+
+  useEffect(() => {
     scene.add(terrain.group);
+    // Booted at mount, not at the first build: that waited for the material, and the INIT reply then
+    // queued behind the load's shader links.
+    ensureTerrainWorker();
     // The first water in reach can build long after the load (utils/warmPrograms.ts).
     const cancelWaterWarm = warmPrograms(scene, [meshTemplate(getWaterMaterial())]);
     return () => {
@@ -274,43 +256,33 @@ export const TerrainRenderer = () => {
     },
   };
 
+  // Both terrain programs link during the load, together (utils/warmPrograms.ts), and the chunks wait
+  // for them: the fade twin otherwise linked at the first swap, mid-walk, and the opaque one inside the
+  // first chunk's draw — the load's two longest tasks (~1s each).
   useEffect(() => {
-    if (!terrainLoaded) {
-      if (remainingChunks !== null) {
-        setProgress(1 - remainingChunks / totalChunks);
-      }
-      remainingChunks === 0 && setTerrainLoaded(true);
-    }
-  }, [remainingChunks, terrainLoaded]);
-
-  useEffect(() => {
+    let cancelWarm = () => {};
+    let unmounted = false;
     getMaterial().then((material) => {
+      if (unmounted) return;
       const fade = createLodFadeMaterial(material);
       fadeMaterialRef.current = fade;
-      // Links the fade program during the load, under the scene's real lights (they are part of the
-      // program key): otherwise the first swap compiled the whole terrain shader mid-walk.
-      const warm = new THREE.Mesh(FADE_WARM_GEOMETRY, fade);
-      warm.frustumCulled = false;
-      const state = { mesh: warm, drawn: false };
-      warm.onAfterRender = () => {
-        state.drawn = true;
-      };
-      terrain.group.add(warm);
-      fadeWarmRef.current = state;
-      setTerrainMaterial(material);
+      cancelWarm = warmPrograms(scene, [meshTemplate(material), meshTemplate(fade)], () => setTerrainMaterial(material));
     });
+    return () => {
+      unmounted = true;
+      cancelWarm();
+    };
   }, []);
 
   useFrame(({ clock }, delta) => {
     tickWater(clock.elapsedTime);
-    const warm = fadeWarmRef.current;
-    if (warm?.drawn) {
-      terrain.group.remove(warm.mesh);
-      fadeWarmRef.current = null;
-    }
     // Every frame, even while an update pass is awaiting a build: a fade is timed in frames' delta.
     swapper.tick(delta, swapHooks);
-    if (!terrainMaterial || isUpdatingTerrain.current) return;
+    if (!terrainMaterial) {
+      if (playerSpawn) prefetchTerrainAround(playerSpawn[0], playerSpawn[2]);
+      return;
+    }
+    if (isUpdatingTerrain.current) return;
     // Synchronous early-out: reaching the same gate inside the async updateTerrain
     // cost a promise chain + microtask drain every parked frame.
     if (!terrainDirty && cachedDesired !== null) {
@@ -356,13 +328,7 @@ export const TerrainRenderer = () => {
     // ── 5. Build chunks until the time budget runs out ───────────────────
     const builtThisPass = await buildQueuedChunks(material, playerX, playerZ);
 
-    // Only the loading bar needs this; after terrainLoaded a re-render per queue change is waste.
-    const newRemaining = terrain.queuedToBuild.length;
-    if (newRemaining !== lastRemainingRef.current && !terrainLoaded) {
-      lastRemainingRef.current = newRemaining;
-      if (remainingChunks === null) setTotalChunks(newRemaining);
-      setRemainingChunks(newRemaining);
-    }
+    reportRemaining(terrain.queuedToBuild.length);
 
     // Stay "dirty" while anything is still in flight, and for one extra pass
     // after the last build so processSwaps gets to draw it.
@@ -384,23 +350,29 @@ export const TerrainRenderer = () => {
       if (isFarBuildDeferred(next.lod, terrainLoaded)) break;
       const chunk = terrain.queuedToBuild.pop()!;
       terrain.activeChunk = chunk;
-      chunk.rebuildIterator = buildChunk(chunk, material);
+      requestBuildOf(chunk);
+      prefetchQueuedBuilds(terrain.queuedToBuild, terrainLoaded);
       try {
-        await chunk.rebuildIterator.next();
+        await buildChunk(chunk, material);
         builtThisPass = true;
       } catch (error) {
         console.error("Error updating terrain:", error);
       }
       terrain.activeChunk = null;
       if (performance.now() > buildDeadline) break;
+      // Prefetched results are often ready at once; a struggling machine still finishes one per frame,
+      // as it did when every chunk waited for its own round trip.
+      if (terrainLoaded && isMachineStruggling()) break;
     }
     return builtThisPass;
   };
 
-  const buildChunk = async function* (chunk: Chunk, material: THREE.Material) {
+  /** Awaits the chunk's worker build and writes it into its meshes and collider. */
+  const buildChunk = async (chunk: Chunk, material: THREE.Material): Promise<void> => {
     await ensureTerrainWorker();
     const { offset, lod } = chunk;
-    const result = await requestChunkBuild(lod, offset.x, offset.z);
+    const result = await requestBuildOf(chunk);
+    chunk.request = null;
     const traceT0 = performance.now();
 
     const geom = chunk.plane.geometry;
@@ -413,35 +385,13 @@ export const TerrainRenderer = () => {
     chunk.plane.updateMatrix();
 
     if (lod.hasCollider && result.colliderHeights) {
-      generateColliders(chunk, offset, result.colliderHeights);
+      generateColliders(world, rapier, chunk, result.colliderHeights);
     }
 
     const finishMs = performance.now() - traceT0;
     traceEvent(`terrain:finish L${lod.level}`, finishMs);
     chargeFrameWork(finishMs);
     chunk.built = true;
-
-    yield;
-  };
-
-  /** Heightfield (column-major heights from the worker) straight into the
-   *  Rapier world — never a React <RigidBody>, see CLAUDE.md. The desc is
-   *  created before the body so a failure can't leave an empty body behind. */
-  const generateColliders = (chunk: Chunk, offset: PointXZ, heights: Float32Array) => {
-    const segments = chunk.lod.segments;
-    const cs = chunk.lod.chunkSize;
-    const t0 = performance.now();
-    const desc = rapier.ColliderDesc.heightfield(segments, segments, heights, { x: cs, y: 1, z: cs });
-    const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(offset.x, 0, offset.z));
-    try {
-      world.createCollider(desc, body);
-    } catch (e) {
-      world.removeRigidBody(body);
-      console.error("terrain heightfield collider failed:", e);
-      return;
-    }
-    chunk.colliderBody = body;
-    traceEvent("terrain:collider", performance.now() - t0);
   };
 
   return null;

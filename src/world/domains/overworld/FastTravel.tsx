@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import { useGameContext } from "../../../context/GameContext";
 import { getPlaceInfo } from "../../../objects/dressing/dressingWorker";
+import { prefetchTerrainAround } from "../../terrain/buildRequests";
 import { ensureVertexCompute, getVertexData, getVertexSample } from "../../terrain/vertexData";
 import { ADDRESS_TRAVEL_EVENT } from "../constants";
 import { replaceAddressPath, takePendingAddress } from "../navigation";
@@ -28,6 +29,8 @@ export const FastTravel = () => {
 
     // Closes the terrain gate and moves the spawn onto the ground (or the water) at (x, z).
     const landAt = async (x: number, z: number) => {
+      // The terrain worker starts on the destination while the height lookup round-trips.
+      prefetchTerrainAround(x, z);
       // Padded height in the worker when it is up (a flatten-tile miss is 30–70ms on the main thread).
       const vd = (await getVertexSample(x, z)) ?? (await getVertexData(x, z));
       if (cancelled) return;

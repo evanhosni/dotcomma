@@ -126,7 +126,21 @@ interface FoliageGrid {
 const GRID_CACHE_MAX = 256;
 const gridCache = new Map<string, FoliageGrid>();
 
-const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[] | undefined): FoliageGrid => {
+/** The grid's per-node fields (slopes are derived from the heights). */
+const NODE_FIELDS = ["heights", "biomeWeights", "roadDistances", "submerged", "riverBed"] as const;
+
+/** A cached neighbor's node shared with this chunk's node (gx, gz), or null: neighboring chunks share their
+ *  border row/column of nodes (the same world points — 128 of a 64u chunk's 1089 evaluations). */
+type Neighbors = [FoliageGrid | undefined, FoliageGrid | undefined, FoliageGrid | undefined, FoliageGrid | undefined];
+const sharedNode = (n: Neighbors, gx: number, gz: number, last: number): [FoliageGrid, number] | null => {
+  if (gx === 0 && n[0]) return [n[0], gz * (last + 1) + last];
+  if (gx === last && n[1]) return [n[1], gz * (last + 1)];
+  if (gz === 0 && n[2]) return [n[2], last * (last + 1) + gx];
+  if (gz === last && n[3]) return [n[3], gx];
+  return null;
+};
+
+const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[] | undefined, neighbors: Neighbors): FoliageGrid => {
   const gridNodes = Math.floor(size / GRID_STEP) + 1;
   const heights = new Float32Array(gridNodes * gridNodes);
   const slopes = new Float32Array(gridNodes * gridNodes);
@@ -137,10 +151,18 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
   const rampEnd = riverKeepOff() - RIVER_BED_FULL_INSET + RIVER_BED_PLANT_RAMP;
   let nearRiverBed = false;
 
+  const fields = { heights, biomeWeights, roadDistances, submerged, riverBed };
   for (let gz = 0; gz < gridNodes; gz++) {
     for (let gx = 0; gx < gridNodes; gx++) {
-      const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
       const i = gz * gridNodes + gx;
+      const shared = sharedNode(neighbors, gx, gz, gridNodes - 1);
+      if (shared) {
+        const [grid, j] = shared;
+        for (const f of NODE_FIELDS) fields[f][i] = grid[f][j];
+        if (riverBed[i] < rampEnd) nearRiverBed = true;
+        continue;
+      }
+      const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
       heights[i] = vd.height;
       biomeWeights[i] = biomeIds ? biomeWeightOf(vd.biomeSdf, biomeIds) : 1;
       roadDistances[i] = vd.distanceToRoadCenter;
@@ -245,7 +267,9 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
   let grid = takeCachedGrid(gridKey); // only non-empty chunks are cached: a hit skips the probe
   if (!grid) {
     if (biomeIds && !biomesVisibleInChunk(minX, minZ, size, biomeIds)) return EMPTY_RESULT();
-    grid = sampleGrid(minX, minZ, size, biomeIds);
+    // (Peeked, not touched: the neighbors' LRU order is theirs.)
+    const near = (dx: number, dz: number) => gridCache.get(`${size}|${biomeIds ? biomeIds.join(",") : ""}|${chunkX + dx},${chunkZ + dz}`);
+    grid = sampleGrid(minX, minZ, size, biomeIds, [near(-1, 0), near(1, 0), near(0, -1), near(0, 1)]);
     cacheGrid(gridKey, grid);
   }
   const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, riverBed, nearRiverBed } = grid;

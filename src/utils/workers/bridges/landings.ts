@@ -4,6 +4,7 @@
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { smoothstep } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
+import { PointCache } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
 import { warp } from "../noise";
@@ -25,32 +26,38 @@ const BRIDGE_PAVED_SHARE = 0.35;
 const BRIDGE_PAVED_CURB = 1;
 const BRIDGE_PAVED_RAMP_PAST = 8;
 
-/** A LANDED end cut along the edge of the road's pavement, so traffic from any part of the road
- *  merges onto the deck (an oblique deck's parapet would run across the road it lands on, and its
- *  side stand as a ledge over the far lanes): the deck starts exactly
- *  where its two edges leave the pavement, its end section running between those two points at the
- *  road's own heights there, so the road simply continues onto it — no wall, no ledge, no deck lying
- *  over the road. Null where the end does not lie on pavement (the deck keeps its ramp). `path` is
- *  the chain's, `W` the deck's width. */
-/** Whether the road is PAVED at a world point, as the terrain draws it where no deck is: asphalt and
- *  the curb strip anywhere (road field under BRIDGE_PAVED_CURB past the half-width), and in a city the
- *  sidewalk band too. Never near a river's channel, where every road yields (a cheap test first: most
- *  of a deck lies over it). */
-export const pavedAt = (x: number, z: number): boolean => {
-  const w = warp(x, z);
-  riverFieldAt(w.x, w.z);
-  const river = domainConfig!.river;
-  if (riverSample.distance < river.halfWidth + BRIDGE_PAVED_RIVER_SKIP) return false;
-  const r = computeVertexDataRaw(x, z);
-  const cfg = domainConfig!.cityConfig;
-  return r.distanceToRoadCenter < cfg.roadWidth + (r.biomeId === CITY_BIOME_ID ? BRIDGE_PAVED_SIDEWALK : BRIDGE_PAVED_CURB);
-};
 /** Every road's field is pushed off the pavement this far past a river's half-width (factor-1 units;
  *  an inter-city run's push is full from its yield line less ROAD_RIVER_RAMP, 54): no raw evaluation is
  *  needed nearer. (The water band's edge, 58, was too far: a run's curb there is still paved.) */
 const BRIDGE_PAVED_RIVER_SKIP = 8;
 /** A city sidewalk's outer edge past the road's half-width (street units): city_frag's sidewalk band. */
 const BRIDGE_PAVED_SIDEWALK = 5;
+
+/** Whether the road is PAVED at a world point, as the terrain draws it where no deck is: asphalt and
+ *  the curb strip anywhere (road field under BRIDGE_PAVED_CURB past the half-width), and in a city the
+ *  sidewalk band too. Never near a river's channel, where every road yields (a cheap test first: most
+ *  of a deck lies over it). */
+export const pavedAt = (x: number, z: number): boolean => {
+  // Cached per exact point: the landed cuts' searches, the parapet gaps and the ramp lengths of every
+  // deck (and every window that rebuilds one) ask the same points again — 30k of a 3.6 km walk's 49k
+  // repeated raw evaluations, MEASURED.
+  const hit = pavedCache.get(x, z);
+  if (hit !== undefined) return hit === 1;
+  const w = warp(x, z);
+  riverFieldAt(w.x, w.z, false, false);
+  const river = domainConfig!.river;
+  let paved = false;
+  if (!(riverSample.distance < river.halfWidth + BRIDGE_PAVED_RIVER_SKIP)) {
+    const r = computeVertexDataRaw(x, z);
+    const cfg = domainConfig!.cityConfig;
+    paved = r.distanceToRoadCenter < cfg.roadWidth + (r.biomeId === CITY_BIOME_ID ? BRIDGE_PAVED_SIDEWALK : BRIDGE_PAVED_CURB);
+  }
+  pavedCache.set(x, z, paved ? 1 : 0);
+  return paved;
+};
+const pavedCache = new PointCache(1 << 15);
+export const clearPavedCache = (): void => pavedCache.clear();
+
 /** A landed cut's road may fall this steeply (rise over run) between the bank's edge and the cut. */
 const BRIDGE_LANDING_MAX_GRADE = 0.3;
 /** 0: cut where the edges LAST leave the pavement; 1: where they FIRST do; 2: no cut (withCutRetry). */
@@ -63,6 +70,14 @@ export const withLandedCutMode = <T>(mode: 1 | 2, run: () => T): T => {
     landedCutMode = 0;
   }
 };
+
+/** A LANDED end cut along the edge of the road's pavement, so traffic from any part of the road
+ *  merges onto the deck (an oblique deck's parapet would run across the road it lands on, and its
+ *  side stand as a ledge over the far lanes): the deck starts exactly
+ *  where its two edges leave the pavement, its end section running between those two points at the
+ *  road's own heights there, so the road simply continues onto it — no wall, no ledge, no deck lying
+ *  over the road. Null where the end does not lie on pavement (the deck keeps its ramp). `path` is
+ *  the chain's, `W` the deck's width. */
 export const landedCut = (path: PointXZ[], cum: number[], which: 0 | 1, W: number): (TeeTrim & { y: number }) | null => {
   if (landedCutMode === 2) return null;
   const L = cum[cum.length - 1];
@@ -125,7 +140,7 @@ export const landedCut = (path: PointXZ[], cum: number[], which: 0 | 1, W: numbe
     for (let sArc = 0; sArc <= limit; sArc += BRIDGE_PAVED_STEP) {
       const p = at(sArc, lat);
       const w = warp(p.x, p.z);
-      riverFieldAt(w.x, w.z);
+      riverFieldAt(w.x, w.z, false, false);
       if (riverSample.distance < river.halfWidth + river.bank) return Math.max(0, sArc - BRIDGE_PAVED_STEP);
     }
     return Infinity;

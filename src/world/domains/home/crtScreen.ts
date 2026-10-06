@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { FONT } from "../../../menus/overlay/styles";
+import { fontOfSize } from "../../../menus/overlay/styles";
 
 // The CRT's picture: a canvas text atlas (one 4:3 row per page) and the screen shader that scrolls
 // through it over the diorama thumbnail, with barrel curvature, scanlines, flicker and power-on.
@@ -13,8 +13,6 @@ export interface CrtPage {
 // Text atlas: one row per page, top to bottom.
 const ATLAS_W = 512;
 const ATLAS_ROW_H = 384; // 4:3, matches the screen so text isn't stretched
-
-const font = (px: number) => `${px}px ${FONT}`;
 
 const drawAtlas = (ctx: CanvasRenderingContext2D, pages: readonly CrtPage[]) => {
   const pageCount = pages.length;
@@ -31,20 +29,20 @@ const drawAtlas = (ctx: CanvasRenderingContext2D, pages: readonly CrtPage[]) => 
     const top = i * ATLAS_ROW_H;
     ctx.fillStyle = "#00ff00";
     if (page.href) {
-      ctx.font = font(44);
+      ctx.font = fontOfSize(44);
       text(page.label, ATLAS_W / 2, top + 62);
-      ctx.font = font(20);
+      ctx.font = fontOfSize(20);
       ctx.fillStyle = "#00dd44";
       text("click to enter", ATLAS_W / 2, top + 356);
     } else {
       ctx.fillStyle = "#1d6b2f";
-      ctx.font = font(84);
+      ctx.font = fontOfSize(84);
       text(page.label, ATLAS_W / 2, top + 186);
-      ctx.font = font(20);
+      ctx.font = fontOfSize(20);
       text("locked", ATLAS_W / 2, top + 246);
     }
     ctx.fillStyle = "#0a9a34";
-    ctx.font = font(18);
+    ctx.font = fontOfSize(18);
     ctx.textAlign = "right";
     text(`${i + 1} / ${pageCount}`, ATLAS_W - 18, top + ATLAS_ROW_H - 16);
     ctx.textAlign = "center";

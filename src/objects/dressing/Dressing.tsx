@@ -1,15 +1,8 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useRapier, type RapierRigidBody } from "@react-three/rapier";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import {
-  DRESSING_CHUNK_SIZE,
-  type DressingBounds,
-  type DressingColliderBody,
-  type DressingColliderMesh,
-  type DressingColliderPart,
-  type DressingColliderSpec,
-} from "./types";
+import { DRESSING_COLLIDER_DISTANCE, DressingPartColliders, useDressingColliders } from "./dressingColliders";
+import { DRESSING_CHUNK_SIZE, type DressingBounds, type DressingColliderBody, type DressingColliderSpec } from "./types";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { freezeStaticSubtree } from "../../utils/utils";
@@ -25,8 +18,8 @@ import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./
  * THE DRESSING BASE (CLAUDE.md → "The three game-object classes"): a feature
  * component holds only its own placement query, geometry/materials and optional
  * animation; everything shared — chunk lifecycle, asset prep (curvature, spawn fade),
- * instanced assembly + rebase, chunk side-state, distance-gated colliders —
- * lives here so a new feature cannot miss a world-wide effect.
+ * instanced assembly + rebase, chunk side-state, distance-gated colliders (their Rapier
+ * bodies in dressingColliders.tsx) — lives here so a new feature cannot miss a world-wide effect.
  *
  * A feature uses: useDressingAssets (its geometry/materials) + useDressingChunks (a
  * placement-only feature) or useSolidDressing (a feature with a DressingColliderSpec),
@@ -41,6 +34,10 @@ const UPDATE_INTERVAL_FRAMES = 31;
 const dressingQueue = new TaskQueue({ weight: 1.5 });
 
 type DressingDefaults = Pick<DressingAttributes, "renderDistance" | "colliderDistance" | "serverSynced">;
+
+/** A solid feature's mount props: its distances only — its placement lives in its spec, the only one the
+ *  server knows. Unset = the <Dressing> group's, then the feature's default. */
+export type SolidDressingProps = Pick<DressingAttributes, "renderDistance" | "colliderDistance">;
 
 const DressingGroup = createDefaultsGroup<DressingDefaults>("dressing");
 export const Dressing = DressingGroup.Group;
@@ -62,6 +59,8 @@ export const prepareDressingMaterial = (material: THREE.Material): void => {
   _spawnFade.patchMaterial(material);
 };
 
+const isMaterial = (asset: unknown): asset is THREE.Material => !!(asset as THREE.Material | undefined)?.isMaterial;
+
 /** `warm`: the objects this feature draws, as program templates (utils/warmPrograms.ts) — linked at
  *  domain load, not when the first chunk streams in. Default: one InstancedMesh per material (what
  *  instancedFromPoints draws); a feature drawing anything else (a plain Mesh, instanceColor) lists its own. */
@@ -72,18 +71,11 @@ export const useDressingAssets = <T extends Record<string, { dispose: () => void
   const scene = useThree((state) => state.scene);
   const assets = useMemo(() => {
     const created = create();
-    for (const key of Object.keys(created)) {
-      const asset = created[key] as unknown as THREE.Material;
-      if (asset?.isMaterial) prepareDressingMaterial(asset);
-    }
+    for (const asset of Object.values(created)) if (isMaterial(asset)) prepareDressingMaterial(asset);
     return created;
   }, []);
   useEffect(() => {
-    const templates = warm
-      ? warm(assets)
-      : Object.values(assets)
-          .filter((a) => (a as unknown as THREE.Material).isMaterial)
-          .map((m) => instancedTemplate(m as unknown as THREE.Material));
+    const templates = warm ? warm(assets) : Object.values(assets).filter(isMaterial).map((m) => instancedTemplate(m));
     const cancelWarm = warmPrograms(scene, templates);
     return () => {
       cancelWarm();
@@ -231,154 +223,10 @@ const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) =>
   return registryRef.current;
 };
 
-/** A mounted collider body: a chunk's DressingColliderBody (types.ts) keyed for React. */
-interface DressingColliderPoint {
-  key: string;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  pitch: number;
-  parts?: DressingColliderPart[];
-  mesh?: DressingColliderMesh;
-}
-
 /** `points` are the chunk's collider bodies — its spec's `bodiesOf`, so the server builds the same. */
 export interface ChunkWithPoints extends ChunkRegistryEntry {
   points: DressingColliderBody[];
 }
-
-/** Thin street furniture only needs to be solid where the player can reach it. */
-const DRESSING_COLLIDER_DISTANCE = 90;
-
-const _colliderEuler = new THREE.Euler();
-const _colliderQuat = new THREE.Quaternion();
-
-/** One fixed Rapier body per point, created IMPERATIVELY (like the terrain heightfields and the
- *  building proxies): r-t-r's frame loop syncs every mounted <RigidBody> each frame and a fixed
- *  body never reads as sleeping. Same shapes and transforms as `<RigidBody rotation={[0, yaw,
- *  pitch]}>` + a `<CuboidCollider>` per part — the server builds the same (physics/obstacles.ts). */
-const DressingPartColliders = ({
-  colliders,
-  parts,
-}: {
-  colliders: DressingColliderPoint[];
-  parts: DressingColliderPart[];
-}): null => {
-  const { world, rapier } = useRapier();
-  const bodies = useRef(new Map<string, RapierRigidBody>()).current;
-  const partsRef = useRef(parts);
-
-  useEffect(() => {
-    // The shared boxes changed: every body is rebuilt.
-    if (partsRef.current !== parts) {
-      partsRef.current = parts;
-      bodies.forEach((body) => world.removeRigidBody(body));
-      bodies.clear();
-    }
-    const wanted = new Set<string>();
-    for (const c of colliders) wanted.add(c.key);
-    bodies.forEach((body, key) => {
-      if (wanted.has(key)) return;
-      world.removeRigidBody(body);
-      bodies.delete(key);
-    });
-    for (const c of colliders) {
-      if (bodies.has(c.key)) continue;
-      _colliderQuat.setFromEuler(_colliderEuler.set(0, c.yaw, c.pitch));
-      const body = world.createRigidBody(
-        rapier.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z).setRotation(_colliderQuat),
-      );
-      for (const p of c.parts ?? parts) {
-        _colliderQuat.setFromEuler(_colliderEuler.set(0, p.yaw ?? 0, 0));
-        world.createCollider(
-          rapier.ColliderDesc.cuboid(p.w / 2, p.h / 2, p.d / 2).setTranslation(p.x, p.y, p.z ?? 0).setRotation(_colliderQuat),
-          body,
-        );
-      }
-      if (c.mesh) world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
-      bodies.set(c.key, body);
-    }
-  }, [colliders, parts, world, rapier, bodies]);
-
-  useEffect(
-    () => () => {
-      bodies.forEach((body) => world.removeRigidBody(body));
-      bodies.clear();
-    },
-    [world, bodies],
-  );
-
-  return null;
-};
-
-/** Real colliders only within `colliderDistance` (thousands of Rapier shapes would cost more than the
- *  instancing saved). The registry sweep must run every interval even when the scan is skipped:
- *  forEachAlive is what prunes unmounted chunks and fires their onRemove. */
-const useDressingColliders = <T extends ChunkWithPoints>(
-  registry: { forEachAlive: (cb: (entry: T) => void) => void },
-  options: { colliderDistance?: number; scanIntervalFrames?: number } = {},
-): DressingColliderPoint[] => {
-  const { colliderDistance = DRESSING_COLLIDER_DISTANCE, scanIntervalFrames = 10 } = options;
-  const [colliders, setColliders] = useState<DressingColliderPoint[]>([]);
-  const frameCount = useRef(0);
-  const aliveScratch = useRef<T[]>([]);
-  const lastScan = useRef({
-    x: Infinity,
-    z: Infinity,
-    chunkCount: -1,
-    pointCount: -1,
-    colliderCount: -1,
-    colliderHash: 0,
-  });
-
-  useFrame(({ camera }) => {
-    if (frameCount.current++ % scanIntervalFrames !== 0) return;
-
-    const alive = aliveScratch.current;
-    alive.length = 0;
-    let pointCount = 0;
-    registry.forEachAlive((chunk) => {
-      alive.push(chunk);
-      pointCount += chunk.points.length;
-    });
-
-    const last = lastScan.current;
-    const movedSq = (camera.position.x - last.x) ** 2 + (camera.position.z - last.z) ** 2;
-    if (movedSq < 4 && alive.length === last.chunkCount && pointCount === last.pointCount) {
-      alive.length = 0;
-      return;
-    }
-    last.x = camera.position.x;
-    last.z = camera.position.z;
-    last.chunkCount = alive.length;
-    last.pointCount = pointCount;
-
-    const near: DressingColliderPoint[] = [];
-    let hash = 0;
-    const maxDistSq = colliderDistance * colliderDistance;
-    for (const chunk of alive) {
-      for (const p of chunk.points) {
-        const dx = p.x - camera.position.x;
-        const dz = p.z - camera.position.z;
-        if (dx * dx + dz * dz < maxDistSq) {
-          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch ?? 0, parts: p.parts, mesh: p.mesh });
-          hash += p.x * 31 + p.z * 17 + p.y;
-        }
-      }
-    }
-    alive.length = 0;
-    // Positions are deterministic, so equal count + hash = the same set.
-    if (near.length !== last.colliderCount || hash !== last.colliderHash) {
-      last.colliderCount = near.length;
-      last.colliderHash = hash;
-      setColliders(near);
-    }
-  });
-
-  return colliders;
-};
-
 
 interface DressingChunk {
   object: THREE.Object3D | null;
@@ -396,6 +244,36 @@ const disposeChunkObject = (object: THREE.Object3D): void => {
     else if ((o as THREE.Mesh).isMesh && o.userData.ownsGeometry) (o as THREE.Mesh).geometry.dispose();
   });
 };
+
+/** Chunks are dropped this far past the render distance, so chunk borders don't thrash. */
+const DROP_HYSTERESIS = 1.3;
+
+const chunkKeyOf = (cx: number, cz: number): string => `${cx}_${cz}`;
+
+const chunkBoundsOf = (cx: number, cz: number): DressingBounds => ({
+  minX: cx * DRESSING_CHUNK_SIZE,
+  minZ: cz * DRESSING_CHUNK_SIZE,
+  maxX: (cx + 1) * DRESSING_CHUNK_SIZE,
+  maxZ: (cz + 1) * DRESSING_CHUNK_SIZE,
+});
+
+/** Cancels a chunk's queued build and unmounts and disposes what it drew. */
+const discardChunk = (chunk: DressingChunk, group: THREE.Group | null, fades: _spawnFade.SpawnFadeSet): void => {
+  chunk.dropped = true;
+  if (chunk.taskId !== null) dressingQueue.removeTask(chunk.taskId);
+  if (!chunk.object) return;
+  group?.remove(chunk.object);
+  fades.delete(chunk.object);
+  disposeChunkObject(chunk.object);
+};
+
+interface ChunkCandidate {
+  cx: number;
+  cz: number;
+  centerX: number;
+  centerZ: number;
+  distSq: number;
+}
 
 /** Camera-following chunk lifecycle; render the returned ref as `<group ref={groupRef} />`. */
 export const useDressingChunks = ({
@@ -419,34 +297,19 @@ export const useDressingChunks = ({
     const group = groupRef.current;
     if (group) freezeStaticSubtree(group);
     return () => {
-      chunks.forEach((chunk) => {
-        chunk.dropped = true;
-        if (chunk.taskId !== null) dressingQueue.removeTask(chunk.taskId);
-        if (chunk.object) {
-          if (group) group.remove(chunk.object);
-          disposeChunkObject(chunk.object);
-        }
-      });
+      chunks.forEach((chunk) => discardChunk(chunk, group, fades));
       chunks.clear();
       fades.clear();
     };
   }, [chunks, fades]);
 
-  useFrame(({ camera }) => {
-    fades.update();
-    if (frameCount.current++ % UPDATE_INTERVAL_FRAMES !== 0) return;
-    const group = groupRef.current;
-    if (!group) return;
-
-    const camX = camera.position.x;
-    const camZ = camera.position.z;
+  /** The chunks within the render distance not held yet, nearest-first: the shared queue serializes
+   *  all features, and raw scan order built a fresh ring's far corner before the ground under the camera. */
+  const missingChunks = (camX: number, camZ: number): ChunkCandidate[] => {
     const radius = Math.ceil(renderDistance / DRESSING_CHUNK_SIZE);
     const ccx = Math.floor(camX / DRESSING_CHUNK_SIZE);
     const ccz = Math.floor(camZ / DRESSING_CHUNK_SIZE);
-
-    // Enqueued nearest-first: the shared queue serializes all features, and raw scan
-    // order built a fresh ring's far corner before the ground under the camera.
-    const candidates: { cx: number; cz: number; centerX: number; centerZ: number; distSq: number }[] = [];
+    const candidates: ChunkCandidate[] = [];
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dz = -radius; dz <= radius; dz++) {
         const cx = ccx + dx;
@@ -455,53 +318,52 @@ export const useDressingChunks = ({
         const centerZ = (cz + 0.5) * DRESSING_CHUNK_SIZE;
         const distSq = (camX - centerX) ** 2 + (camZ - centerZ) ** 2;
         if (distSq > renderDistance * renderDistance) continue;
-        if (chunks.has(`${cx}_${cz}`)) continue;
+        if (chunks.has(chunkKeyOf(cx, cz))) continue;
         candidates.push({ cx, cz, centerX, centerZ, distSq });
       }
     }
-    candidates.sort((a, b) => a.distSq - b.distSq);
-    for (const { cx, cz, centerX, centerZ } of candidates) {
-      const entry: DressingChunk = { object: null, dropped: false, taskId: null, centerX, centerZ };
-      chunks.set(`${cx}_${cz}`, entry);
+    return candidates.sort((a, b) => a.distSq - b.distSq);
+  };
 
-      entry.taskId = dressingQueue.addTask(async () => {
-        entry.taskId = null;
-        if (entry.dropped) return;
-        const object = await buildRef.current({
-          minX: cx * DRESSING_CHUNK_SIZE,
-          minZ: cz * DRESSING_CHUNK_SIZE,
-          maxX: (cx + 1) * DRESSING_CHUNK_SIZE,
-          maxZ: (cz + 1) * DRESSING_CHUNK_SIZE,
-        });
-        if (!object) return;
-        if (entry.dropped || !groupRef.current) {
-          disposeChunkObject(object);
-          return;
-        }
-        reportUnwarmedPrograms(object, "a dressing chunk", "list it in the feature's useDressingAssets(create, warm) templates.");
-        freezeStaticSubtree(object);
-        groupRef.current.add(object);
-        fades.add(object);
-        entry.object = object;
-      }, { at: { x: centerX, z: centerZ } });
-    }
-
-    // 1.3× hysteresis so chunk borders don't thrash.
-    const dropDistSq = renderDistance * 1.3 * (renderDistance * 1.3);
-    chunks.forEach((entry, key) => {
-      const ddx = camX - entry.centerX;
-      const ddz = camZ - entry.centerZ;
-      if (ddx * ddx + ddz * ddz > dropDistSq) {
-        entry.dropped = true;
-        if (entry.taskId !== null) dressingQueue.removeTask(entry.taskId);
-        if (entry.object) {
-          group.remove(entry.object);
-          fades.delete(entry.object);
-          disposeChunkObject(entry.object);
-        }
-        chunks.delete(key);
+  const queueChunk = ({ cx, cz, centerX, centerZ }: ChunkCandidate): void => {
+    const entry: DressingChunk = { object: null, dropped: false, taskId: null, centerX, centerZ };
+    chunks.set(chunkKeyOf(cx, cz), entry);
+    entry.taskId = dressingQueue.addTask(async () => {
+      entry.taskId = null;
+      if (entry.dropped) return;
+      const object = await buildRef.current(chunkBoundsOf(cx, cz));
+      if (!object) return;
+      if (entry.dropped || !groupRef.current) {
+        disposeChunkObject(object);
+        return;
       }
+      reportUnwarmedPrograms(object, "a dressing chunk", "list it in the feature's useDressingAssets(create, warm) templates.");
+      freezeStaticSubtree(object);
+      groupRef.current.add(object);
+      fades.add(object);
+      entry.object = object;
+    }, { at: { x: centerX, z: centerZ } });
+  };
+
+  const dropFarChunks = (group: THREE.Group, camX: number, camZ: number): void => {
+    const dropDistance = renderDistance * DROP_HYSTERESIS;
+    const dropDistSq = dropDistance * dropDistance;
+    chunks.forEach((entry, key) => {
+      const dx = camX - entry.centerX;
+      const dz = camZ - entry.centerZ;
+      if (dx * dx + dz * dz <= dropDistSq) return;
+      discardChunk(entry, group, fades);
+      chunks.delete(key);
     });
+  };
+
+  useFrame(({ camera }) => {
+    fades.update();
+    if (frameCount.current++ % UPDATE_INTERVAL_FRAMES !== 0) return;
+    const group = groupRef.current;
+    if (!group) return;
+    for (const candidate of missingChunks(camera.position.x, camera.position.z)) queueChunk(candidate);
+    dropFarChunks(group, camera.position.x, camera.position.z);
   });
 
   return groupRef;

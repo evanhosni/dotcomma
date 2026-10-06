@@ -2,6 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
+import { wrapAngle } from "../../utils/math/_math";
 import { onServerMessage, send } from "../connection";
 
 /**
@@ -99,7 +100,7 @@ export const LocalPlayerSync = () => {
 
     let reason: SendReason | null = forceSend.current ? "change" : velocityChangeOf(v, sv);
     if (!reason) {
-      const dyaw = Math.atan2(Math.sin(yaw - sentYaw.current), Math.cos(yaw - sentYaw.current));
+      const dyaw = wrapAngle(yaw - sentYaw.current);
       if (Math.abs(dyaw) > YAW_THRESHOLD) reason = "change";
     }
     if (!reason && now - lastDriftCheck.current > DRIFT_CHECK_MS) {

@@ -6,6 +6,10 @@ import { smoothstep } from "../../../utils/math/_math";
 
 const RES = 64; // the thumbnail's pixelation IS this number
 
+/** The city's block lattice: towers at x≡0 / z≡9, roads between them at x≡9 / z≡0 (mod BLOCK_PITCH). */
+const BLOCK_PITCH = 18;
+const ROAD_HALF_WIDTH = 2.5;
+
 let cached: THREE.Texture | null = null;
 
 const hash = (x: number, z: number): number => {
@@ -13,24 +17,14 @@ const hash = (x: number, z: number): number => {
   return s - Math.floor(s);
 };
 
-
-/** Distance from v to the nearest lattice line (multiples of 18, offset o). */
+/** Distance from v to the nearest lattice line (multiples of BLOCK_PITCH, offset o). */
 const lineDist = (v: number, o: number): number => {
-  const m = (((v - o) % 18) + 18) % 18;
-  return Math.min(m, 18 - m);
+  const m = (((v - o) % BLOCK_PITCH) + BLOCK_PITCH) % BLOCK_PITCH;
+  return Math.min(m, BLOCK_PITCH - m);
 };
 
-export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture => {
-  if (cached) return cached;
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#0b0620");
-  scene.fog = new THREE.Fog("#0b0620", 140, 330);
-
-  const sun = new THREE.DirectionalLight("#ffe9c4", 2.4);
-  sun.position.set(60, 90, 50);
-  scene.add(sun, new THREE.AmbientLight("#7788dd", 0.55));
-
+/** The vertex-colored ground: grass < -30 < city < 30 < desert, soft borders, hills and dunes. */
+const createGround = (): THREE.Mesh => {
   const W = 240;
   const D = 170;
   const geo = new THREE.PlaneGeometry(W, D, 48, 34);
@@ -47,7 +41,6 @@ export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture 
     const x = pos.getX(i);
     const z = pos.getZ(i);
 
-    // grass < -30 < city < 30 < desert, soft borders
     const desertW = smoothstep(22, 42, x);
     const grassW = 1 - smoothstep(-42, -22, x);
     const cityW = 1 - grassW - desertW;
@@ -56,8 +49,7 @@ export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture 
     const dunes = Math.max(0, 4 + 5 * (Math.sin(x * 0.06 + z * 0.045) + 0.5 * Math.sin(z * 0.1 + 2)));
     pos.setY(i, grassW * hills + desertW * dunes);
 
-    // Roads run BETWEEN the towers (towers at x≡0 / z≡9 mod 18, roads at x≡9 / z≡0).
-    const onRoad = lineDist(x, 9) < 2.5 || lineDist(z, 0) < 2.5;
+    const onRoad = lineDist(x, 9) < ROAD_HALF_WIDTH || lineDist(z, 0) < ROAD_HALF_WIDTH;
     const cityGround = onRoad ? asphalt : plaza;
 
     const jitter = 0.85 + 0.3 * hash(x, z);
@@ -72,26 +64,42 @@ export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture 
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-  scene.add(terrain);
+  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+};
 
-  const towerMats: THREE.Material[] = [];
-  const towerGeos: THREE.BufferGeometry[] = [];
-  for (const bx of [-18, 0, 18]) {
-    for (let bz = -63; bz <= 63; bz += 18) {
+/** Gray towers of seeded heights on the city's lots (some left empty). */
+const createTowers = (): THREE.Mesh[] => {
+  const towers: THREE.Mesh[] = [];
+  for (const bx of [-BLOCK_PITCH, 0, BLOCK_PITCH]) {
+    for (let bz = -63; bz <= 63; bz += BLOCK_PITCH) {
       const roll = hash(bx, bz);
       if (roll < 0.3) continue; // empty lot
       const h = 7 + roll * 26;
-      const g = new THREE.BoxGeometry(11, h, 11);
       const shade = 0.3 + 0.45 * hash(bz, bx);
-      const m = new THREE.MeshLambertMaterial({ color: new THREE.Color(shade, shade, shade) });
-      const tower = new THREE.Mesh(g, m);
+      const tower = new THREE.Mesh(
+        new THREE.BoxGeometry(11, h, 11),
+        new THREE.MeshLambertMaterial({ color: new THREE.Color(shade, shade, shade) }),
+      );
       tower.position.set(bx, h / 2, bz);
-      scene.add(tower);
-      towerGeos.push(g);
-      towerMats.push(m);
+      towers.push(tower);
     }
   }
+  return towers;
+};
+
+export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture => {
+  if (cached) return cached;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color("#0b0620");
+  scene.fog = new THREE.Fog("#0b0620", 140, 330);
+
+  const sun = new THREE.DirectionalLight("#ffe9c4", 2.4);
+  sun.position.set(60, 90, 50);
+  scene.add(sun, new THREE.AmbientLight("#7788dd", 0.55));
+
+  const meshes = [createGround(), ...createTowers()];
+  scene.add(...meshes);
 
   const camera = new THREE.PerspectiveCamera(50, 1, 1, 1000);
   camera.position.set(0, 46, 150);
@@ -107,10 +115,10 @@ export const getDomainDioramaTexture = (gl: THREE.WebGLRenderer): THREE.Texture 
   gl.render(scene, camera);
   gl.setRenderTarget(prevTarget);
 
-  geo.dispose();
-  (terrain.material as THREE.Material).dispose();
-  towerGeos.forEach((g) => g.dispose());
-  towerMats.forEach((m) => m.dispose());
+  for (const mesh of meshes) {
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+  }
 
   cached = rt.texture;
   return cached;

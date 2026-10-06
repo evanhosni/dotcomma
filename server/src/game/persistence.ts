@@ -67,13 +67,6 @@ export class PlayerPersistence {
     return merged;
   }
 
-  set(identity: string, data: PlayerData): void {
-    const p = this.byIdentity.get(identity);
-    if (!p) return;
-    p.data = data;
-    p.dirty = true;
-  }
-
   private save(p: PersistedPlayer, now = Date.now()): void {
     savePlayerData(p.identity, p.data);
     p.dirty = false;

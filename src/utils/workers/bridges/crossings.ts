@@ -6,14 +6,17 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { seedRand } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
-import { getCityDistrict } from "../roads/cityTerrain";
+import { computeVertexDataRaw } from "../flattenPads";
+import { getCityDistrict } from "../roads/cityDistricts";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warp } from "../noise";
 import { riverFieldAt, riverSample, riverStraight, riverStraightNear } from "../rivers/riverField";
-import { type RiverEdge, riverEdgePiece, type RiverPiece, riverPieceBuilt } from "../rivers/riverNetwork";
+import { riverEdgePiece, riverPieceBuilt } from "../rivers/riverNetwork";
+import type { RiverEdge, RiverPiece } from "../rivers/types";
 import { computeVertexData, freewayDistanceAt } from "../vertexCompute";
 import { zoneAtWarped } from "../voronoi";
 import { BRIDGE_ALONG_ALIGN, BRIDGE_EDGE_GUARD, BRIDGE_MAX_ALONG_SHORE, BRIDGE_MAX_LENGTH, deckWidth, streetDeckWidth } from "./constants";
+import { enumeratingBridges } from "./freewayBridges";
 import { edgeDirWorld, MOUTH_CLUSTER, MOUTH_PAIR_MAX, mouthPairGeom, mouthSingleGeom, mouthsOf } from "./mouths";
 import { polyPointAt, segIntersect } from "./polyline";
 import type { BridgeChain, Crossing, CrossingGeom, Mouth, RoadPath, WindowScan } from "./types";
@@ -324,6 +327,11 @@ export const resolveCrossingChain = (c: BridgeChain): boolean => {
 
 export const failedCrossing = (why: string): CrossingGeom => ({ ok: false, why, path: [], ys: [0, 0], x: 0, z: 0, width: 0, street: false });
 
+/** The road field at a world point. Flatten pads move only the height, and while decks are enumerated
+ *  the deck steps are off on both paths, so the pad-free evaluation is the same field without building
+ *  a flatten tile per probe. */
+const roadFieldAt = (x: number, z: number): number => (enumeratingBridges > 0 ? computeVertexDataRaw(x, z) : computeVertexData(x, z)).distanceToRoadCenter;
+
 /** One landing: from the centerline point (x, z) along (ux, uz), past the last point where any of the
  *  deck's cross-section is inside a river's footprint, on to the middle of the road met there (the
  *  quay, or the road the deck continues). `cont`: a street goes on beyond it. */
@@ -335,7 +343,7 @@ const landCrossing = (x: number, z: number, ux: number, uz: number, W: number): 
   const nz = ux;
   const wetAt = (px: number, pz: number): boolean => {
     const w = warp(px, pz);
-    riverFieldAt(w.x, w.z);
+    riverFieldAt(w.x, w.z, false, false);
     return riverSample.distance < reach;
   };
   const wet = (s: number): boolean => {
@@ -353,7 +361,7 @@ const landCrossing = (x: number, z: number, ux: number, uz: number, W: number): 
     if (wet(m)) lo = m;
     else hi = m;
   }
-  const field = (d: number): number => computeVertexData(x + ux * d, z + uz * d).distanceToRoadCenter;
+  const field = (d: number): number => roadFieldAt(x + ux * d, z + uz * d);
   let best = hi;
   let bestF = field(hi);
   for (let k = 1; k * CROSSING_SETTLE_STEP <= 2 * rw + 4; k++) {
@@ -368,7 +376,7 @@ const landCrossing = (x: number, z: number, ux: number, uz: number, W: number): 
   for (const side of [1, -1]) {
     const px = x + ux * best + nx * half * side;
     const pz = z + uz * best + nz * half * side;
-    const corner = computeVertexData(px, pz).distanceToRoadCenter;
+    const corner = roadFieldAt(px, pz);
     if (!(corner <= rw + CROSSING_CORNER_SLACK) || wetAt(px, pz)) return `off the road at the bank (${corner.toFixed(1)}${wetAt(px, pz) ? ", wet" : ""})`;
   }
   const y = computeVertexData(x + ux * best, z + uz * best).height;
@@ -389,7 +397,7 @@ const straightAlongShore = (x: number, z: number, ux: number, uz: number, s0: nu
   for (let i = 0; i < n; i++) {
     const s = s0 + (i + 0.5) * step;
     const w = warp(x + ux * s, z + uz * s);
-    riverFieldAt(w.x, w.z);
+    riverFieldAt(w.x, w.z, false, false);
     if (!(riverSample.distance < reach)) continue;
     riverStraightNear(w.x, w.z);
     if (riverStraight.distance < Infinity && Math.abs(ux * riverStraight.dirX + uz * riverStraight.dirZ) > cosAlign) along += step;

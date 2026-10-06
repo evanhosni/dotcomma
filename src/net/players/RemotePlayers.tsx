@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { prepareActorMaterial } from "../../objects/actors/Actor";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
+import { wrapAngle } from "../../utils/math/_math";
 import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
 /**
@@ -55,8 +56,6 @@ const RemoteCapsule = ({ player }: { player: RemotePlayer }) => {
     </group>
   );
 };
-
-const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 export const RemotePlayers = () => {
   const version = useRosterVersion();

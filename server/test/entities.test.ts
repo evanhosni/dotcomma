@@ -7,7 +7,9 @@ import { ACTOR_CATALOG } from "../../src/world/domains/configs";
 import type { ActorSpec } from "../../src/objects/actors/spec";
 import type { StateMachineConfig } from "../../src/objects/actors/state/types";
 import { computeVertexData } from "../../src/utils/workers/vertexCompute";
-import { EntityManager, TICK_MS, type EntityManagerOptions, type PlayerView } from "../src/game/entities/manager.js";
+import { EntityManager, type EntityManagerOptions, type PlayerView } from "../src/game/entities/manager.js";
+import { TICK_MS } from "../src/game/tick.js";
+import { createPublished, fullUpdate, wirePosition, wireYaw } from "../src/game/entities/publish.js";
 import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
 
 /** One physics world for the suite (WASM init once); an unbounded budget builds chunks on the first tick. */
@@ -51,6 +53,17 @@ describe("EntityManager (server authority)", () => {
   afterEach(() => {
     for (const m of live) m.disposeAll();
     live.length = 0;
+  });
+
+  it("a building disposed and re-registered before its hull job ran still gets its hull", () => {
+    const h = makeHost();
+    const m = manager(h);
+    const item = { id: "40_60_building", kind: "building", x: 40, y: 0, z: 60 };
+    m.register("A", "overworld", [item]);
+    m.unregister("A", [item.id]);
+    m.register("A", "overworld", [item]);
+    m.tick(Date.now());
+    assert.ok(m.get(item.id)!.hull, "the queued job served the new record");
   });
 
   it("registration answers with the full record; kinds outside the catalog are static", () => {
@@ -145,7 +158,7 @@ describe("EntityManager (server authority)", () => {
     ticks(m, 3, t0 + 200); // → alert
     assert.equal(e.sm, "alert");
     const y0 = e.y;
-    m.interact("B", ID, "mouse-left-click", m.playersFor("overworld"));
+    m.interact("B", ID, "mouse-left-click");
     ticks(m, 10, t0 + 500);
     assert.equal(e.sm, "ascending");
     assert.equal(e.anim?.clip, "ascend");
@@ -157,7 +170,7 @@ describe("EntityManager (server authority)", () => {
     regBeeble(m2, "A");
     h2.setPlayer("A", 500, 500);
     ticks(m2, 2, t0);
-    m2.interact("A", ID, "mouse-left-click", m2.playersFor("overworld"));
+    m2.interact("A", ID, "mouse-left-click");
     ticks(m2, 2, t0 + 200);
     assert.notEqual(m2.get(ID)!.sm, "ascending", "far click ignored");
   });
@@ -202,14 +215,14 @@ describe("EntityManager (server authority)", () => {
     h.setPlayer("A", 11, 21);
     const e = m.get(ID)!;
     const bb = e.runner!.blackboard;
-    m.interact("A", ID, "mouse-hover-enter", m.playersFor("overworld"));
+    m.interact("A", ID, "mouse-hover-enter");
     assert.equal(bb.__mouse_hover_enter, true);
     assert.equal(bb.__mouse_hover_active, true);
-    m.interact("A", ID, "mouse-scroll-up", m.playersFor("overworld"));
+    m.interact("A", ID, "mouse-scroll-up");
     assert.equal(bb.__mouse_scroll_up, true);
-    m.interact("A", ID, "mouse-hover-leave", m.playersFor("overworld"));
+    m.interact("A", ID, "mouse-hover-leave");
     assert.equal(bb.__mouse_hover_active, false);
-    m.interact("A", ID, "not-a-mouse-thing", m.playersFor("overworld"));
+    m.interact("A", ID, "not-a-mouse-thing");
     assert.equal(bb["__not_a_mouse_thing"], undefined, "unknown actions never touch the blackboard");
   });
 
@@ -229,12 +242,12 @@ describe("EntityManager (server authority)", () => {
     const out = 2.5 / Math.hypot(at[0], at[2]);
     h.setPlayer("A", bx + at[0] * (1 + out), bz + at[2] * (1 + out));
     h.clear();
-    m.interact("A", B, `door:${far}`, m.playersFor("overworld"));
+    m.interact("A", B, `door:${far}`);
     const c = h.to("C")[0];
     assert.ok(c, "the toggle is broadcast");
     assert.equal(c.state.doors[far], true, "other registrant sees the door open");
     assert.equal(m.get(B)!.state.doors[far], true);
-    m.interact("A", B, `door:${far}`, m.playersFor("overworld"));
+    m.interact("A", B, `door:${far}`);
     assert.equal(m.get(B)!.state.doors[far], false);
     // Late joiner gets the doors in the registration answer.
     h.clear();
@@ -251,17 +264,17 @@ describe("EntityManager (server authority)", () => {
     m.register("A", "overworld", [{ id: B, kind: "building", x: bx, y: 0, z: bz }]);
     const at = doors[0].position;
     h.setPlayer("A", bx + at[0] + 12, bz + at[2]);
-    m.interact("A", B, "door:0", m.playersFor("overworld"));
+    m.interact("A", B, "door:0");
     assert.equal(m.get(B)!.state.doors, undefined, "12u from the door: refused");
     h.setPlayer("A", bx + at[0], bz + at[2]);
-    m.interact("A", B, `door:${doors.length}`, m.playersFor("overworld"));
+    m.interact("A", B, `door:${doors.length}`);
     assert.equal(m.get(B)!.state.doors, undefined, "no such door in the plan: refused");
     const other = doors.findIndex((d) => Math.hypot(d.position[0] - at[0], d.position[2] - at[2]) > 12);
     if (other >= 0) {
-      m.interact("A", B, `door:${other}`, m.playersFor("overworld"));
+      m.interact("A", B, `door:${other}`);
       assert.equal(m.get(B)!.state.doors, undefined, "standing at door 0, another door's index: refused");
     }
-    m.interact("A", B, "door:0", m.playersFor("overworld"));
+    m.interact("A", B, "door:0");
     assert.equal(m.get(B)!.state.doors[0], true, "at door 0: accepted");
   });
 
@@ -299,5 +312,22 @@ describe("EntityManager (server authority)", () => {
     assert.equal(m.size, 1);
     m.removeSession("B");
     assert.equal(m.size, 0);
+  });
+});
+
+describe("snapshot wire encoding", () => {
+  it("a float32 position goes out as its shortest round-tripping decimal, anything else to 1e-4", () => {
+    for (const v of [0, 1, -3.5, 86.19412994384766, 228.489501953125, -1551.0625, 123456.7890625, 4.2e6 + 0.5]) {
+      const f = Math.fround(v);
+      const w = wirePosition(f);
+      assert.equal(Math.fround(w), f, `${f} round-trips through ${w}`);
+      assert.ok(String(w).replace(/^-|\./g, "").length <= 9, `${w} has at most 9 digits`);
+    }
+    for (const v of [22.56004981994629 - 0.75, 1e6 + 1 / 3, -7.123456789]) {
+      const w = wirePosition(v);
+      assert.ok(Math.abs(w - v) <= 5e-5, `${v} → ${w}`);
+    }
+    assert.equal(wireYaw(9.358333933178395), 9.3583);
+    assert.equal(JSON.stringify(fullUpdate(createPublished(86.19412994384766, 3.25, -12.5), 1).x), "86.19413");
   });
 });

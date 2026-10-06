@@ -44,7 +44,7 @@ void main() {
   // material cross-fades this color into the neighbor over the biome's feather).
 
   // Fake directional shading so ramps and curbs read on the unlit terrain (~1.0 on flat ground).
-  float shade = 0.62 + 0.38 * clamp(dot(normalize(vWorldNormal), normalize(vec3(0.35, 0.9, 0.2))), 0.0, 1.0);
+  float shade = 0.62 + 0.38 * fakeSunLight(vWorldNormal);
   groundColor *= shade / 0.967;
 
   gl_FragColor = vec4(groundColor, 1.0);

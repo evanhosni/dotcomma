@@ -9,7 +9,7 @@ The landing page at `/`: a flat black world with a huge CRT that selects an over
 - **No ambient light**: the grid stays black until the CRT's glow light (parked at zero intensity from mount) turns on.
 - [CrtMonitor.tsx](CrtMonitor.tsx): powers on after the first pointer lock; the wheel scrolls pages (`ADDRESS_PAGES` = one `/<region>` page per `OVERWORLD_REGIONS` entry, then `EXTRA_PAGES`, padded with locked pages to `MIN_PAGE_COUNT`). Clicking an unlocked page within `INTERACT_DISTANCE` calls `navigateToAddress(href)`. [crtScreen.ts](crtScreen.ts) draws the page atlas and screen shader; [domainDiorama.ts](domainDiorama.ts) bakes the hand-built thumbnail.
 - [ClickToEnter.tsx](ClickToEnter.tsx): HTML gate that swallows clicks until "click to enter", then triggers drei's pointer lock.
-- [HomeTitle.tsx](HomeTitle.tsx) + [labelMaterial.ts](labelMaterial.ts): the floating title.
+- [HomeTitle.tsx](HomeTitle.tsx): the floating title (a canvas-text material).
 
 ## How to add another
 

@@ -1,8 +1,9 @@
 import type Rapier from "@dimforge/rapier3d-compat";
+import { smoothstep } from "../utils/math/_math";
 
 /**
  * THE movement resolver for every kinematic capsule (local player + server
- * NPCs): tune here, nowhere else. Rapier types only — no Three, no React —
+ * NPCs): tune here, nowhere else. No Three, no React (of Rapier, types only),
  * because the server's esbuild bundle runs this file. The measurements behind the
  * constants are in CLAUDE.md (player/Player.tsx).
  */
@@ -147,11 +148,6 @@ const _step = { x: 0, y: 0, z: 0 };
 const _trans = { x: 0, y: 0, z: 0 };
 const _notSensor = (c: Rapier.Collider) => !c.isSensor();
 
-const smoothstep01 = (t: number): number => {
-  const x = Math.min(Math.max(t, 0), 1);
-  return x * x * (3 - 2 * x);
-};
-
 /** Fills while active, decays faster when not, saturates at 2× the delay (hysteresis on the way out). */
 const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
   Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
@@ -231,7 +227,7 @@ const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionStat
         const upX = -g.nX / hLen;
         const upZ = -g.nZ / hLen;
         const uphillFactor = Math.max(0, mx * upX + mz * upZ);
-        const climb = 1 - smoothstep01((g.angle - SLOPE_SOFT_START) / (SLOPE_SOFT_END - SLOPE_SOFT_START));
+        const climb = 1 - smoothstep(SLOPE_SOFT_START, SLOPE_SOFT_END, g.angle);
         scale = input.speed * (1 - uphillFactor * (1 - climb));
       }
     }

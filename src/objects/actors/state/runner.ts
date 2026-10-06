@@ -4,8 +4,6 @@ import { Input } from "./input";
 import { Motion, type Vec3Like } from "./motion";
 import type { BehaviorContext, StateDef, StateMachineConfig, TransitionDef, TriggerDef } from "./types";
 
-export type { Vec3Like };
-
 /**
  * The Three-free state machine core. The SAME config file runs on the server
  * (the one authority; its `motion`/`animation` outputs are published) and on
@@ -141,11 +139,14 @@ export class StateMachineRunner {
     this.blackboard.__forcedTransition = stateId;
   }
 
+  private runExitCleanup(): void {
+    if (!this.exitCleanup) return;
+    this.exitCleanup();
+    this.exitCleanup = null;
+  }
+
   private enterState(stateId: string, elapsed: number): void {
-    if (this.exitCleanup) {
-      this.exitCleanup();
-      this.exitCleanup = null;
-    }
+    this.runExitCleanup();
     const state = this.stateMap.get(stateId);
     if (!state) return;
     this.stateId = stateId;
@@ -158,6 +159,12 @@ export class StateMachineRunner {
       const cleanup = state.onEnter(this.ctx);
       if (typeof cleanup === "function") this.exitCleanup = cleanup;
     }
+  }
+
+  /** Enters a state and runs its first update on the same tick. */
+  private enterAndUpdate(stateId: string, elapsed: number): void {
+    this.enterState(stateId, elapsed);
+    this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);
   }
 
   private prepare(elapsed: number, delta: number, clockMs: number, playerPosition: Vec3Like, playerDistanceSq: number): void {
@@ -184,8 +191,7 @@ export class StateMachineRunner {
     const forced = bb.__forcedTransition;
     if (forced) {
       delete bb.__forcedTransition;
-      this.enterState(forced, elapsed);
-      this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);
+      this.enterAndUpdate(forced, elapsed);
       return;
     }
 
@@ -195,8 +201,7 @@ export class StateMachineRunner {
     for (const transition of this.transitionsOf.get(this.stateId)!) {
       if (transition.trigger.evaluate(this.ctx)) {
         if (transition.guard && !transition.guard(this.ctx)) continue;
-        this.enterState(transition.target, elapsed);
-        this.stateMap.get(this.stateId)?.onUpdate?.(this.ctx);
+        this.enterAndUpdate(transition.target, elapsed);
         this.clearMouseFlags();
         return;
       }
@@ -242,9 +247,6 @@ export class StateMachineRunner {
   }
 
   dispose(): void {
-    if (this.exitCleanup) {
-      this.exitCleanup();
-      this.exitCleanup = null;
-    }
+    this.runExitCleanup();
   }
 }

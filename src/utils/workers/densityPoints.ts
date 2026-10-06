@@ -1,6 +1,6 @@
 import { BRIDGE_CUT_FEATHER } from "./bridges/constants";
 import { decksAround } from "./bridges/deckGround";
-import { computeVertexData, riverKeepOff } from "./vertexCompute";
+import { computeVertexData, outsideBiomes, riverKeepOff } from "./vertexCompute";
 import type { GameObjectAttributes } from "../../objects/types";
 import {
   densityCellRange,
@@ -82,6 +82,7 @@ export const generateDensityPoints = (
       const roll = rollDensityCell(params.seedTag, gx, gz, cellSize, probability);
       if (!roll) continue;
       const { x, z } = roll;
+      if (outsideBiomes(params.biomeIds, x, z)) continue;
 
       const vd = computeVertexData(x, z);
       if (!passesPlacementFilters(vd, params, riverKeepOff()) || besideDeck(x, z)) continue;

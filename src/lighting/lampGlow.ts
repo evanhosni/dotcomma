@@ -1,5 +1,6 @@
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { chainMaterialPatch } from "../vfx/materialPatch";
 import { glslFloat } from "../world/shaders/constants";
 import { getWindowLightsProgress } from "./dayNight";
 
@@ -204,16 +205,12 @@ export const lampGlowAccumGLSL = (worldPosExpr: string): string => `
   }
 `;
 
-/** Adds lamp glow to a lit material's indirect irradiance. Chains after any existing onBeforeCompile. */
+/** Adds lamp glow to a lit material's indirect irradiance. Idempotent. */
 export const patchStandardMaterialLampGlow = (material: THREE.Material, strength = 0.5): void => {
   if ((material as any).__lampGlowPatched) return;
-  const prev = material.onBeforeCompile;
-  const prevKey = material.customProgramCacheKey?.bind(material);
   // strength is baked into the GLSL: a different strength is a different program, and without it
   // in the key the second material silently reuses the first one's compiled shader.
-  material.customProgramCacheKey = () => (prevKey?.() ?? "") + "_lampGlow" + strength.toFixed(2);
-  material.onBeforeCompile = (shader, renderer) => {
-    prev?.call(material, shader, renderer);
+  chainMaterialPatch(material, "_lampGlow" + strength.toFixed(2), (shader) => {
     shader.uniforms.uLampGrid = LAMP_GRID_UNIFORMS.uLampGrid;
     shader.uniforms.uLampGridOrigin = LAMP_GRID_UNIFORMS.uLampGridOrigin;
     shader.uniforms.uLampGlowIntensity = LAMP_GRID_UNIFORMS.uLampGlowIntensity;
@@ -231,7 +228,6 @@ export const patchStandardMaterialLampGlow = (material: THREE.Material, strength
         ${lampGlowAccumGLSL("vLampWorldPos")}
         irradiance += lampGlowSum * ${strength.toFixed(2)};`,
       );
-  };
+  });
   (material as any).__lampGlowPatched = true;
-  material.needsUpdate = true;
 };

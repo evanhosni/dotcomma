@@ -115,7 +115,7 @@ export const getWaterMaterial = (): THREE.ShaderMaterial => {
       uTime: WATER_TIME_UNIFORM,
       uNightBlend: NIGHT_BLEND_UNIFORM,
       uSunDirection: { value: SUN_DIRECTION.clone() },
-      // Per mesh: each chunk's water writes its range right before its draw (TerrainRenderer syncLodFade).
+      // Per mesh: each chunk's water writes its range right before its draw (terrain/chunkObjects.ts syncLodFade).
       [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) },
       uCurveStart: _curvature.uniforms.uCurveStart,
       uCurveK: _curvature.uniforms.uCurveK,

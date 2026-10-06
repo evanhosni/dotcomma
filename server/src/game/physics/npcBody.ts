@@ -34,14 +34,31 @@ export interface NpcBody {
   dispose(): void;
 }
 
-/** Rounded so float noise doesn't re-publish every tick. */
-const VEL_QUANTUM = 0.01;
-export const quantizeVelocity = (v: number): number => Math.round(v / VEL_QUANTUM) * VEL_QUANTUM;
+/** Rounded to 0.01 u/s so float noise doesn't re-publish every tick. Divided rather than multiplied
+ *  by the quantum: n × 0.01 prints as 4.2700000000000005 on the wire, n / 100 as 4.27. */
+const VELOCITY_STEPS_PER_UNIT = 100;
+const quantizeVelocity = (v: number): number => Math.round(v * VELOCITY_STEPS_PER_UNIT) / VELOCITY_STEPS_PER_UNIT;
 
 export const SPAWN_CLEARANCE = 0.05;
 
-export const createNpcBody = (pw: PhysicsWorld, spec: ActorSpec, x: number, z: number): NpcBody | null => {
+/** Writes the pose at (x, y, z) with the velocity that moved it there from `last` over dt, then makes it `last`. */
+export const writeResolvedPose = (last: { x: number; y: number; z: number }, x: number, y: number, z: number, dt: number, out: Pose): Pose => {
+  out.x = x;
+  out.y = y;
+  out.z = z;
+  out.vx = quantizeVelocity((x - last.x) / dt);
+  out.vy = quantizeVelocity((y - last.y) / dt);
+  out.vz = quantizeVelocity((z - last.z) / dt);
+  last.x = x;
+  last.y = y;
+  last.z = z;
+  return out;
+};
+
+/** `hintFeetY`: where the body stands until the server's own ground is answered (PhysicsWorld.heightAt). */
+export const createNpcBody = (pw: PhysicsWorld, spec: ActorSpec, x: number, z: number, hintFeetY: number): NpcBody | null => {
   if (spec.body !== "kinematic") return null;
-  const shape = spec.collider ?? DEFAULT_COLLIDER;
-  return (spec.movement ?? "ground") === "free" ? new FreeBody(x, z, shape) : new GroundBody(pw, x, z, shape);
+  return (spec.movement ?? "ground") === "free"
+    ? new FreeBody(pw, x, z, hintFeetY)
+    : new GroundBody(pw, x, z, spec.collider ?? DEFAULT_COLLIDER, hintFeetY);
 };

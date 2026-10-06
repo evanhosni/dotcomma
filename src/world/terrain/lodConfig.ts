@@ -47,6 +47,12 @@ export interface LODLevel {
    *  true water as isolated specks while building the per-cell river lists cost ~90% of their build
    *  time. LOD3 (210u) keeps it: it still draws a wide river near the ocean. */
   carvesRivers: boolean;
+  /** Whether a collider LOD cuts the ground under bridge decks (computeVertexData step 7: the cut, the
+   *  landing approaches, the mouths); the visual-only LODs never do (their path has no decks). LOD2
+   *  KEEPS it: off, its cold build was 28–45% faster at bridge areas (enumerating a cell's decks), but
+   *  the bowed approach road rose up to 7.5u through a deck's landed end (2 of 15 decks, ≤ 0.8u on the
+   *  rest), a mound of several pixels at 420–600u that popped flat when LOD1 took over. */
+  cutsDecks: boolean;
   /** Clamp the biome blend fields to where the shader saturates (sdf ±1, presence 0..1) before
    *  upload — exact at every vertex, and it makes them interpolate as a plain cross-fade. Unclamped,
    *  a slot reads ±BIOME_SDF_FAR where no wall is in reach and ±(distance / feather half) elsewhere,
@@ -58,9 +64,9 @@ export interface LODLevel {
 }
 
 export const LOD_LEVELS: LODLevel[] = [
-  { level: 1, chunkSize: CHUNK_SIZE, segments: LOD1_SEGMENTS, maxDistance: LOD1_MAX_DISTANCE, hasCollider: true, skirtDepth: 30, carvesRivers: true, clampBlendFields: false },
-  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true, skirtDepth: 230, carvesRivers: true, clampBlendFields: false },
-  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false, skirtDepth: 460, carvesRivers: true, clampBlendFields: true },
-  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false, skirtDepth: 1000, carvesRivers: false, clampBlendFields: true },
-  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false, skirtDepth: 450, carvesRivers: false, clampBlendFields: true },
+  { level: 1, chunkSize: CHUNK_SIZE, segments: LOD1_SEGMENTS, maxDistance: LOD1_MAX_DISTANCE, hasCollider: true, skirtDepth: 30, carvesRivers: true, cutsDecks: true, clampBlendFields: false },
+  { level: 2, chunkSize: CHUNK_SIZE, segments: LOD2_SEGMENTS, maxDistance: LOD2_MAX_DISTANCE, hasCollider: true, skirtDepth: 230, carvesRivers: true, cutsDecks: true, clampBlendFields: false },
+  { level: 3, chunkSize: LOD3_CHUNK_SIZE, segments: LOD3_SEGMENTS, maxDistance: LOD3_MAX_DISTANCE, hasCollider: false, skirtDepth: 460, carvesRivers: true, cutsDecks: false, clampBlendFields: true },
+  { level: 4, chunkSize: LOD4_CHUNK_SIZE, segments: LOD4_SEGMENTS, maxDistance: LOD4_MAX_DISTANCE, hasCollider: false, skirtDepth: 1000, carvesRivers: false, cutsDecks: false, clampBlendFields: true },
+  { level: 5, chunkSize: LOD5_CHUNK_SIZE, segments: LOD5_SEGMENTS, maxDistance: LOD5_MAX_DISTANCE, hasCollider: false, skirtDepth: 450, carvesRivers: false, cutsDecks: false, clampBlendFields: true },
 ];

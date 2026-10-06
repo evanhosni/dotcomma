@@ -1,19 +1,21 @@
 import { computeVertexData } from "../../../src/utils/workers/vertexCompute";
 import { GRASS_BIOME } from "../../../src/world/domains/overworld/regions/city/biomes/grass/spec";
-import { PhysicsWorld, PHYSICS_DT } from "../game/physics/physicsWorld.js";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../../src/player/spec";
+import { PhysicsWorld } from "../game/physics/physicsWorld.js";
+import { TICK_SECONDS } from "../game/tick.js";
 import { Walker } from "../game/physics/walker.js";
 import { deg, findBiomePatch, findSlopeSpot, slopeAt, type SlopeSample } from "./terrainScan.js";
 
 /** `npm run physics:demo` — standalone: drop, gentle climb, steep slide. Nothing in the game depends on it. */
 
-const CAPSULE = { radius: 0.5, height: 2 }; // the player's dimensions
+const CAPSULE = { radius: PLAYER_RADIUS, height: PLAYER_HEIGHT };
 const WALK_SPEED = 5; // BEEBLE_SPEED
 
 const f = (n: number, d = 2) => n.toFixed(d).padStart(8);
 
 const settle = (w: Walker, pw: PhysicsWorld, ticks: number) => {
   for (let i = 0; i < ticks; i++) {
-    w.step(PHYSICS_DT, 0, 0);
+    w.step(TICK_SECONDS, 0, 0);
     pw.step();
   }
 };
@@ -22,11 +24,11 @@ const walk = (w: Walker, pw: PhysicsWorld, spot: SlopeSample, seconds: number, l
   const start = w.position();
   const startFeet = w.feetY();
   let minFeet = startFeet;
-  const ticks = Math.round(seconds / PHYSICS_DT);
+  const ticks = Math.round(seconds / TICK_SECONDS);
   console.log(`\n${label}: ${deg(spot.angle)} slope at (${spot.x.toFixed(1)}, ${spot.z.toFixed(1)}), pushing uphill at ${WALK_SPEED} u/s for ${seconds}s`);
   console.log("   tick   uphill(u)    feetY   analytic   gap    grounded  groundAngle");
   for (let i = 1; i <= ticks; i++) {
-    w.step(PHYSICS_DT, spot.ux * WALK_SPEED, spot.uz * WALK_SPEED);
+    w.step(TICK_SECONDS, spot.ux * WALK_SPEED, spot.uz * WALK_SPEED);
     pw.step();
     const p = w.position();
     const feet = w.feetY();
@@ -44,7 +46,7 @@ const walk = (w: Walker, pw: PhysicsWorld, spot: SlopeSample, seconds: number, l
 
 const main = async () => {
   const pw = await PhysicsWorld.create(); // initializes the physics domain's height function
-  console.log(`Rapier ready. dt = ${PHYSICS_DT}s (entity tick)`);
+  console.log(`Rapier ready. dt = ${TICK_SECONDS}s (entity tick)`);
 
   let t0 = performance.now();
   const patch = findBiomePatch(GRASS_BIOME.id);
@@ -70,7 +72,7 @@ const main = async () => {
   console.log(`\nDROP: capsule feet at ${(flat.height + dropFrom).toFixed(2)} over ground ${flat.height.toFixed(2)} at (${flat.x.toFixed(1)}, ${flat.z.toFixed(1)})`);
   console.log("   tick    feetY   analytic    gap    vy      grounded  step(ms)");
   for (let i = 1; i <= 25; i++) {
-    w.step(PHYSICS_DT, 0, 0);
+    w.step(TICK_SECONDS, 0, 0);
     const ms = pw.step();
     const feet = w.feetY();
     console.log(`  ${String(i).padStart(4)} ${f(feet)} ${f(flat.height)} ${f(feet - flat.height)} ${f(w.character.state.vy, 1)}   ${w.lastStep.walkableSupport ? "yes" : "no "}     ${ms.toFixed(3)}`);

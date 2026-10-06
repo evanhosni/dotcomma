@@ -4,7 +4,7 @@
  * the main thread only writes buffers.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "BUILD_CHUNK", id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, needCollider }
+ *   IN:  { type: "BUILD_CHUNK", id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, cutsDecks, needCollider }
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "CHUNK_BUILT", id, heights, biomeSdf, biomePresence (count × slots, interleaved),
  *          slots, riverBed, distRoad, distFreeway, freewayAlong, normals,
@@ -85,15 +85,17 @@ self.onmessage = (e: MessageEvent) => {
       return;
     }
 
-    const { id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, needCollider } = e.data;
+    const { id, segments, chunkSize, offsetX, offsetZ, visualOnly, carvesRivers, cutsDecks, needCollider } = e.data;
     const n: number = segments + 1;
     const count = n * n;
     const half = chunkSize / 2;
     // Far visual-only LODs skip flatten pads and the freeway runs, the farthest the river field too
-    // (computeVertexDataFar, LODLevel.carvesRivers, CLAUDE.md). A collider LOD always carves.
+    // (computeVertexDataFar, LODLevel.carvesRivers, CLAUDE.md). A collider LOD always carves, and cuts
+    // the ground under decks unless its LOD says not to (LODLevel.cutsDecks).
+    const cut = cutsDecks !== false;
     const compute = visualOnly
       ? (x: number, z: number) => computeVertexDataFar(x, z, carvesRivers !== false)
-      : computeVertexData;
+      : (x: number, z: number) => computeVertexData(x, z, cut);
     const slots = getBiomeSlots().length;
     // The ground under decks is cut as far beside them as this chunk's triangles reach.
     setDeckCutSpacing(chunkSize / segments);

@@ -2,7 +2,7 @@
  *  records (road paths, wet items, chains, crossings, mouths) the enumerator builds per window. */
 
 import type { PointXZ } from "../../math/types";
-import { type RiverEdge, type RiverPiece } from "../rivers/riverNetwork";
+import type { RiverEdge, RiverPiece } from "../rivers/types";
 
 export interface BridgePlacementParams {
   /** Deck extension onto the dry road past the footprint at each landed end (real units). */

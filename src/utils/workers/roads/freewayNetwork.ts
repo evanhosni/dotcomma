@@ -199,11 +199,6 @@ const buildNetGraph = (cx: number, cz: number): NetGraph => {
  *  only paths that stay in the trusted interior are kept. */
 const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDebug): void => {
   const { sites, junctions, walls, walkable, trusted } = g;
-  const wallBetween = new Map<string, number>();
-  for (let wi = 0; wi < walls.length; wi++) {
-    const w = walls[wi];
-    wallBetween.set(w.s < w.e ? `${w.s}-${w.e}` : `${w.e}-${w.s}`, wi);
-  }
   const compCells = new Map<number, NetSite[]>();
   for (let si = 0; si < sites.length; si++) {
     const s = sites[si];
@@ -215,6 +210,18 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
   }
   const comps = [...compCells.keys()].sort((p, q) => p - q);
   debug.comps = comps.length;
+  // Each city's cell-index box: two cities whose boxes lie more than FREEWAY_LINK_CELLS apart have no
+  // pair of cells that close, so the pair is skipped without comparing its cells.
+  const boxes = comps.map((c) => {
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const a of compCells.get(c)!) {
+      box[0] = Math.min(box[0], a.ix);
+      box[1] = Math.min(box[1], a.iz);
+      box[2] = Math.max(box[2], a.ix);
+      box[3] = Math.max(box[3], a.iz);
+    }
+    return box;
+  });
   const compJunctions = new Map<number, number[]>();
   for (let i = 0; i < junctions.length; i++) {
     const c = junctions[i].comp;
@@ -223,15 +230,76 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
     if (!list) compJunctions.set(c, (list = []));
     list.push(i);
   }
+  // A path is kept only if every junction on it is trusted, its two ends included: a pair with a city
+  // that has no trusted junction is not searched (the path it found would be dropped).
+  const routable = new Set<number>();
+  for (const [c, list] of compJunctions) if (list.some((i) => trusted(junctions[i].x, junctions[i].z))) routable.add(c);
+  // The search's hot fields as flat arrays (the same values, read without object hops).
+  const jx = new Float64Array(junctions.length);
+  const jz = new Float64Array(junctions.length);
+  const jcomp = new Int32Array(junctions.length);
+  for (let i = 0; i < junctions.length; i++) {
+    jx[i] = junctions[i].x;
+    jz[i] = junctions[i].z;
+    jcomp[i] = junctions[i].comp;
+  }
+  const wallS = new Int32Array(walls.length);
+  const wallE = new Int32Array(walls.length);
+  const wallLen = new Float64Array(walls.length);
+  for (let wi = 0; wi < walls.length; wi++) {
+    wallS[wi] = walls[wi].s;
+    wallE[wi] = walls[wi].e;
+    wallLen[wi] = walls[wi].len;
+  }
+  // Whether a pair HAS a path is a property of the graph, not of the search order: from P's junctions a
+  // search moves over walkable walls through non-city junctions only, to one of Q's. So the components of
+  // non-city junctions joined by walkable walls answer "no path" without the search, which explored
+  // everything reachable before giving up.
+  const freeRoot = new Int32Array(junctions.length);
+  for (let i = 0; i < junctions.length; i++) freeRoot[i] = i;
+  const freeFind = (i: number): number => {
+    while (freeRoot[i] !== i) i = freeRoot[i] = freeRoot[freeRoot[i]];
+    return i;
+  };
+  for (let wi = 0; wi < walls.length; wi++) {
+    if (walkable[wi] && jcomp[wallS[wi]] === -1 && jcomp[wallE[wi]] === -1) freeRoot[freeFind(wallS[wi])] = freeFind(wallE[wi]);
+  }
+  const touchesFree = new Map<number, Set<number>>();
+  const touchesCity = new Map<number, Set<number>>();
+  const touch = (m: Map<number, Set<number>>, c: number, v: number) => {
+    let set = m.get(c);
+    if (!set) m.set(c, (set = new Set()));
+    set.add(v);
+  };
+  for (let wi = 0; wi < walls.length; wi++) {
+    if (!walkable[wi]) continue;
+    const cs = jcomp[wallS[wi]];
+    const ce = jcomp[wallE[wi]];
+    if (cs !== -1 && ce === -1) touch(touchesFree, cs, freeFind(wallE[wi]));
+    else if (ce !== -1 && cs === -1) touch(touchesFree, ce, freeFind(wallS[wi]));
+    else if (cs !== -1 && ce !== -1 && cs !== ce) {
+      touch(touchesCity, cs, ce);
+      touch(touchesCity, ce, cs);
+    }
+  }
+  const pathExists = (P: number, Q: number): boolean => {
+    if (touchesCity.get(P)?.has(Q)) return true;
+    const fp = touchesFree.get(P);
+    const fq = touchesFree.get(Q);
+    if (!fp || !fq) return false;
+    for (const r of fp) if (fq.has(r)) return true;
+    return false;
+  };
   const heap: number[] = [];
   const dist = new Float64Array(junctions.length);
   const prev = new Int32Array(junctions.length);
+  // The wall each junction was last reached over (always the one wall between it and prev).
+  const prevWall = new Int32Array(junctions.length);
   // dist/done hold for the current pair only where stamped with its epoch.
   const reached = new Int32Array(junctions.length);
   const doneAt = new Int32Array(junctions.length);
   let epoch = 0;
-  const less = (a: number, b: number) =>
-    dist[a] < dist[b] || (dist[a] === dist[b] && (junctions[a].x < junctions[b].x || (junctions[a].x === junctions[b].x && junctions[a].z < junctions[b].z)));
+  const less = (a: number, b: number) => dist[a] < dist[b] || (dist[a] === dist[b] && (jx[a] < jx[b] || (jx[a] === jx[b] && jz[a] < jz[b])));
   const push = (v: number) => {
     heap.push(v);
     let i = heap.length - 1;
@@ -269,6 +337,12 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
     for (let qi = pi + 1; qi < comps.length; qi++) {
       const P = comps[pi];
       const Q = comps[qi];
+      const bp = boxes[pi];
+      const bq = boxes[qi];
+      if (Math.max(bq[0] - bp[2], bp[0] - bq[2], bq[1] - bp[3], bp[1] - bq[3]) > FREEWAY_LINK_CELLS) {
+        debug.pairs++;
+        continue;
+      }
       const pc = compCells.get(P)!;
       const qc = compCells.get(Q)!;
       let best = Infinity;
@@ -284,6 +358,11 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
       debug.pairs++;
       if (best > FREEWAY_LINK_CELLS) continue;
       debug.linked++;
+      if (!pathExists(P, Q)) {
+        debug.noPath++;
+        continue;
+      }
+      if (!routable.has(P) || !routable.has(Q)) continue;
       epoch++;
       heap.length = 0;
       for (const i of compJunctions.get(P) ?? []) {
@@ -297,22 +376,24 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
         const u = pop();
         if (doneAt[u] === epoch) continue;
         doneAt[u] = epoch;
-        if (junctions[u].comp === Q) {
+        if (jcomp[u] === Q) {
           target = u;
           break;
         }
-        for (const wi of junctions[u].walls) {
+        const uWalls = junctions[u].walls;
+        for (let k = 0; k < uWalls.length; k++) {
+          const wi = uWalls[k];
           if (!walkable[wi]) continue;
-          const w = walls[wi];
-          const v = w.s === u ? w.e : w.s;
+          const v = wallS[wi] === u ? wallE[wi] : wallS[wi];
           if (doneAt[v] === epoch) continue;
-          const jv = junctions[v];
-          if (jv.comp !== -1 && jv.comp !== P && jv.comp !== Q) continue; // a third city: relay
-          if (jv.comp === P) continue; // never back along the start city's boundary
-          const nd = dist[u] + w.len;
+          const cv = jcomp[v];
+          if (cv !== -1 && cv !== P && cv !== Q) continue; // a third city: relay
+          if (cv === P) continue; // never back along the start city's boundary
+          const nd = dist[u] + wallLen[wi];
           if (reached[v] !== epoch || nd < dist[v]) {
             dist[v] = nd;
             prev[v] = u;
+            prevWall[v] = wi;
             reached[v] = epoch;
             push(v);
           }
@@ -326,7 +407,7 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
       let length = 0;
       let inside = true;
       for (let u = target; prev[u] !== -1; u = prev[u]) {
-        const wi = wallBetween.get(u < prev[u] ? `${u}-${prev[u]}` : `${prev[u]}-${u}`)!;
+        const wi = prevWall[u];
         chain.push(wi);
         length += walls[wi].len;
         if (!trusted(junctions[u].x, junctions[u].z) || !trusted(junctions[prev[u]].x, junctions[prev[u]].z)) inside = false;

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { availableParallelism } from "node:os";
 import { closeDb, getDb, resolveDatabasePath } from "./data/db.js";
 import { TICK_MS } from "./game/tick.js";
 import { PhysicsWorld } from "./game/physics/physicsWorld.js";
@@ -16,13 +17,22 @@ getDb();
 console.log(`[db] ${resolveDatabasePath()}`);
 
 // Awaited before the transport accepts a single registration (WASM init is async).
-const physics = await PhysicsWorld.create();
-console.log("[physics] rapier ready");
+// The worker sits beside this entry: src/game/physics/*.ts under tsx, dist/game/physics/*.js in the bundle (--outbase=src).
+// CHUNK_GENERATOR=inline builds on the tick's thread instead. The worker stays the default on ONE vCPU too:
+// MEASURED pinned to one core (10 fresh areas × 8 NPCs), ticks over 100ms 0–5 with the worker vs 9–30 inline,
+// worst tick 90–178 vs 1121–1162ms, NPCs ready after a median 0.5 vs 2.2s — the OS time-slicing the two threads
+// beats the tick doing every cold sample itself.
+const chunkGeneratorWorker =
+  process.env.CHUNK_GENERATOR === "inline"
+    ? undefined
+    : new URL(`./game/physics/chunkGenerator.worker${import.meta.url.endsWith(".ts") ? ".ts" : ".js"}`, import.meta.url);
+const physics = await PhysicsWorld.create(undefined, { chunkGeneratorWorker });
+console.log(`[physics] rapier ready — chunk generation ${chunkGeneratorWorker ? "on a worker" : "inline"}, ${availableParallelism()} CPU(s)`);
 
 const server = http.createServer(createApp());
 const { wss, world } = attachWebSocketTransport(server, physics);
 
-// Deliberately a coarse timer, NOT the game tick (see world.ts write policy).
+// Deliberately a coarse timer, NOT the game tick (see the write policy in game/persistence.ts).
 const saveSweep = setInterval(() => world.flushDirty(), SAVE_INTERVAL_MS / 3);
 saveSweep.unref();
 

@@ -5,14 +5,16 @@
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { distanceToSegment } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
-import { CITY_WIGGLE_AMP, cityDistrictPitch, cityRowBoundary, cityRowEdgeZ, citySegBoundary, citySegEdgeX, findCityRow, findCitySeg, wallDrownedAt } from "../roads/cityTerrain";
+import { CITY_WIGGLE_AMP, cityDistrictPitch, cityRowBoundary, cityRowEdgeZ, citySegBoundary, citySegEdgeX, findCityRow, findCitySeg } from "../roads/cityDistricts";
+import { wallDrownedAt } from "../roads/cityWaterfront";
 import { domainConfig } from "../computeConfig";
 import { getNetwork } from "../roads/freewayNetwork";
-import { unwarp, warp } from "../noise";
+import { unwarp, warp, warpMax } from "../noise";
 import { riverFieldAt, riverSample, riverStraight, riverStraightNear } from "../rivers/riverField";
-import { RIVER_MEANDER_AMP, type RiverEdge, type RiverPiece } from "../rivers/riverNetwork";
+import { RIVER_MEANDER_AMP } from "../rivers/constants";
+import type { RiverEdge, RiverPiece } from "../rivers/types";
 import { getBiomeGrid, getZoneWalls, isCanonicalWall, zoneAtWarped } from "../voronoi";
-import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_SAMPLE, warpMax } from "./constants";
+import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_SAMPLE } from "./constants";
 import { mergeIntervals, segSegDistance } from "./polyline";
 import type { BridgeWindow, RoadPath, WindowScan } from "./types";
 
@@ -80,7 +82,7 @@ const chainLegs = (legs: number[][], kind: RoadPath["kind"], w: BridgeWindow, ou
   const less = (ax: number, az: number, bx: number, bz: number) => ax < bx || (ax === bx && az < bz);
   const dryness = (x: number, z: number): number => {
     if (seamDryness) return seamDryness(x, z);
-    riverFieldAt(x, z);
+    riverFieldAt(x, z, false, false);
     return Math.min(riverSample.distance, 1e9);
   };
   const nodeKey = (x: number, z: number) => `${Math.round(x * 100)},${Math.round(z * 100)}`;
@@ -281,7 +283,7 @@ export const withoutCarriedStretches = (paths: RoadPath[]): RoadPath[] => {
     let part: RoadPath | null = null;
     let lastDry = false;
     for (let i = 0; i < n; i++) {
-      riverFieldAt(p.wx[i], p.wz[i]);
+      riverFieldAt(p.wx[i], p.wz[i], false, false);
       const dry = !(riverSample.distance < reach);
       let carried = false;
       if (!dry) {

@@ -14,10 +14,13 @@ import type { RoadPath } from "../bridges/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
-import { cityRowEdgeZ, citySegEdgeX, cityWiggleSlope, getCityDistrict, rowWiggle, segWiggle } from "../roads/cityTerrain";
+import { cityRowEdgeZ, citySegEdgeX, cityWiggleSlope, getCityDistrict, rowWiggle, segWiggle } from "../roads/cityDistricts";
 import { FREEWAY_LINK_CELLS, networkOf } from "../roads/freewayNetwork";
 import { biomeSiteAt, getBiomeContext, cityWallsOf } from "../voronoi";
-import { RIVER_BLOCK_WATER, RIVER_MEANDER_AMP, riverCellEntry, riverDebug, type RiverEdge, riverEdgeBlocked, riverKeepOff, type RiverPiece } from "./riverNetwork";
+import { RIVER_BLOCK_WATER, RIVER_MEANDER_AMP, riverKeepOff } from "./constants";
+import { riverCellEntry, riverDebug } from "./riverNetwork";
+import { riverEdgeBlocked } from "./riverPieceRules";
+import type { RiverEdge, RiverPiece } from "./types";
 
 /** The road layer (riverPieceSuppressed): where a road runs within ALIGN of the river's direction
  *  inside its footprint for ALONG_MIN or more — longer than a deck should be — the river is not

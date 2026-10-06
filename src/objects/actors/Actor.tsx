@@ -3,11 +3,11 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { _quantization } from "../../vfx/quantization";
-import { framePhaseFromCoords, getDistance2DSq } from "../../utils/utils";
+import { framePhaseFromCoords, getDistance2DSq, stopMatrixUpdatesWhenFrozen } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
 import { _spawnFade } from "../../vfx/spawnFade";
 import { PosePlayback } from "../../net/entities/posePlayback";
-import { useSyncedEntity, type SyncHandle } from "../../net/entities/useSyncedEntity";
+import { useSyncedEntity, type PuppetTarget, type SyncHandle } from "../../net/entities/useSyncedEntity";
 import type { MotionOutput } from "./state/motion";
 import type { StateMachineHandle } from "./state/useStateMachine";
 
@@ -29,6 +29,12 @@ const DESPAWN_DISTANCE_FACTOR = 1.2;
 // A blocked actor retries at its next check; deactivation is never throttled.
 const COLLIDER_ACTIVATION_WINDOW_S = 0.05;
 let lastColliderActivationTime = -Infinity;
+
+/** A distance gate with hysteresis: once active it holds out to `gateDistance + hysteresis`, so it can't flicker. */
+export const withinGate = (distanceSq: number, gateDistance: number, active: boolean, hysteresis: number): boolean => {
+  const reach = gateDistance + (active ? hysteresis : 0);
+  return distanceSq < reach * reach;
+};
 
 // ONE frame subscriber for every mounted actor (driven by ActorPool's useFrame):
 // per-instance useFrames were hundreds of subscribers plus churn per spawn batch.
@@ -170,6 +176,15 @@ export const useActorLifecycle = ({
 
   const sync = useSyncedEntity(serverSynced ? id : null, descriptorId ?? "unknown", coordinates);
   const playback = useRef(new PosePlayback()).current;
+  // One per actor, rewritten every frame: hundreds of actors allocated one each per frame.
+  const frameCtx = useRef<ActorFrameContext>({
+    distanceSq: Infinity,
+    gatesChecked: false,
+    visible: true,
+    sync: null,
+    syncRenderTime: NaN,
+    spawnFade: 1,
+  }).current;
 
   // Per-life constants derived per RENDER, not per frame — this is the hottest loop in the project.
   const killDistance = despawnDistance ?? renderDistance * DESPAWN_DISTANCE_FACTOR;
@@ -182,6 +197,99 @@ export const useActorLifecycle = ({
   const staticPosition = useRef(new THREE.Vector3()).current;
   if (!positionRef) staticPosition.set(coordinates[0], coordinates[1], coordinates[2]);
 
+  const destroy = (): void => {
+    destroyedRef.current = true;
+    onDestroy(id);
+  };
+
+  /** The fade starts when the group first exists (a Building or a pool-miss ModelActor renders null until
+   *  its assets land) and before its first draw: useFrame precedes render. A `fadeOut` actor dithers out
+   *  past renderDistance and is destroyed once gone. Returns this frame's visibility. */
+  const advanceSpawnFade = (fadeRoot: THREE.Group, distanceSq: number): number => {
+    const fade = fadeRef.current;
+    spawnFade.setRoot(fadeRoot);
+    if (!fade.started) {
+      fade.started = true;
+      spawnFade.fadeIn(0);
+    }
+    if (fadeOut) {
+      const beyond = distanceSq > renderDistanceSq;
+      if (beyond !== fade.fadingOut) {
+        fade.fadingOut = beyond;
+        if (beyond) spawnFade.fadeOut();
+        else spawnFade.fadeIn();
+      }
+    }
+    if (!spawnFade.fading) return 1;
+    const visibility = spawnFade.update();
+    if (fade.fadingOut && visibility <= 0) destroy();
+    return visibility;
+  };
+
+  /** The frustum test, held true over the warm-up frames; written to the group only on change. */
+  const updateVisibility = (group: THREE.Group | null, position: THREE.Vector3, distanceSq: number): boolean => {
+    if (boundsRadius === undefined) return true;
+    boundsRef.center.copy(position);
+    boundsRef.radius = paddedBoundsRadius;
+    let visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
+    if (forceVisibleFramesRef.current > 0) {
+      forceVisibleFramesRef.current--;
+      visible = true;
+    }
+    if (group && lastVisibleRef.current !== visible) {
+      lastVisibleRef.current = visible;
+      group.visible = visible;
+    }
+    return visible;
+  };
+
+  const updateColliderGate = (distanceSq: number, time: number): void => {
+    const should = withinGate(distanceSq, colliderDistance!, collidersActiveRef.current, gateHysteresis);
+    if (should === collidersActiveRef.current) return;
+    const throttled = should && throttleColliderActivation;
+    if (throttled && time - lastColliderActivationTime <= COLLIDER_ACTIVATION_WINDOW_S) return;
+    if (throttled) lastColliderActivationTime = time;
+    collidersActiveRef.current = should;
+    setCollidersActive(should);
+  };
+
+  const updateNearGate = (distanceSq: number): void => {
+    const near = withinGate(distanceSq, nearDistance!, nearActiveRef.current, gateHysteresis);
+    if (near === nearActiveRef.current) return;
+    nearActiveRef.current = near;
+    setNearActive(near);
+  };
+
+  // matrixWorldAutoUpdate = false stops the renderer's per-frame updateMatrixWorld from descending into
+  // the subtree; the near gate re-enables it, which covers every dynamic case (hinges, children,
+  // collider mounts, raycasts).
+  const freezeMatricesOnce = (group: THREE.Group): void => {
+    if (matricesFrozenRef.current) return;
+    matricesFrozenRef.current = true;
+    group.updateWorldMatrix(true, true);
+    group.matrixAutoUpdate = false;
+    stopMatrixUpdatesWhenFrozen(group);
+    group.matrixWorldAutoUpdate = false;
+  };
+
+  // A culled actor's subtree (a beeble: ~37 nodes incl. bones) skips the renderer's matrix update too;
+  // the frame it turns visible, the update runs before its draw. Frozen actors additionally stay frozen
+  // outside the near gate.
+  const updateMatrixLiveness = (group: THREE.Group, visible: boolean): void => {
+    const live = visible && (!freezeMatrices || !matricesFrozenRef.current || nearActiveRef.current);
+    if (group.matrixWorldAutoUpdate === live) return;
+    if (!live) stopMatrixUpdatesWhenFrozen(group);
+    group.matrixWorldAutoUpdate = live;
+  };
+
+  // Written only on change: the rotation setter recomputes the quaternion (trig) and a static actor
+  // (every building) holds one pose for its whole life.
+  const applyServerPose = (group: THREE.Group, t: PuppetTarget): void => {
+    const p = group.position;
+    if (p.x !== t.x || p.y !== t.y || p.z !== t.z) p.set(t.x, t.y, t.z);
+    if (group.rotation.y !== t.ry) group.rotation.y = t.ry;
+  };
+
   const frameUpdaterRef = useRef<ActorFrameUpdater>(() => {});
   frameUpdaterRef.current = (state, delta) => {
     // onDestroy fires ONCE: re-firing until the pool unmounts us rewrote the
@@ -191,106 +299,26 @@ export const useActorLifecycle = ({
     const position = positionRef?.current ?? staticPosition;
     const distanceSq = getDistance2DSq(state.camera.position, position);
     distanceSqRef.current = distanceSq;
-
     if (distanceSq > killDistanceSq) {
-      destroyedRef.current = true;
-      onDestroy(id);
+      destroy();
       return;
     }
 
-    // The fade starts when the group first exists (a Building or a pool-miss ModelActor
-    // renders null until its assets land) and before its first draw: useFrame precedes render.
-    let fadeVisibility = 1;
-    const fadeRoot = groupRef.current;
-    if (fadeRoot) {
-      const fade = fadeRef.current;
-      spawnFade.setRoot(fadeRoot);
-      if (!fade.started) {
-        fade.started = true;
-        spawnFade.fadeIn(0);
-      }
-      if (fadeOut) {
-        const beyond = distanceSq > renderDistanceSq;
-        if (beyond !== fade.fadingOut) {
-          fade.fadingOut = beyond;
-          if (beyond) spawnFade.fadeOut();
-          else spawnFade.fadeIn();
-        }
-      }
-      if (spawnFade.fading) {
-        fadeVisibility = spawnFade.update();
-        if (fade.fadingOut && fadeVisibility <= 0) {
-          destroyedRef.current = true;
-          onDestroy(id);
-          return;
-        }
-      }
-    }
-
-    let visible = true;
-    if (boundsRadius !== undefined) {
-      boundsRef.center.copy(position);
-      boundsRef.radius = paddedBoundsRadius;
-      visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
-      if (forceVisibleFramesRef.current > 0) {
-        forceVisibleFramesRef.current--;
-        visible = true;
-      }
-      if (groupRef.current && lastVisibleRef.current !== visible) {
-        lastVisibleRef.current = visible;
-        groupRef.current.visible = visible;
-      }
-    }
-
-    // matrixWorldAutoUpdate = false stops the renderer's per-frame updateMatrixWorld
-    // from descending into the subtree; the near gate re-enables it, which covers
-    // every dynamic case (hinges, children, collider mounts, raycasts).
     const group = groupRef.current;
-    if (freezeMatrices && group && !matricesFrozenRef.current) {
-      matricesFrozenRef.current = true;
-      group.updateWorldMatrix(true, true);
-      group.matrixAutoUpdate = false;
-      group.matrixWorldAutoUpdate = false;
-    }
+    const fadeVisibility = group ? advanceSpawnFade(group, distanceSq) : 1;
+    if (destroyedRef.current) return;
+
+    const visible = updateVisibility(group, position, distanceSq);
+    if (freezeMatrices && group) freezeMatricesOnce(group);
 
     const checked = !everCheckedRef.current || frameRef.current++ % checkInterval === 0;
     if (checked) {
       everCheckedRef.current = true;
-
-      if (colliderDistance !== undefined) {
-        const reach = colliderDistance + (collidersActiveRef.current ? gateHysteresis : 0);
-        const should = distanceSq < reach * reach;
-        if (should !== collidersActiveRef.current) {
-          const time = state.clock.elapsedTime;
-          const blocked =
-            should &&
-            throttleColliderActivation &&
-            time - lastColliderActivationTime <= COLLIDER_ACTIVATION_WINDOW_S;
-          if (!blocked) {
-            if (should && throttleColliderActivation) lastColliderActivationTime = time;
-            collidersActiveRef.current = should;
-            setCollidersActive(should);
-          }
-        }
-      }
-
-      if (nearDistance !== undefined) {
-        const reach = nearDistance + (nearActiveRef.current ? gateHysteresis : 0);
-        const near = distanceSq < reach * reach;
-        if (near !== nearActiveRef.current) {
-          nearActiveRef.current = near;
-          setNearActive(near);
-        }
-      }
+      if (colliderDistance !== undefined) updateColliderGate(distanceSq, state.clock.elapsedTime);
+      if (nearDistance !== undefined) updateNearGate(distanceSq);
     }
 
-    // A culled actor's subtree (a beeble: ~37 nodes incl. bones) skips the renderer's matrix
-    // update too; the frame it turns visible, the update runs before its draw. Frozen actors
-    // additionally stay frozen outside the near gate.
-    if (group) {
-      const live = visible && (!freezeMatrices || !matricesFrozenRef.current || nearActiveRef.current);
-      if (group.matrixWorldAutoUpdate !== live) group.matrixWorldAutoUpdate = live;
-    }
+    if (group) updateMatrixLiveness(group, visible);
 
     // Snapshot interpolation (net/entities/interpolation.ts): drawn as it was
     // INTERP_DELAY_MS ago on the SERVER clock — arrival time plays no part, so
@@ -299,24 +327,24 @@ export const useActorLifecycle = ({
     if (synced) playback.sample(sync.entity!, delta, sync.target);
     else playback.reset();
 
-    onFrame?.(state, delta, {
-      distanceSq,
-      gatesChecked: checked,
-      visible,
-      sync,
-      syncRenderTime: playback.renderTime,
-      spawnFade: fadeVisibility,
-    });
+    if (onFrame) {
+      frameCtx.distanceSq = distanceSq;
+      frameCtx.gatesChecked = checked;
+      frameCtx.visible = visible;
+      frameCtx.sync = sync;
+      frameCtx.syncRenderTime = playback.renderTime;
+      frameCtx.spawnFade = fadeVisibility;
+      onFrame(state, delta, frameCtx);
+    }
 
     // The server's pose wins over anything the component's logic wrote.
-    if (synced && group && sync.target.valid) {
-      const t = sync.target;
-      // Written only on change: the rotation setter recomputes the quaternion (trig) and a static
-      // actor (every building) holds one pose for its whole life.
-      const p = group.position;
-      if (p.x !== t.x || p.y !== t.y || p.z !== t.z) p.set(t.x, t.y, t.z);
-      if (group.rotation.y !== t.ry) group.rotation.y = t.ry;
-    }
+    if (synced && group && sync.target.valid) applyServerPose(group, sync.target);
+  };
+
+  const resetFade = (): void => {
+    spawnFade.release();
+    fadeRef.current.started = false;
+    fadeRef.current.fadingOut = false;
   };
 
   useEffect(() => {
@@ -324,16 +352,12 @@ export const useActorLifecycle = ({
     return () => {
       frameUpdaters.delete(frameUpdaterRef);
       // A pooled clone must go back on its base materials.
-      spawnFade.release();
-      fadeRef.current.started = false;
-      fadeRef.current.fadingOut = false;
+      resetFade();
     };
   }, []);
 
   const resetLife = useRef(() => {
-    spawnFade.release();
-    fadeRef.current.started = false;
-    fadeRef.current.fadingOut = false;
+    resetFade();
     forceVisibleFramesRef.current = forceVisibleFrames;
     destroyedRef.current = false;
   }).current;
