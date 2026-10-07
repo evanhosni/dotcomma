@@ -42,3 +42,11 @@ export const RIVER_BED_SLOPE_END_DEG = 40;
  *  shader's fade, the bed limit's marches): a domed biome (the mountain). Grass, dunes and snow
  *  stay under the bed — yielding, they cut into it in wedges and strips reaching the water. */
 export const bedYieldsToSteepGround = (noise: { dome?: unknown } | undefined): boolean => !!noise?.dome;
+
+/** The riverBedDistance ATTRIBUTE's "no river" value. The pipeline reports Infinity out of a river's
+ *  reach, but a vertex attribute must stay FINITE: a triangle with one Infinity vertex interpolates to
+ *  NaN over its whole area, and Metal's fast-math shaders take `NaN < RIVER_BED_REACH` as true — every
+ *  triangle straddling the field's reach (chunk edges, the far ring around each river) painted the
+ *  riverbed as a dark triangle on the Mac (D3D's IEEE compare hid it on Windows). Far enough that a
+ *  triangle mixing it with any in-field distance never crosses the paint reach. */
+export const RIVER_BED_FAR = 1e4;

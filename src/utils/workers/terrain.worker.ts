@@ -12,6 +12,7 @@
  */
 
 import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, getBiomeSlots, setDeckCutSpacing } from "./vertexCompute";
+import { RIVER_BED_FAR } from "../../world/shaders/constants";
 
 let initialized = false;
 
@@ -131,7 +132,7 @@ self.onmessage = (e: MessageEvent) => {
           biomePresence[i * slots + s] = result.biomePresence[s];
           riverbedSdf[i * slots + s] = result.riverbedSdf[s];
         }
-        riverBed[i] = result.riverBedDistance;
+        riverBed[i] = Math.min(result.riverBedDistance, RIVER_BED_FAR);
         distRoad[i] = result.distanceToRoadCenter;
         distFreeway[i] = result.distanceToFreewayCenter;
         freewayAlong[i] = result.freewayAlong;

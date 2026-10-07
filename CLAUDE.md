@@ -107,6 +107,7 @@ Rule of thumb: unique geometry, interaction, or behavior → actor; many + ident
   - Only LOD3–5 clamp the blend fields.
   - `biomeSdf`/`biomePresence` are returned in their OWN buffers, because the pad recursion clobbers the scratch.
   - Widths resolve biome → region → domain default.
+  - Every vertex attribute is FINITE (`RIVER_BED_FAR`, `BIOME_SDF_FAR`): one Infinity vertex makes the whole triangle NaN, and Metal's fast-math compares took it as true (the Mac's dark seam triangles).
 
   → workers/DECISIONS.md
 - **Heights have a single source of truth:** `src/utils/workers/vertexCompute.ts` (`computeVertexData`). Every worker, the main thread (`world/terrain/vertexData.ts`) and the server run it. Biome heights come from the spec's `noise`; bespoke biomes (city) have a branch in the pipeline. Never add a second height code path.
