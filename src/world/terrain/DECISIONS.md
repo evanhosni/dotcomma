@@ -1,0 +1,7 @@
+# Terrain renderer — decisions
+
+> Moved verbatim from CLAUDE.md (Oct 2026) to keep it under the context limit. Section names quoted in the text ("Blending", "Rivers", …) refer to the other decision docs listed in CLAUDE.md under "Where the docs are".
+
+## LOD swaps cross-fade
+
+5. LOD swaps CROSS-FADE (`lodSwaps.ts`, `LOD_FADE_SECONDS` 0.35): when every replacement of a component of old chunks is built, the old and new chunks are drawn TOGETHER with a complementary screen-door dither — new chunks keep the pixels whose screen-door threshold (`world/shaders/lodFade.ts`, the objects' 4×4 Bayer pattern) is in [0, p), old ones [p, 2), one progress p — then the olds are destroyed. Each pixel is drawn by exactly one of them (no hole, no z-fight, no double water: the water child uses the same range), and each threshold value sees a complete tiling, so skirts cover exactly as a static tiling. A fade whose old chunk is desired again runs BACKWARDS; a fading chunk never starts another swap until its fade ends; a swap whose old and new chunks cover different areas is instant (as before). Chunks mid-fade draw the terrain's FADE TWIN (`createLodFadeMaterial`, the `TERRAIN_LOD_FADE` define): `discard` in the one opaque program would cost every terrain fragment its early depth test, so only fading chunks pay it; the twin's program is linked during the load by a zero-area warm mesh. Colliders keep their lifecycle (built with the chunk, removed when it is destroyed), so the old ground lingers ≤ 0.35s longer; physics never sees the fade

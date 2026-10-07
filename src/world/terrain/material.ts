@@ -71,6 +71,7 @@ export const getMaterial = async () => {
       "varying float vDistanceToRoadCenter;",
       "varying float vDistanceToFreewayCenter;",
       "varying float vFreewayAlong;",
+      "varying float vUnderwaterDepth;",
       "varying vec2 vUv;",
       "varying vec2 vWorldUv;",
       "varying float vSlopeAngle;",

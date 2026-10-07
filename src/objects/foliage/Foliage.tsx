@@ -169,6 +169,7 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
   swaySpeed = 1.2,
   renderDistance = 500,
   seed = "foliage",
+  underwater,
   quantization,
   serverSynced,
   plant,
@@ -228,8 +229,9 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
       slopeRange,
       slopeBlend,
       roadDistanceRange,
+      underwater: underwater ? { height } : undefined,
     }),
-    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange), JSON.stringify(roadDistanceRange)],
+    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange), JSON.stringify(roadDistanceRange), underwater, underwater ? height : 0],
   );
 
   useEffect(() => {

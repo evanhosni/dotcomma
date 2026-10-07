@@ -233,12 +233,21 @@ export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, r
     copyEdgeToSkirt(arr, 1, perimeterIndices, mainVertCount);
   }
 
+  // How deep the ground lies under drawn water (0 where dry): biome frags shade a lakebed by it.
+  const underwater = ensureAttribute(geom, "underwaterDepth");
+  const waterHeights = result.waterHeights;
+  for (let i = 0; i < mainVertCount; i++) {
+    const depth = waterHeights ? waterHeights[i] - result.heights[i] : 0;
+    underwater[i] = depth > 0 ? depth : 0;
+  }
+  copyEdgeToSkirt(underwater, 1, perimeterIndices, mainVertCount);
+
   // Skirt normals copy the edge so the skirt never triggers the triplanar branch.
   const normals = geom.attributes.normal.array as Float32Array;
   normals.set(result.normals, 0);
   copyEdgeToSkirt(normals, 3, perimeterIndices, mainVertCount);
 
-  for (const name of ["biomeSdf0", "biomeSdf1", "biomePresence0", "biomePresence1", "riverbedSdf0", "riverbedSdf1", ...SCALAR_FIELDS.map(([a]) => a)]) {
+  for (const name of ["biomeSdf0", "biomeSdf1", "biomePresence0", "biomePresence1", "riverbedSdf0", "riverbedSdf1", "underwaterDepth", ...SCALAR_FIELDS.map(([a]) => a)]) {
     (geom.getAttribute(name) as THREE.BufferAttribute).needsUpdate = true;
   }
   geom.attributes.position.needsUpdate = true;

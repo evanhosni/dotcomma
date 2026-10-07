@@ -13,6 +13,8 @@ import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
 import { seedRand, smoothstep } from "../math/_math";
 import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { DomainConfig, initCompute, computeVertexData, biomeWeightOf, riverKeepOff } from "./vertexCompute";
+import { footprintsNear, insideFootprint, type Footprint } from "./buildingFootprints";
+import { padsApplyIn } from "./flattenPads";
 
 const GRID_STEP = 2; // world units between terrain samples
 // Same visibility floor as the terrain shader's per-biome branch.
@@ -26,6 +28,14 @@ const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation e
 const RIVER_BED_PLANT_RAMP = RIVER_BED_BLEND_WIDTH;
 // Stored in place of an out-of-reach Infinity: a bilinear weight of 0 times Infinity is NaN.
 const RIVER_BED_FAR = 1e4;
+/** Blades stay this far outside a building's silhouette (their width and sway): inside one they grew
+ *  up through the floor. */
+const FOOTPRINT_MARGIN = 0.6;
+/** Underwater plants: the shallowest water they grow in, and how far under the surface a tip stays. */
+const UNDERWATER_MIN_DEPTH = 1.5;
+const UNDERWATER_TIP_CLEARANCE = 0.8;
+/** An underwater plant cut shorter than this fraction of its height to fit the depth is not placed. */
+const UNDERWATER_MIN_SCALE = 0.25;
 
 let initialized = false;
 
@@ -116,8 +126,10 @@ interface FoliageGrid {
   biomeWeights: Float32Array;
   roadDistances: Float32Array;
   submerged: Float32Array; // 1 where the water surface sits above the ground (lake, river channel)
+  waterDepth: Float32Array; // how far the water surface stands above the ground (0 when dry)
   riverBed: Float32Array; // riverBedDistance, capped at RIVER_BED_FAR
   nearRiverBed: boolean; // some node inside the plant ramp: only then is it evaluated per blade
+  padBiome: boolean; // some node in a biome flatten pads (buildings) stand in: only then are footprints looked up
 }
 
 // A BAND upgrade of a held chunk re-runs placement (the RNG stream is the only way to reach
@@ -127,7 +139,7 @@ const GRID_CACHE_MAX = 256;
 const gridCache = new Map<string, FoliageGrid>();
 
 /** The grid's per-node fields (slopes are derived from the heights). */
-const NODE_FIELDS = ["heights", "biomeWeights", "roadDistances", "submerged", "riverBed"] as const;
+const NODE_FIELDS = ["heights", "biomeWeights", "roadDistances", "submerged", "waterDepth", "riverBed"] as const;
 
 /** A cached neighbor's node shared with this chunk's node (gx, gz), or null: neighboring chunks share their
  *  border row/column of nodes (the same world points — 128 of a 64u chunk's 1089 evaluations). */
@@ -147,11 +159,13 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
   const biomeWeights = new Float32Array(gridNodes * gridNodes);
   const roadDistances = new Float32Array(gridNodes * gridNodes);
   const submerged = new Float32Array(gridNodes * gridNodes);
+  const waterDepth = new Float32Array(gridNodes * gridNodes);
   const riverBed = new Float32Array(gridNodes * gridNodes);
   const rampEnd = riverKeepOff() - RIVER_BED_FULL_INSET + RIVER_BED_PLANT_RAMP;
   let nearRiverBed = false;
+  let padBiome = false;
 
-  const fields = { heights, biomeWeights, roadDistances, submerged, riverBed };
+  const fields = { heights, biomeWeights, roadDistances, submerged, waterDepth, riverBed };
   for (let gz = 0; gz < gridNodes; gz++) {
     for (let gx = 0; gx < gridNodes; gx++) {
       const i = gz * gridNodes + gx;
@@ -160,6 +174,7 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
         const [grid, j] = shared;
         for (const f of NODE_FIELDS) fields[f][i] = grid[f][j];
         if (riverBed[i] < rampEnd) nearRiverBed = true;
+        if (grid.padBiome) padBiome = true;
         continue;
       }
       const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
@@ -168,6 +183,8 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
       roadDistances[i] = vd.distanceToRoadCenter;
       // Nor under a bridge deck: the ground there is cut just below the deck's top.
       submerged[i] = (!Number.isNaN(vd.waterHeight) && vd.waterHeight > vd.height - 0.3) || vd.underDeck > 0 ? 1 : 0;
+      waterDepth[i] = vd.waterHeight > vd.height ? vd.waterHeight - vd.height : 0;
+      if (padsApplyIn(vd.biomeId)) padBiome = true;
       riverBed[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
       if (riverBed[i] < rampEnd) nearRiverBed = true;
     }
@@ -184,7 +201,7 @@ const sampleGrid = (minX: number, minZ: number, size: number, biomeIds: number[]
       slopes[gz * gridNodes + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
     }
   }
-  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, riverBed, nearRiverBed };
+  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, waterDepth, riverBed, nearRiverBed, padBiome };
 };
 
 const takeCachedGrid = (key: string): FoliageGrid | undefined => {
@@ -272,8 +289,10 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     grid = sampleGrid(minX, minZ, size, biomeIds, [near(-1, 0), near(1, 0), near(0, -1), near(0, 1)]);
     cacheGrid(gridKey, grid);
   }
-  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, riverBed, nearRiverBed } = grid;
+  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, waterDepth, riverBed, nearRiverBed, padBiome } = grid;
   const bedCovered = riverKeepOff() - RIVER_BED_FULL_INSET;
+  const underwater = params.underwater;
+  const footprints: Footprint[] = padBiome && !underwater ? footprintsNear(minX, minZ, minX + size, minZ + size) : [];
 
   // One bilinear cell per blade, shared by every field it samples (the arithmetic is
   // term-for-term the per-field version's, so the samples are bit-identical).
@@ -326,7 +345,15 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     if (params.heightRange) {
       if (height < params.heightRange[0] || height > params.heightRange[1]) continue;
     }
-    if (bilinear(submerged) > 0.25) continue;
+    if (underwater) {
+      // Cut to the water over it, so no tip pokes out of the surface.
+      const depth = bilinear(waterDepth);
+      if (depth < UNDERWATER_MIN_DEPTH) continue;
+      scale = Math.min(scale, (depth - UNDERWATER_TIP_CLEARANCE) / underwater.height);
+      if (scale < UNDERWATER_MIN_SCALE) continue;
+    } else if (bilinear(submerged) > 0.25) {
+      continue;
+    }
     if (params.roadDistanceRange) {
       const road = bilinear(roadDistances);
       if (road < params.roadDistanceRange[0] || road > params.roadDistanceRange[1]) continue;
@@ -348,7 +375,7 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
 
     // LAST, after every filter that draws from `rand`: a blade it drops must not skip a draw, or
     // every later blade of the chunk would reshuffle — the river only ever REMOVES blades.
-    if (nearRiverBed) {
+    if (nearRiverBed && !underwater) {
       // The riverbed paint's own field and edge (the terrain shader's riverBlend).
       const keep = smoothstep(bedCovered, bedCovered + RIVER_BED_PLANT_RAMP, bilinear(riverBed));
       if (keep < 1) {
@@ -356,6 +383,8 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
         scale *= 0.6 + 0.4 * keep;
       }
     }
+    // After every rand() draw, like the river's: it only ever removes blades.
+    if (footprints.length > 0 && footprints.some((f) => insideFootprint(f, x, z, FOOTPRINT_MARGIN))) continue;
 
     const y = height - INSTANCE_SINK;
     offsets[placed * 3] = x;

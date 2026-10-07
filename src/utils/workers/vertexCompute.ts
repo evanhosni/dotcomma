@@ -20,7 +20,7 @@ import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges"
 import { LANE_END_CLEAR, NO_DECKS, clearDeckCells, cutGroundUnderDecks, deckEndNear, deckGround, decksAround } from "./bridges/deckGround";
 import { domainConfig, setDomainConfig } from "./computeConfig";
 import { applyFlattenPads, computeVertexDataRaw, evaluatingPadCandidates, initFlattenPads, padsApplyIn } from "./flattenPads";
-import { SHORE_RISE, clearLakeCaches, lakeLevelAt, lakeSurface, lastMergeLevel, mergeFloor, riverLakeMerge, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
+import { clearLakeCaches, lakeBedBumps, lakeBowlHeight, lakeLevelAt, lakeSurface, lastMergeLevel, mergeFloor, riverLakeMerge, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
 import { biomeNoiseHeight, terrainNoise, warp } from "./noise";
 import { initPlaces } from "./places";
 import { capRiverBed } from "./rivers/riverBedLimit";
@@ -126,8 +126,8 @@ const zoneBiomeHeight = (zone: Zone, x: number, z: number, isOwn: boolean, ctx: 
     // Relative to the LEVEL, not the base: the shore (presence 0, both sides of the wall)
     // stands SHORE_RISE above the water and the bowl descends to depth below it.
     const level = lakeLevelAt(ctx.warped, ctx.grid);
-    if (Number.isNaN(level)) return -zone.biome.water.depth * presence;
-    return level + SHORE_RISE - (zone.biome.water.depth + SHORE_RISE) * presence - terrainNoise(zone.baseNoise, x, z);
+    if (Number.isNaN(level)) return -zone.biome.water.depth * presence + lakeBedBumps(ctx.warped, presence);
+    return lakeBowlHeight(level, zone.biome.water.depth, presence, ctx.warped) - terrainNoise(zone.baseNoise, x, z);
   }
   if (presence <= 0) return 0;
   const noiseConfig = domainConfig!.biomeNoiseConfigs[zone.biome.id];

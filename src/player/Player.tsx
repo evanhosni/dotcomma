@@ -7,11 +7,13 @@ import * as THREE from "three";
 import { useDevContext } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { getAssignedSpawnOffset } from "../net/connection";
-import { createCharacter, createStepResult, disposeCharacter, stepCharacter, type Character } from "../physics/characterMovement";
+import { createCharacter, createStepResult, disposeCharacter, stepCharacter, type Character, type SwimInput } from "../physics/characterMovement";
+import { setCameraWaterDepth } from "../vfx/underwater";
 import { CAMERA_FAR } from "./constants";
 import { useGroundSafetyNets } from "./groundSafetyNets";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
 import { type InputState, useInput } from "./useInput";
+import { useWaterProbe } from "./waterProbe";
 
 /** BODY-CENTER position; the player free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
@@ -77,6 +79,9 @@ export const Player = () => {
   const characterRef = useRef<Character | null>(null);
   const stepResult = useRef(createStepResult()).current;
   const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded);
+  const water = useWaterProbe();
+  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false }).current;
+  const jumpWasHeld = useRef(false);
 
   const { world, rapier } = useRapier();
 
@@ -142,6 +147,9 @@ export const Player = () => {
 
     if (!terrainLoaded && !noclip) {
       holdAtSpawn(rb, character);
+      // A teleport or domain switch: the last sample is another place's water.
+      water.clear();
+      setCameraWaterDepth(0);
       return;
     }
 
@@ -151,17 +159,23 @@ export const Player = () => {
       const collider = rb.collider(0);
       if (collider) {
         const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-        const characterInput = { dirX: move.x, dirZ: move.z, speed, jump: input.jump };
+        const surfaceY = water.surfaceY();
+        swimInput.surfaceY = surfaceY;
+        swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
+        const characterInput = { dirX: move.x, dirZ: move.z, speed, jump: input.jump, swim: Number.isNaN(surfaceY) ? null : swimInput };
         const r = stepCharacter(world, character, rb, collider, pos.x, pos.y, pos.z, characterInput, dt, stepResult);
-        safetyNets.escapeIfStuck(r, pos, character);
-      }
+        safetyNets.escapeIfStuck(r, pos, character);      }
     }
+
+    jumpWasHeld.current = input.jump;
 
     const finalPos = rb.translation();
     if (!noclip && terrainLoaded) safetyNets.runBackstop(finalPos, character);
     safetyNets.respawnIfFallen(finalPos, character);
     followWithCamera(finalPos);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
+    water.sample(finalPos.x, finalPos.z);
+    setCameraWaterDepth(water.surfaceY() - camera.position.y);
   }, -3);
 
   return (

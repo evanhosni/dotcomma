@@ -12,6 +12,8 @@
   - Each source is a `LampHead` (position + index into `LAMP_COLORS`) in `activeLampHeads`.
   - The heads are periodically written into a camera-centered grid texture of `LAMP_CELL_SIZE` cells, one head per cell.
   - Shaders sample their neighboring cells (`lampGlowAccumGLSL`) with falloff `LAMP_GLOW_RADIUS`, so cost is constant for any lamp count.
+  - A registered head fades in over `LAMP_FADE_SECONDS` and a released one fades out before it is deleted (the fade rides in the texel's w), so a dressing chunk mounting or dropping at the render distance never switches a block's light at once. The grid is rewritten every few frames while anything fades.
+- **City lights** ([world/…/city/CityLights.tsx](../world/domains/overworld/regions/city/biomes/city/CityLights.tsx)): a fixed pool of point lights on the nearest city sites. Each light fades out as the next site outside the pool closes in (`RANK_FADE_BAND`) and toward the scan's edge, so re-picks never switch a light; each aura sprite also fades as the camera approaches its view plane (`AURA_NEAR_HIDE`/`SHOW`) — a screen-aligned sprite otherwise vanished whole as the camera passed it.
   - `LampGlowDriver` (in [world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) runs `driveLampLighting`; intensity follows `getWindowLightsProgress()`.
   - Receivers: terrain, every actor material (`patchStandardMaterialLampGlow` via `prepareActorMaterial`), bridge decks.
 

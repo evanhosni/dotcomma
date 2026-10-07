@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useDevContext } from "../context/DevContext";
 import { GameContextProvider } from "../context/GameContext";
 import { StatsOverlay } from "../menus/overlay/StatsOverlay";
@@ -13,6 +13,7 @@ import { initCursor } from "../utils/cursor/cursor";
 import { traceSpan } from "../utils/spikeTrace";
 import { bindProgramCompiler } from "../utils/warmPrograms";
 import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
+import { isCameraUnderwater, UnderwaterPass } from "../vfx/underwater";
 
 /** Non-zero useFrame priorities disable R3F's auto-render, so this renders
  *  explicitly. The FPS-cap decision runs ONCE per tick at -10, before every
@@ -32,9 +33,18 @@ const SceneRender = () => {
   useFrame(() => {
     shouldPresentThisFrame();
   }, -10);
-  useFrame(() => {
+  const underwater = useMemo(() => new UnderwaterPass(), []);
+  useEffect(() => {
+    underwater.warm(gl);
+    return () => underwater.dispose();
+  }, [gl, underwater]);
+  useFrame(({ clock }) => {
+    if (!isMainRenderFrame()) return;
     // A spike INSIDE this span is GPU/driver work; outside it is main-thread JS.
-    if (isMainRenderFrame()) traceSpan("render", () => gl.render(scene, camera));
+    traceSpan("render", () => {
+      if (isCameraUnderwater()) underwater.render(gl, scene, camera, clock.elapsedTime);
+      else gl.render(scene, camera);
+    });
   }, 2);
   return null;
 };

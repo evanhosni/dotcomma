@@ -13,7 +13,7 @@ import { smoothstep } from "../math/_math";
 import type { PointXZ } from "../math/types";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
-import { terrainNoise, unwarp } from "./noise";
+import { simplex2, terrainNoise, unwarp } from "./noise";
 import type { BiomeContext, RiverParams, VoronoiCell, Zone } from "./types";
 import { ZONE_WEIGHT_EPS, sstep01, zoneFinal, zoneMinDist, zones } from "./zoneBlend";
 
@@ -43,6 +43,23 @@ let lastLevelWeight = 0;
  *  sides meet: without it a lower neighbor's share (desert salt beside the ocean) left the lake
  *  side up to 5u under the lifted land (a step along the waterline, census). */
 let bowlFloor = NaN;
+
+/** Sea-floor relief: hummocks on the lake BED (warped coords), grown in with presence² so the shore
+ *  and the wall (presence 0) stay exactly as they were. Peaks stay ≥ 20u under a 26u lake's level. */
+const LAKE_BED_BUMP_HEIGHT = 3.5;
+const LAKE_BED_BUMP_SCALE = 70;
+export const lakeBedBumps = (warped: PointXZ, presence: number): number => {
+  if (presence <= 0) return 0;
+  const n =
+    simplex2(warped.x / LAKE_BED_BUMP_SCALE, warped.z / LAKE_BED_BUMP_SCALE) * 0.65 +
+    simplex2(warped.x / (LAKE_BED_BUMP_SCALE * 0.3) + 31.7, warped.z / (LAKE_BED_BUMP_SCALE * 0.3) - 12.3) * 0.35;
+  return n * LAKE_BED_BUMP_HEIGHT * presence * presence;
+};
+
+/** A lake zone's own bowl at full lift: the shore SHORE_RISE above the level at its wall, `depth` under it one width in. */
+export const lakeBowlHeight = (level: number, depth: number, presence: number, warped: PointXZ): number =>
+  level + SHORE_RISE - (depth + SHORE_RISE) * presence + lakeBedBumps(warped, presence);
+
 export const shoreLift = (h: number): number => {
   if (!Number.isNaN(bowlFloor)) return h < bowlFloor ? bowlFloor : h;
   if (Number.isNaN(shoreLevel)) return h;
@@ -242,7 +259,7 @@ export const lakeSurface = (warped: PointXZ, ctx: BiomeContext, own: Zone): numb
     ownWaterDist = zoneMinDist[own.index];
     if (zoneFinal[own.index] < 1 && !Number.isNaN(level)) {
       const presence = sstep01(zoneMinDist[own.index] / own.heightPresenceWidth);
-      bowlFloor = level + SHORE_RISE - (own.biome.water.depth + SHORE_RISE) * presence;
+      bowlFloor = lakeBowlHeight(level, own.biome.water.depth, presence, warped);
     }
     return level;
   }
