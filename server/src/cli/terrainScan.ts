@@ -1,13 +1,11 @@
 import { computeVertexData, computeVertexDataRaw, type VertexResult } from "../../../src/utils/workers/vertexCompute";
-import { snapToVertex, TERRAIN_CHUNK_SIZE, TERRAIN_SEGMENTS } from "../game/physics/terrain.js";
+import { snapToVertex, TERRAIN_VERTEX_SPACING } from "../game/physics/terrain.js";
 
 /**
  * Finds real places to test the physics world on. Slope is the analytic gradient
  * at LOD1 vertex spacing (what the heightfield resolves) and candidates are
  * heightfield VERTICES, where the collider surface is exact.
  */
-
-export const VERTEX_SPACING = TERRAIN_CHUNK_SIZE / TERRAIN_SEGMENTS; // 4.375
 
 export interface SlopeSample {
   x: number;
@@ -22,7 +20,7 @@ export interface SlopeSample {
 
 /** Central differences one vertex apart. */
 export const slopeAt = (x: number, z: number, sample: (x: number, z: number) => VertexResult = computeVertexData): SlopeSample => {
-  const s = VERTEX_SPACING;
+  const s = TERRAIN_VERTEX_SPACING;
   const h = sample(x, z).height;
   const dhdx = (sample(x + s, z).height - sample(x - s, z).height) / (2 * s);
   const dhdz = (sample(x, z + s).height - sample(x, z - s).height) / (2 * s);
@@ -63,7 +61,7 @@ const ROAD_CORRIDOR = 40;
 
 /** Every point of the 3×3 vertex neighborhood around (x, z) has a slope in range. */
 const neighborhoodInRange = (x: number, z: number, inRange: (angle: number) => boolean, sample?: (x: number, z: number) => VertexResult): boolean => {
-  const s = VERTEX_SPACING;
+  const s = TERRAIN_VERTEX_SPACING;
   for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (!inRange(slopeAt(x + a * s, z + b * s, sample).angle)) return false;
   return true;
 };
@@ -73,7 +71,7 @@ export const findSlopeSpot = (cx: number, cz: number, opts: SlopeSpotOptions): S
   const { minDeg, maxDeg, radius = 300, solid = true, offRoad = false } = opts;
   const lo = (minDeg * Math.PI) / 180;
   const hi = (maxDeg * Math.PI) / 180;
-  const s = VERTEX_SPACING;
+  const s = TERRAIN_VERTEX_SPACING;
   const origin = snapToVertex(cx, cz);
   const inRange = (a: number) => a >= lo && a <= hi;
   const n = Math.floor(radius / s);

@@ -73,6 +73,9 @@ export const clamp = (x: number, min: number, max: number): number => Math.min(M
 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+/** An angle (radians) wrapped into [-π, π]. */
+export const wrapAngle = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
+
 /** Distance from (px, pz) to the segment a→b on the horizontal plane. */
 export const distanceToSegment = (px: number, pz: number, ax: number, az: number, bx: number, bz: number): number => {
   const dx = bx - ax;

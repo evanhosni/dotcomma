@@ -18,19 +18,34 @@ import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges";
 import { LANE_END_CLEAR, NO_DECKS, clearDeckCells, cutGroundUnderDecks, deckEndNear, deckGround, decksAround } from "./bridges/deckGround";
-import { runRiverYield } from "./bridges/constants";
 import { domainConfig, setDomainConfig } from "./computeConfig";
 import { applyFlattenPads, computeVertexDataRaw, evaluatingPadCandidates, initFlattenPads, padsApplyIn } from "./flattenPads";
-import { SHORE_RISE, clearLakeCaches, lakeLevelAt, lakeSurface, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
-import { biomeNoiseHeight, terrainNoise, unwarp, warp } from "./noise";
+import { clearLakeCaches, lakeBedBumps, lakeBowlHeight, lakeLevelAt, lakeSurface, lastMergeLevel, mergeFloor, riverLakeMerge, riverMouthShare, riverSurfaceBesideCrispShore, shoreLift } from "./lakes";
+import { biomeNoiseHeight, terrainNoise, warp } from "./noise";
 import { initPlaces } from "./places";
+import { capRiverBed } from "./rivers/riverBedLimit";
+import { carveRiverChannel, riverWaterBand } from "./rivers/riverChannel";
+import { clearRiverField, noRiverQuay, noRiverSample, riverFieldAt, riverQuay, riverQuayAt, riverSample } from "./rivers/riverField";
 import { initRivers } from "./rivers/riverNetwork";
-import { capRiverBed, clearRiverField, noRiverQuay, noRiverSample, riverFieldAt, riverQuay, riverQuayAt, riverSample } from "./rivers/riverField";
-import { CITY_QUAY_INNER_CAP, type CityTerrain, clearCityCaches, drownedBeltDistance, getCityTerrain, wallDrownedAt } from "./roads/cityTerrain";
+import { NO_ROAD_DISTANCE } from "./roads/cityRoadField";
+import { type CityTerrain, clearCityCaches, getCityTerrain } from "./roads/cityTerrain";
+import { drownedBeltDistance } from "./roads/cityWaterfront";
+import {
+  APPROACH_SHOULDER,
+  APPROACH_WIDEN,
+  BELT_DROWN_READ,
+  BELT_FIELD_HANDOFF,
+  FREEWAY_FIELD_REACH,
+  FREEWAY_MERGE_CLEAR,
+  findNearestCityWall,
+  gradeOffCityFreeway,
+  nearestCityWall,
+  offCityRoad,
+} from "./roads/offCityFreeway";
 import { FREEWAY_GRADE_RAMP, clearFreewayGrades, freewayGradeAt } from "./roads/freewayGrade";
 import { FREEWAY_SMIN_K, type WallNetwork, clearNetworkCache, nearestFreewayRun, nearestRun, networkOf, smoothMin } from "./roads/freewayNetwork";
 import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, ISLAND_LAND_FIELD, TO_BANK, TO_ROAD, blockIslandAt, clearRoadFragments, islandRoad, inRoadFragment } from "./roads/roadFragments";
-import type { BiomeContext, DomainConfig, RiverParams, SerializedRegion, VertexResult, Wall, Zone } from "./types";
+import type { BiomeContext, DomainConfig, SerializedRegion, VertexResult, Zone } from "./types";
 import { clearVoronoiCaches, getBiomeContext, cityWallsOf } from "./voronoi";
 import {
   ZONE_WEIGHT_EPS,
@@ -54,46 +69,22 @@ import {
   zones,
 } from "./zoneBlend";
 
-/** Within freewayWidth + this of BOTH a run and a city wall, the two roads are merging: no lane paint. */
-const FREEWAY_MERGE_CLEAR = 12;
-/** A deck landing's approach lays its road flat this far past the freeway's half-width (real units,
- *  warped like every road distance) before its shoulder: past the deck's sides (BRIDGE_DECK_MARGIN)
- *  wherever the road warp stretches them out to ~1.4× (a ramp end measured 21 at the deck's side). */
-const APPROACH_WIDEN = 8;
-/** …and its shoulder meets the ground over this, gentler than a road's own FREEWAY_GRADE_RAMP: a landing's
- *  approach often stands units over a bank the river carved, and at 10u that edge measured 2–7u kinks. */
-const APPROACH_SHOULDER = 30;
-/** How far from a freeway centerline the normalized road distance is still written (real units). */
-const FREEWAY_FIELD_REACH = 70;
 /** Past the riverbed's reach a vertex still carries the bed's own texture distances this far (real
  *  units): a quad reaching into the bed interpolates them (LOD2 spacing 17.5u). */
 const RIVERBED_SDF_MARGIN = 30;
-/** How far past a river's footprint (real units) a vertex can still read a city wall the river drowns:
- *  the belt's field reach, plus the freeway's half-width (14) and the waterfront's fade (30, cityTerrain)
- *  a drowned wall lies within, and a margin for the meander. */
-const BELT_DROWN_READ = FREEWAY_FIELD_REACH + 64;
-/** A road's field is pushed off the pavement over the last this many (factor-1) units of the zone
- *  it yields to a river in: continuous, so the road ends in a clean curbed line under the deck. */
-const ROAD_RIVER_RAMP = 16;
 /** A city vertex on the river side of the quay reports its riverbed paint distance at most this
  *  far inside the STRAIGHT bank edge (factor-1 units): past the fade the bed shader applies, so the
  *  sand begins whole exactly where the quay's river-side sidewalk ends (see riverBedDistance). */
 const QUAY_BED_INSET = RIVER_BED_FULL_INSET;
-/** Past the river's footprint by this much (factor-1 units) the belt's straight river distance is
- *  still worth asking for: the meander moves the footprint's edge by at most RIVER_MEANDER_AMP. */
-const BELT_STRAIGHT_REACH = 30;
-/** A road's field meets the river's push (step 5) over about this much (street units): a LOD1
- *  vertex spacing of the freeway's field (4.375u × roadWidth / freewayWidth ≈ 2.2), and a margin. */
-const ROAD_PUSH_SMOOTH = 5;
-/** The river's push on a road's field grows no further than this (street units): far past the pavement. */
-const ROAD_PUSH_CAP = 40;
-/** A smooth maximum of a road's field and the river's push on it; the rounding fades in with the push
- *  itself, so where the push begins the field is exactly the road's. */
-const smoothMaxRoad = (a: number, push: number): number => {
-  const k = ROAD_PUSH_SMOOTH * smoothstep(0, ROAD_PUSH_SMOOTH, push);
-  if (k <= 0) return Math.max(a, push);
-  const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (push - a)) / k));
-  return a + (push - a) * h + k * h * (1 - h);
+/** The quay's riverbed paint distance at the vertex riverQuayAt last measured: its straight distance
+ *  less QUAY_BED_INSET, never below where the bed is whole. */
+/** A river merges into the lake beside it (step 4) only this far (real units) past a freeway's
+ *  half-width, fully from the second: a road along the shore stays on dry ground, and so do its decks. */
+const MERGE_ROAD_NEAR = 10;
+const MERGE_ROAD_FAR = 40;
+const quayBedDistance = (): number => {
+  const river = domainConfig!.river;
+  return Math.max(riverQuay.distance / riverQuay.factor - QUAY_BED_INSET, river.halfWidth + river.bank - RIVER_BED_FULL_INSET);
 };
 
 export function initCompute(config: DomainConfig): void {
@@ -120,32 +111,6 @@ export const getRegions = (): SerializedRegion[] => {
   return domainConfig.regions;
 };
 
-/** The nearest city wall — the belt seen from OUTSIDE the city: distance (the belt's: step 2 pushes it
- *  off a drowned wall), the wall's own distance, along coordinate, closest point. */
-const nearestCityWall = { distance: Infinity, wall: Infinity, along: 0, x: 0, z: 0 };
-const findNearestCityWall = (px: number, pz: number, walls: Wall[]): void => {
-  nearestCityWall.distance = Infinity;
-  for (let i = 0; i < walls.length; i++) {
-    const w = walls[i];
-    const dx = w.ex - w.sx;
-    const dz = w.ez - w.sz;
-    const lenSq = dx * dx + dz * dz;
-    let t = lenSq > 0 ? ((px - w.sx) * dx + (pz - w.sz) * dz) / lenSq : 0;
-    if (t < 0) t = 0;
-    else if (t > 1) t = 1;
-    const cx = w.sx + t * dx;
-    const cz = w.sz + t * dz;
-    const d = Math.hypot(px - cx, pz - cz);
-    if (d < nearestCityWall.distance) {
-      nearestCityWall.distance = d;
-      nearestCityWall.wall = d;
-      nearestCityWall.along = t * Math.sqrt(lenSq) + w.sx + w.sz;
-      nearestCityWall.x = cx;
-      nearestCityWall.z = cz;
-    }
-  }
-};
-
 /** The own zone's city terrain, when zoneBiomeHeight evaluated one for the current vertex. */
 let ownCityTerrain: CityTerrain | null = null;
 
@@ -161,8 +126,8 @@ const zoneBiomeHeight = (zone: Zone, x: number, z: number, isOwn: boolean, ctx: 
     // Relative to the LEVEL, not the base: the shore (presence 0, both sides of the wall)
     // stands SHORE_RISE above the water and the bowl descends to depth below it.
     const level = lakeLevelAt(ctx.warped, ctx.grid);
-    if (Number.isNaN(level)) return -zone.biome.water.depth * presence;
-    return level + SHORE_RISE - (zone.biome.water.depth + SHORE_RISE) * presence - terrainNoise(zone.baseNoise, x, z);
+    if (Number.isNaN(level)) return -zone.biome.water.depth * presence + lakeBedBumps(ctx.warped, presence);
+    return lakeBowlHeight(level, zone.biome.water.depth, presence, ctx.warped) - terrainNoise(zone.baseNoise, x, z);
   }
   if (presence <= 0) return 0;
   const noiseConfig = domainConfig!.biomeNoiseConfigs[zone.biome.id];
@@ -225,180 +190,17 @@ export const freewayDistanceAt = (x: number, z: number): number => {
   return Math.min(inCity, nearestRun.distance, nearestCityWall.distance);
 };
 
+/** Whether a world point lies outside every one of `biomeIds` (none = every biome) — exactly the
+ *  biomeId test of passesPlacementFilters, from the point's own zone alone: a placement checks it
+ *  before paying for the whole vertex (most of a city descriptor's rolls fall outside the city). */
+export const outsideBiomes = (biomeIds: readonly number[] | undefined, x: number, z: number): boolean =>
+  !!biomeIds && biomeIds.length > 0 && !biomeIds.includes(getBiomeContext(warp(x, z)).zone.biome.id);
+
 /** Set while a FAR VISUAL-ONLY terrain vertex is evaluated (computeVertexDataFar). */
 let farVisual = false;
 /** Set while a far vertex is evaluated WITHOUT the river field (computeVertexDataFar, rivers = false). */
 let farDry = false;
 const NO_RUNS: WallNetwork["freeways"] = [];
-
-/** How far out a river's water is reported (and the bank held above it), factor-1 units: past the
- *  waterline, so the water mesh's shore triangles are level and meet the rising bank. */
-const riverWaterBand = (river: RiverParams): number => river.halfWidth + river.bank * 0.5;
-
-/** Step 4's channel at a vertex `distanceToRiver` (factor-1) from a river whose surface is
- *  `surface`: FORCED, not min'ed — a parabola from depth under the surface to a rim SHORE_RISE above
- *  it at the half-width (the water's edge sits just inside), the bank blending the rim back into the
- *  terrain, so it raises low ground as well as cutting high ground. Depth grows with the root of the
- *  width factor. */
-export const carveRiverChannel = (height: number, distanceToRiver: number, surface: number, factor: number): number => {
-  const river = domainConfig!.river;
-  const riverReach = river.halfWidth + river.bank;
-  const depth = river.depth * Math.sqrt(factor);
-  const rim = surface + SHORE_RISE;
-  // Ground LOWER than the rim is held at it across the whole water band and only then descends:
-  // blended down from the half-width, the bank sits under the surface there and the water mesh draws
-  // a second strip on the dry bank.
-  return distanceToRiver < river.halfWidth
-    ? rim - (depth + SHORE_RISE) * (1 - (distanceToRiver / river.halfWidth) ** 2)
-    : rim + (height - rim) * smoothstep(height < rim ? riverWaterBand(river) : river.halfWidth, riverReach, distanceToRiver);
-};
-
-/** Over this far off the wall (real units) the belt's field beside a river hands over from the city's
- *  own rule to a smooth maximum that never paints the quay's bands out into the neighbor. */
-const BELT_FIELD_HANDOFF = 6;
-/** The belt's road field beside a river, `normalized` (street units) and `wall` (real units) off its
- *  wall: ON the wall exactly the city's (getCityTerrain: the belt's field lerped toward the quay's own
- *  by its river-side fade), so the pavement's edges (7, 8, 12) and the curb dip cross the wall at the
- *  same distances — a smooth maximum alone stood the curb 0.15u apart there — and off it a smooth
- *  maximum (the city's lerp, carried on, would draw the quay's sidewalk band 70u into the grass). */
-const beltQuayField = (normalized: number, wall: number): number => {
-  const rv = domainConfig!.river;
-  const rw = domainConfig!.cityConfig.roadWidth;
-  const quayOffset = (rv.halfWidth + rv.bank) * riverQuay.factor + rw;
-  if (riverQuay.distance >= quayOffset) return normalized;
-  const only = Math.min(CITY_QUAY_INNER_CAP, quayOffset - riverQuay.distance);
-  const riverSide = 1 - smoothstep(quayOffset - rw, quayOffset - rw * 0.5, riverQuay.distance);
-  const cityRule = normalized + (only - normalized) * riverSide;
-  return cityRule + (smoothMaxRoad(normalized, only * riverSide) - cityRule) * smoothstep(0, BELT_FIELD_HANDOFF, wall);
-};
-
-/** What gradeOffCityFreeway computed for the current vertex (read right after the call). */
-const offCityRoad = { height: 0, roadField: 99999, freewayField: 99999, freewayAlong: 0, laneEndGap: Infinity, approachDelta: 0 };
-
-/** Step 5: the freeways OUTSIDE the city — the inter-city runs and the OUTER HALF of every city's belt
- *  (centered on the wall) — as one grade, one curb dip and one normalized road field, so the city road
- *  shader paints them as one surface with the city's rim. Reads step 2's nearestRun / nearestCityWall /
- *  roadReal / roadGrade and writes offCityRoad. */
-const gradeOffCityFreeway = (
-  height: number,
-  cvx: number,
-  cvz: number,
-  own: Zone,
-  ctx: BiomeContext,
-  roadReal: number,
-  roadGrade: number,
-  distanceToRiver: number,
-  riverFactor: number,
-  riverSurface: number,
-  lakeLevel: number,
-): void => {
-  const river = domainConfig!.river;
-  const cityCfg = domainConfig!.cityConfig;
-  const fw = cityCfg.freewayWidth;
-  const riverReach = river.halfWidth + river.bank;
-  const waterBand = riverWaterBand(river);
-  let roadField = 99999;
-  let freewayField = 99999;
-  let freewayAlong = 0;
-  let laneEndGap = Infinity;
-  let approachDelta = 0;
-  // Near a river: the belt's STRAIGHT river distance (the yield below), and whether its wall is
-  // drowned — then the city's WATERFRONT carries the belt on (getCityTerrain) and this outer half,
-  // inside the waterfront's band, keeps no lane paint of its own.
-  const beltDist = nearestCityWall.distance;
-  let beltStraight = Infinity;
-  let beltDrowned = false;
-  if (distanceToRiver < riverReach + BELT_STRAIGHT_REACH && beltDist < FREEWAY_FIELD_REACH) {
-    riverQuayAt(cvx, cvz);
-    if (riverQuay.distance < Infinity) {
-      beltStraight = riverQuay.distance / riverQuay.factor;
-      beltDrowned = wallDrownedAt(nearestCityWall.x, nearestCityWall.z) > 0.5;
-    }
-  }
-  const onBelt = beltDist < nearestRun.distance;
-  // Where the road yields to a river: the belt's outer half across the whole footprint, an inter-city
-  // RUN only near the water (runRiverYield — a run grazing a river's outer bank stays a road).
-  // Blended where the two roads meet, so the field never jumps.
-  const runShare = smoothstep(-8, 8, beltDist - nearestRun.distance);
-  const yieldAt = riverReach + (runRiverYield() - riverReach) * runShare;
-  // The belt also yields by the STRAIGHT river distance, as the city's side of it does (quay and
-  // waterfront): by the meandered one alone, a strip of belt stands in the sand where the channel
-  // wanders off.
-  const roadRiver = beltStraight < Infinity ? Math.min(distanceToRiver, distanceToRiver + (beltStraight - distanceToRiver) * (1 - runShare)) : distanceToRiver;
-  const roadChannel = Number.isNaN(riverSurface) ? 1 : smoothstep(waterBand, yieldAt, roadRiver);
-  if (distanceToRiver < Infinity) laneEndGap = (roadRiver - yieldAt) * riverFactor;
-  const roadAlong = onBelt ? nearestCityWall.along : nearestRun.along;
-  const roadPx = onBelt ? nearestCityWall.x : nearestRun.x;
-  const roadPz = onBelt ? nearestCityWall.z : nearestRun.z;
-  // Where a run meets the belt, neither carries lane paint (the mouth of the merge).
-  const merging = nearestRun.distance < fw + FREEWAY_MERGE_CLEAR && beltDist < fw + FREEWAY_MERGE_CLEAR;
-  // Written CONTINUOUSLY out to FREEWAY_FIELD_REACH: the shader's corridor mask (8–9.5 street units)
-  // interpolates it per vertex, so a 99999 beside a 9 would alias the corridor's edge into the grid.
-  if (roadReal < FREEWAY_FIELD_REACH) {
-    let normalized = roadReal * (cityCfg.roadWidth / fw);
-    // Where the road yields to the river it is on a DECK: its field is pushed past the pavement band
-    // so the ground under it shows sand. The push ramps in LINEARLY over the zone's last
-    // ROAD_RIVER_RAMP units, inside the deck's cover (a hard jump, or a ramp flattening near the
-    // sidewalk's edge, steps along the LOD triangles), and joins the road's field by a SMOOTH maximum
-    // (a plain max() creases it the same way).
-    const pushFull = cityCfg.roadWidth + 6;
-    const runPush = distanceToRiver < yieldAt ? Math.min(ROAD_PUSH_CAP, (pushFull * (yieldAt - distanceToRiver)) / ROAD_RIVER_RAMP) : 0;
-    const runField = runPush > 0 ? smoothMaxRoad(normalized, runPush) : normalized;
-    // The BELT gives way exactly as the city's side of it does (getCityTerrain's quay river side: by
-    // the straight river distance, a unit per unit past the bank's edge), so its pavement's edges
-    // (7, 8, 12) cross the wall at the same distances on both sides.
-    const beltField = beltStraight < Infinity ? beltQuayField(normalized, nearestCityWall.wall) : normalized;
-    normalized = beltField + (runField - beltField) * runShare;
-    if (normalized < roadField) roadField = normalized;
-  }
-  const graded = roadReal < fw + FREEWAY_GRADE_RAMP;
-  if (graded || (roadReal < fw + APPROACH_WIDEN + APPROACH_SHOULDER && !Number.isNaN(roadGrade))) {
-    // Flat across, riding the terrain along its centerline; it never fills a river channel (a deck
-    // spans that). At a city wall the centerline sample is the city's own grade (weight 1 there).
-    const rp = unwarp(roadPx, roadPz);
-    const grade = Number.isNaN(roadGrade) ? blendedTerrainAt(rp.x, rp.z, own, ctx) : roadGrade;
-    const normalized = roadReal * (cityCfg.roadWidth / fw);
-    const dip = cityCfg.curbHeight * (1 - smoothstep(cityCfg.roadWidth - 2, cityCfg.roadWidth, normalized));
-    // The road as a deck landing's approach lays it (step 7, bridgeApproachAt): the same grade and curb,
-    // NOT giving way to the river, and flat out past the deck's sides. The yield follows the vertex's
-    // own river distance, so where a river meets the road obliquely it crosses the road diagonally —
-    // half the road at its grade, half carved down the bank — and the deck, wider than the road's flat,
-    // sat on its falling shoulder: pits and mounds in front of a cut end, a trench under a ramp.
-    const approach = height + (grade - dip - height) * (1 - smoothstep(fw + APPROACH_WIDEN, fw + APPROACH_WIDEN + APPROACH_SHOULDER, roadReal));
-    if (graded) {
-      const ramp = 1 - smoothstep(fw, fw + FREEWAY_GRADE_RAMP, roadReal);
-      const runHeight = height + (grade - dip - height) * ramp * roadChannel;
-      if (runShare < 1 && (beltStraight < Infinity || !Number.isNaN(riverSurface))) {
-        // The belt's OUTER half beside a river is what the city's inner half is at the wall: the grade
-        // with the curb dip of the quay-aware field, carved by the river like any city ground (the
-        // bank blends into the road, a mouth only deepens) — yielding by roadChannel instead stood the
-        // outer half up to 2.7u off the city's side of the wall.
-        const beltDip = cityCfg.curbHeight * (1 - smoothstep(cityCfg.roadWidth - 2, cityCfg.roadWidth, beltStraight < Infinity ? beltQuayField(normalized, nearestCityWall.wall) : normalized));
-        let ground = grade - beltDip;
-        if (!Number.isNaN(riverSurface)) {
-          const carved = carveRiverChannel(ground, distanceToRiver, riverSurface, riverFactor);
-          const mouth = riverMouthShare(ground, lakeLevel);
-          ground = mouth > 0 ? carved + (Math.min(carved, ground) - carved) * mouth : carved;
-        }
-        const beltHeight = height + (ground - height) * ramp;
-        height = runShare > 0 ? beltHeight + (runHeight - beltHeight) * runShare : beltHeight;
-      } else height = runHeight;
-      // No lane paint on the riverbed under a deck, nor in a merge.
-      if (roadChannel > 0.999 && !merging && !(onBelt && beltDrowned)) {
-        freewayField = roadReal;
-        freewayAlong = roadAlong;
-      }
-    }
-    // (Not over a lake: a causeway's approach would fill the lakebed beside it.)
-    if (!own.biome.water) approachDelta = approach - height;
-  }
-  offCityRoad.height = height;
-  offCityRoad.roadField = roadField;
-  offCityRoad.freewayField = freewayField;
-  offCityRoad.freewayAlong = freewayAlong;
-  offCityRoad.laneEndGap = laneEndGap;
-  offCityRoad.approachDelta = approachDelta;
-};
 
 /** A vertex of a far visual-only terrain LOD (LOD3–5, no collider): pad-free like
  *  computeVertexDataRaw, and blind to the inter-city freeway RUNS (a 14u road cannot be resolved
@@ -417,14 +219,17 @@ export function computeVertexDataFar(x: number, z: number, rivers = true): Verte
   }
 }
 
-export function computeVertexData(x: number, z: number): VertexResult {
+/** One vertex of the full pipeline. `cutDecks` false (a terrain LOD whose LODLevel.cutsDecks is false)
+ *  leaves out step 7, the ground under the decks, and with it the cell's deck enumeration; the
+ *  lane-end, fragment and island steps run as everywhere a cell has no deck. */
+export function computeVertexData(x: number, z: number, cutDecks = true): VertexResult {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
   const river = domainConfig.river;
 
   // Step 0: the decks whose ground this vertex may have to cut (step 7) — fetched FIRST: enumerating a
   // cell's decks evaluates the terrain (their landed ends), which clobbers every scratch buffer below.
   const decksKnown = !evaluatingPadCandidates && enumeratingBridges === 0;
-  const cellDecks = decksKnown ? decksAround(x, z) : NO_DECKS;
+  const cellDecks = decksKnown && cutDecks ? decksAround(x, z) : NO_DECKS;
 
   // Step 1: the road-noise warp — every grid, wall, road and river lives in warped space.
   const currentVertex = warp(x, z);
@@ -439,6 +244,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
   const own = ctx.zone;
   const offCity = own.biome.id !== CITY_BIOME_ID;
   if (offCity) findNearestCityWall(cvx, cvz, cityWallsOf(ctx));
+  // The city's own wall, before a drowned belt is pushed off it (step 4's merge keeps clear of the city).
+  const cityWallAway = offCity ? nearestCityWall.distance : 0;
   if (farDry) noRiverSample();
   // In a city (and just outside its wall) the quay rule paints the bed a little past the field's
   // reach: the bed limit is wanted there too.
@@ -477,8 +284,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
   combineZoneWeights(zoneWeights, zoneFinal);
   const blend = zoneFinal[own.index];
   let height = 0;
-  let distanceToRoadCenter = 99999; // normalized street units; set by the city field or step 5
-  let distanceToFreewayCenter = 99999;
+  let distanceToRoadCenter = NO_ROAD_DISTANCE; // normalized street units; set by the city field or step 5
+  let distanceToFreewayCenter = NO_ROAD_DISTANCE;
   let freewayAlong = 0;
   ownCityTerrain = null;
   for (let i = 0; i < zones.length; i++) {
@@ -495,12 +302,11 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // distance, as across the city's wall (the bed darkens toward the channel by it — 17u apart there).
   let riverBedDistance = distanceToRiver;
   if (city !== null && riverQuay.distance < Infinity) {
-    const quayBed = Math.max(riverQuay.distance / riverQuay.factor - QUAY_BED_INSET, river.halfWidth + river.bank - RIVER_BED_FULL_INSET);
-    riverBedDistance = Math.min(distanceToRiver, quayBed);
+    riverBedDistance = Math.min(distanceToRiver, quayBedDistance());
   } else if (quayBeside && nearestCityWall.wall < BELT_FIELD_HANDOFF) {
     // Just outside the wall the same rule hands over to the river's own distance, so the sand does
     // not start on a line along the wall (9u of bed distance apart, beside a river leaving a city).
-    const quayBed = Math.max(riverQuay.distance / riverQuay.factor - QUAY_BED_INSET, river.halfWidth + river.bank - RIVER_BED_FULL_INSET);
+    const quayBed = quayBedDistance();
     riverBedDistance = Math.min(distanceToRiver, quayBed + (distanceToRiver - quayBed) * smoothstep(0, BELT_FIELD_HANDOFF, nearestCityWall.wall));
   }
   // How far a freeway's lane paint is from the river end of its road (real units): in a city the
@@ -517,7 +323,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     // branching off instead of running through (same rule as the city's own interchanges).
     if (ownWallDistance < fw + FREEWAY_MERGE_CLEAR) {
       nearestFreewayRun(cvx, cvz, farVisual ? NO_RUNS : networkOf(ctx).freeways);
-      if (nearestRun.distance < fw + FREEWAY_MERGE_CLEAR) distanceToFreewayCenter = 99999;
+      if (nearestRun.distance < fw + FREEWAY_MERGE_CLEAR) distanceToFreewayCenter = NO_ROAD_DISTANCE;
     }
   }
 
@@ -532,6 +338,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     const lifted = shoreLift(height + dip);
     if (lifted !== height + dip) height = lifted - dip;
   } else height = shoreLift(height);
+  const groundBeforeRiver = height;
   const riverReach = river.halfWidth + river.bank;
   const waterBand = riverWaterBand(river);
   const riverSurface = distanceToRiver < riverReach ? riverSurfaceBesideCrispShore(riverSample.surface) : NaN;
@@ -545,6 +352,8 @@ export function computeVertexData(x: number, z: number): VertexResult {
     riverBedDistance += (capped - riverBedDistance) * (quayBeside ? smoothstep(0, BELT_FIELD_HANDOFF, nearestCityWall.wall) : 1);
   }
   let mouth = 0;
+  // The river's water as drawn here (NaN outside its water band).
+  let riverWater = NaN;
   if (!Number.isNaN(riverSurface)) {
     // A river MOUTH (riverMouthShare): over the lakebed the channel only deepens the ground and the
     // water is the lake's — no bank rim, no surface above the lake's, no bed paint across the mouth.
@@ -556,12 +365,41 @@ export function computeVertexData(x: number, z: number): VertexResult {
       if (surface > waterHeight) surface += (waterHeight - surface) * mouth;
       riverBedDistance += (Math.max(riverBedDistance, riverReach) - riverBedDistance) * mouth;
     } else height = carved;
-    if (distanceToRiver < waterBand) waterHeight = Number.isNaN(waterHeight) ? surface : Math.max(waterHeight, surface);
+    if (distanceToRiver < waterBand) {
+      riverWater = surface;
+      waterHeight = Number.isNaN(waterHeight) ? surface : Math.max(waterHeight, surface);
+    }
+  }
+  // A river BESIDE a lake (riverLakeMerge): the land between them, the river's lake-side bank and the
+  // lake's beach there go under the lake's level — one water, no levee. Never in a city or on a road
+  // (quays, the belt and a run along the shore stay dry, and with them every deck's landing).
+  // (roadReal is NaN where no road is in reach at all: the smooth minimum of two infinities.) The city's
+  // wall counts even where its belt is pushed off it (a waterfront): sunk beside it, the lake's beach
+  // stood 9u under the city's crisp edge.
+  const roadAway = Math.min(Number.isNaN(roadReal) ? Infinity : roadReal, cityWallAway);
+  if (city === null && riverSample.shore < Infinity && roadAway > fw + MERGE_ROAD_NEAR) {
+    const merge =
+      smoothstep(fw + MERGE_ROAD_NEAR, fw + MERGE_ROAD_FAR, roadAway) *
+      riverLakeMerge(groundBeforeRiver, distanceToRiver, riverFactor, riverSample.surface, riverSample.shore, riverSample.level, river);
+    if (merge > 0) {
+      height += (Math.min(height, mergeFloor()) - height) * merge;
+      // The water comes onto the lake's level with the share: in the river's band its own surface eased
+      // there; outside it the level, or where the river runs under the lake, that surface (under the
+      // ground) as the share fades — continuous wherever the share reaches 0, and the two agree at the
+      // band's edge (to the surface tolerance riverLakeMerge allows above the level).
+      const level = lastMergeLevel();
+      const merged = Number.isNaN(riverWater)
+        ? level + Math.min(0, riverSample.surface - level) * (1 - merge)
+        : riverWater + (level - riverWater) * merge;
+      waterHeight = Number.isNaN(lakeLevel) ? merged : Math.max(lakeLevel, merged);
+      // Painted as the river's bed, whole (what lies under the river beside it), never as the land.
+      riverBedDistance += (Math.min(riverBedDistance, riverReach - RIVER_BED_FULL_INSET) - riverBedDistance) * merge;
+    }
   }
   // 1 on open ground, 0 in the channel. The city's arterials and belt cross the river on decks: no
   // lane paint on the riverbed.
   const channel = Number.isNaN(riverSurface) ? 1 : smoothstep(waterBand, riverReach, distanceToRiver);
-  if (city !== null && channel < 0.999) distanceToFreewayCenter = 99999;
+  if (city !== null && channel < 0.999) distanceToFreewayCenter = NO_ROAD_DISTANCE;
 
   // Step 5: freeways OUTSIDE the city (step 2 found them).
   let approachDelta = 0;
@@ -618,7 +456,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
   // median markers, which follow it) stops LANE_END_CLEAR short of the quay or bank, as before any
   // junction. A deck landing nearby (deckEndNear) continues the lanes. Not while enumerating decks
   // (which reads the paint it continues) nor on the raw/far paths (no decks).
-  if (distanceToFreewayCenter < 99990 && laneEndGap < LANE_END_CLEAR && decksKnown && !deckEndNear(cellDecks, x, z)) distanceToFreewayCenter = 99999;
+  if (distanceToFreewayCenter < NO_ROAD_DISTANCE && laneEndGap < LANE_END_CLEAR && decksKnown && !deckEndNear(cellDecks, x, z)) distanceToFreewayCenter = NO_ROAD_DISTANCE;
 
   // Step 8: tiny pieces of road a river has cut off from every other road are not drawn (not on the
   // raw/far paths: decksKnown is false there).
@@ -629,7 +467,7 @@ export function computeVertexData(x: number, z: number): VertexResult {
     inRoadFragment(x, z, city !== null, riverBedDistance, distanceToRoadCenter, distanceToBiomeBoundary, waterHeight > height, sdfOut, presenceOut, !deckEndNear(cellDecks, x, z))
   ) {
     distanceToRoadCenter = Math.max(distanceToRoadCenter, FRAGMENT_REMOVED_FIELD);
-    distanceToFreewayCenter = 99999;
+    distanceToFreewayCenter = NO_ROAD_DISTANCE;
     riverBedDistance = Math.min(riverBedDistance, riverReach - RIVER_BED_FULL_INSET);
   }
   // Step 8b: block islands — city land no building could stand on, too small to be a block, goes the
@@ -690,20 +528,13 @@ export { unwarp, warp } from "./noise";
 export { setDeckCutSpacing } from "./bridges/deckGround";
 export { type FlattenPoint, computeVertexDataRaw, getFlattenPoints } from "./flattenPads";
 export { freewayPointAt, getNetwork } from "./roads/freewayNetwork";
-export { getRiverSegments, riverDebug, riverKeepOff } from "./rivers/riverNetwork";
+export { getRiverSegments, riverDebug } from "./rivers/riverNetwork";
+export { riverKeepOff } from "./rivers/constants";
 export { type PlaceInfo, findBiomeCell, findRegionCell, getBiomeCellSite, getPlaceInfo, getRegionCellSite, getZoneOfBiomeCell } from "./places";
-export {
-  type CityFreewaySidePoint,
-  type CitySitePoint,
-  type CityTrafficLightPoint,
-  type RoadMarkerPoint,
-  getCityFreewayEdgePoints,
-  getCityFreewaySidePoints,
-  getCityRoadMarkers,
-  getCityTrafficLightPoints,
-  getCityVoronoiSites,
-  getFreewayRunMarkers,
-} from "./roads/cityFeatures";
+export { type CitySitePoint, getCityVoronoiSites } from "./roads/citySites";
+export { type CityFreewaySidePoint, getCityFreewayEdgePoints, getCityFreewaySidePoints } from "./roads/freewaySidePoints";
+export { type RoadMarkerPoint, getCityRoadMarkers, getFreewayRunMarkers } from "./roads/roadMarkers";
+export { type CityTrafficLightPoint, getCityTrafficLightPoints } from "./roads/trafficLights";
 export { type FreewayLampParams, type FreewayLampPoint, getFreewayRunLamps, runLampDebug } from "./roads/runLamps";
 export type { BridgePlacementParams, BridgeSection, FreewayBridge } from "./bridges/types";
 export { BRIDGE_PARAPET_WIDTH, DEFAULT_BRIDGE_PLACEMENT } from "./bridges/constants";

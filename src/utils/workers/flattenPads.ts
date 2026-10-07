@@ -11,9 +11,9 @@ import { smoothstep } from "../math/_math";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
-import { riverKeepOff } from "./rivers/riverNetwork";
+import { riverKeepOff } from "./rivers/constants";
 import type { DomainConfig, FlattenDescriptor, VertexResult } from "./types";
-import { computeVertexData } from "./vertexCompute";
+import { computeVertexData, outsideBiomes } from "./vertexCompute";
 
 const FLATTEN_TILE = 128; // world units per canonical placement tile
 // Spacing rounds: 1 round = Matérn II (~45% of greedy packing); 4 rounds
@@ -84,7 +84,10 @@ const rollPadCandidates = (pMinX: number, pMinZ: number, pMaxX: number, pMaxZ: n
 
         let cand: FlattenCandidate | null = null;
         const roll = rollDensityCell(desc.id, gx, gz, cellSize, probability, desc.clustering);
-        if (roll) {
+        // The biome filter first, from the point's own zone (exactly the raw evaluation's biomeId):
+        // most candidates of a city descriptor stand outside the city, and each raw evaluation is a
+        // whole vertex (MEASURED: 77% of the building descriptor's rolls in a 2 km square near a city).
+        if (roll && !outsideBiomes(desc.biomeIds, roll.x, roll.z)) {
           const vd = computeVertexDataRaw(roll.x, roll.z);
           if (passesPlacementFilters(vd, desc, riverKeepOff())) {
             cand = { x: roll.x, z: roll.z, y: vd.height, biomeId: vd.biomeId, descIndex: di, gx, gz };

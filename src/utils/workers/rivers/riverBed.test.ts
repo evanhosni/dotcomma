@@ -1,12 +1,17 @@
-/** The riverbed paint is CONNECTED to its river: going outward from the channel, once the bank gets
+/** The riverbed paint is CONNECTED to its river: going outward from the channel, once a ROCK bank gets
  *  too steep the bed ends and never resumes further out (riverField.ts, capRiverBed). The shader's
- *  per-pixel slope fade alone left a patch of bed wherever the bank flattened again within reach. */
+ *  per-pixel slope fade alone left a patch of bed wherever the bank flattened again within reach. Any
+ *  other ground never yields: steep grass cut into the band in wedges reaching the water. */
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { RIVER_BED_FADE_INSET, RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_END_DEG, RIVER_BED_SLOPE_START_DEG } from "../../../world/shaders/constants";
+import { RIVER_BED_FADE_INSET, RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_END_DEG, RIVER_BED_SLOPE_START_DEG, bedYieldsToSteepGround } from "../../../world/shaders/constants";
 import { smoothstep } from "../../math/_math";
-import { computeVertexData, computeVertexDataFar, initCompute, unwarp, warp } from "../vertexCompute";
+import { biomeSlotsOf, combineSlotWeights, computeVertexData, computeVertexDataFar, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "../vertexCompute";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
+import { lastShoreDistance } from "../lakes";
+
+/** No river merges into a lake farther than this from its wall (riverLakeMerge: the widest gap). */
+const LAKE_MERGE_REACH = 300;
 
 const config = OVERWORLD_CONFIG;
 const reach = config.river.halfWidth + config.river.bank;
@@ -14,6 +19,11 @@ const reach = config.river.halfWidth + config.river.bank;
 beforeAll(() => initCompute(config));
 
 const cosDeg = (deg: number) => Math.cos((deg * Math.PI) / 180);
+const bedHalves = riverbedSlotHalvesOf(config);
+const rockSlots = biomeSlotsOf(config).map((id) => bedYieldsToSteepGround(config.biomeNoiseConfigs[id]));
+/** The shader's rock share of the bed (its slope fade's scale): the riverbed weights of the rock slots. */
+const rockShareOf = (riverbedSdf: ArrayLike<number>): number =>
+  combineSlotWeights(riverbedSdf, bedHalves).reduce((sum, w, k) => sum + (rockSlots[k] ? w : 0), 0);
 /** What the terrain shader paints there: "water" (the bed goes on under it — a channel, or the ground
  *  cut under a deck), "bed" (the bed's weight over half), "ground", or "city" (pavement: not judged). */
 const paintAt = (x: number, z: number): "water" | "bed" | "ground" | "city" => {
@@ -24,7 +34,7 @@ const paintAt = (x: number, z: number): "water" | "bed" | "ground" | "city" => {
   const s = 2.1875; // half the LOD1 vertex spacing: the rendered normal's scale
   const gx = (computeVertexData(x + s, z).height - computeVertexData(x - s, z).height) / (2 * s);
   const gz = (computeVertexData(x, z + s).height - computeVertexData(x, z - s).height) / (2 * s);
-  const steep = 1 - smoothstep(cosDeg(RIVER_BED_SLOPE_END_DEG), cosDeg(RIVER_BED_SLOPE_START_DEG), 1 / Math.hypot(gx, gz, 1));
+  const steep = (1 - smoothstep(cosDeg(RIVER_BED_SLOPE_END_DEG), cosDeg(RIVER_BED_SLOPE_START_DEG), 1 / Math.hypot(gx, gz, 1))) * rockShareOf(v.riverbedSdf);
   const edge = 1 - smoothstep(reach - RIVER_BED_FULL_INSET, reach - RIVER_BED_FADE_INSET, v.riverBedDistance);
   return edge * (1 - steep) > 0.5 ? "bed" : "ground";
 };
@@ -48,9 +58,9 @@ const bedReachesWater = (x0: number, z0: number): boolean => {
 };
 
 describe("riverbed paint", () => {
-  it("ends where its bank first gets steep and does not resume beyond it", () => {
-    // A stretch of steep desert banks (salt flat and dunes) that showed 60 cut-off patches before.
-    const box = { x0: -4300, z0: -4200, x1: -3900, z1: -3350 };
+  it("ends where its rock bank first gets steep and does not resume beyond it", () => {
+    // Rivers along the mountains' rock.
+    const box = { x0: 3200, z0: -6800, x1: 5600, z1: -4000 };
     const w0 = warp(box.x0, box.z0);
     const w1 = warp(box.x1, box.z1);
     const pieces = riverPiecesNear(Math.min(w0.x, w1.x), Math.min(w0.z, w1.z), Math.max(w0.x, w1.x), Math.max(w0.z, w1.z), 0)
@@ -93,6 +103,30 @@ describe("riverbed paint", () => {
     expect(capped).toBeGreaterThan(50);
   });
 
+  it("never yields to steep ground that is not rock: no wedge of grass, dunes or snow reaches into the band", () => {
+    // Steep desert banks (salt flat and dunes), and grass banks at a confluence (Evan, screenshot at
+    // (-8900, 1100)): the ground cut into the band in wedges and strips reaching the water.
+    let checked = 0;
+    for (const box of [
+      { x0: -4300, z0: -4200, x1: -3900, z1: -3350 },
+      { x0: -9000, z0: 980, x1: -8800, z1: 1160 },
+    ]) {
+      for (let x = box.x0; x <= box.x1; x += 4) {
+        for (let z = box.z0; z <= box.z1; z += 4) {
+          const v = computeVertexData(x, z);
+          if (!(v.distanceToRiverCenter < reach - RIVER_BED_FULL_INSET) || v.distanceToRoadCenter < 9.5) continue;
+          if (rockShareOf(v.riverbedSdf) > 0 || !Number.isNaN(computeVertexDataFar(x, z, false).waterHeight)) continue;
+          const p = paintAt(x, z);
+          if (p === "city") continue;
+          checked++;
+          expect(v.riverBedDistance).toBe(v.distanceToRiverCenter);
+          expect(p).not.toBe("ground");
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(2000);
+  });
+
   it("leaves flat banks alone: off the city and lakes the bed reaches the river's full reach", () => {
     // Banks with no slope over 25° anywhere in reach: the paint distance is the river distance.
     let checked = 0;
@@ -110,8 +144,8 @@ describe("riverbed paint", () => {
         for (let d = 0; d <= reach * f; d += 4) {
           const q = unwarp((p.sx + p.ex) / 2 - uz * d, (p.sz + p.ez) / 2 + ux * d);
           const v = computeVertexData(q.x, q.z);
-          // (Beside a lake the mouth hands the bed to the lake: not a flat bank.)
-          const lake = !Number.isNaN(computeVertexDataFar(q.x, q.z, false).waterHeight);
+          // (Beside a lake the mouth and the merge hand the bed to the lake: not a flat bank.)
+          const lake = !Number.isNaN(computeVertexDataFar(q.x, q.z, false).waterHeight) || lastShoreDistance() < LAKE_MERGE_REACH;
           ray.push({ bed: v.riverBedDistance, dr: v.distanceToRiverCenter, h: v.height, skip: v.biomeId === CITY_BIOME_ID || lake });
         }
         const flat = ray.every((s, i) => i === 0 || Math.abs(s.h - ray[i - 1].h) < 4 * Math.tan((25 * Math.PI) / 180));

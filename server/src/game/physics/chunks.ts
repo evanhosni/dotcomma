@@ -50,25 +50,41 @@ export class JobQueue {
 /** Called with the deadline each work slice until it returns the value. */
 export type ChunkBuilder<T> = (deadline: number) => T | undefined;
 
+/** An off-thread half of a build: resolves the chunk's data, after which only the (cheap) main-thread
+ *  finish runs on the queue. A rejection falls back to the whole build on the queue. */
+export interface ChunkFetch<D> {
+  promise: Promise<D>;
+  cancel(): void;
+}
+
 interface ChunkRecord<T> {
   refs: number;
   value: T | null;
+  cancelFetch: (() => void) | null;
+}
+
+export interface ChunkStoreOptions<T, D> {
+  /** Key prefix, so several stores share one JobQueue. */
+  name: string;
+  /** Gets the fetched data when `fetch` resolved, else undefined (build everything in place). */
+  builder: (gx: number, gz: number, fetched?: D) => ChunkBuilder<T>;
+  dispose: (value: T) => void;
+  /** The off-thread half, when there is one; returning null builds that chunk in place. */
+  fetch?: ((gx: number, gz: number) => ChunkFetch<D> | null) | null;
 }
 
 /** REFCOUNTED keyed resources built by queued jobs — nothing is ever built for the
  *  whole world, only what something currently holds. */
-export class ChunkStore<T> {
+export class ChunkStore<T, D = never> {
   private readonly chunks = new Map<string, ChunkRecord<T>>();
 
   constructor(
     private readonly queue: JobQueue,
-    private readonly name: string,
-    private readonly startBuild: (gx: number, gz: number) => ChunkBuilder<T>,
-    private readonly dispose: (value: T) => void,
+    private readonly opts: ChunkStoreOptions<T, D>,
   ) {}
 
-  key(gx: number, gz: number): string {
-    return `${this.name}:${gx},${gz}`;
+  private key(gx: number, gz: number): string {
+    return `${this.opts.name}:${gx},${gz}`;
   }
 
   request(gx: number, gz: number): string {
@@ -78,23 +94,42 @@ export class ChunkStore<T> {
       rec.refs++;
       return key;
     }
-    const fresh: ChunkRecord<T> = { refs: 1, value: null };
+    const fresh: ChunkRecord<T> = { refs: 1, value: null, cancelFetch: null };
     this.chunks.set(key, fresh);
-    const build = this.startBuild(gx, gz);
+    const f = this.opts.fetch?.(gx, gz) ?? null;
+    if (!f) {
+      this.enqueueBuild(key, this.opts.builder(gx, gz));
+      return key;
+    }
+    fresh.cancelFetch = f.cancel;
+    const settle = (data?: D) => {
+      fresh.cancelFetch = null;
+      if (this.chunks.get(key) === fresh) this.enqueueBuild(key, this.opts.builder(gx, gz, data));
+    };
+    f.promise.then(settle, () => settle());
+    return key;
+  }
+
+  /** The job builds for whatever record holds the key WHEN IT RUNS: a chunk released while pending
+   *  and requested again before its job ran is still served by that job (the queue dedupes by key,
+   *  so the new record's own enqueue is a no-op — tying the job to the old record left the new one
+   *  unbuilt forever and every body holding it frozen). */
+  private enqueueBuild(key: string, build: ChunkBuilder<T>): void {
     this.queue.enqueue(key, (deadline) => {
-      if (this.chunks.get(key) !== fresh) return true; // released while pending
+      const rec = this.chunks.get(key);
+      if (!rec || rec.value !== null) return true;
       const value = build(deadline);
       if (value === undefined) return false;
-      fresh.value = value;
+      rec.value = value;
       return true;
     });
-    return key;
   }
 
   release(key: string): void {
     const rec = this.chunks.get(key);
     if (!rec || --rec.refs > 0) return;
-    if (rec.value !== null) this.dispose(rec.value);
+    if (rec.value !== null) this.opts.dispose(rec.value);
+    rec.cancelFetch?.();
     this.chunks.delete(key);
   }
 

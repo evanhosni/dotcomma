@@ -1,8 +1,5 @@
 /** The band policy's one guarantee: a chunk holds every blade the draw truncation asks for. */
-import { foliageBandCovers, foliageBandFor, foliageBandToRequest, foliageDrawFraction } from "./Foliage";
-
-// The worker client's `new URL(…, import.meta.url)` doesn't parse under jest.
-jest.mock("./foliageWorker", () => ({}));
+import { foliageBandCovers, foliageBandFor, foliageBandToRequest, foliageDrawFraction } from "./foliageLod";
 
 const RENDER_DISTANCES = [200, 500, 800];
 const TOTALS = [1, 7, 4099, 32768];

@@ -9,6 +9,7 @@ import {
 } from "@react-three/rapier";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import type { BoxColliderProps, CapsuleColliderProps, SphereColliderProps, TrimeshColliderProps } from "./types";
 
 // The RigidBody `position` prop is LOCAL (these mount inside a positioned
 // group) but setNextKinematicTranslation is WORLD, so kinematic updates add positionRef.
@@ -75,13 +76,13 @@ const ColliderBody = ({
   );
 };
 
-export const CapsuleCollider = ({ radius, height, position, positionRef, collidersNeverMove }: ColliderPlacement & { radius: number; height: number }) => (
+export const CapsuleCollider = ({ radius, height, position, positionRef, collidersNeverMove }: ColliderPlacement & CapsuleColliderProps) => (
   <ColliderBody position={position} positionRef={positionRef} collidersNeverMove={collidersNeverMove}>
     <RapierCapsule args={[height / 2, radius]} />
   </ColliderBody>
 );
 
-export const SphereCollider = ({ radius, position, positionRef, collidersNeverMove }: ColliderPlacement & { radius: number }) => (
+export const SphereCollider = ({ radius, position, positionRef, collidersNeverMove }: ColliderPlacement & SphereColliderProps) => (
   <ColliderBody position={position} positionRef={positionRef} collidersNeverMove={collidersNeverMove}>
     <BallCollider args={[radius]} />
   </ColliderBody>
@@ -93,7 +94,7 @@ export const BoxCollider = ({
   rotation,
   positionRef,
   collidersNeverMove,
-}: ColliderPlacement & { size: THREE.Vector3Tuple; rotation: THREE.Vector3Tuple }) => (
+}: ColliderPlacement & BoxColliderProps) => (
   <ColliderBody position={position} rotation={rotation} positionRef={positionRef} collidersNeverMove={collidersNeverMove}>
     <CuboidCollider args={[size[0] / 2, size[1] / 2, size[2] / 2]} />
   </ColliderBody>
@@ -106,7 +107,7 @@ export const TrimeshCollider = ({
   rotation,
   positionRef,
   collidersNeverMove,
-}: ColliderPlacement & { vertices: Float32Array; indices: Uint32Array; rotation: THREE.Vector3Tuple }) => {
+}: ColliderPlacement & TrimeshColliderProps) => {
   // r-t-r keys the Rapier shape on `args`: a fresh array per render would rebuild the trimesh (full QBVH) on every parent re-render.
   const args = useMemo<[Float32Array, Uint32Array]>(() => [vertices, indices], [vertices, indices]);
   return (

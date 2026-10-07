@@ -165,7 +165,7 @@ const lineMeet = (px: number, pz: number, dx: number, dz: number, qx: number, qz
  *  inner face line (the partner running on to this one's closes the corner), or — the two near one
  *  line — to the partner's start when this one ends first. 0 when it already reaches or the corner is
  *  no such join. */
-export const bridgeWallRunOn = (e: BridgeWallEnd, f: BridgeWallEnd): number => {
+const bridgeWallRunOn = (e: BridgeWallEnd, f: BridgeWallEnd): number => {
   const cos = -(e.dx * f.dx + e.dz * f.dz);
   if (cos > COLLINEAR_COS) {
     const mx = (f.ox + f.ix) / 2 - (e.ox + e.ix) / 2;

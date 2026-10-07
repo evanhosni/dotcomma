@@ -7,6 +7,9 @@ export const HUD_COLOR = "#0f0";
 export const PANEL_BACKGROUND = "rgba(0,0,0,0.6)";
 export const HUD_Z_INDEX = 1000;
 
+/** The overlay font at `px` pixels, for canvas text (`ctx.font`). */
+export const fontOfSize = (px: number): string => `${px}px ${FONT}`;
+
 /** A HUD panel for React `style` props. */
 export const PANEL_STYLE: React.CSSProperties = {
   pointerEvents: "none",

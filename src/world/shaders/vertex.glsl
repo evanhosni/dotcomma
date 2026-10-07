@@ -9,6 +9,8 @@ attribute float distanceToRoadCenter;
 attribute float distanceToFreewayCenter;
 attribute float freewayAlong;
 attribute float skirtDrop;
+attribute float underwaterDepth;
+varying float vUnderwaterDepth;
 varying vec4 vBiomeSdf0;
 varying vec4 vBiomeSdf1;
 varying vec4 vBiomePresence0;
@@ -55,6 +57,7 @@ void main() {
   vDistanceToRoadCenter = distanceToRoadCenter;
   vDistanceToFreewayCenter = distanceToFreewayCenter;
   vFreewayAlong = freewayAlong;
+  vUnderwaterDepth = underwaterDepth;
   vUv = uv;
 
   vec3 chunkOrigin = modelMatrix[3].xyz;
@@ -65,7 +68,7 @@ void main() {
 
   vSkirt = skirtDrop > 0.0 ? 1.0 : 0.0;
 
-  vWorldUv = worldPos.xz / 26.25;
+  vWorldUv = worldPos.xz / TEXTURE_TILE;
   vWorldPosWrapped = worldPos;
 
   // Unwrapped: ONLY for comparing against CPU-side absolute positions (lamp

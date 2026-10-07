@@ -4,8 +4,7 @@ import { createLampPostMaterial, getLampPostGeometry } from "./lampGeometry";
 import { FREEWAY_LAMPS_SPEC, LAMP_COLLIDER_DISTANCE, LAMP_HEAD_OFFSET_X, LAMP_POLE_HEIGHT, STREET_LAMPS_SPEC } from "./lampSpec";
 import { getWindowLightsProgress } from "../../../lighting/dayNight";
 import { LAMP_COLOR_WARM, LAMP_EMISSIVE_STRENGTH, type LampHead, registerLampHeads } from "../../../lighting/lampGlow";
-import { type ChunkWithPoints, instancedFromPoints, useDressingAssets, useSolidDressing } from "../Dressing";
-import { DressingAttributes } from "../../types";
+import { type ChunkWithPoints, instancedFromPoints, type SolidDressingProps, useDressingAssets, useSolidDressing } from "../Dressing";
 import type { DressingColliderSpec } from "../types";
 
 const DEFAULT_RENDER_DISTANCE = 440;
@@ -18,7 +17,7 @@ interface LampChunk extends ChunkWithPoints {
 
 type LampEnumerator = "densityPoints" | "freewayLamps";
 
-interface LampPostsProps<K extends LampEnumerator> extends LampsProps {
+interface LampPostsProps<K extends LampEnumerator> extends SolidDressingProps {
   spec: DressingColliderSpec<K>;
 }
 
@@ -61,11 +60,8 @@ const LampPosts = <K extends LampEnumerator>({ spec, renderDistance, colliderDis
   return content;
 };
 
-/** Placement lives in lampSpec.ts only (the server builds the colliders from it). */
-export interface LampsProps extends Pick<DressingAttributes, "renderDistance" | "colliderDistance"> {}
-
 /** The city's sidewalk lamps (density-placed, LAMP_PLACEMENT). With FreewayLamps, the ONLY lamp art path. */
-export const StreetLamps = (props: LampsProps) => <LampPosts spec={STREET_LAMPS_SPEC} {...props} />;
+export const StreetLamps = (props: SolidDressingProps) => <LampPosts spec={STREET_LAMPS_SPEC} {...props} />;
 
 /** Lamps along both sides of every inter-city freeway run (getFreewayRunLamps, FREEWAY_LAMP_PLACEMENT). */
-export const FreewayLamps = (props: LampsProps) => <LampPosts spec={FREEWAY_LAMPS_SPEC} {...props} />;
+export const FreewayLamps = (props: SolidDressingProps) => <LampPosts spec={FREEWAY_LAMPS_SPEC} {...props} />;

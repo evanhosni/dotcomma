@@ -11,7 +11,11 @@ const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
 
 // Memoized per params object: recomputing 2**-persistence per call added a pow per noise call.
 const noiseParamsCache = new WeakMap<TerrainNoiseParams, { G: number; norm: number }>();
+// The last params object's constants first: the warp alternates with one or two base noises per vertex.
+let lastNoiseParams: TerrainNoiseParams | null = null;
+let lastNoiseConsts = { G: 1, norm: 1 };
 const getNoiseConsts = (params: TerrainNoiseParams) => {
+  if (params === lastNoiseParams) return lastNoiseConsts;
   let c = noiseParamsCache.get(params);
   if (!c) {
     const G = 2.0 ** -params.persistence;
@@ -24,6 +28,8 @@ const getNoiseConsts = (params: TerrainNoiseParams) => {
     c = { G, norm };
     noiseParamsCache.set(params, c);
   }
+  lastNoiseParams = params;
+  lastNoiseConsts = c;
   return c;
 };
 
@@ -35,11 +41,15 @@ export const terrainNoise = (params: TerrainNoiseParams, x: number, y: number): 
   let amplitude = 1.0;
   let frequency = 1.0;
   let total = 0;
+  // An octave at the previous one's frequency (lacunarity 1: the road warp, grass, dust) samples the
+  // very same point: its value is reused — identical, and the warp's half of every vertex's noise.
+  let sampledAt = NaN;
+  let noiseValue = 0;
   for (let o = 0; o < params.octaves; o++) {
-    const noiseValue =
-      (isSimplex ? simplex2(xs * frequency, ys * frequency) : perlin2(xs * frequency, ys * frequency)) *
-        0.5 +
-      0.5;
+    if (frequency !== sampledAt) {
+      noiseValue = (isSimplex ? simplex2(xs * frequency, ys * frequency) : perlin2(xs * frequency, ys * frequency)) * 0.5 + 0.5;
+      sampledAt = frequency;
+    }
     total += noiseValue * amplitude;
     amplitude *= G;
     frequency *= params.lacunarity;
@@ -89,3 +99,6 @@ export const unwarp = (wx: number, wz: number): PointXZ => {
   }
   return { x, z };
 };
+
+/** The road warp's largest offset along one axis. */
+export const warpMax = (): number => domainConfig!.roadNoiseParams.height / 2;

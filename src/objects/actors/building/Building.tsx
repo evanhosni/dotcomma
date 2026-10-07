@@ -2,23 +2,23 @@ import { RootState, useThree } from "@react-three/fiber";
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { getNightIndex, getWindowLightsProgress } from "../../../lighting/dayNight";
 import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
 import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
 import { framePhaseFromCoords } from "../../../utils/utils";
-import { prepareActorMaterial, useActorLifecycle } from "../Actor";
+import { useActorLifecycle, withinGate } from "../Actor";
 import {
+  beginBuildingInteriorBuild,
   beginProceduralBuildingBuild,
-  ensureBuildingInterior,
   peekBuildingInterior,
   peekProceduralBuildingAssets,
   ProceduralBuildingAssets,
   releaseProceduralBuildingAssets,
   retainProceduralBuildingAssets,
 } from "./buildingAssets";
+import { DEFAULT_EXTERIOR_MATERIAL, DEFAULT_INTERIOR_MATERIAL, DOOR_MATERIAL, updateWindowLightUniforms } from "./buildingMaterials";
 import { addFarDoor, FarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
 import { BUILDING_HULL_KEYS, buildingSeedAt, DOOR_INTERACT_REACH } from "./spec";
@@ -40,90 +40,38 @@ const DOOR_RAYCAST_INTERVAL_FRAMES = 3;
 const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
 const DOOR_SWING_RATE = 4;
 
-// One material instance across every Building (one shader compile); colors
-// are baked per building as vertex colors. The interior is unlit: scene light
-// can't reach inside the shell anyway.
-const DEFAULT_EXTERIOR = new THREE.MeshStandardMaterial({
-  color: 0xffffff,
-  vertexColors: true,
-  roughness: 0.85,
-  metalness: 0.05,
-});
-
-// Night window lights (see CLAUDE.md → Procedural buildings): per-vertex
-// aWindow = (stable per-window random, windowLightChance, windowLightIntensity),
-// hashed against a per-night seed so a different subset lights each night.
-const WINDOW_LIGHTS_UNIFORM = { value: 0 };
-const NIGHT_SEED_UNIFORM = { value: 0 };
-DEFAULT_EXTERIOR.onBeforeCompile = (shader) => {
-  shader.uniforms.uWindowLights = WINDOW_LIGHTS_UNIFORM;
-  shader.uniforms.uNightSeed = NIGHT_SEED_UNIFORM;
-  // The hash runs in the VERTEX shader: hashing an interpolated varying per
-  // fragment amplifies 1-ulp noise into per-pixel speckle.
-  shader.vertexShader = shader.vertexShader
-    .replace(
-      "#include <common>",
-      `#include <common>
-      attribute vec3 aWindow;
-      uniform float uWindowLights;
-      uniform float uNightSeed;
-      varying float vWindowLit;
-      varying float vWindowGlow;`,
-    )
-    .replace(
-      "#include <begin_vertex>",
-      `#include <begin_vertex>
-      float winRoll = fract(sin((fract(aWindow.x) * 91.17 + uNightSeed) * 47.53) * 43758.5453);
-      float winOrder = winRoll / max(aWindow.y, 1e-3);
-      // The last step gates progress == 0: a hash landing exactly on 0 would
-      // otherwise satisfy step(winOrder, 0) and glow in daylight.
-      vWindowLit = step(1e-4, aWindow.y) * step(winRoll, aWindow.y) * step(winOrder, uWindowLights) * step(1e-4, uWindowLights);
-      vWindowGlow = vWindowLit * aWindow.z;`,
-    )
-    .replace(
-      "#include <project_vertex>",
-      `#include <project_vertex>
-      // Windows sit 0.05-0.1u proud of the wall, below depth precision a few
-      // hundred units out (z-fighting). Pull them toward the camera in view
-      // space, scaled with distance. aWindow.x layer: 0 wall, (0,1] frame,
-      // (1,2] glass (pulled twice as far — it overlaps the frame).
-      if (aWindow.x > 0.0) {
-        float winLayer = aWindow.x > 1.0 ? 2.0 : 1.0;
-        mvPosition.xyz *= 1.0 - min(-mvPosition.z * 2e-6, 0.003) * winLayer;
-        gl_Position = projectionMatrix * mvPosition;
-      }`,
-    );
-  shader.fragmentShader = shader.fragmentShader
-    .replace("#include <common>", "#include <common>\nvarying float vWindowLit;\nvarying float vWindowGlow;")
-    .replace(
-      "#include <color_fragment>",
-      `#include <color_fragment>
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.78, 0.28), vWindowLit);`,
-    )
-    .replace(
-      "#include <emissivemap_fragment>",
-      `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(1.0, 0.85, 0.1) * vWindowGlow;`,
-    );
-};
-const DEFAULT_INTERIOR = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
-const DOOR_MATERIAL = new THREE.MeshStandardMaterial({
-  color: 0xffffff,
-  vertexColors: true,
-  roughness: 0.9,
-  metalness: 0.05,
-});
-
-// Applied AFTER the window-lights patch: the patchers chain, and the window
-// depth bias recomputes gl_Position from mvPosition, so it must see the
-// curved position. Procedural geometry is off the quantization lattice.
-prepareActorMaterial(DEFAULT_EXTERIOR, { skipQuantization: true });
-prepareActorMaterial(DOOR_MATERIAL, { skipQuantization: true });
-prepareActorMaterial(DEFAULT_INTERIOR, { skipQuantization: true, skipLampGlow: true });
-
 const DISTANCE_GATE_HYSTERESIS = 12;
 
 const buildQueue = new TaskQueue();
+
+/** Queues build phases one task at a time, each queuing the next, so the queue can yield between them
+ *  (as one monolithic task a heavy skyscraper was a single long frame) and the building nearest the
+ *  player finishes first. Returns the cancel. */
+const queueBuildPhases = (steps: Array<() => void>, at: { x: number; z: number }): (() => void) => {
+  let cancelled = false;
+  let taskId: string | null = null;
+  const queueStep = (i: number) => {
+    taskId = buildQueue.addTask(
+      async () => {
+        taskId = null;
+        if (cancelled) return;
+        steps[i]();
+        if (i + 1 < steps.length) queueStep(i + 1);
+      },
+      { at },
+    );
+  };
+  queueStep(0);
+  return () => {
+    cancelled = true;
+    if (taskId !== null) buildQueue.removeTask(taskId);
+  };
+};
+
+const uploadMeshesOnFirstDraw = (root: THREE.Object3D | null): void =>
+  root?.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) uploadOnFirstDraw(o);
+  });
 
 // The FIRST building each frame writes the shared window-light uniforms and moves the far-door origin.
 let sharedStateTime = -1;
@@ -131,8 +79,7 @@ const driveSharedBuildingState = (state: RootState): void => {
   const time = state.clock.elapsedTime;
   if (time === sharedStateTime) return;
   sharedStateTime = time;
-  WINDOW_LIGHTS_UNIFORM.value = getWindowLightsProgress();
-  NIGHT_SEED_UNIFORM.value = getNightIndex();
+  updateWindowLightUniforms();
   followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
 };
 
@@ -247,33 +194,14 @@ export const Building = (props: BuildingProps) => {
   );
   useEffect(() => {
     if (assets) return;
-    let cancelled = false;
-    let taskId: string | null = null;
-    // One task per build PHASE so the queue can yield between them — as one
-    // monolithic task a heavy skyscraper was a single long frame. Each phase queues
-    // the next, ranked by distance, so the building nearest the player finishes first.
     const build = beginProceduralBuildingBuild(resolvedSeed, buildOptions, optionsKey);
-    const steps = [
-      ...build.steps.map((step, phase) => () => traceSpan(`building:phase${phase}`, step)),
-      () => setAssets(traceSpan("building:finish", build.finish)),
-    ];
-    const at = { x: coordinates[0], z: coordinates[2] };
-    const queueStep = (i: number) => {
-      taskId = buildQueue.addTask(
-        async () => {
-          taskId = null;
-          if (cancelled) return;
-          steps[i]();
-          if (i + 1 < steps.length) queueStep(i + 1);
-        },
-        { at },
-      );
-    };
-    queueStep(0);
-    return () => {
-      cancelled = true;
-      if (taskId !== null) buildQueue.removeTask(taskId);
-    };
+    return queueBuildPhases(
+      [
+        ...build.steps.map((step, phase) => () => traceSpan(`building:phase${phase}`, step)),
+        () => setAssets(traceSpan("building:finish", build.finish)),
+      ],
+      { x: coordinates[0], z: coordinates[2] },
+    );
   }, [resolvedSeed, optionsKey]); // assets deliberately omitted: guard exits once built
 
   // Passing `assets` lets the cache re-register an entry a concurrent
@@ -285,10 +213,7 @@ export const Building = (props: BuildingProps) => {
   }, [assets, resolvedSeed, optionsKey]);
 
   useEffect(() => {
-    if (!assets) return;
-    groupRef.current?.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) uploadOnFirstDraw(o);
-    });
+    if (assets) uploadMeshesOnFirstDraw(groupRef.current);
   }, [assets]);
 
   // State drives the collider mount; the swing loop reads the REF: the next
@@ -337,8 +262,7 @@ export const Building = (props: BuildingProps) => {
       // Same test as the base's near gate (same distance, same frames), so "live" is exactly
       // "matrices unfrozen" and a real leaf never swings under a frozen matrix.
       if (ctx.gatesChecked) {
-        const reach = LIVE_DISTANCE + (liveRef.current ? DISTANCE_GATE_HYSTERESIS : 0);
-        const live = ctx.distanceSq < reach * reach;
+        const live = withinGate(ctx.distanceSq, LIVE_DISTANCE, liveRef.current, DISTANCE_GATE_HYSTERESIS);
         liveRef.current = live;
         // The interior is fully occluded by the shell from outside.
         if (interiorGroupRef.current) interiorGroupRef.current.visible = live;
@@ -386,24 +310,18 @@ export const Building = (props: BuildingProps) => {
       setInterior(cached);
       return;
     }
-    let cancelled = false;
-    const taskId = buildQueue.addTask(
-      async () => {
-        if (!cancelled) setInterior(traceSpan("building:interior", () => ensureBuildingInterior(resolvedSeed, optionsKey)));
-      },
-      { at: { x: coordinates[0], z: coordinates[2] } },
+    const build = beginBuildingInteriorBuild(resolvedSeed, optionsKey, assets.plan);
+    return queueBuildPhases(
+      [
+        ...build.steps.map((step, phase) => () => traceSpan(`building:interior${phase}`, step)),
+        () => setInterior(traceSpan("building:interior-merge", build.finish)),
+      ],
+      { x: coordinates[0], z: coordinates[2] },
     );
-    return () => {
-      cancelled = true;
-      buildQueue.removeTask(taskId);
-    };
   }, [interiorWanted, assets, resolvedSeed, optionsKey]);
 
   useEffect(() => {
-    if (!interior) return;
-    interiorGroupRef.current?.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) uploadOnFirstDraw(o);
-    });
+    if (interior) uploadMeshesOnFirstDraw(interiorGroupRef.current);
   }, [interior]);
 
   useEffect(
@@ -478,13 +396,13 @@ export const Building = (props: BuildingProps) => {
 
   return (
     <group ref={groupRef} position={coordinates}>
-      <mesh geometry={assets.exteriorGeometry} material={materials?.exterior ?? DEFAULT_EXTERIOR} />
+      <mesh geometry={assets.exteriorGeometry} material={materials?.exterior ?? DEFAULT_EXTERIOR_MATERIAL} />
 
       {/* Built on the first approach within INTERIOR_DISTANCE and kept until unmount; shown
           inside LIVE_DISTANCE (a ref write in onFrame). */}
       {interior && (
         <group ref={interiorGroupRef}>
-          <mesh geometry={interior} material={materials?.interior ?? DEFAULT_INTERIOR} />
+          <mesh geometry={interior} material={materials?.interior ?? DEFAULT_INTERIOR_MATERIAL} />
           {/* Seeded room slots. */}
           {childArray.map((child, i) => {
             const slot = slots[i % slots.length];
@@ -549,8 +467,8 @@ export const Building = (props: BuildingProps) => {
  *  descriptor resolves, and the shared far-door mesh. */
 const BuildingWarmup = ({ descriptor }: { descriptor: { materials?: BuildingMaterials } }) => {
   const scene = useThree((state) => state.scene);
-  const exterior = descriptor.materials?.exterior ?? DEFAULT_EXTERIOR;
-  const interior = descriptor.materials?.interior ?? DEFAULT_INTERIOR;
+  const exterior = descriptor.materials?.exterior ?? DEFAULT_EXTERIOR_MATERIAL;
+  const interior = descriptor.materials?.interior ?? DEFAULT_INTERIOR_MATERIAL;
   useEffect(
     () => warmPrograms(scene, [meshTemplate(exterior), meshTemplate(DOOR_MATERIAL), meshTemplate(interior), farDoorWarmTemplate()]),
     [scene, exterior, interior],

@@ -24,8 +24,6 @@ export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Pro
   return client.ensure();
 };
 
-export type { SerializedActorDescriptor };
-
 export const serializeDescriptors = (
   descriptors: AnyActorDescriptor[]
 ): SerializedActorDescriptor[] =>

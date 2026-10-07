@@ -1,9 +1,9 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useDevContext } from "../context/DevContext";
 import { GameContextProvider } from "../context/GameContext";
-import { Overlay } from "../menus/overlay/Overlay";
+import { StatsOverlay } from "../menus/overlay/StatsOverlay";
 import { Player } from "../player/Player";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
@@ -11,7 +11,9 @@ import { LampGlowDriver } from "../lighting/lampGlow";
 import { GRAVITY } from "../physics/characterMovement";
 import { initCursor } from "../utils/cursor/cursor";
 import { traceSpan } from "../utils/spikeTrace";
+import { bindProgramCompiler } from "../utils/warmPrograms";
 import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
+import { isCameraUnderwater, UnderwaterPass } from "../vfx/underwater";
 
 /** Non-zero useFrame priorities disable R3F's auto-render, so this renders
  *  explicitly. The FPS-cap decision runs ONCE per tick at -10, before every
@@ -26,12 +28,23 @@ const SceneRender = () => {
     scene.updateMatrix();
     scene.matrixAutoUpdate = false;
   }, [gl, scene, camera]);
+  // Before any sibling below mounts its content: their program warm-ups compile through it.
+  useEffect(() => bindProgramCompiler(gl, camera), [gl, camera]);
   useFrame(() => {
     shouldPresentThisFrame();
   }, -10);
-  useFrame(() => {
+  const underwater = useMemo(() => new UnderwaterPass(), []);
+  useEffect(() => {
+    underwater.warm(gl);
+    return () => underwater.dispose();
+  }, [gl, underwater]);
+  useFrame(({ clock }) => {
+    if (!isMainRenderFrame()) return;
     // A spike INSIDE this span is GPU/driver work; outside it is main-thread JS.
-    if (isMainRenderFrame()) traceSpan("render", () => gl.render(scene, camera));
+    traceSpan("render", () => {
+      if (isCameraUnderwater()) underwater.render(gl, scene, camera, clock.elapsedTime);
+      else gl.render(scene, camera);
+    });
   }, 2);
   return null;
 };
@@ -41,7 +54,9 @@ const SceneRender = () => {
 
 const PHYSICS_GRAVITY: [number, number, number] = [0, GRAVITY, 0];
 
-const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
+/** Everything that lives as long as the canvas: the render loop, the HUD, the physics world (the domain
+ *  and the Player inside it) and the network players. */
+const CanvasContents = ({ children }: React.PropsWithChildren) => {
   const { physicsDebug } = useDevContext();
 
   useEffect(() => {
@@ -52,7 +67,7 @@ const PreCustomCanvas = ({ children }: React.PropsWithChildren) => {
     <>
       <SceneRender />
       <LampGlowDriver />
-      <Overlay />
+      <StatsOverlay />
       {/* interpolate={false} + timeStep="vary": no dynamic bodies; the fixed 1/60 accumulator
           drove kinematic bodies at 60/fps of their speed above 60fps (see CLAUDE.md). */}
       <Physics gravity={PHYSICS_GRAVITY} debug={physicsDebug} interpolate={false} timeStep="vary">
@@ -77,7 +92,7 @@ export const CustomCanvas = ({ children }: React.PropsWithChildren) => {
     // Black avoids a gray flash before the first frame (alpha: false, so CSS never shows otherwise).
     <Canvas style={{ background: "#000000" }} dpr={[1, MAX_DPR]} gl={GL_PROPS}>
       <GameContextProvider>
-        <PreCustomCanvas>{children}</PreCustomCanvas>
+        <CanvasContents>{children}</CanvasContents>
       </GameContextProvider>
     </Canvas>
   );

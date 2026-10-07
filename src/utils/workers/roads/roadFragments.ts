@@ -56,7 +56,7 @@ const ISLAND_PIECE_MAX = 4 * ISLAND_MAX_CELLS;
 /** A piece goes to the bank when this many times more of its rim is bank than road. */
 const ISLAND_BANK_RIM = 2;
 /** A building's band (building/spec.ts roadDistanceRange): a piece reaching it is a block. */
-export const ISLAND_BUILD_FIELD = 23;
+const ISLAND_BUILD_FIELD = 23;
 
 /** Per lattice point, what `land` says (ROAD / BANK: not land, beside road or riverbank; LAND; KEEPS:
  *  land that keeps its piece by itself) and the verdict of a land point's piece (STAYS, or removed

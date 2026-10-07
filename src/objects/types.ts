@@ -82,4 +82,7 @@ export interface FoliageAttributes extends GameObjectAttributes {
   swaySpeed?: number;
   /** Two fields with the SAME seed and density land on identical points and grow through each other. */
   seed?: string;
+  /** true = grows ONLY under water (seaweed), each instance shortened to stay under the surface;
+   *  unset = never under water. */
+  underwater?: boolean;
 }

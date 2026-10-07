@@ -44,7 +44,7 @@ export const toFlattenDescriptor = (d: FlattenPlacement): FlattenDescriptor => (
 });
 
 /** Lowercase letters only: a name is an address word (`/<region>/<biome>`, address.ts) and a
- *  shader function (`<name>_frag`, utils/material/_material.ts). */
+ *  shader function (`<name>_frag`, world/shaders/combineBiomeMaterials.ts). */
 const NAME_RE = /^[a-z]+$/;
 
 /** Ids and names decide the world (voronoi rolls, address words, shader slots): a clash silently

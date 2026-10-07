@@ -2,12 +2,13 @@
 
 ## How it works
 
-Water is a flat surface placed by the CPU; waves and shore fade are shader-only. Physics ignores it.
+Water is a flat surface placed by the CPU; waves and shore fade are shader-only. Physics ignores it (the player's swimming reads the same surface through the height pipeline).
 
-- **Lakes** ([../../utils/workers/lakes.ts](../../utils/workers/lakes.ts)): a biome with `water: { depth }`. Its level is the region base at the cell site minus `LAKE_SURFACE_BELOW_BASE`, blended across neighboring water cells (`lakeLevelAt`). The bed is built relative to that level (`SHORE_RISE` at the shore); `shoreLift` raises nearby land so it never sits below the water.
-- **Rivers** ([../../utils/workers/rivers/riverField.ts](../../utils/workers/rivers/riverField.ts)): the surface follows the terrain along the centerline minus `RIVER_SURFACE_BELOW`; `riverMouthShare` merges a river into lake water at its mouth.
+- **Lakes** ([../../utils/workers/lakes.ts](../../utils/workers/lakes.ts)): a biome with `water: { depth }`. Its level is the region base at the cell site minus `LAKE_SURFACE_BELOW_BASE`, blended across neighboring water cells (`lakeLevelAt`). The bed is built relative to that level (`lakeBowlHeight`: `SHORE_RISE` at the shore, `depth` under it one blend width in, with `lakeBedBumps` hummocks grown in by presence² so the shore is untouched); `shoreLift` raises nearby land so it never sits below the water.
+- **Under the water:** the terrain carries `underwaterDepth` per vertex (`vUnderwaterDepth` in every biome frag — the lake's sand darkens with it), seaweed grows on the lake bed (an `underwater` foliage plant), the player swims ([player/README.md](../../player/README.md)) and the camera's view goes through the underwater pass ([vfx/underwater.ts](../../vfx/underwater.ts)). Physics still ignores the water itself.
+- **Rivers** ([../../utils/workers/rivers/riverField.ts](../../utils/workers/rivers/riverField.ts)): the surface follows the terrain along the centerline minus `RIVER_SURFACE_BELOW`; `riverMouthShare` merges a river into lake water at its mouth, and `riverLakeMerge` sinks the land between a river and a lake close beside it under the lake (one water, no levee).
 - Both produce `VertexResult.waterHeight` (`NaN` when no water is near).
-- **Mesh:** a chunk with water gets a child mesh on the same pooled grid (`ensureWaterMesh` in [../terrain/TerrainRenderer.tsx](../terrain/TerrainRenderer.tsx), filled by `writeWaterBuffers`), sharing the chunk's LOD fades and disposal (`releaseWater`). Dry vertices are pushed below the ground; wet ones carry `waterDepth`.
+- **Mesh:** a chunk with water gets a child mesh on the same pooled grid (`ensureWaterMesh` in [../terrain/chunkObjects.ts](../terrain/chunkObjects.ts), filled by `writeWaterBuffers`), sharing the chunk's LOD fades and disposal (`releaseWater`). Dry vertices are pushed below the ground; wet ones carry `waterDepth`.
 - **Material** ([waterMaterial.ts](waterMaterial.ts)): one shared `getWaterMaterial()`, clock advanced by `tickWater()`. Vertex swell + curvature; fragment `worldFbm` normals, fresnel, glint, depth color, alpha fade at the shore, night dim and dither.
 
 ## How to add another

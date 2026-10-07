@@ -12,11 +12,14 @@ import { DRESSING_COLLIDER_SPECS } from "../../src/objects/dressing/catalog";
 import { runDressingEnumerator } from "../../src/objects/dressing/enumerators";
 import { DRESSING_CHUNK_SIZE } from "../../src/objects/dressing/types";
 import { createBuildingCollider } from "../src/game/physics/buildings.js";
-import { createObstacleBodies, enumerateObstacles } from "../src/game/physics/obstacles.js";
+import { createObstacleBodies } from "../src/game/physics/obstacles.js";
+import { dressingChunkBounds, enumerateObstacles } from "../src/game/physics/obstaclePoints.js";
 import { CITY_BIOME_ID } from "../../src/world/constants";
 import { GRASS_BIOME } from "../../src/world/domains/overworld/regions/city/biomes/grass/spec";
-import { PhysicsWorld, PHYSICS_DT } from "../src/game/physics/physicsWorld.js";
+import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
+import { TICK_SECONDS } from "../src/game/tick.js";
 import { Walker } from "../src/game/physics/walker.js";
+import { GroundBody } from "../src/game/physics/groundBody.js";
 import { findBiomePatch, findSlopeSpot, type SlopeSample } from "../src/cli/terrainScan.js";
 import { chunkIndex, sampleChunkHeights, TERRAIN_SEGMENTS, vertexWorld } from "../src/game/physics/terrain.js";
 
@@ -30,7 +33,7 @@ const held: string[] = [];
 
 const settle = (w: Walker, ticks: number) => {
   for (let i = 0; i < ticks; i++) {
-    w.step(PHYSICS_DT, 0, 0);
+    w.step(TICK_SECONDS, 0, 0);
     pw.step();
   }
 };
@@ -38,8 +41,8 @@ const push = (w: Walker, spot: SlopeSample, seconds: number) => {
   const p0 = w.position();
   const feet0 = w.feetY();
   let minFeet = feet0;
-  for (let i = 0; i < Math.round(seconds / PHYSICS_DT); i++) {
-    w.step(PHYSICS_DT, spot.ux * SPEED, spot.uz * SPEED);
+  for (let i = 0; i < Math.round(seconds / TICK_SECONDS); i++) {
+    w.step(TICK_SECONDS, spot.ux * SPEED, spot.uz * SPEED);
     pw.step();
     minFeet = Math.min(minFeet, w.feetY());
   }
@@ -110,6 +113,87 @@ describe("server physics", () => {
     pw.terrain.release(k3);
     pw.workFor(Infinity);
     assert.equal(pw.stats().colliders, before, "abandoned build created nothing");
+  });
+
+  it("a chunk released while pending and requested again is still built", () => {
+    // The queue dedupes by key: the first record's job must serve the second record.
+    const before = pw.stats().colliders;
+    pw.terrain.release(pw.terrain.request(1500, 1500));
+    const k = pw.terrain.request(1500, 1500);
+    pw.workFor(Infinity);
+    assert.ok(pw.terrain.isReady(k), "re-requested chunk built");
+    assert.equal(pw.stats().colliders, before + 1, "exactly once");
+    pw.terrain.release(k);
+    assert.equal(pw.stats().colliders, before);
+  });
+
+  it("the generation worker builds the in-place chunks bit for bit", async () => {
+    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: new URL("../src/game/physics/chunkGenerator.worker.ts", import.meta.url) });
+    try {
+      const gx = chunkIndex(patch.x);
+      const gz = chunkIndex(patch.z);
+      const city = findBiomePatch(CITY_BIOME_ID)!;
+      const dx = Math.floor(city.x / DRESSING_CHUNK_SIZE);
+      const dz = Math.floor(city.z / DRESSING_CHUNK_SIZE);
+      const kt = worker.terrain.request(gx, gz);
+      const kd = worker.dressing.request(dx, dz);
+      worker.terrain.release(worker.terrain.request(gx + 7, gz)); // cancelled while pending
+      worker.workFor(Infinity);
+      assert.ok(!worker.terrain.isReady(kt), "nothing is sampled on the tick's thread");
+      const deadline = Date.now() + 60_000;
+      while (!(worker.terrain.isReady(kt) && worker.dressing.isReady(kd)) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+        worker.workFor(Infinity);
+      }
+      assert.ok(worker.terrain.isReady(kt) && worker.dressing.isReady(kd), "built from the worker's data");
+      assert.ok(!worker.terrain.has(gx + 7, gz), "the cancelled chunk was never built");
+      // The heightfield Rapier holds is the in-place sample, bit for bit.
+      const field = worker.world.bodies.getAll().map((b) => b.collider(0)).find((c) => c.shape.type === RAPIER.ShapeType.HeightField)!;
+      const held = (field.shape as RAPIER.Heightfield).heights;
+      assert.deepEqual(Array.from(held), Array.from(sampleChunkHeights(gx, gz)), "heights identical");
+      const expected = enumerateObstacles(dx, dz);
+      assert.equal(worker.stats().colliders - 1, expected.reduce((n, p) => n + p.parts.length + (p.mesh ? 1 : 0), 0), "every dressing collider");
+    } finally {
+      worker.free();
+    }
+  });
+
+  it("height queries are answered off the tick, bit for bit, and a body stands at its hint until then", async () => {
+    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: new URL("../src/game/physics/chunkGenerator.worker.ts", import.meta.url) });
+    const until = async (done: () => boolean) => {
+      const deadline = Date.now() + 60_000;
+      while (!done() && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+        worker.workFor(Infinity);
+      }
+    };
+    try {
+      const points = [patch, { x: patch.x + 37.3, z: patch.z - 12.9 }, { x: -2210.5, z: 3301.25 }];
+      const answers: number[] = [];
+      for (const p of points) worker.heightAt(p.x, p.z, (h) => answers.push(h));
+      assert.equal(answers.length, 0, "never answered on the tick's thread");
+      await until(() => answers.length === points.length);
+      assert.deepEqual(answers, points.map((p) => computeVertexData(p.x, p.z).height), "the in-place heights");
+
+      const ground = computeVertexData(patch.x, patch.z).height;
+      const hint = ground + 7;
+      const body = new GroundBody(worker, patch.x, patch.z, CAPSULE, hint);
+      try {
+        assert.equal(body.y, hint, "stands at the registration's hint");
+        assert.ok(!body.ready, "not ready before its ground is answered");
+        await until(() => {
+          body.step(TICK_SECONDS, 0, 0, null);
+          return body.ready;
+        });
+        assert.ok(body.ready, "ready once the ground is in and its chunks are built");
+        const pose = body.resolvePose(TICK_SECONDS, { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
+        assert.ok(Math.abs(pose.y - ground) < 0.1, `placed on the ground (${(pose.y - ground).toFixed(3)}u)`);
+      } finally {
+        body.dispose();
+      }
+    } finally {
+      worker.free();
+    }
   });
 
   it("a dropped capsule lands on the terrain at the analytic height", () => {
@@ -189,8 +273,8 @@ describe("server physics", () => {
     const w = new Walker(pw, sx, computeVertexData(sx, sz).height + 0.1, sz, CAPSULE);
     settle(w, 5);
     let minDist = Infinity;
-    for (let i = 0; i < Math.round(8 / PHYSICS_DT); i++) {
-      w.step(PHYSICS_DT, -SPEED, 0);
+    for (let i = 0; i < Math.round(8 / TICK_SECONDS); i++) {
+      w.step(TICK_SECONDS, -SPEED, 0);
       pw.step();
       const p = w.position();
       minDist = Math.min(minDist, Math.hypot(p.x - b.x, p.z - b.z));
@@ -220,7 +304,7 @@ describe("server physics", () => {
     assert.ok(pts.length > 0, "a city chunk has dressing obstacles");
     assert.ok(pts.some((p) => p.parts === LAMP_COLLIDER_PARTS), "street lamps among them");
     assert.deepEqual(enumerateObstacles(gx, gz), pts, "deterministic");
-    const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+    const bounds = dressingChunkBounds(gx, gz);
     const fromCatalog = DRESSING_COLLIDER_SPECS.flatMap((spec) =>
       runDressingEnumerator(spec.enumerator, bounds, spec.placement).flatMap((p) => spec.bodiesOf(p).map((b) => ({ ...b, parts: b.parts ?? spec.colliderParts }))),
     );
@@ -244,14 +328,14 @@ describe("server physics", () => {
         if (computeVertexDataRaw(q.x, q.z).biomeId === CITY_BIOME_ID) continue;
         const gx = Math.floor(q.x / DRESSING_CHUNK_SIZE);
         const gz = Math.floor(q.z / DRESSING_CHUNK_SIZE);
-        const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+        const bounds = dressingChunkBounds(gx, gz);
         if (runDressingEnumerator(FREEWAY_LAMPS_SPEC.enumerator, bounds, FREEWAY_LAMPS_SPEC.placement).length > 0) found = { gx, gz };
       }
       if (found) break;
     }
     assert.ok(found, "a run chunk with lamps");
     const { gx, gz } = found!;
-    const bounds = { minX: gx * DRESSING_CHUNK_SIZE, minZ: gz * DRESSING_CHUNK_SIZE, maxX: (gx + 1) * DRESSING_CHUNK_SIZE, maxZ: (gz + 1) * DRESSING_CHUNK_SIZE };
+    const bounds = dressingChunkBounds(gx, gz);
     const lamps = runDressingEnumerator(FREEWAY_LAMPS_SPEC.enumerator, bounds, FREEWAY_LAMPS_SPEC.placement);
     const obstacles = enumerateObstacles(gx, gz);
     for (const l of lamps) {

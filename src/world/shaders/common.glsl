@@ -42,3 +42,14 @@ vec4 triplanarSample(sampler2D tex, vec3 worldPos, vec3 worldNormal, float scale
 
   return xaxis * blending.x + yaxis * blending.y + zaxis * blending.z;
 }
+
+/** `tex` at the flat world UV, blended toward a triplanar read by `tri` (steep ground); the triplanar reads
+ *  are skipped where `tri` is negligible. */
+vec4 slopeBlendedSample(sampler2D tex, vec2 uv, float tri, vec3 worldPos, vec3 worldNormal, float scale) {
+  return tri < 0.01 ? texture2D(tex, uv) : mix(texture2D(tex, uv), triplanarSample(tex, worldPos, worldNormal, scale), tri);
+}
+
+/** The terrain's fake directional light, 0..1: unlit ground scales by it so ramps, curbs and faces read. */
+float fakeSunLight(vec3 worldNormal) {
+  return clamp(dot(normalize(worldNormal), normalize(vec3(0.35, 0.9, 0.2))), 0.0, 1.0);
+}

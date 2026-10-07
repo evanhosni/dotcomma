@@ -247,7 +247,9 @@ const getDelaunayData = (grid: VoronoiCell[]) => {
 
 /** Which two cells a wall midpoint lies between, by its floored midpoint, with the biome cell
  *  whose grid first found it (swept 5 cells out). */
-let wallSides: { [label: string]: { grid: [number, number]; a: VoronoiCell; b: VoronoiCell } } = {};
+// A Map (insertion order, as the object's non-index keys had): the per-build sweep walked a dictionary-mode
+// object of thousands of labels.
+const wallSides = new Map<string, { grid: [number, number]; a: VoronoiCell; b: VoronoiCell }>();
 // Memoized on grid identity: rebuilding the wall list per vertex (~900k string
 // allocations per LOD1 chunk) was the dominant chunk-build cost.
 const zoneWallsCache = new WeakMap<VoronoiCell[], Wall[]>();
@@ -284,24 +286,19 @@ export const getZoneWalls = (currentVertex: PointXZ, grid: VoronoiCell[]): Wall[
     const midZ = (v1z + v2z) / 2;
     const label = `${Math.floor(midX)},${Math.floor(midZ)}`;
 
-    let sides = cache[label];
+    let sides = cache.get(label);
     if (sides === undefined) {
       const [nearest1, nearest2] = twoNearestCells(midX, midZ, grid);
       sides = { grid: [x, z] as [number, number], a: nearest1, b: nearest2 };
-      cache[label] = sides;
+      cache.set(label, sides);
 
       // One sweep per build is exactly a sweep after every new label: what this build adds carries
       // its own cell, so later sweeps in the same build never find anything to drop.
       if (!swept) {
         swept = true;
-        for (const key in cache) {
-          const cachedData = cache[key];
-          if (cachedData.grid) {
-            const [cx, cz] = cachedData.grid;
-            if (Math.abs(x - cx) > 5 || Math.abs(z - cz) > 5) {
-              delete cache[key];
-            }
-          }
+        for (const [key, cachedData] of cache) {
+          const [cx, cz] = cachedData.grid;
+          if (Math.abs(x - cx) > 5 || Math.abs(z - cz) > 5) cache.delete(key);
         }
       }
     }
@@ -386,7 +383,7 @@ export const distanceToWall = (px: number, pz: number, walls: Wall[]): number =>
 
 /** Everything keyed by seed or by config-derived objects is stale across an init. */
 export const clearVoronoiCaches = (): void => {
-  wallSides = {};
+  wallSides.clear();
   regionSites.clear();
   regionGrids.clear();
   biomeGrids.clear();

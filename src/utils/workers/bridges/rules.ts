@@ -6,7 +6,9 @@ import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import { warp } from "../noise";
 import { riverFieldAt, riverSample } from "../rivers/riverField";
-import { type RiverEdge, riverPieceBuilt, riverPieceEnds, riverPiecesNear, riverWetReach } from "../rivers/riverNetwork";
+import { riverWetReach } from "../rivers/constants";
+import { riverPieceBuilt, riverPieceEnds, riverPiecesNear } from "../rivers/riverNetwork";
+import type { RiverEdge } from "../rivers/types";
 import { BRIDGE_ALONG_ALIGN, BRIDGE_MAX_ALONG_SHORE, BRIDGE_MAX_DEVIATION, BRIDGE_MAX_TURN, BRIDGE_MIN_CROSSING, MOUTH_SAMPLE } from "./constants";
 import { edgeDirWorld, edgeSide } from "./mouths";
 import { dropShortLegs, filletCorners, segIntersect, simplifyPolyline } from "./polyline";
@@ -71,7 +73,7 @@ export const alongShoreLength = (scan: WindowScan, c: BridgeChain): number => {
     if (l < 1e-6) continue;
     const mx = (c.wx[i] + c.wx[i + 1]) / 2;
     const mz = (c.wz[i] + c.wz[i + 1]) / 2;
-    riverFieldAt(mx, mz);
+    riverFieldAt(mx, mz, false, false);
     if (!(riverSample.distance < scan.reach)) continue;
     let best = Infinity;
     let ux = 0;
@@ -180,7 +182,7 @@ export const mouthCurveRules = (pts: PointXZ[], e: RiverEdge, landedEnd: boolean
     const p = pts[i];
     const q = pts[i + 1];
     const mw = warp((p.x + q.x) / 2, (p.z + q.z) / 2);
-    riverFieldAt(mw.x, mw.z);
+    riverFieldAt(mw.x, mw.z, false, false);
     const inFoot = riverSample.distance < reach;
     if (inFoot && !wasWet) wetRuns++;
     if (inFoot && dryStart < 0) dryStart = cum[i];

@@ -1,4 +1,5 @@
-import { useGLTF } from "@react-three/drei";
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
+import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../../context/GameContext";
@@ -129,6 +130,23 @@ const actorPropsOf = (
   };
 };
 
+/** Warm-up components are module-level members' statics: a handful, alive for the page. */
+const warmupIds = new Map<React.FC<{ descriptor: AnyActorDescriptor }>, number>();
+
+/** One load-time warm-up node per distinct (member warm-up, warmupKey) among the descriptors. */
+const warmupNodesOf = (descriptors: AnyActorDescriptor[]): React.ReactNode[] => {
+  const nodes = new Map<string, React.ReactNode>();
+  for (const desc of descriptors) {
+    const hooks = desc.component as ActorWarmupHooks;
+    if (!hooks.Warmup) continue;
+    let hookId = warmupIds.get(hooks.Warmup);
+    if (hookId === undefined) warmupIds.set(hooks.Warmup, (hookId = warmupIds.size));
+    const key = `${hookId}:${hooks.warmupKey?.(desc) ?? ""}`;
+    if (!nodes.has(key)) nodes.set(key, <hooks.Warmup key={key} descriptor={desc} />);
+  }
+  return Array.from(nodes.values());
+};
+
 export const ActorPool = () => {
   const [stableComponents, setStableComponents] = useState<React.ReactNode[]>([]);
 
@@ -193,27 +211,62 @@ export const ActorPool = () => {
     }
   }, [descriptors]);
 
+  /** Unblocks cooled-down ledger entries whose point is outside the immediate radius (or whose kind is gone). */
   const cleanupDespawnLedger = useCallback(() => {
     const now = Date.now();
     respawnBlockedRef.current.forEach((rec, objId) => {
       if (now - rec.despawnedAt < RESPAWN_COOLDOWN_MS) return;
-
       const desc = descriptorMap.get(rec.descriptorId);
-      if (!desc) {
-        respawnBlockedRef.current.delete(objId);
-        ledgerPointsRef.current.delete(rec.point);
-        return;
+      if (desc) {
+        const dx = camera.position.x - rec.x;
+        const dz = camera.position.z - rec.z;
+        const immediateRadius = getRespawnBlockRadius(desc);
+        if (dx * dx + dz * dz <= immediateRadius * immediateRadius) return;
       }
-
-      const dx = camera.position.x - rec.x;
-      const dz = camera.position.z - rec.z;
-      const immediateRadius = getRespawnBlockRadius(desc);
-      if (dx * dx + dz * dz > immediateRadius * immediateRadius) {
-        respawnBlockedRef.current.delete(objId);
-        ledgerPointsRef.current.delete(rec.point);
-      }
+      respawnBlockedRef.current.delete(objId);
+      ledgerPointsRef.current.delete(rec.point);
     });
   }, [camera, descriptorMap]);
+
+  /** The one hole in identity checks: a chunk evicted and re-delivered hands back NEW point objects. The
+   *  string maps stay authoritative and the identity entry is re-pointed so the next hot loop filters it.
+   *  True when the point was already mounted or respawn-blocked. */
+  const repointRedelivered = useCallback((objId: string, point: SpawnPoint): boolean => {
+    const ledgerRec = respawnBlockedRef.current.get(objId);
+    if (ledgerRec) {
+      ledgerPointsRef.current.delete(ledgerRec.point);
+      ledgerRec.point = point;
+      ledgerPointsRef.current.set(point, ledgerRec);
+      return true;
+    }
+    const mounted = objectsMapRef.current.get(objId);
+    if (mounted) {
+      mountedPointsRef.current.delete(mounted.point);
+      mounted.point = point;
+      mountedPointsRef.current.add(point);
+      return true;
+    }
+    return false;
+  }, []);
+
+  /** An actor destroyed itself: unmount it and block its respawn (CLAUDE.md → Actor Spawn Lifecycle). */
+  const recordDespawn = useCallback((id: string, point: SpawnPoint): void => {
+    // A stale onDestroy after a sweep + remount must not orphan the NEW point.
+    const entry = objectsMapRef.current.get(id);
+    const livePoint = entry ? entry.point : point;
+    const rec: DespawnRecord = {
+      despawnedAt: Date.now(),
+      x: point.x,
+      z: point.z,
+      descriptorId: point.descriptorId,
+      point: livePoint,
+    };
+    respawnBlockedRef.current.set(id, rec);
+    ledgerPointsRef.current.set(livePoint, rec);
+    objectsMapRef.current.delete(id);
+    mountedPointsRef.current.delete(livePoint);
+    dirtyRef.current = true;
+  }, []);
 
   // Not a "destroy" (no ledger entry): re-entering the spawn radius remounts it.
   const sweepOutOfRange = useCallback((): boolean => {
@@ -282,43 +335,10 @@ export const ActorPool = () => {
 
       for (const { point, desc } of candidates) {
         const objId = objIdOf(point);
-
-        // The one hole in identity checks: a chunk evicted and re-delivered
-        // hands back NEW point objects. The string maps stay authoritative and
-        // the identity entry is re-pointed so the next hot loop filters it.
-        const ledgerRec = respawnBlockedRef.current.get(objId);
-        if (ledgerRec) {
-          ledgerPointsRef.current.delete(ledgerRec.point);
-          ledgerRec.point = point;
-          ledgerPointsRef.current.set(point, ledgerRec);
-          continue;
-        }
-        const mounted = objectsMapRef.current.get(objId);
-        if (mounted) {
-          mountedPointsRef.current.delete(mounted.point);
-          mounted.point = point;
-          mountedPointsRef.current.add(point);
-          continue;
-        }
+        if (repointRedelivered(objId, point)) continue;
 
         const Component = desc.component;
-        const props = actorPropsOf(desc, point, objId, (id: string) => {
-          // A stale onDestroy after a sweep + remount must not orphan the NEW point.
-          const entry = objectsMapRef.current.get(id);
-          const livePoint = entry ? entry.point : point;
-          const rec: DespawnRecord = {
-            despawnedAt: Date.now(),
-            x: point.x,
-            z: point.z,
-            descriptorId: point.descriptorId,
-            point: livePoint,
-          };
-          respawnBlockedRef.current.set(id, rec);
-          ledgerPointsRef.current.set(livePoint, rec);
-          objectsMapRef.current.delete(id);
-          mountedPointsRef.current.delete(livePoint);
-          dirtyRef.current = true;
-        });
+        const props = actorPropsOf(desc, point, objId, (id: string) => recordDespawn(id, point));
 
         objectsMapRef.current.set(objId, {
           node: <Component key={objId} {...props} />,
@@ -345,6 +365,8 @@ export const ActorPool = () => {
     maxDespawnRadius,
     cleanupDespawnLedger,
     sweepOutOfRange,
+    repointRedelivered,
+    recordDespawn,
   ]);
 
   // <Domain> always mounts the pool, so this drives every actor in a domain tree.
@@ -366,18 +388,7 @@ export const ActorPool = () => {
     runSpawnBatch();
   });
 
-  const warmups = useMemo(() => {
-    const nodes = new Map<string, React.ReactNode>();
-    for (const desc of descriptors) {
-      const hooks = desc.component as ActorWarmupHooks;
-      if (!hooks.Warmup) continue;
-      let hookId = warmupIds.get(hooks.Warmup);
-      if (hookId === undefined) warmupIds.set(hooks.Warmup, (hookId = warmupIds.size));
-      const key = `${hookId}:${hooks.warmupKey?.(desc) ?? ""}`;
-      if (!nodes.has(key)) nodes.set(key, <hooks.Warmup key={key} descriptor={desc} />);
-    }
-    return Array.from(nodes.values());
-  }, [descriptors]);
+  const warmups = useMemo(() => warmupNodesOf(descriptors), [descriptors]);
 
   return (
     <>
@@ -386,6 +397,3 @@ export const ActorPool = () => {
     </>
   );
 };
-
-/** Warm-up components are module-level members' statics: a handful, alive for the page. */
-const warmupIds = new Map<React.FC<{ descriptor: AnyActorDescriptor }>, number>();

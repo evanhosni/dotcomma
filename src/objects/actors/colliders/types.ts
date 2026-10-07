@@ -1,4 +1,5 @@
-import * as THREE from "three";
+import type * as THREE from "three";
+
 export enum COLLIDER_TYPE {
   CAPSULE = "capsule",
   SPHERE = "sphere",
@@ -48,4 +49,12 @@ export interface TrimeshColliderProps {
   indices: Uint32Array;
   position: THREE.Vector3Tuple;
   rotation: THREE.Vector3Tuple;
+}
+
+/** A model's fitted shapes by kind: createColliders' result, what ModelActor mounts. */
+export interface ModelColliders {
+  capsuleColliders: CapsuleColliderProps[];
+  sphereColliders: SphereColliderProps[];
+  boxColliders: BoxColliderProps[];
+  trimeshColliders: TrimeshColliderProps[];
 }

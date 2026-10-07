@@ -40,6 +40,11 @@ const BRIDGE_TEE_OVERLAP = 0.6;
 /** A T-child meets its host at no shallower than this: two roads converging at a narrow angle would
  *  overlap as two decks with crossing parapets. */
 const BRIDGE_MIN_T_ANGLE = (35 * Math.PI) / 180;
+/** A deck within this of an arterial's crossing already carries it; of two arterial crossings this
+ *  close, the squarer one is built. */
+const CROSSING_SPACING = 120;
+/** A natural branch's host is the deck landing within this of the mouth it faces. */
+const MOUTH_NATURAL_LAND = 30;
 
 /** 4. The deck of a chain, built LAZILY and memoized on the chain (state 1 = building, so a T
  *  cycle drops). A dropped chain returns null and records why. Throws WINDOW_TOO_SMALL for a chain
@@ -483,7 +488,7 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
       let inChannel = false;
       for (const off of [0, W / 2, -W / 2]) {
         const w = warp(q.x - d.z * off, q.z + d.x * off);
-        riverFieldAt(w.x, w.z);
+        riverFieldAt(w.x, w.z, false, false);
         if (!(riverSample.distance < waterBand)) continue;
         const drawn = drawnRiverSurface(w.x, w.z);
         if (off === 0) {
@@ -567,7 +572,7 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
       if (s < sFrom + 2 || s > sTo - 2) continue;
       const p = polyPointAt(c.path, c.cum, s);
       const w = warp(p.x, p.z);
-      riverFieldAt(w.x, w.z);
+      riverFieldAt(w.x, w.z, false, false);
       if (!(riverSample.distance < reach)) continue;
       const dir = polyDirAt(c.path, c.cum, s);
       // The raw ground less the cut under this very deck (the terrain's, computeVertexData).
@@ -587,12 +592,3 @@ export const deckBuilder = (scan: WindowScan, params: BridgePlacementParams, las
   };
   return build;
 };
-
-/** A deck within this of an arterial's crossing already carries it; of two arterial crossings this
- *  close, the squarer one is built. */
-const CROSSING_SPACING = 120;
-
-/** A lone mouth whose road is at most this far off square to the river gets a straight deck
- *  (turned to CROSSING_MAX_SKEW), landing on its own bank within MOUTH_SINGLE_LAND of the mouth. */
-/** A natural branch's host is the deck landing within this of the mouth it faces. */
-const MOUTH_NATURAL_LAND = 30;

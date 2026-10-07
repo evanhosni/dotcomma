@@ -1,9 +1,15 @@
+import type Rapier from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
 import type { PointXZ } from "../../utils/math/types";
+import type { LODLevel } from "./lodConfig";
 import type { SwapChunk } from "./lodSwaps";
-export interface TerrainProps {
+import type { ChunkBuildResult } from "./terrainWorker";
+
+/** TerrainRenderer's module state: every chunk it holds, under one scene group. */
+export interface TerrainState {
   group: THREE.Group;
   chunks: Map<string, Chunk>;
+  /** The chunk being finished by the update pass (kept out of the prune). */
   activeChunk: Chunk | null;
   queuedToBuild: Chunk[];
 }
@@ -18,8 +24,9 @@ export interface Chunk extends SwapChunk {
   /** The WATER surface over this chunk (a child of `plane`, so it shows/hides/moves with it);
    *  null for chunks with no lake or river. Same pooled geometry family as the terrain. */
   water: THREE.Mesh | null;
-  rebuildIterator: AsyncIterator<any> | null;
+  /** Its worker build, requested ahead of its turn (buildRequests.ts); null until then. */
+  request: Promise<ChunkBuildResult> | null;
   /** Imperative Rapier body, never a React <RigidBody> (see CLAUDE.md). */
-  colliderBody: import("@dimforge/rapier3d-compat").RigidBody | null;
-  lod: import("./lodConfig").LODLevel;
+  colliderBody: Rapier.RigidBody | null;
+  lod: LODLevel;
 }

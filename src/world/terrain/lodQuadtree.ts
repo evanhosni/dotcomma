@@ -11,15 +11,20 @@ const subdivideThreshold: { [size: number]: number } = {
   [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
 };
 
+/** Distance from (px, pz) to the nearest point of the square [ox, ox + size] × [oz, oz + size]. */
+const distanceToSquare = (ox: number, oz: number, size: number, px: number, pz: number): number => {
+  const clampedX = Math.max(ox, Math.min(px, ox + size));
+  const clampedZ = Math.max(oz, Math.min(pz, oz + size));
+  return Math.sqrt((clampedX - px) ** 2 + (clampedZ - pz) ** 2);
+};
+
 /** The quadtree's leaves around the player: a PARTITION of every LOD5 root within the render disc,
  *  keyed `${level}/${gx}/${gz}`. */
 export const computeDesiredChunks = (playerX: number, playerZ: number): DesiredChunks => {
   const desired: DesiredChunks = {};
 
   const visitNode = (ox: number, oz: number, size: number) => {
-    const clampedX = Math.max(ox, Math.min(playerX, ox + size));
-    const clampedZ = Math.max(oz, Math.min(playerZ, oz + size));
-    const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
+    const dist = distanceToSquare(ox, oz, size, playerX, playerZ);
 
     if (size > CHUNK_SIZE) {
       const threshold = subdivideThreshold[size];
@@ -53,10 +58,7 @@ export const computeDesiredChunks = (playerX: number, playerZ: number): DesiredC
     for (let dz = -radius; dz <= radius; dz++) {
       const ox = (rootGX + dx) * rootSize;
       const oz = (rootGZ + dz) * rootSize;
-      const clampedX = Math.max(ox, Math.min(playerX, ox + rootSize));
-      const clampedZ = Math.max(oz, Math.min(playerZ, oz + rootSize));
-      const dist = Math.sqrt((clampedX - playerX) ** 2 + (clampedZ - playerZ) ** 2);
-      if (dist > MAX_RENDER_DISTANCE) continue;
+      if (distanceToSquare(ox, oz, rootSize, playerX, playerZ) > MAX_RENDER_DISTANCE) continue;
       visitNode(ox, oz, rootSize);
     }
   }

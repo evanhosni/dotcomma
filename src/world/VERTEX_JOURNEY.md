@@ -11,7 +11,7 @@ Everything below is in execution order. File links are relative to this folder.
 
 ## 1. Entry: who asks, and which variant runs
 
-[`terrain/TerrainRenderer.tsx`](terrain/TerrainRenderer.tsx) builds a chunk by posting `BUILD_CHUNK`
+[`terrain/TerrainRenderer.tsx`](terrain/TerrainRenderer.tsx) builds a chunk by posting `BUILD_CHUNK` (through [`terrain/buildRequests.ts`](terrain/buildRequests.ts))
 to [`utils/workers/terrain.worker.ts`](../utils/workers/terrain.worker.ts) with the chunk's LOD flags
 from [`terrain/lodConfig.ts`](terrain/lodConfig.ts). The worker walks the `(segments + 1)²` grid
 (local x/z are `Math.fround`ed so heights match the float32 positions) and calls one of three
@@ -59,16 +59,18 @@ name what each step consumes, what it produces, and what earlier result it repla
    region's list). A zone is a (region, biome) pair.
 2. **The river field.** Off the city, the nearest city wall is measured first (pure geometry). Then
    `riverFieldAt` ([`rivers/riverField.ts`](../utils/workers/rivers/riverField.ts))
-   writes `riverSample`: distance in factor-1 units, the width factor, and the water surface. It is
+   writes `riverSample`: distance in factor-1 units, the width factor, the water surface, and the
+   centerline's signed distance to a water wall and the lake level there (step 4's merge). It is
    measured from a meandered point, and it smooth-mins confluences. The factor and surface come from
    each run's PLAINLY nearest piece (the nearest by factor-1 distance jumps between pieces where the
    width varies), weighted across runs by the smooth-min weights. Building a cell's piece list
-   (first query in a cell) evaluates the terrain at every piece end (`riverSurfaceAt`); a GORGE's piece
+   (first query in a cell) evaluates the terrain at every piece end (`riverSurfaceAt`,
+   [`rivers/riverSurface.ts`](../utils/workers/rivers/riverSurface.ts)); a GORGE's piece
    ends (a joined gap) instead run straight and downhill between its two waters (`gorgeSurfaces`). The surface
    is capped under any freeway crossing (`roadCrossingCap`: 5u under the lower landing, sampled along
    the road itself, and easing back up along the river at `RIVER_CAP_GRADE`, 6u per piece). On the bank it also writes the BED
-   LIMIT (`bedLimit`): how far out the bed reaches before its bank first gets steep, interpolated from
-   per-station marches (lazy, cached per station and direction; each march evaluates the terrain). In
+   LIMIT (`bedLimit`): how far out the bed reaches before its bank first gets steep on rock, interpolated from
+   per-station marches ([`rivers/riverBedLimit.ts`](../utils/workers/rivers/riverBedLimit.ts)) (lazy, cached per station and direction; each march evaluates the terrain). In
    a city and within 6u of its wall the limit is found past the reach too, as far as the quay rule can
    still paint the bed (`RIVER_BED_LIMIT_PAST`).
    Far-dry vertices call `noRiverSample` instead.
@@ -123,14 +125,14 @@ same scratch buffers.
   - **The city, own zone:** `getCityTerrain` ([`roads/cityTerrain.ts`](../utils/workers/roads/cityTerrain.ts)),
     after `riverQuayAt` fills the straight river field. The city branch runs in this order (the
     order is part of the output: city cells are cached by first query):
-    1. Pick the district and rotate into its local frame.
+    1. Pick the district ([`roads/cityDistricts.ts`](../utils/workers/roads/cityDistricts.ts)) and rotate into its local frame.
     2. Look up the block-grid cell and its 3×3 labels (`readNeighborLabels`). A cell's label comes from
-       its survey (`cellSurvey`, cached per cell): a REMNANT, one the edge roads (belt, arterials, quays)
+       its survey (`cellSurvey` in [`roads/cityCells.ts`](../utils/workers/roads/cityCells.ts), cached per cell): a REMNANT, one the edge roads (belt, arterials, quays)
        leave too little of, takes a full neighbor's label, so its land joins that block.
     3. Collect the road constraints: merged cell-boundary segments (`addBoundaryStreets`, not inside
        a roundabout's ring); the shape feature (`addShapeFeature`: a triangle super-cell's diagonal, a
        roundabout ring); the arterial field (`addArterialConstraint`: district boundaries, recovering
-       past 12.2); the belt (`addBeltConstraint` → `findWaterfrontBelt`: the wall, or the waterfront
+       past 12.2); the belt (`addBeltConstraint` → `findWaterfrontBelt`, [`roads/cityWaterfront.ts`](../utils/workers/roads/cityWaterfront.ts): the wall, or the waterfront
        where a wall is drowned); the quay road beside a river (`addQuayConstraint`).
     4. Interpolate the plateau heights bilinearly (`plateauElevation`).
     5. Ramp toward the mid-plateau freeway grade near arterials and the belt.
@@ -162,12 +164,12 @@ same scratch buffers.
    belt's outer half dips under its lifted grade. In a water zone where a neighbor still
    has weight, the blend is instead held at least at the bowl's own height (`bowlFloor`), which on the
    wall is that same shore height, so the two sides meet.
-3. **The bed limit** (`capRiverBed`): off the city, wherever `riverBedDistance` is inside the reach,
+3. **The bed limit** (`capRiverBed`, [`rivers/riverBedLimit.ts`](../utils/workers/rivers/riverBedLimit.ts); only a ROCK bank ends the bed, see GPU step 3.4): off the city, wherever `riverBedDistance` is inside the reach,
    past step 2's `bedLimit` it reads as out of reach, fading over `RIVER_BED_CAP_FADE` inward of it,
    so the bed ends at its first steep bank. Not in a city (its ground past the edge roads is the bank,
    and its pavement keeps the bed off through the shader's pavement mask), and just outside the wall
    the cap comes in over `BELT_FIELD_HANDOFF`, so the paint does not step across it.
-4. **The river channel** (`carveRiverChannel`), where `distanceToRiver < halfWidth + bank`. Its
+4. **The river channel** (`carveRiverChannel`, [`rivers/riverChannel.ts`](../utils/workers/rivers/riverChannel.ts)), where `distanceToRiver < halfWidth + bank`. Its
    surface is first held up to a lake's level by the weight of crisp land there
    (`riverSurfaceBesideCrispShore`): the city draws no lake on its side of the wall. The
    channel is FORCED, not min'ed:
@@ -181,6 +183,18 @@ same scratch buffers.
      bank), the river surface comes down to the lake level, and `riverBedDistance` is pushed out of
      reach. The share ramps to 0 at the shore height (`level + SHORE_RISE`), so dry land is carved as
      before.
+   - **Beside a lake** (`riverLakeMerge`, [`lakes.ts`](../utils/workers/lakes.ts)), off the city and
+     10–40u past any freeway's half-width and the city's own wall: where the river's water band comes
+     within `40 + min(band,120)/2` of a water wall (fading over 80u more; `riverSample.shore`, the
+     centerline's signed wall distance), the land BETWEEN the two — the vertex's river distance plus its
+     own wall distance exceeds the centerline's by under 0.6–1.5 half-widths, or it lies within 25–75u
+     of both the water band and the wall (the corner where the river turns in) — and the lake's beach
+     there sink to the river channel's floor (`level − depth·√factor`, min'ed). The water there is the
+     lake's level (in the band the river's surface eased onto it by the same share) and
+     `riverBedDistance` reads as the whole bed. Not on ground 10–20u over the shore height (a real
+     ridge) nor where the river's surface stands over the centerline's level (`riverSample.level`) by
+     more than 0.25–0.75u; the piece-end surface is already eased onto the level there
+     (`riverPieceEndSurface`, the same closeness 80u wider). The far bank is untouched.
 5. **The channel mask.** `channel` (0 in the channel, 1 on open ground) stops the city's lane paint
    over the riverbed.
 
@@ -189,7 +203,7 @@ same scratch buffers.
 
 ### Step 5: freeways off the city
 
-`gradeOffCityFreeway` runs only when `city === null`. It covers the inter-city runs and the belt's
+`gradeOffCityFreeway` ([`roads/offCityFreeway.ts`](../utils/workers/roads/offCityFreeway.ts)) runs only when `city === null`. It covers the inter-city runs and the belt's
 OUTER half, and writes its results to `offCityRoad`.
 
 - **Reads:** `nearestRun` and `nearestCityWall` from step 2, the river field, and for the belt beside
@@ -229,7 +243,7 @@ OUTER half, and writes its results to `offCityRoad`.
 
 - **Code:** `cutGroundUnderDecks` ([`bridges/deckGround.ts`](../utils/workers/bridges/deckGround.ts)),
   run only when step 0 found decks.
-- **The approach** (first). Within a landed end's approach (`bridgeApproachAt`: the cut margin +
+- **The approach** (first). Within a landed end's approach (`bridgeApproachAt`, [`bridges/deckMouth.ts`](../utils/workers/bridges/deckMouth.ts): the cut margin +
   16u in front, fading over 16u; inward over the ramp and the margin; 34u past the deck's sides) the
   height takes step 5's `approachDelta`, so the road is flat across at its grade and the bank gives
   way to it, gated off in the channel (`halfWidth` → the water band).
@@ -238,10 +252,10 @@ OUTER half, and writes its results to `offCityRoad`.
   field the mouth paints (last item), never a step where the mouth ends. Past that margin the road
   in front of a cut end is never cut toward the slab's corner.
 - **The cut.** Under and beside every drawn slab, the ground is cut to just below it
-  (`bridgeTriangleCap`). It stays above any drawn water, or drops the water where the slab is lower.
+  (`bridgeTriangleCap`, [`bridges/drawnSlab.ts`](../utils/workers/bridges/drawnSlab.ts)). It stays above any drawn water, or drops the water where the slab is lower.
 - **The fill.** Inward of a landed cut end, the ground is filled up to the slab.
 - **Paint.** Off the city, the road's paint is removed under the deck.
-- **The mouth's paint** (last). `bridgeMouthFieldAt` ([`bridges/drawnSlab.ts`](../utils/workers/bridges/drawnSlab.ts)):
+- **The mouth's paint** (last). `bridgeMouthFieldAt` ([`bridges/deckMouth.ts`](../utils/workers/bridges/deckMouth.ts)):
   between a landed cut end and its road's asphalt the road field becomes asphalt — per 1u column
   along the deck, only where that road's asphalt lies ahead within 12u (the ground's own field,
   marched once per deck), 1.5u past the deck's sides and the chunk's cut margin under the slab (the
@@ -342,7 +356,7 @@ water mesh (`waterDepth` attribute, [`water/waterMaterial.ts`](water/waterMateri
 ## 4. The GPU material pipeline
 
 The terrain material is generated by `getMaterial` ([`terrain/material.ts`](terrain/material.ts)),
-which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/material/_material.ts)).
+which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shaders/combineBiomeMaterials.ts)).
 
 ### Vertex shader ([`shaders/vertex.glsl`](shaders/vertex.glsl))
 
@@ -350,7 +364,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 2. The world position is computed as `wrapOrigin + mat3(modelMatrix) × position`: the chunk origin
    wrapped to `WORLD_WRAP` (4200) plus a chunk-local offset. It is never one absolute float32 number.
 3. `quantizeWorldPos` ([`vfx/quantization.ts`](../vfx/quantization.ts)) snaps it to the grid.
-4. The quantized position gives `vWorldPosWrapped`, `vWorldUv` (xz / 26.25) and `vHeight`.
+4. The quantized position gives `vWorldPosWrapped`, `vWorldUv` (xz / `TEXTURE_TILE`, 26.25) and `vHeight`.
 5. `vWorldPosAbs` is the unwrapped position, used only for lighting lookups.
 6. The normal gives `vWorldNormal` and `vSlopeAngle`.
 7. The view position is `modelViewMatrix[3] + mat3(viewMatrix) × offset`.
@@ -380,8 +394,10 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
       over `RIVER_BED_BLEND_WIDTH` (9 factor-1 units) by `RIVER_BED_REACH − 1`, except where the CITY's
       road field says pavement (the city's weight × the road band up to `ROAD_HALF_WIDTH + 5`): a quay's
       asphalt, curb and sidewalk stay crisp.
-   4. On a steep bank the bed fades out by slope (`RIVER_BED_SLOPE_START_DEG` → `_END_DEG`, 30° → 40°,
-      from `vWorldNormal`), so a mountainside rising out of the water keeps its own ground. Beyond
+   4. On a steep bank of ROCK (a domed biome, `bedYieldsToSteepGround`; scaled by the rock slots' bed
+      weights) the bed fades out by slope (`RIVER_BED_SLOPE_START_DEG` → `_END_DEG`, 30° → 40°,
+      from `vWorldNormal`), so a mountainside rising out of the water keeps its own ground. Any other
+      ground stays under the bed however steep. Beyond
       the first steep bank it does not come back: step 4 already capped `riverBedDistance` there.
 4. **The road corridor**, where `vDistanceToRoadCenter < 9.5`: the CITY's own `city_frag` is painted
    over everything above, faded over 8–9.5 street units. That frag paints the asphalt, curb,
@@ -408,7 +424,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
 | 3 | zones × (region base + biome × presence), crisp tiers | `combineZoneWeights`, `zoneBiomeHeight` | ✔ | – | – |
 | 3′ | city plateaus, roads, curb dip, quay | `getCityTerrain` | ✔ | road field, lane paint, bed cap | – |
 | 4a | lake level + shore lift (the city's curb under it) | `lakeSurface`, `shoreLift` | ✔ | water | step 3 |
-| 4b | river channel + banks, mouth, bed limit | `carveRiverChannel`, `riverMouthShare`, `capRiverBed` | ✔ | water, bed | steps 3–4a |
+| 4b | river channel + banks, mouth, bed limit, merge beside a lake | `carveRiverChannel`, `riverMouthShare`, `capRiverBed`, `riverLakeMerge` | ✔ | water, bed | steps 3–4a |
 | 5 | off-city freeway grade, curb dip, road field | `gradeOffCityFreeway` | ✔ | road field, lane paint | 4b (not in the channel) |
 | 6 | flatten pads | `applyFlattenPads` | ✔ | – | 3–5 |
 | 7 | deck mouth / cut / fill / paint-off / mouth paint | `cutGroundUnderDecks` | ✔ | road, lane, water | 3–6 |
@@ -435,7 +451,7 @@ which calls `combineBiomeMaterials` ([`utils/material/_material.ts`](../utils/ma
   copy its arrays.
 - **The shore state is implicit.** `shoreLift` (and `blendedTerrainAt`) lift by whatever the LAST
   `lakeSurface` call stored. Every sampler must call `lakeSurface` for the point it means first:
-  `terrainOnlyAt`, `riverSurfaceAt` and `roadCrossingCap` (through `setShoreAt`) all do; step 5's
+  `terrainOnlyAt`, `riverSurfaceAt` and `roadCrossingCap` (through `setShoreAt`, `rivers/riverSurface.ts`) all do; step 5's
   fallback grade reuses the vertex's own.
 - **Depth precision.** Near a deck's ends the ground sits 0.08u under its top, which the depth buffer
   resolves only within ~200u; the deck material's `polygonOffset` ([`deckMaterial.ts`](../objects/dressing/bridges/deckMaterial.ts))

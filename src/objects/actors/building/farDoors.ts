@@ -72,6 +72,12 @@ const writeColor = (door: FarDoor): void => {
   mesh!.instanceColor!.needsUpdate = true;
 };
 
+const writeDoor = (door: FarDoor): void => {
+  writeMatrix(door);
+  writeColor(door);
+  writeFade(door);
+};
+
 const ensureCapacity = (scene: THREE.Scene, needed: number): void => {
   if (mesh && needed <= capacity) {
     if (!mesh.parent) scene.add(mesh);
@@ -93,11 +99,7 @@ const ensureCapacity = (scene: THREE.Scene, needed: number): void => {
   mesh.frustumCulled = false;
   mesh.position.set(originX, 0, originZ);
   mesh.count = doors.length;
-  for (const door of doors) {
-    writeMatrix(door);
-    writeColor(door);
-    writeFade(door);
-  }
+  for (const door of doors) writeDoor(door);
   if (previous) {
     previous.removeFromParent();
     previous.dispose();
@@ -115,9 +117,7 @@ export const addFarDoor = (scene: THREE.Scene, spec: FarDoorSpec, angle: number,
   const door: FarDoor = { ...spec, angle, fade, index: doors.length };
   doors.push(door);
   mesh!.count = doors.length;
-  writeMatrix(door);
-  writeColor(door);
-  writeFade(door);
+  writeDoor(door);
   return door;
 };
 
@@ -140,9 +140,7 @@ export const removeFarDoor = (door: FarDoor): void => {
   if (last !== door) {
     last.index = door.index;
     doors[last.index] = last;
-    writeMatrix(last);
-    writeColor(last);
-    writeFade(last);
+    writeDoor(last);
   }
   mesh!.count = doors.length;
 };

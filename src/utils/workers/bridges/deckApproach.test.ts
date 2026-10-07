@@ -6,7 +6,7 @@
  *  piece (36u at (-1548, 1090), a gorge under the deck). */
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
-import { riverPieceEndSurface, riverPieceEndTerrainSurface } from "../rivers/riverField";
+import { riverPieceEndSurface, riverPieceEndTerrainSurface } from "../rivers/riverSurface";
 import { riverPiecesIn } from "../rivers/riverNetwork";
 import { type FreewayBridge, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute } from "../vertexCompute";
 

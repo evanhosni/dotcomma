@@ -38,24 +38,44 @@ export const createPublished = (x: number, y: number, z: number): Published => (
   state: {},
 });
 
+/** JSON prints a double's 17 digits, but a Rapier position is a float32: the shortest decimal that parses
+ *  back to the same float32 (≤ 9 digits) loses nothing the client's float32 world could hold. A value that
+ *  is not a float32 (feet = center − half height, a free body's integrated position) goes out to 1e-4.
+ *  MEASURED on a recorded 40-beeble stream: frames 185.5 → 142 B on average (with the velocities on their
+ *  0.01 grid, npcBody.ts). */
+export const wirePosition = (v: number): number => {
+  const f = Math.fround(v);
+  if (f !== v) return Math.round(v * 1e4) / 1e4;
+  // Below 6 digits a world position rarely round-trips; 9 always does.
+  for (let digits = 6; digits < 9; digits++) {
+    const d = Number(f.toPrecision(digits));
+    if (Math.fround(d) === f) return d;
+  }
+  return Number(f.toPrecision(9));
+};
+
+/** 1e-4 rad: far under what a frame can show, and under publishTick's 1e-3 change gate. */
+export const wireYaw = (ry: number): number => Math.round(ry * 1e4) / 1e4;
+
+const writeSnapshot = (p: Published, f: EntityUpdateFields, now: number): void => {
+  f.st = now;
+  f.x = wirePosition(p.x);
+  f.y = wirePosition(p.y);
+  f.z = wirePosition(p.z);
+  f.vx = p.vx;
+  f.vy = p.vy;
+  f.vz = p.vz;
+  f.ry = wireYaw(p.ry);
+};
+
 /** Everything a new registrant needs, as one update. */
 export const fullUpdate = (p: Published, now: number): EntityUpdateFields => {
-  const f: EntityUpdateFields = { st: now, x: p.x, y: p.y, z: p.z, vx: p.vx, vy: p.vy, vz: p.vz, ry: p.ry };
+  const f: EntityUpdateFields = {};
+  writeSnapshot(p, f, now);
   if (p.anim) f.anim = { ...p.anim };
   if (p.sm) f.sm = p.sm;
   if (Object.keys(p.state).length) f.state = p.state;
   return f;
-};
-
-const snapshot = (p: Published, f: EntityUpdateFields, now: number): void => {
-  f.st = now;
-  f.x = p.x;
-  f.y = p.y;
-  f.z = p.z;
-  f.vx = p.vx;
-  f.vy = p.vy;
-  f.vz = p.vz;
-  f.ry = p.ry;
 };
 
 /** The changed fields, or null when nothing changed (a resting entity costs no bytes). */
@@ -77,7 +97,7 @@ export const publishTick = (p: Published, pose: Pose | null, runner: StateMachin
   }
   if (moved || Math.abs(ry - p.ry) > 1e-3) {
     p.ry = ry;
-    snapshot(p, f, now);
+    writeSnapshot(p, f, now);
     changed = true;
   }
 

@@ -11,17 +11,17 @@ Every road that enters a river's footprint (channel plus banks) is carried on a 
 4. `crossings.ts` / `mouths.ts` — extra street decks across city rivers (every `FILL_STEP`) and at freeway mouths.
 5. `deckBuilder.ts` / `finishDeck.ts` — only chains whose midpoint is in the queried chunk are built (that chunk owns them); the window widens through `BRIDGE_WINDOWS` when needed. `finishDeck.ts` and `wallJoins.ts` open and join parapets where decks merge.
 
-Shared deck shape is `deckGeometry.ts`, slab tests `drawnSlab.ts`, constants `constants.ts`, the result type `FreewayBridge` in `types.ts`.
+Shared deck shape is `deckGeometry.ts`, slab tests `drawnSlab.ts`, the road in front of a landed end (its approach and its mouth) `deckMouth.ts`, constants `constants.ts`, the result type `FreewayBridge` in `types.ts`.
 
-**Terrain**: `deckGround.ts` (via `getFreewayBridgesNear`) cuts the ground under each deck, sets `underDeck` (keeps grass and actors out) and lays each landed end's flat approach (`approachHeight`, `bridgeApproachAt`; ramp `bridgeRampAt`).
+**Terrain**: `deckGround.ts` (via `getFreewayBridgesNear`) cuts the ground under each deck, sets `underDeck` (keeps grass and actors out) and lays each landed end's flat approach (`approachHeight`, `bridgeApproachAt` in `deckMouth.ts`; ramp `bridgeRampAt` in `deckGeometry.ts`).
 
 **This folder**:
 - [bridgeSpec.ts](bridgeSpec.ts) — Three-free dimensions and builders: `bridgeRibbon` (slab + parapets as one lofted ribbon), `bridgePierColumns`, `bridgeColliderPoints`; `BRIDGES_SPEC` feeds client and server colliders.
-- [Bridges.tsx](Bridges.tsx) — `useSolidDressing`; per chunk one ribbon mesh (`buildDeckRibbonMesh`), one pier mesh (`buildPierMesh`), colliders within `BRIDGE_COLLIDER_DISTANCE`. Mounted once in the city biome; covers bridges everywhere.
+- [Bridges.tsx](Bridges.tsx) — `useSolidDressing`; per chunk one ribbon mesh (`buildDeckRibbonMesh`), one pier mesh (`buildPierMesh`), colliders within `DEFAULT_COLLIDER_DISTANCE`. Mounted once in the city biome; covers bridges everywhere.
 - [deckMaterial.ts](deckMaterial.ts) — the deck looks like the city road it carries.
 
 ## How to add another
 
 N/A — every road/river crossing gets a deck automatically.
 
-Tune: `BRIDGE_DECK_THICKNESS`, `BRIDGE_PARAPET_HEIGHT`, `BRIDGE_PIER_SIZE` ([bridgeSpec.ts](bridgeSpec.ts)); `DEFAULT_BRIDGE_PLACEMENT` and the `BRIDGE_*` rules (`utils/workers/bridges/constants.ts`); `BRIDGE_RENDER_DISTANCE` / `BRIDGE_COLLIDER_DISTANCE` ([Bridges.tsx](Bridges.tsx)).
+Tune: `BRIDGE_DECK_THICKNESS`, `BRIDGE_PARAPET_HEIGHT`, `BRIDGE_PIER_SIZE` ([bridgeSpec.ts](bridgeSpec.ts)); `DEFAULT_BRIDGE_PLACEMENT` and the `BRIDGE_*` rules (`utils/workers/bridges/constants.ts`); `DEFAULT_RENDER_DISTANCE` / `DEFAULT_COLLIDER_DISTANCE` ([Bridges.tsx](Bridges.tsx)).

@@ -1,33 +1,9 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
-import { DRESSING_COLLIDER_SPECS } from "../../../../src/objects/dressing/catalog";
-import { runDressingEnumerator } from "../../../../src/objects/dressing/enumerators";
-import { DRESSING_CHUNK_SIZE, type DressingColliderBody, type DressingColliderPart } from "../../../../src/objects/dressing/types";
+import type { ObstaclePoint } from "./obstaclePoints.js";
 import type { PhysicsWorld } from "./physicsWorld.js";
 
-/**
- * Every collider-bearing dressing feature (objects/dressing/catalog.ts) as the client's exact
- * cuboid colliders (Dressing.tsx DressingPartColliders): each spec's enumerator run in-thread with
- * its spec placement, each point through its spec's bodiesOf. Chunk size MUST stay
- * DRESSING_CHUNK_SIZE: belt-freeway pole and bridge coverage depend on the query center's wall set.
- */
-
-export interface ObstaclePoint extends DressingColliderBody {
-  parts: DressingColliderPart[];
-}
-
-export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {
-  const cs = DRESSING_CHUNK_SIZE;
-  const bounds = { minX: gx * cs, minZ: gz * cs, maxX: (gx + 1) * cs, maxZ: (gz + 1) * cs };
-  const out: ObstaclePoint[] = [];
-  for (const spec of DRESSING_COLLIDER_SPECS) {
-    for (const point of runDressingEnumerator(spec.enumerator, bounds, spec.placement)) {
-      for (const body of spec.bodiesOf(point)) out.push({ ...body, parts: body.parts ?? spec.colliderParts });
-    }
-  }
-  return out;
-};
-
-/** Exactly the client's <RigidBody rotation={[0, yaw, pitch]}><CuboidCollider args={[w/2,h/2,d/2]} position={[x, y, z]}/> (+ a mesh):
+/** The dressing obstacles (obstaclePoints.ts) as the client's exact colliders (Dressing.tsx DressingPartColliders):
+ *  the client's <RigidBody rotation={[0, yaw, pitch]}><CuboidCollider args={[w/2,h/2,d/2]} position={[x, y, z]}/> (+ a mesh).
  *  Euler XYZ = qY(yaw) · qZ(pitch), composed here by hand. */
 export const createObstacleBodies = (pw: PhysicsWorld, points: ObstaclePoint[]): RAPIER.RigidBody[] => {
   const bodies: RAPIER.RigidBody[] = [];

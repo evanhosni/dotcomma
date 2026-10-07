@@ -17,6 +17,8 @@ export interface FoliageChunkParams {
   slopeBlend: number;
   /** Normalized street units from the nearest road centerline (freeways included) — blades stay off asphalt. */
   roadDistanceRange?: [number, number];
+  /** Only under water, `height` = the blade height (it is cut to the water's depth). */
+  underwater?: { height: number };
 }
 
 export interface FoliageChunkResult {

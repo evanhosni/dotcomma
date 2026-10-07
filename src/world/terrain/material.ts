@@ -5,7 +5,8 @@ import { _quantization } from "../../vfx/quantization";
 import { getAllBiomes } from "../../utils/utils";
 import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
-import { glslFloat, WORLD_WRAP } from "../shaders/constants";
+import { combineBiomeMaterials } from "../shaders/combineBiomeMaterials";
+import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
 import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
@@ -43,6 +44,7 @@ export const getMaterial = async () => {
   const params = getTerrainParams();
   const defines = {
     WORLD_WRAP: glslFloat(WORLD_WRAP),
+    TEXTURE_TILE: glslFloat(TERRAIN_TEXTURE_TILE),
     ROAD_HALF_WIDTH: glslFloat(params.cityConfig.roadWidth),
     /** REAL units — lane paint is drawn from real distance. */
     FREEWAY_HALF_WIDTH: glslFloat(params.cityConfig.freewayWidth),
@@ -50,7 +52,7 @@ export const getMaterial = async () => {
     RIVER_BED_REACH: glslFloat(params.river.halfWidth + params.river.bank),
   };
 
-  const material = await _material.combineBiomeMaterials(biomes, regions, vertexShader, {
+  const material = await combineBiomeMaterials(biomes, regions, vertexShader, {
     riverTexture,
     slotRiverbeds,
     riverbedTextures,
@@ -69,6 +71,7 @@ export const getMaterial = async () => {
       "varying float vDistanceToRoadCenter;",
       "varying float vDistanceToFreewayCenter;",
       "varying float vFreewayAlong;",
+      "varying float vUnderwaterDepth;",
       "varying vec2 vUv;",
       "varying vec2 vWorldUv;",
       "varying float vSlopeAngle;",

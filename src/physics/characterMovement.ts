@@ -1,8 +1,9 @@
 import type Rapier from "@dimforge/rapier3d-compat";
+import { smoothstep } from "../utils/math/_math";
 
 /**
  * THE movement resolver for every kinematic capsule (local player + server
- * NPCs): tune here, nowhere else. Rapier types only — no Three, no React —
+ * NPCs): tune here, nowhere else. No Three, no React (of Rapier, types only),
  * because the server's esbuild bundle runs this file. The measurements behind the
  * constants are in CLAUDE.md (player/Player.tsx).
  */
@@ -50,6 +51,24 @@ export const MAX_SUBSTEPS = 16;
 export const GROUND_RAY_LENGTH = 5;
 export const GROUND_RAY_SLACK = SNAP_TO_GROUND + 0.4;
 
+// SWIMMING (input.swim): under water the capsule sinks slowly, a held jump swims up and floats the
+// head just above the surface, and a fresh press with the head near the surface breaches out of it.
+/** Fraction of the capsule's height under the surface before it swims rather than wades. */
+export const SWIM_SUBMERGED_FRACTION = 0.6;
+export const SWIM_SINK_SPEED = -3;
+export const SWIM_SINK_ACCEL = 12;
+export const SWIM_UP_SPEED = 9;
+export const SWIM_UP_ACCEL = 40;
+/** 1/s: how fast a dive's fall speed bleeds off to the sink speed. */
+export const WATER_DRAG = 5;
+/** Under JUMP_IMPULSE: enough to clear the surface by about a body height. */
+export const SWIM_BREACH_IMPULSE = 32;
+export const SWIM_HEAD_ABOVE_SURFACE = 0.35;
+/** A fresh press breaches while the head is less than this under the surface. */
+export const SWIM_BREACH_REACH = 1.5;
+/** Horizontal input speed multiplier while swimming. */
+export const SWIM_SPEED_FACTOR = 0.55;
+
 export interface CharacterShape {
   height: number;
   radius: number;
@@ -64,6 +83,15 @@ export interface CharacterMotionState {
   slideDirZ: number;
   softSlopeTime: number;
   steepSlopeTime: number;
+  /** Rising out of the water after a breach: plain gravity until the rise ends. */
+  breaching: boolean;
+}
+
+export interface SwimInput {
+  /** The water surface over the capsule. */
+  surfaceY: number;
+  /** The jump key went down this step (not merely held). */
+  jumpPressed: boolean;
 }
 
 export interface CharacterInput {
@@ -73,6 +101,8 @@ export interface CharacterInput {
   jump: boolean;
   /** Caller drives vy this step (NPC ascend); gravity, fall clamp and jump are skipped. */
   vyOverride?: number | null;
+  /** Water over the capsule (unset = none): it swims once SWIM_SUBMERGED_FRACTION of it is under. */
+  swim?: SwimInput | null;
 }
 
 /** Positions are the body CENTER after the solve. */
@@ -87,6 +117,8 @@ export interface CharacterStepResult {
   /** Radians; 0 when no ground probed. */
   groundAngle: number;
   onSlideSlope: boolean;
+  /** Under water this step (the vertical motion was the swim's). */
+  swimming: boolean;
   /** Horizontal DESIRED translation this step — for the caller's stuck detection. */
   desiredX: number;
   desiredZ: number;
@@ -111,11 +143,13 @@ export const createCharacterMotionState = (): CharacterMotionState => ({
   slideDirZ: 0,
   softSlopeTime: 0,
   steepSlopeTime: 0,
+  breaching: false,
 });
 
 export const resetCharacterMotion = (s: CharacterMotionState): void => {
   s.vy = 0;
   s.slideSpeed = 0;
+  s.breaching = false;
 };
 
 export const createCharacterController = (world: Rapier.World): Rapier.KinematicCharacterController => {
@@ -146,11 +180,6 @@ const _desired = { x: 0, y: 0, z: 0 };
 const _step = { x: 0, y: 0, z: 0 };
 const _trans = { x: 0, y: 0, z: 0 };
 const _notSensor = (c: Rapier.Collider) => !c.isSensor();
-
-const smoothstep01 = (t: number): number => {
-  const x = Math.min(Math.max(t, 0), 1);
-  return x * x * (3 - 2 * x);
-};
 
 /** Fills while active, decays faster when not, saturates at 2× the delay (hysteresis on the way out). */
 const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
@@ -231,7 +260,7 @@ const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionStat
         const upX = -g.nX / hLen;
         const upZ = -g.nZ / hLen;
         const uphillFactor = Math.max(0, mx * upX + mz * upZ);
-        const climb = 1 - smoothstep01((g.angle - SLOPE_SOFT_START) / (SLOPE_SOFT_END - SLOPE_SOFT_START));
+        const climb = 1 - smoothstep(SLOPE_SOFT_START, SLOPE_SOFT_END, g.angle);
         scale = input.speed * (1 - uphillFactor * (1 - climb));
       }
     }
@@ -279,6 +308,34 @@ const updateVertical = (s: CharacterMotionState, input: CharacterInput, supporte
   if (input.jump && supported && !onSlideSlope && s.vy <= 0) {
     s.vy = JUMP_IMPULSE;
   }
+};
+
+/** Whether the capsule centered at `py` swims under `swim`'s surface. */
+const isSwimming = (swim: SwimInput | null | undefined, py: number, height: number): swim is SwimInput =>
+  !!swim && swim.surfaceY - (py - height / 2) > height * SWIM_SUBMERGED_FRACTION;
+
+/** The swim's vy, or false while a breach is still rising (plain gravity carries it out of the water). */
+const updateSwimVertical = (s: CharacterMotionState, input: CharacterInput, swim: SwimInput, py: number, height: number, dt: number): boolean => {
+  if (s.breaching) {
+    if (s.vy > 0) return false;
+    s.breaching = false;
+  }
+  const head = py + height / 2;
+  if (swim.jumpPressed && head > swim.surfaceY - SWIM_BREACH_REACH) {
+    s.vy = SWIM_BREACH_IMPULSE;
+    s.breaching = true;
+    return true;
+  }
+  // The drag only approaches the sink speed, so it must not gate the strokes below.
+  if (s.vy < SWIM_SINK_SPEED) s.vy += (SWIM_SINK_SPEED - s.vy) * (1 - Math.exp(-WATER_DRAG * dt));
+  if (input.jump) {
+    s.vy = Math.min(SWIM_UP_SPEED, s.vy + SWIM_UP_ACCEL * dt);
+    // Floats at the surface instead of shooting out of it: only a fresh press breaches.
+    s.vy = Math.min(s.vy, (swim.surfaceY + SWIM_HEAD_ABOVE_SURFACE - head) / dt);
+  } else if (s.vy > SWIM_SINK_SPEED) {
+    s.vy = Math.max(SWIM_SINK_SPEED, s.vy - SWIM_SINK_ACCEL * dt);
+  }
+  return true;
 };
 
 /** Sweeps `_desired` from (px, py, pz) in substeps of ≤ MAX_SUBSTEP_DISTANCE and sets the body's next
@@ -359,7 +416,16 @@ export const stepCharacter = (
 
   const walk = steerWalk(input, ground, s);
   updateSlide(s, ground, onSlideSlope, dt);
-  updateVertical(s, input, grounded || walkableSupport, ground.nearGround, onSlideSlope, dt);
+  const swimming = input.vyOverride == null && isSwimming(input.swim, py, c.shape.height);
+  if (swimming) {
+    walk.x *= SWIM_SPEED_FACTOR;
+    walk.z *= SWIM_SPEED_FACTOR;
+  } else {
+    s.breaching = false;
+  }
+  if (!swimming || !updateSwimVertical(s, input, input.swim!, py, c.shape.height, dt)) {
+    updateVertical(s, input, grounded || walkableSupport, ground.nearGround, onSlideSlope, dt);
+  }
 
   _desired.x = (walk.x + s.slideDirX * s.slideSpeed) * dt;
   _desired.y = s.vy * dt + s.slideDirY * s.slideSpeed * dt;
@@ -381,6 +447,7 @@ export const stepCharacter = (
   out.nearGround = ground.nearGround;
   out.groundAngle = ground.angle;
   out.onSlideSlope = onSlideSlope;
+  out.swimming = swimming;
   out.desiredX = _desired.x;
   out.desiredZ = _desired.z;
   return out;
@@ -395,6 +462,7 @@ export const createStepResult = (): CharacterStepResult => ({
   nearGround: false,
   groundAngle: 0,
   onSlideSlope: false,
+  swimming: false,
   desiredX: 0,
   desiredZ: 0,
 });

@@ -12,9 +12,11 @@ import { smoothstep } from "../../math/_math";
 import { CHUNK_SIZE, LOD1_SEGMENTS } from "../../../world/terrain/lodConfig";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
+import { NO_ROAD_DISTANCE, cityCurbDip } from "../roads/cityRoadField";
 import { BRIDGE_CUT_FEATHER, BRIDGE_CUT_FLUSH, DEFAULT_BRIDGE_PLACEMENT } from "./constants";
 import { bridgeRampSpan } from "./deckGeometry";
-import { bridgeApproach, bridgeApproachAt, bridgeDrawn, bridgeDrawnAt, bridgeMouth, bridgeMouthAt, bridgeMouthFieldAt, bridgeSideIn, bridgeTriangleCap } from "./drawnSlab";
+import { bridgeApproach, bridgeApproachAt, bridgeMouth, bridgeMouthAt, bridgeMouthFieldAt } from "./deckMouth";
+import { bridgeDrawn, bridgeDrawnAt, bridgeSideIn, bridgeTriangleCap } from "./drawnSlab";
 import { getFreewayBridgesNear } from "./freewayBridges";
 import type { FreewayBridge } from "./types";
 
@@ -142,10 +144,9 @@ export const cutGroundUnderDecks = (decks: FreewayBridge[], x: number, z: number
   // the mouth's reach ended, which the fake directional shading drew as a dark streak on the road
   // (screenshot 102).
   const cfg = domainConfig!.cityConfig;
-  const curbDipOf = (field: number): number => cfg.curbHeight * (1 - smoothstep(cfg.roadWidth - 2, cfg.roadWidth, field));
   let hold = 0;
   if (mouth > 0) {
-    const asphalt = g.height - cfg.curbHeight + curbDipOf(g.roadField);
+    const asphalt = g.height - cfg.curbHeight + cityCurbDip(g.roadField);
     hold = mouth * (1 - smoothstep(deckCutMargin, deckCutMargin + DECK_MOUTH_EASE, mouthDepth));
     g.height = asphalt + (mouthTop + BRIDGE_CUT_FLUSH - asphalt) * hold + (g.height - asphalt) * (1 - hold);
   }
@@ -203,7 +204,7 @@ export const cutGroundUnderDecks = (decks: FreewayBridge[], x: number, z: number
       const paintOff = cut * (1 - mouth) * Math.min(smoothstep(span0, span0 + DECK_PAINT_END_FADE, from0), smoothstep(span1, span1 + DECK_PAINT_END_FADE, from1));
       if (paintOff > 0) {
         g.roadField = Math.max(g.roadField, (domainConfig!.cityConfig.roadWidth + 6) * paintOff);
-        g.freewayField = 99999;
+        g.freewayField = NO_ROAD_DISTANCE;
       }
     }
   }
@@ -219,7 +220,7 @@ export const cutGroundUnderDecks = (decks: FreewayBridge[], x: number, z: number
     const h = Math.max(0, DECK_MOUTH_FILLET - Math.abs(mouthField - g.roadField)) / DECK_MOUTH_FILLET;
     const painted = Math.min(g.roadField, mouthField) - (h * h * DECK_MOUTH_FILLET) / 4;
     // (Not under the slab: the ground there is the cut's, and the slab's corners stand on it.)
-    g.height -= (curbDipOf(painted) - curbDipOf(g.roadField)) * (1 - hold) * (1 - underDeck);
+    g.height -= (cityCurbDip(painted) - cityCurbDip(g.roadField)) * (1 - hold) * (1 - underDeck);
     g.roadField = painted;
   }
 };

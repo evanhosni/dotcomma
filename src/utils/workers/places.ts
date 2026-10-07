@@ -69,7 +69,7 @@ export function getPlaceInfo(x: number, z: number): PlaceInfo {
 
 /** The region a region-grid cell rolled — a pure function of the cell (and the seed),
  *  so an address resolves whether or not anyone has ever been there. */
-export function getRegionOfCell(ix: number, iz: number): SerializedRegion {
+function getRegionOfCell(ix: number, iz: number): SerializedRegion {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
   return regionSiteAt(ix, iz).region;
 }

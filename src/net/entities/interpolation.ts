@@ -43,7 +43,8 @@ export const TELEPORT_DIST = 40;
 export const SNAPSHOT_KEEP_MS = 1000;
 export const MAX_SNAPSHOTS = 32;
 
-const wrapAngle = (a: number): number => {
+/** `a` wrapped into [-π, π] by whole turns. */
+const wrapAngleByTurns = (a: number): number => {
   let d = a;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
@@ -71,23 +72,25 @@ export const pruneSnapshots = (snaps: Snapshot[], renderTime: number): void => {
   if (drop) snaps.splice(0, drop);
 };
 
+/** Standing still at snapshot `s`. */
+const holdAt = (out: SampledPose, s: Snapshot): SampleStatus => {
+  out.x = s.x;
+  out.y = s.y;
+  out.z = s.z;
+  out.ry = s.ry;
+  out.vx = 0;
+  out.vy = 0;
+  out.vz = 0;
+  return "hold";
+};
+
 /** "none" leaves `out` untouched. */
 export const sampleSnapshots = (snaps: Snapshot[], renderTime: number, out: SampledPose): SampleStatus => {
   const n = snaps.length;
   if (n === 0) return "none";
   let i = n - 1;
   while (i >= 0 && snaps[i].st > renderTime) i--;
-  if (i < 0) {
-    const a = snaps[0];
-    out.x = a.x;
-    out.y = a.y;
-    out.z = a.z;
-    out.ry = a.ry;
-    out.vx = 0;
-    out.vy = 0;
-    out.vz = 0;
-    return "hold";
-  }
+  if (i < 0) return holdAt(out, snaps[0]);
   const a = snaps[i];
   if (i === n - 1) {
     const dt = Math.min(renderTime - a.st, MAX_EXTRAPOLATION_MS) / 1000;
@@ -111,33 +114,14 @@ export const sampleSnapshots = (snaps: Snapshot[], renderTime: number, out: Samp
   if (span > 2 * PUBLISH_INTERVAL_MS) {
     aSt = b.st - PUBLISH_INTERVAL_MS;
     span = PUBLISH_INTERVAL_MS;
-    if (renderTime < aSt) {
-      out.x = a.x;
-      out.y = a.y;
-      out.z = a.z;
-      out.ry = a.ry;
-      out.vx = 0;
-      out.vy = 0;
-      out.vz = 0;
-      return "hold";
-    }
+    if (renderTime < aSt) return holdAt(out, a);
   }
-  if (span <= 0 || dist > TELEPORT_DIST) {
-    const s = renderTime >= b.st ? b : a;
-    out.x = s.x;
-    out.y = s.y;
-    out.z = s.z;
-    out.ry = s.ry;
-    out.vx = 0;
-    out.vy = 0;
-    out.vz = 0;
-    return "hold";
-  }
+  if (span <= 0 || dist > TELEPORT_DIST) return holdAt(out, renderTime >= b.st ? b : a);
   const f = (renderTime - aSt) / span;
   out.x = a.x + (b.x - a.x) * f;
   out.y = a.y + (b.y - a.y) * f;
   out.z = a.z + (b.z - a.z) * f;
-  out.ry = a.ry + wrapAngle(b.ry - a.ry) * f;
+  out.ry = a.ry + wrapAngleByTurns(b.ry - a.ry) * f;
   const inv = 1000 / span;
   out.vx = (b.x - a.x) * inv;
   out.vy = (b.y - a.y) * inv;

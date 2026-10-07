@@ -136,7 +136,7 @@ export interface VertexResult {
    *  grows or stands there (the ground is cut just below the deck's top). */
   underDeck: number;
   distanceToRoadCenter: number;
-  /** Real units; 99999 where no freeway (city arterial/belt or inter-city) is near, and in junction zones. */
+  /** Real units; NO_ROAD_DISTANCE (99999) where no freeway (city arterial/belt or inter-city) is near, and in junction zones. */
   distanceToFreewayCenter: number;
   /** Lane-paint dash phase along that freeway; 0 outside. */
   freewayAlong: number;

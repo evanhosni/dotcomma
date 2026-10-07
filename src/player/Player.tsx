@@ -1,46 +1,25 @@
-import { PointerLockControls } from "@react-three/drei";
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
+import { PointerLockControls } from "@react-three/drei/core/PointerLockControls";
 import { useFrame, useThree } from "@react-three/fiber";
 import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useDevContext } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
-import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
-import { type InputState, useInput } from "./useInput";
-import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
-import { CAMERA_FAR } from "./constants";
 import { getAssignedSpawnOffset } from "../net/connection";
-import {
-  createCharacter,
-  createStepResult,
-  disposeCharacter,
-  resetCharacterMotion,
-  stepCharacter,
-  type Character,
-  type CharacterMotionState,
-  type CharacterStepResult,
-} from "../physics/characterMovement";
+import { createCharacter, createStepResult, disposeCharacter, stepCharacter, type Character, type SwimInput } from "../physics/characterMovement";
+import { setCameraWaterDepth } from "../vfx/underwater";
+import { CAMERA_FAR } from "./constants";
+import { useGroundSafetyNets } from "./groundSafetyNets";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
+import { type InputState, useInput } from "./useInput";
+import { useWaterProbe } from "./waterProbe";
 
 /** BODY-CENTER position; the player free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
-const FALL_RESET_Y = -500;
-/** Above the ground after a fall reset. */
-const FALL_RESET_DROP_HEIGHT = 10;
-
-const GROUND_CHECK_INTERVAL = 3; // frames
-// Generous: coarse-LOD heightfield colliders legitimately sit a little below the analytic surface.
-const BACKSTOP_EMBED_TOLERANCE = 2;
-
-const STUCK_FRAMES_TRIGGER = 12; // ~0.2s of blocked input
-const STUCK_EMBED_MIN = 0.1;
-const STUCK_RECHECK_BACKOFF = 45; // frames
-/** "No movement": under 5% of the desired step (0.05²). */
-const STUCK_MOVE_FRACTION_SQ = 0.0025;
-
-/** An async height check whose body has since moved this far (either axis) is stale and ignored. */
-const STALE_CHECK_DISTANCE = 3;
-/** Clearance above the surface when a safety net lifts the capsule onto it. */
-const LIFT_CLEARANCE = 0.1;
+/** Held this far above the spawn's ground until the terrain exists, then dropped: a spawn point inside a
+ *  building's footprint lands the player on top of it instead of inside its walls. */
+const SPAWN_DROP_HEIGHT = 100;
 
 // Movement feel (slopes, gravity, jump, substepping) is tuned in physics/characterMovement.ts.
 const WALK_SPEED = 15;
@@ -62,24 +41,6 @@ const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
-
-/** Surface height at (x, z) if the capsule bottom is more than `tolerance`
- *  below it, else null. The raw height is only a PRE-FILTER: flatten pads
- *  EXCAVATE (up to ~8u), so trusting it alone would teleport a player standing
- *  in a building's excavation. The padded confirm runs in the dressing worker —
- *  a flatten-tile miss is 30–70ms. */
-const resolveEmbeddedSurface = async (
-  x: number,
-  z: number,
-  bottom: number,
-  tolerance: number
-): Promise<number | null> => {
-  const raw = await getVertexDataRaw(x, z);
-  if (bottom >= raw.height - tolerance) return null;
-  const padded = (await getVertexSample(x, z)) ?? (await getVertexData(x, z));
-  if (bottom >= padded.height - tolerance) return null;
-  return padded.height;
-};
 
 /** The held keys as a horizontal direction from the camera's flattened forward/side (not normalized). */
 const readMoveDirection = (camera: THREE.Camera, input: InputState, out: THREE.Vector3): THREE.Vector3 => {
@@ -106,16 +67,6 @@ const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }
   rb.setTranslation({ x: pos.x + move.x * dt, y: pos.y + vy * dt, z: pos.z + move.z * dt }, true);
 };
 
-/** The check that started at (x, z) no longer applies: the body has moved on. */
-const isStale = (cur: { x: number; z: number }, x: number, z: number): boolean =>
-  Math.abs(cur.x - x) > STALE_CHECK_DISTANCE || Math.abs(cur.z - z) > STALE_CHECK_DISTANCE;
-
-/** Puts the capsule bottom just above `surface` and clears its fall/slide. */
-const liftOnto = (body: RapierRigidBody, cur: { x: number; z: number }, surface: number, motion: CharacterMotionState): void => {
-  body.setTranslation({ x: cur.x, y: surface + PLAYER_HEIGHT / 2 + LIFT_CLEARANCE, z: cur.z }, true);
-  resetCharacterMotion(motion);
-};
-
 /** Mounted ONCE by CustomCanvas; persists across domain switches (see CLAUDE.md). */
 export const Player = () => {
   const inputRef = useInput();
@@ -125,12 +76,12 @@ export const Player = () => {
 
   const rigidBodyRef = useRef<RapierRigidBody | null>(null);
   const cameraReady = useRef(false);
-  const respawning = useRef(false);
   const characterRef = useRef<Character | null>(null);
   const stepResult = useRef(createStepResult()).current;
-  const groundCheckFrame = useRef(0);
-  const stuckFrames = useRef(0);
-  const unsticking = useRef(false);
+  const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded);
+  const water = useWaterProbe();
+  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false }).current;
+  const jumpWasHeld = useRef(false);
 
   const { world, rapier } = useRapier();
 
@@ -164,76 +115,14 @@ export const Player = () => {
     const off = getAssignedSpawnOffset();
     const sx = spawn[0] + (off?.x ?? 0);
     const sz = spawn[2] + (off?.z ?? 0);
-    rb.setTranslation({ x: sx, y: spawn[1], z: sz }, true);
+    const sy = spawn[1] + SPAWN_DROP_HEIGHT;
+    rb.setTranslation({ x: sx, y: sy, z: sz }, true);
     character.state.vy = 0;
-    _camTarget.set(sx, spawn[1] + PLAYER_HEIGHT * 0.5, sz);
+    _camTarget.set(sx, sy + PLAYER_HEIGHT * 0.5, sz);
     camera.position.copy(_camTarget);
     cameraReady.current = false;
     // Published while holding too: the address bar and terrain streaming follow the spawn, not the last stand.
-    playerPosition.set(sx, spawn[1], sz);
-  };
-
-  /** Stuck escape: a capsule slightly embedded (under the backstop tolerance, e.g. after a LOD swap)
-   *  makes every sweep return ~zero. Signal = sustained input with ~no movement; confirmed against the
-   *  analytic height so a wall push never triggers it. */
-  const escapeIfStuck = (r: CharacterStepResult, from: { x: number; z: number }, character: Character): void => {
-    const wantSq = r.desiredX * r.desiredX + r.desiredZ * r.desiredZ;
-    const gotX = r.x - from.x;
-    const gotZ = r.z - from.z;
-    const gotSq = gotX * gotX + gotZ * gotZ;
-    if (wantSq > 1e-6 && gotSq < wantSq * STUCK_MOVE_FRACTION_SQ) {
-      stuckFrames.current++;
-    } else {
-      stuckFrames.current = 0;
-    }
-    if (stuckFrames.current < STUCK_FRAMES_TRIGGER || unsticking.current || !terrainLoaded || respawning.current) return;
-    unsticking.current = true;
-    const sx = r.x;
-    const sz = r.z;
-    resolveEmbeddedSurface(sx, sz, r.y - PLAYER_HEIGHT / 2, STUCK_EMBED_MIN).then((surface) => {
-      unsticking.current = false;
-      const body = rigidBodyRef.current;
-      if (!body) return;
-      const cur = body.translation();
-      if (isStale(cur, sx, sz)) return;
-      if (surface !== null && cur.y - PLAYER_HEIGHT / 2 < surface - STUCK_EMBED_MIN) {
-        liftOnto(body, cur, surface, character.state);
-        stuckFrames.current = 0;
-      } else {
-        stuckFrames.current = -STUCK_RECHECK_BACKOFF;
-      }
-    });
-  };
-
-  /** Authoritative anti-tunneling backstop, every GROUND_CHECK_INTERVAL frames: heightfield colliders
-   *  swap during LOD changes, so sweep hardening alone can't close every timing hole. */
-  const runBackstop = (at: { x: number; y: number; z: number }, character: Character): void => {
-    groundCheckFrame.current++;
-    if (groundCheckFrame.current % GROUND_CHECK_INTERVAL !== 0) return;
-    const cx = at.x;
-    const cz = at.z;
-    resolveEmbeddedSurface(cx, cz, at.y - PLAYER_HEIGHT / 2, BACKSTOP_EMBED_TOLERANCE).then((surface) => {
-      if (surface === null) return;
-      const body = rigidBodyRef.current;
-      if (!body) return;
-      const cur = body.translation();
-      if (isStale(cur, cx, cz)) return;
-      if (cur.y - PLAYER_HEIGHT / 2 >= surface - BACKSTOP_EMBED_TOLERANCE) return;
-      liftOnto(body, cur, surface, character.state);
-    });
-  };
-
-  /** Fell out of the world: drop back in above the ground here. */
-  const respawnAfterFall = (at: { x: number; z: number }, character: Character): void => {
-    respawning.current = true;
-    character.state.vy = 0;
-    getVertexData(at.x, at.z).then((vd) => {
-      if (rigidBodyRef.current) {
-        rigidBodyRef.current.setTranslation({ x: at.x, y: vd.height + FALL_RESET_DROP_HEIGHT, z: at.z }, true);
-      }
-      character.state.vy = 0;
-      respawning.current = false;
-    });
+    playerPosition.set(sx, sy, sz);
   };
 
   const followWithCamera = (at: { x: number; y: number; z: number }): void => {
@@ -258,6 +147,9 @@ export const Player = () => {
 
     if (!terrainLoaded && !noclip) {
       holdAtSpawn(rb, character);
+      // A teleport or domain switch: the last sample is another place's water.
+      water.clear();
+      setCameraWaterDepth(0);
       return;
     }
 
@@ -267,17 +159,23 @@ export const Player = () => {
       const collider = rb.collider(0);
       if (collider) {
         const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-        const characterInput = { dirX: move.x, dirZ: move.z, speed, jump: input.jump };
+        const surfaceY = water.surfaceY();
+        swimInput.surfaceY = surfaceY;
+        swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
+        const characterInput = { dirX: move.x, dirZ: move.z, speed, jump: input.jump, swim: Number.isNaN(surfaceY) ? null : swimInput };
         const r = stepCharacter(world, character, rb, collider, pos.x, pos.y, pos.z, characterInput, dt, stepResult);
-        escapeIfStuck(r, pos, character);
-      }
+        safetyNets.escapeIfStuck(r, pos, character);      }
     }
 
+    jumpWasHeld.current = input.jump;
+
     const finalPos = rb.translation();
-    if (!noclip && terrainLoaded && !respawning.current) runBackstop(finalPos, character);
-    if (finalPos.y < FALL_RESET_Y && !respawning.current) respawnAfterFall(finalPos, character);
+    if (!noclip && terrainLoaded) safetyNets.runBackstop(finalPos, character);
+    safetyNets.respawnIfFallen(finalPos, character);
     followWithCamera(finalPos);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
+    water.sample(finalPos.x, finalPos.z);
+    setCameraWaterDepth(water.surfaceY() - camera.position.y);
   }, -3);
 
   return (

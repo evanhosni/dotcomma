@@ -22,34 +22,40 @@ interface PlanFacts {
 const planCache = new Map<string, PlanFacts>();
 const MAX_PLAN_CACHE = 4096;
 
-const planFactsFor = (seed: string, attrs: BuildingAttributes): PlanFacts => {
+/** Insertion order ≈ age: the oldest half goes, never the whole cache. */
+const evictOldestHalf = (cache: Map<string, unknown>): void => {
+  let n = cache.size >> 1;
+  for (const k of cache.keys()) {
+    if (n-- <= 0) break;
+    cache.delete(k);
+  }
+};
+
+const readPlanFacts = (seed: string, attrs: BuildingAttributes): PlanFacts => {
+  const plan = generateBuildingPlan(seed, attrs);
+  const doorsXZ = new Float64Array(plan.doors.length * 2);
+  plan.doors.forEach((d, i) => {
+    doorsXZ[i * 2] = d.position[0];
+    doorsXZ[i * 2 + 1] = d.position[2];
+  });
+  return { hull: buildProxyHullVertices(plan), doorsXZ };
+};
+
+/** The building at (x, z), seeded like Building.tsx (no spec sets an explicit seed). */
+const planFactsAt = (attrs: BuildingAttributes, x: number, z: number): PlanFacts => {
+  const seed = buildingSeedAt(x, z);
   const key = `${seed}|${JSON.stringify(attrs)}`;
   let facts = planCache.get(key);
   if (!facts) {
-    if (planCache.size >= MAX_PLAN_CACHE) {
-      let n = planCache.size >> 1;
-      for (const k of planCache.keys()) {
-        if (n-- <= 0) break;
-        planCache.delete(k);
-      }
-    }
-    const plan = generateBuildingPlan(seed, attrs);
-    const doorsXZ = new Float64Array(plan.doors.length * 2);
-    plan.doors.forEach((d, i) => {
-      doorsXZ[i * 2] = d.position[0];
-      doorsXZ[i * 2 + 1] = d.position[2];
-    });
-    facts = { hull: buildProxyHullVertices(plan), doorsXZ };
+    if (planCache.size >= MAX_PLAN_CACHE) evictOldestHalf(planCache);
+    facts = readPlanFacts(seed, attrs);
     planCache.set(key, facts);
   }
   return facts;
 };
 
-const hullVerticesFor = (seed: string, attrs: BuildingAttributes): Float32Array => planFactsFor(seed, attrs).hull;
-
 /** Door offsets from the building at (x, z) — the leaves Building.tsx places from the same plan. */
-export const doorOffsetsFor = (attrs: BuildingAttributes, x: number, z: number): Float64Array =>
-  planFactsFor(buildingSeedAt(x, z), attrs).doorsXZ; // no spec sets an explicit seed
+export const doorOffsetsFor = (attrs: BuildingAttributes, x: number, z: number): Float64Array => planFactsAt(attrs, x, z).doorsXZ;
 
 /** `attrs` = the actor spec's `hull` (plan-shaping attributes); y = ground height. */
 export const createBuildingCollider = (
@@ -59,7 +65,7 @@ export const createBuildingCollider = (
   y: number,
   z: number,
 ): ProxyColliderHandle => {
-  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], hullVerticesFor(buildingSeedAt(x, z), attrs));
+  const handle = createProxyCollider({ world: pw.world, rapier: RAPIER }, [x, y, z], planFactsAt(attrs, x, z).hull);
   pw.markQueriesDirty();
   return handle;
 };

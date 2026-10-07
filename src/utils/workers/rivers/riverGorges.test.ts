@@ -4,8 +4,10 @@
  *  lake beside it. */
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { computeVertexData, initCompute, unwarp, warp } from "../vertexCompute";
-import { riverPieceEndSurface } from "./riverField";
-import { type RiverEdge, type RiverGorge, riverEdgeBlocked, riverEdgePiece, riverPiecesNear } from "./riverNetwork";
+import { riverPieceEndSurface } from "./riverSurface";
+import { riverEdgePiece, riverPiecesNear } from "./riverNetwork";
+import { riverEdgeBlocked } from "./riverPieceRules";
+import type { RiverEdge, RiverGorge } from "./types";
 
 const config = OVERWORLD_CONFIG;
 

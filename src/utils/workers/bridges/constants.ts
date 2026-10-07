@@ -84,9 +84,6 @@ export const BRIDGE_CUT_FLUSH = 0.05;
 export const deckWidth = (): number => 2 * (domainConfig!.cityConfig.freewayWidth + BRIDGE_DECK_MARGIN);
 export const BRIDGE_PARAPET_WIDTH = 0.6;
 
-/** The road warp's largest offset along one axis. */
-export const warpMax = (): number => domainConfig!.roadNoiseParams.height / 2;
-
 /** A street-width deck (a crossing of its own landing on the quays): a street plus the margin. */
 export const streetDeckWidth = (): number => 2 * (domainConfig!.cityConfig.roadWidth + BRIDGE_DECK_MARGIN);
 

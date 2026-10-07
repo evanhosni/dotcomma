@@ -5,6 +5,9 @@
  *  quantization grids (0.025, 0.2). A new world-space period must divide it. */
 export const WORLD_WRAP = 4200;
 
+/** World units per repeat of a terrain texture (`vWorldUv`, the TEXTURE_TILE define); divides WORLD_WRAP. */
+export const TERRAIN_TEXTURE_TILE = 26.25;
+
 export const glslFloat = (v: number): string => (Number.isInteger(v) ? `${v}.0` : `${v}`);
 
 /** The freeway CORRIDOR off the city, in the road field's normalized street units: the terrain shader
@@ -29,11 +32,16 @@ export const RIVER_BED_FULL_INSET = RIVER_BED_FADE_INSET + RIVER_BED_BLEND_WIDTH
  *  and beside the crisp city (a 1u half) the bed's sand met the snow's gravel on a hard line. */
 export const RIVER_BED_TEXTURE_HALF = 8;
 
-/** The riverbed paint yields to the ground beneath it on steep banks: fully painted up to START,
- *  gone by END (slope from the world normal, degrees) — a mountainside rising out of a river keeps
- *  its rock instead of a band of gravel. */
+/** The riverbed paint yields to ROCK beneath it on steep banks: fully painted up to START, gone by END
+ *  (slope from the world normal, degrees) — a mountainside rising out of a river keeps its rock
+ *  instead of a band of gravel. */
 export const RIVER_BED_SLOPE_START_DEG = 30;
 export const RIVER_BED_SLOPE_END_DEG = 40;
+
+/** Whether a biome's ground is ROCK on steep banks, the only ground the bed yields to by slope (the
+ *  shader's fade, the bed limit's marches): a domed biome (the mountain). Grass, dunes and snow
+ *  stay under the bed — yielding, they cut into it in wedges and strips reaching the water. */
+export const bedYieldsToSteepGround = (noise: { dome?: unknown } | undefined): boolean => !!noise?.dome;
 
 /** The riverBedDistance ATTRIBUTE's "no river" value. The pipeline reports Infinity out of a river's
  *  reach, but a vertex attribute must stay FINITE: a triangle with one Infinity vertex interpolates to

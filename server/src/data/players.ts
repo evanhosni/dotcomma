@@ -1,12 +1,10 @@
+import type { PlayerData } from "../../../src/net/protocol";
 import { getDb } from "./db.js";
 
 /**
  * The ONLY module touching the `players` table. Prepared statements are built
  * at module load, so this must load after the schema exists (getDb enforces it).
  */
-
-import type { PlayerData } from "../../../src/net/protocol";
-export type { PlayerData };
 
 /** A type alias, not an interface: aliases get an implicit index signature, which
  *  makes the cast from node:sqlite's Record<string, SQLOutputValue> legal. */

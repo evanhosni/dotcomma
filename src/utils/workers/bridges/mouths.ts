@@ -6,12 +6,14 @@ import { distanceToSegment } from "../../math/_math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
-import { unwarp, warp } from "../noise";
+import { unwarp, warp, warpMax } from "../noise";
 import { riverFieldAt, riverSample } from "../rivers/riverField";
-import { RIVER_MEANDER_AMP, type RiverEdge, riverEdgePiece, type RiverPiece, riverPiecesNear, riversEnabled, riverWetReach } from "../rivers/riverNetwork";
+import { RIVER_MEANDER_AMP, riverWetReach } from "../rivers/constants";
+import { riverEdgePiece, riverPiecesNear, riversEnabled } from "../rivers/riverNetwork";
+import type { RiverEdge, RiverPiece } from "../rivers/types";
 import { riverEdgeNearRoads } from "../rivers/riverRoadLayer";
 import { freewayDistanceAt } from "../vertexCompute";
-import { BRIDGE_MAX_DEVIATION, BRIDGE_RAMP_LENGTH, BRIDGE_RAMP_SHARE, BRIDGE_WET_MERGE, deckWidth, DEFAULT_BRIDGE_PLACEMENT, MOUTH_SAMPLE, runRiverYield, streetDeckWidth, warpMax } from "./constants";
+import { BRIDGE_MAX_DEVIATION, BRIDGE_RAMP_LENGTH, BRIDGE_RAMP_SHARE, BRIDGE_WET_MERGE, deckWidth, DEFAULT_BRIDGE_PLACEMENT, MOUTH_SAMPLE, runRiverYield, streetDeckWidth } from "./constants";
 import { CROSSING_MAX_SKEW, failedCrossing, straightCrossing } from "./crossings";
 import { whileEnumeratingBridges } from "./freewayBridges";
 import { dropShortLegs, hermitePoints, polyDirAt, polyPointAt, projectOnPolyline, simplifyPolyline } from "./polyline";
@@ -109,7 +111,7 @@ const findEdgeMouths = (e: RiverEdge, entry: EdgeMouths): void => {
   const wMax = pieces.reduce((m, p) => Math.max(m, p.w0, p.w1), 0);
   const nearEdge = reach * wMax + RIVER_MEANDER_AMP + half;
   const distance = (wx: number, wz: number): number => {
-    riverFieldAt(wx, wz);
+    riverFieldAt(wx, wz, false, false);
     return riverSample.distance;
   };
   const seen = new Set<string>();
@@ -273,7 +275,7 @@ const strandedRunEnds = (e: RiverEdge, paths: RoadPath[], entry: EdgeMouths, nea
   const bx = e.ax + e.ux * e.len;
   const bz = e.az + e.uz * e.len;
   const wetAt = (wx: number, wz: number): boolean => {
-    riverFieldAt(wx, wz);
+    riverFieldAt(wx, wz, false, false);
     return riverSample.distance < reach;
   };
   // Every belt sample, warped, in path order (a belt split by the waterfront leaves its drowned stretch

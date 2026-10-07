@@ -48,6 +48,11 @@ for every variable; server vars go in `server/.env`, client vars in `.env`.
   deploys** (a deploy is a brief restart; clients reconnect with backoff).
 - **Enable volume backups** in the Railway dashboard (Volume → Backups). The
   `.bak` files from `db:migrate` are the second copy, on the same volume.
+- Optional env vars (defaults are right for production):
+  - `WS_DEFLATE=off` disables permessage-deflate (on by default; ~¼ of the raw bandwidth).
+  - `CHUNK_GENERATOR=inline` builds physics chunks on the tick thread instead of the
+    generation worker (the worker measured better even on one core). The boot log prints
+    the CPU count; check the plan's vCPUs under the service's **Settings → Resources**.
 
 ### Deploying
 

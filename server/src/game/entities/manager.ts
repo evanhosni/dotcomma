@@ -1,4 +1,4 @@
-import type { DomainId, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
+import type { DomainId, EntityRegisterItem, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
 import { getActorSpec } from "../../../../src/world/domains/configs";
 import { DOOR_INTERACT_REACH } from "../../../../src/objects/actors/building/spec";
@@ -8,10 +8,8 @@ import { createBuildingCollider, doorOffsetsFor } from "../physics/buildings.js"
 import { createNpcBody, type NpcBody, type Pose } from "../physics/npcBody.js";
 import { DEFAULT_WORK_BUDGET_MS, PHYSICS_DOMAIN, type PhysicsWorld } from "../physics/physicsWorld.js";
 import { PlayerBodies } from "../physics/playerBodies.js";
-import { TICK_HZ, TICK_MS } from "../tick.js";
+import { TICK_HZ, TICK_SECONDS } from "../tick.js";
 import { createPublished, fullUpdate, publishTick, type Published } from "./publish.js";
-
-export { PHYSICS_DOMAIN, TICK_HZ, TICK_MS };
 
 /**
  * THE authority for every synced actor (CLAUDE.md → Entity sync). Entities exist
@@ -65,14 +63,6 @@ export interface EntityManagerOptions {
   specs?: (kind: string) => ActorSpec | undefined;
 }
 
-interface RegisterItem {
-  id: string;
-  kind: string;
-  x: number;
-  y: number;
-  z: number;
-}
-
 const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: number; y: number; z: number }; distSq: number } => {
   let best: PlayerView | null = null;
   let bestSq = Infinity;
@@ -86,13 +76,19 @@ const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: numb
   return best ? { pos: best, distSq: bestSq } : { pos: NO_PLAYER_POSITION, distSq: Infinity };
 };
 
+/** A player as of `now`: moved along its last reported velocity, at most MAX_PLAYER_EXTRAPOLATION_S. */
+const extrapolate = (p: PlayerView, now: number): PlayerView => {
+  const age = Math.min((now - p.lastMoveAt) / 1000, MAX_PLAYER_EXTRAPOLATION_S);
+  return { ...p, x: p.x + p.vx * age, z: p.z + p.vz * age };
+};
+
 export class EntityManager {
   private readonly entities = new Map<string, EntityRecord>();
   private readonly bySession = new Map<string, Set<string>>();
   /** Simulation time (s), advanced exactly one tick per tick so a machine's
    *  `elapsed` agrees with its `delta` (like the client's frame clock). */
   private elapsed = 0;
-  private readonly players: PlayerBodies | null;
+  private readonly playerBodies: PlayerBodies | null;
   private readonly workBudgetMs: number;
   private readonly log: boolean;
   private readonly specs: (kind: string) => ActorSpec | undefined;
@@ -106,7 +102,7 @@ export class EntityManager {
     private readonly physics: PhysicsWorld | null = null,
     opts: EntityManagerOptions = {},
   ) {
-    this.players = physics ? new PlayerBodies(physics) : null;
+    this.playerBodies = physics ? new PlayerBodies(physics) : null;
     this.workBudgetMs = opts.workBudgetMs ?? DEFAULT_WORK_BUDGET_MS;
     this.log = opts.log ?? true;
     this.specs = opts.specs ?? getActorSpec;
@@ -120,7 +116,7 @@ export class EntityManager {
     return this.entities.get(id);
   }
 
-  register(sessionId: string, domain: DomainId, items: RegisterItem[]): void {
+  register(sessionId: string, domain: DomainId, items: EntityRegisterItem[]): void {
     for (const item of items) {
       let e = this.entities.get(item.id);
       if (e && e.domain !== domain) continue;
@@ -131,46 +127,6 @@ export class EntityManager {
       mine.add(item.id);
       this.host.sendMany([sessionId], { t: "entity:update", id: e.id, ...fullUpdate(e, Date.now()) });
     }
-  }
-
-  private create(item: RegisterItem, domain: DomainId): EntityRecord {
-    const spec = this.specs(item.kind);
-    const physical = this.physics !== null && domain === PHYSICS_DOMAIN;
-    const npc = spec && physical ? createNpcBody(this.physics!, spec, item.x, item.z) : null;
-    if (npc) this.npcCount++;
-    // The server owns the ground: the registration's y is only a hint.
-    const position = { x: item.x, y: npc ? npc.y : item.y, z: item.z };
-    const e: EntityRecord = {
-      ...createPublished(position.x, position.y, position.z),
-      id: item.id,
-      kind: item.kind,
-      domain,
-      registrants: new Set(),
-      runner: spec?.stateMachine ? new StateMachineRunner(spec.stateMachine, { current: position }, { current: null }) : null,
-      position,
-      npc,
-      hull: null,
-    };
-    this.entities.set(e.id, e);
-    if (spec?.hull && physical) {
-      // Budgeted queue: a client entering the city registers hundreds of buildings at once.
-      const attrs = spec.hull;
-      this.physics!.jobs.enqueue(`hull:${e.id}`, () => {
-        if (this.entities.get(e.id) === e && !e.hull) e.hull = createBuildingCollider(this.physics!, attrs, e.x, e.y, e.z);
-        return true;
-      });
-    }
-    return e;
-  }
-
-  private dispose(e: EntityRecord): void {
-    e.runner?.dispose();
-    if (e.npc) {
-      e.npc.dispose();
-      this.npcCount--;
-    }
-    e.hull?.dispose();
-    this.entities.delete(e.id);
   }
 
   unregister(sessionId: string, ids: string[]): void {
@@ -193,17 +149,63 @@ export class EntityManager {
   disposeAll(): void {
     for (const e of [...this.entities.values()]) this.dispose(e);
     this.bySession.clear();
-    this.players?.dispose();
+    this.playerBodies?.dispose();
+  }
+
+  private create(item: EntityRegisterItem, domain: DomainId): EntityRecord {
+    const spec = this.specs(item.kind);
+    const physical = this.physics !== null && domain === PHYSICS_DOMAIN;
+    // The server owns the ground: the registration's y is only a hint, held until the server's height is in.
+    const npc = spec && physical ? createNpcBody(this.physics!, spec, item.x, item.z, item.y) : null;
+    if (npc) this.npcCount++;
+    const position = { x: item.x, y: npc ? npc.y : item.y, z: item.z };
+    const e: EntityRecord = {
+      ...createPublished(position.x, position.y, position.z),
+      id: item.id,
+      kind: item.kind,
+      domain,
+      registrants: new Set(),
+      runner: spec?.stateMachine ? new StateMachineRunner(spec.stateMachine, { current: position }, { current: null }) : null,
+      position,
+      npc,
+      hull: null,
+    };
+    this.entities.set(e.id, e);
+    if (spec?.hull && physical) this.queueHull(e.id);
+    return e;
+  }
+
+  /** Budgeted queue: a client entering the city registers hundreds of buildings at once. The job
+   *  serves whatever record holds the id when it runs: one disposed and re-registered before its
+   *  job ran is a new record whose own enqueue the queue dedupes away (it was left without a hull). */
+  private queueHull(id: string): void {
+    this.physics!.jobs.enqueue(`hull:${id}`, () => {
+      const cur = this.entities.get(id);
+      const attrs = cur && !cur.hull && cur.domain === PHYSICS_DOMAIN ? this.specs(cur.kind)?.hull : undefined;
+      if (attrs) cur!.hull = createBuildingCollider(this.physics!, attrs, cur!.x, cur!.y, cur!.z);
+      return true;
+    });
+  }
+
+  private dispose(e: EntityRecord): void {
+    e.runner?.dispose();
+    if (e.npc) {
+      e.npc.dispose();
+      this.npcCount--;
+    }
+    e.hull?.dispose();
+    this.entities.delete(e.id);
   }
 
   /** A mouse action becomes the machine's blackboard flag (its own triggers decide);
    *  "door:<i>" toggles replicated state generically. Both are gated on the sender's
    *  reported position: a mouse action from the actor's origin, a door from the door's
    *  own position (a building's origin is its center, 9–16u from a facade door). */
-  interact(sessionId: string, id: string, action: string, players: PlayerView[]): void {
+  interact(sessionId: string, id: string, action: string, now = Date.now()): void {
     const e = this.entities.get(id);
     if (!e || !e.registrants.has(sessionId)) return;
-    const from = players.find((p) => p.id === sessionId);
+    // A registrant is always in the entity's domain: a domain change unregisters everything first.
+    const from = this.playerView(e.domain, sessionId, now);
     const door = DOOR_ACTION.exec(action);
     if (door) {
       const idx = Number(door[1]);
@@ -233,17 +235,19 @@ export class EntityManager {
     const doors = Array.isArray(e.state.doors) ? [...(e.state.doors as boolean[])] : [];
     doors[idx] = !doors[idx];
     e.state = { ...e.state, doors };
-    this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, state: e.state });
+    this.send(e, { state: e.state });
   }
 
   /** Players of a domain, extrapolated to now. */
-  playersFor(domain: DomainId, now = Date.now()): PlayerView[] {
+  private playersFor(domain: DomainId, now: number): PlayerView[] {
     const list: PlayerView[] = [];
-    for (const p of this.host.playersIn(domain)) {
-      const age = Math.min((now - p.lastMoveAt) / 1000, MAX_PLAYER_EXTRAPOLATION_S);
-      list.push({ ...p, x: p.x + p.vx * age, z: p.z + p.vz * age });
-    }
+    for (const p of this.host.playersIn(domain)) list.push(extrapolate(p, now));
     return list;
+  }
+
+  private playerView(domain: DomainId, sessionId: string, now: number): PlayerView | undefined {
+    for (const p of this.host.playersIn(domain)) if (p.id === sessionId) return extrapolate(p, now);
+    return undefined;
   }
 
   /** One simulation tick: generation work → player capsules → query refresh → every machine ticks and
@@ -251,7 +255,7 @@ export class EntityManager {
   tick(now = Date.now()): void {
     const tickStart = performance.now();
     this.tickNo++;
-    const dt = TICK_MS / 1000;
+    const dt = TICK_SECONDS;
     this.elapsed += dt;
     const playersByDomain = new Map<DomainId, PlayerView[]>();
     const playersOf = (domain: DomainId): PlayerView[] => {
@@ -272,12 +276,12 @@ export class EntityManager {
   private preparePhysics(playersOf: (domain: DomainId) => PlayerView[]): boolean {
     const pw = this.physics;
     if (!pw) return false;
-    const simulate = this.npcCount > 0 || this.players!.size > 0;
+    const simulate = this.npcCount > 0 || this.playerBodies!.size > 0;
     pw.workFor(this.workBudgetMs);
     if (simulate) {
       const domains = new Set<DomainId>();
       for (const e of this.entities.values()) if (e.npc) domains.add(e.domain);
-      this.players!.sync([...domains].flatMap((d) => playersOf(d)));
+      this.playerBodies!.sync([...domains].flatMap((d) => playersOf(d)));
     }
     pw.ensureQueries();
     return simulate;
@@ -324,12 +328,12 @@ export class EntityManager {
     this.host.sendMany(e.registrants, { t: "entity:update", id: e.id, ...fields });
   }
 
-  statsLine(): string {
+  private statsLine(): string {
     const s = this.physics!.stats();
     return (
-      `npcs ${this.npcCount} players ${this.players!.size} | tick max ${this.maxTickMs.toFixed(1)}ms ` +
+      `npcs ${this.npcCount} players ${this.playerBodies!.size} | tick max ${this.maxTickMs.toFixed(1)}ms ` +
       `step ${s.stepMs.toFixed(2)}/${s.maxStepMs.toFixed(2)}ms work ${s.workMs.toFixed(1)}/${s.maxWorkMs.toFixed(1)}ms (slowest job step ${s.maxJobStepMs.toFixed(0)}ms) | ` +
-      `colliders ${s.colliders} bodies ${s.bodies} terrain ${s.terrain.built}+${s.terrain.pending} dressing ${s.dressing.built}+${s.dressing.pending} queue ${s.queued}`
+      `colliders ${s.colliders} bodies ${s.bodies} terrain ${s.terrain.built}+${s.terrain.pending} dressing ${s.dressing.built}+${s.dressing.pending} queue ${s.queued} generating ${s.generating}`
     );
   }
 }
