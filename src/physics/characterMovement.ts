@@ -181,6 +181,18 @@ const _step = { x: 0, y: 0, z: 0 };
 const _trans = { x: 0, y: 0, z: 0 };
 const _notSensor = (c: Rapier.Collider) => !c.isSensor();
 
+/** Colliders walked at FULL speed whatever their slope: building ramps (≈38°), which the uphill fade
+ *  (tuned on terrain) would slow to a crawl. Identity, not handle: Rapier reuses a removed collider's
+ *  handle. Empty on the server, which builds no interiors. */
+const fullSpeedSlopes = new Set<Rapier.Collider>();
+/** Marks a collider as a full-speed slope; returns its unmark. */
+export const markFullSpeedSlope = (c: Rapier.Collider): (() => void) => {
+  fullSpeedSlopes.add(c);
+  return () => {
+    fullSpeedSlopes.delete(c);
+  };
+};
+
 /** Fills while active, decays faster when not, saturates at 2× the delay (hysteresis on the way out). */
 const bumpSlopeTimer = (t: number, active: boolean, dt: number, delay: number): number =>
   Math.max(0, Math.min(delay * 2, t + (active ? dt : -dt * SLOPE_TIMER_DECAY)));
@@ -193,12 +205,14 @@ interface GroundProbe {
   supported: boolean;
   /** Radians; 0 when no ground is near. */
   angle: number;
+  /** The ground is a full-speed slope (markFullSpeedSlope): no uphill fade. */
+  fullSpeed: boolean;
   /** Upward ground normal; (0, 1, 0) when no ground is near. */
   nX: number;
   nY: number;
   nZ: number;
 }
-const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, nX: 0, nY: 1, nZ: 0 };
+const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, fullSpeed: false, nX: 0, nY: 1, nZ: 0 };
 
 /** Probe EVERY step: computedGrounded() flickers false on steep surfaces, where this matters most. */
 const probeGround = (
@@ -215,6 +229,7 @@ const probeGround = (
   p.nearGround = false;
   p.supported = false;
   p.angle = 0;
+  p.fullSpeed = false;
   p.nX = 0;
   p.nY = 1;
   p.nZ = 0;
@@ -236,6 +251,7 @@ const probeGround = (
     p.nY = hnY;
     p.nZ = hnZ;
     p.angle = Math.acos(Math.min(Math.max(hnY, -1), 1));
+    p.fullSpeed = fullSpeedSlopes.has(hit.collider);
   }
   p.supported = hit.timeOfImpact <= halfHeight / Math.max(hnY, 0.25) + SNAP_TO_GROUND + 0.1;
   return p;
@@ -254,7 +270,7 @@ const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionStat
     mx = input.dirX * inv;
     mz = input.dirZ * inv;
     let scale = input.speed;
-    if (g.nearGround && g.angle > SLOPE_SOFT_START && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
+    if (g.nearGround && !g.fullSpeed && g.angle > SLOPE_SOFT_START && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
       const hLen = Math.hypot(g.nX, g.nZ);
       if (hLen > 1e-5) {
         const upX = -g.nX / hLen;

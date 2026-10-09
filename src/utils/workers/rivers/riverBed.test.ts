@@ -7,6 +7,7 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { RIVER_BED_FADE_INSET, RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_END_DEG, RIVER_BED_SLOPE_START_DEG, bedYieldsToSteepGround } from "../../../world/shaders/constants";
 import { smoothstep } from "../../math/_math";
 import { biomeSlotsOf, combineSlotWeights, computeVertexData, computeVertexDataFar, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "../vertexCompute";
+import { capRiverBed } from "./riverBedLimit";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 import { lastShoreDistance } from "../lakes";
 
@@ -158,5 +159,17 @@ describe("riverbed paint", () => {
       }
     }
     expect(checked).toBeGreaterThan(100);
+  });
+});
+
+describe("bed limit under the water", () => {
+  it("never caps the bed inside the half-width, even where the bank is steep right at the water's edge", () => {
+    const hw = config.river.halfWidth;
+    // A limit at the half-width itself (the steepest case): it faded the bed out over the channel's last
+    // 8u, and a mountain river showed its snow through the water.
+    for (const limit of [hw, hw + 2, hw + 6]) {
+      for (let bed = 0; bed <= hw; bed += 0.5) expect(capRiverBed(bed, limit)).toBe(bed);
+      expect(capRiverBed(reach - 0.1, limit)).toBeGreaterThan(reach - 0.1);
+    }
   });
 });
