@@ -7,7 +7,7 @@ import {
   addInteriorWalls,
   buildInteriorColliders,
   mergeInteriorParts,
-  shadeInteriorAndAddPanels,
+  shadeInteriorAndAddLights,
   type RampCollider,
 } from "./interiorGeometry";
 import { buildProxyHullVertices } from "./proxyCollider";
@@ -48,7 +48,7 @@ export interface ProceduralBuildingAssets {
 // mounts would dispose geometry still on live meshes.
 interface BuildingCacheEntry {
   assets: ProceduralBuildingAssets;
-  /** Walls, slabs, ramps and light panels as ONE vertex-colored geometry; null until someone needs it.
+  /** Walls, slabs, ramps and ceiling lights as ONE vertex-colored geometry; null until someone needs it.
    *  Lives exactly while the building is mounted: disposed when the refcount drops to 0. */
   interior: THREE.BufferGeometry | null;
   refCount: number;
@@ -133,7 +133,7 @@ export const beginBuildingInteriorBuild = (
     steps: [
       () => addInteriorWalls(plan, parts),
       () => addInteriorSlabsAndRamps(plan, parts),
-      () => shadeInteriorAndAddPanels(plan, parts),
+      () => shadeInteriorAndAddLights(plan, parts),
     ],
     finish: () => {
       const entry = cache.get(cacheKeyOf(seed, optionsKey));

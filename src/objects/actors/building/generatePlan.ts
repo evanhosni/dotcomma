@@ -23,6 +23,7 @@ import {
   RingLevel,
   RoomRect,
   WallBox,
+  LIGHT_TYPE,
   ROOF_STYLE,
   WallSide,
   WINDOW_SHAPE,
@@ -46,12 +47,20 @@ const WALKWAY_WIDTH = 1.8; // sizing allowance beside the lane so the room aroun
 const RAMP_LANDING = 1.2; // solid floor at each end of the run
 /** Shaft inset from the BSP domain edges, so ramp faces never sit flush against the shell. */
 const RAMP_MARGIN = 0.3;
-const RAMP_RUN_FACTOR = 1.5; // run = storyHeight × this (≈34° slope)
-const RAMP_RUN_MIN_FACTOR = 1.25; // steepest allowed fit (≈39°) before giving up on stories
+/** run = storyHeight × this (≈38.4°): the 9.45u run of the old 6.3u story kept for the 7.5u one, so taller
+ *  floors steepen ramps instead of lengthening them. Above 25° the player slows uphill (physics/characterMovement.ts). */
+const RAMP_RUN_FACTOR = 1.26;
+const RAMP_RUN_MIN_FACTOR = 1.22; // steepest allowed fit (≈39.3°) before giving up on stories; 40° is SLOPE_SLIDE_ANGLE
 const DOORWAY_WIDTH = 2.4; // interior room-to-room openings
-const DOORWAY_HEIGHT = 4.2;
 const MIN_ROOM_DIM = 6; // rooms below 2× this never split again
 const LIGHT_PANEL_SPACING = 5.5;
+/** Ceiling light panel [x, z] size. */
+export const LIGHT_PANEL_SIZE: [number, number] = [1.4, 2.8];
+/** Clearance between a panel's corners and the shell's inner surface: a corner past it pokes through the shell
+ *  (a house's is only SHELL_INSET thick). */
+const LIGHT_PANEL_WALL_CLEARANCE = 0.3;
+/** Room area (u²) each dome light covers. */
+const DOME_LIGHT_AREA = 60;
 const CHILD_SLOT_COUNT = 32;
 const FOUNDATION_DEPTH = 1;
 /** Exterior half-extent minus the interior's: the shell's thickness at the door band. */
@@ -79,6 +88,8 @@ const DEFAULT_WINDOW_SIZE: [number, number] = [2.4, 4.4];
 const GLASS_COLORS = [0x9fd8ec, 0x8ec7de, 0xaad4ea];
 const PIPE_COLORS = [0x6b4a2f, 0x8a8f96, 0x3c4046];
 const DOOR_BROWNS = [0x4a352a, 0x5a4030, 0x6b4a2f, 0x7a5a3a, 0x8a6a4a];
+/** Minimum sRGB-luminance gap between a door and the walls around it. */
+const DOOR_CONTRAST = 0.15;
 const HANDLE_METALS = [0xc9a54a, 0xb08d3c, 0x9ea3a8, 0x2c2e31];
 const ROOF_SHINGLES = [0x3b3f45, 0x4a3b35, 0x5c3a2e, 0x7a3a2c, 0x4d5544, 0x2f3338];
 
@@ -107,9 +118,18 @@ const shade = (hex: number, f: number): number => {
   return (r << 16) | (g << 8) | b;
 };
 
+/** sRGB-encoded luminance in [0, 1]: linear in the channel bytes, so scaling or mixing a color scales it alike. */
+export const luminanceOf = (hex: number): number =>
+  (0.2126 * ((hex >> 16) & 0xff) + 0.7152 * ((hex >> 8) & 0xff) + 0.0722 * (hex & 0xff)) / 255;
+
+const mixToWhite = (hex: number, t: number): number => {
+  const ch = (shift: number) => Math.round(((hex >> shift) & 0xff) + t * (255 - ((hex >> shift) & 0xff)));
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+};
+
 /** Scales the color so its sRGB luminance lies in [lo, hi] (hue kept). */
 const clampLuminance = (hex: number, lo: number, hi: number): number => {
-  const lum = (0.2126 * ((hex >> 16) & 0xff) + 0.7152 * ((hex >> 8) & 0xff) + 0.0722 * (hex & 0xff)) / 255;
+  const lum = luminanceOf(hex);
   if (lum > hi) return shade(hex, hi / lum);
   if (lum < lo) return lum > 0.01 ? shade(hex, lo / lum) : shade(0xffffff, lo);
   return hex;
@@ -182,16 +202,18 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   const segmentColor = createSegmentColors(rng, opts, m.pitched);
   const { lofts, bandTop, bandColor, segBounds } = buildLofts(rng, opts, m, shellHeight, ringAt, segmentColor);
   const interiorColors = interiorColorsOf(opts, bandColor);
-  const { doorColor, doorHandle } = chooseDoorLook(rng, lofts);
+  const { doorColor, doorHandle } = chooseDoorLook(rng, lofts, bandColor, interiorColors.wall);
   const bandPts = ringPoints(m.rect, m.sides, bandTop, m.ringRotation);
   const doors = placeDoors(rng, opts, m, bandPts);
   const placedWindows = placeWindows(rng, opts, m, lofts, segBounds, bandPts, shellHeight);
   const { ramps, storyLayouts } = layoutStories(rng, m, doors);
   stretchSplitWallsToShell(storyLayouts, m);
-  const wallBoxesPerStory = buildWallBoxes(rng, storyLayouts, m.ceilingHeight);
+  const wallBoxesPerStory = buildWallBoxes(rng, storyLayouts, m.ceilingHeight, m.doorHeight);
   nudgeDoorsClearOfWalls(doors, storyLayouts[0].splitWalls, m.intPts, bandPts);
   const windows = placedWindows.filter((w) => !windowOverlapsDoor(w, doors, bandPts));
-  const lightPanelsPerStory = placeLightPanels(rng, m, ramps);
+  const lightType = opts.lightType ?? LIGHT_TYPE.PANEL;
+  const lightsPerStory =
+    lightType === LIGHT_TYPE.DOME ? placeDomeLights(m, storyLayouts, ramps) : placeLightPanels(rng, m, ramps);
   const childSlots = placeChildSlots(rng, m, storyLayouts, ramps);
 
   return {
@@ -218,7 +240,8 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
       roomsPerStory: storyLayouts.map((l) => l.rooms),
       wallBoxesPerStory,
       ramps,
-      lightPanelsPerStory,
+      lightType,
+      lightsPerStory,
       childSlots,
     },
   };
@@ -232,10 +255,10 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
   const rect = sides === 4;
   const ringRotation = rect ? 0 : rng.range(0, Math.PI * 2);
 
-  const ceilingHeight = opts.ceilingHeight ?? 6;
+  const ceilingHeight = opts.ceilingHeight ?? 7.2;
   const storyHeight = ceilingHeight + SLAB_THICKNESS;
   const doorWidth = opts.doorSize?.[0] ?? 2.6;
-  const doorHeight = Math.min(opts.doorSize?.[1] ?? 3.2, ceilingHeight - 0.2);
+  const doorHeight = Math.min(opts.doorSize?.[1] ?? 3.84, ceilingHeight - 0.2);
   const doorBandTop = doorHeight + rng.range(0.8, 2);
 
   const storyRoll = Array.isArray(opts.stories)
@@ -617,11 +640,37 @@ const interiorColorsOf = (opts: BuildingAttributes, bandColor: number) => {
   };
 };
 
-/** Doors never introduce a new bright hue. */
-const chooseDoorLook = (rng: PlanRng, lofts: ExteriorLoft[]): Pick<BuildingPlan, "doorColor" | "doorHandle"> => {
+/** Moves the door's luminance at least DOOR_CONTRAST away from every wall it is seen against: lighter
+ *  when there is room above them, else darker. Hue differences alone vanish at night. */
+const contrastDoor = (door: number, walls: number[]): number => {
+  const lums = walls.map(luminanceOf);
+  const lum = luminanceOf(door);
+  if (lums.every((w) => Math.abs(lum - w) >= DOOR_CONTRAST)) return door;
+  const lighter = Math.max(...lums) + DOOR_CONTRAST;
+  const darker = Math.min(...lums) - DOOR_CONTRAST;
+  if (lighter <= 0.92 && (darker < 0.04 || lighter - lum <= lum - darker)) {
+    return lum < lighter ? mixToWhite(door, (lighter - lum) / (1 - lum)) : door;
+  }
+  return lum > 0.01 ? shade(door, Math.max(0, darker) / lum) : door;
+};
+
+/** Doors never introduce a new bright hue, and always stand out from the band they sit in (outside) and
+ *  the interior wall (inside). */
+const chooseDoorLook = (
+  rng: PlanRng,
+  lofts: ExteriorLoft[],
+  bandColor: number,
+  interiorWall: number,
+): Pick<BuildingPlan, "doorColor" | "doorHandle"> => {
   const doorRoll = rng();
-  const doorColor =
-    doorRoll < 0.4 ? rng.pick(lofts.map((l) => l.color)) : doorRoll < 0.7 ? rng.pick(DOOR_BROWNS) : rng.pick(GRAYSCALE);
+  const otherLoftColors = lofts.map((l) => l.color).filter((c) => c !== bandColor);
+  const picked =
+    doorRoll < 0.4
+      ? rng.pick(otherLoftColors.length ? otherLoftColors : [bandColor])
+      : doorRoll < 0.7
+        ? rng.pick(DOOR_BROWNS)
+        : rng.pick(GRAYSCALE);
+  const doorColor = contrastDoor(picked, [bandColor, interiorWall]);
   return { doorColor, doorHandle: { lever: rng() < 0.5, color: rng.pick(HANDLE_METALS) } };
 };
 
@@ -943,14 +992,15 @@ const stretchSplitWallsToShell = (storyLayouts: StoryLayout[], m: Massing): void
   }
 };
 
-/** A wall's boxes around its one doorway: the pieces left and right of it, and the lintel above. */
-const addWallWithDoor = (boxes: WallBox[], w: SplitWall, ceilingHeight: number): void => {
+/** A wall's boxes around its one doorway: the pieces left and right of it, and the lintel above. Doorways are as tall as
+ *  the exterior doors. */
+const addWallWithDoor = (boxes: WallBox[], w: SplitWall, ceilingHeight: number, doorwayHeight: number): void => {
   const a0 = w.doorAt - DOORWAY_WIDTH / 2;
   const a1 = w.doorAt + DOORWAY_WIDTH / 2;
   const segs: [number, number, number, number][] = []; // [from, to, y0, y1]
   if (a0 - w.from > 0.05) segs.push([w.from, a0, 0, ceilingHeight]);
   if (w.to - a1 > 0.05) segs.push([a1, w.to, 0, ceilingHeight]);
-  if (ceilingHeight - DOORWAY_HEIGHT > 0.05) segs.push([Math.max(w.from, a0), Math.min(w.to, a1), DOORWAY_HEIGHT, ceilingHeight]);
+  if (ceilingHeight - doorwayHeight > 0.05) segs.push([Math.max(w.from, a0), Math.min(w.to, a1), doorwayHeight, ceilingHeight]);
   for (const [f, t, y0s, y1s] of segs) {
     if (t - f <= 0.01) continue;
     if (w.axis === "x") {
@@ -962,10 +1012,10 @@ const addWallWithDoor = (boxes: WallBox[], w: SplitWall, ceilingHeight: number):
 };
 
 /** Split walls, plus occasional pillars in big rooms (one landing on a shaft or arrival hole is dropped). */
-const buildWallBoxes = (rng: PlanRng, storyLayouts: StoryLayout[], ceilingHeight: number): WallBox[][] =>
+const buildWallBoxes = (rng: PlanRng, storyLayouts: StoryLayout[], ceilingHeight: number, doorwayHeight: number): WallBox[][] =>
   storyLayouts.map((layout) => {
     const boxes: WallBox[] = [];
-    for (const w of layout.splitWalls) addWallWithDoor(boxes, w, ceilingHeight);
+    for (const w of layout.splitWalls) addWallWithDoor(boxes, w, ceilingHeight, doorwayHeight);
     for (const r of layout.rooms) {
       const rw = r.x1 - r.x0;
       const rd = r.z1 - r.z0;
@@ -1024,6 +1074,11 @@ const nudgeDoorsClearOfWalls = (doors: DoorPlan[], groundWalls: SplitWall[], int
   }
 };
 
+const panelClearOfShell = (intPts: Pt2[], x: number, z: number): boolean => {
+  const [hx, hz] = [LIGHT_PANEL_SIZE[0] / 2, LIGHT_PANEL_SIZE[1] / 2];
+  return [-1, 1].every((sx) => [-1, 1].every((sz) => pointInRing(intPts, [x + sx * hx, z + sz * hz], LIGHT_PANEL_WALL_CLEARANCE)));
+};
+
 const placeLightPanels = (rng: PlanRng, m: Massing, ramps: RampSpec[]): [number, number][][] => {
   const lightPanelsPerStory: [number, number][][] = [];
   for (let s = 0; s < m.stories; s++) {
@@ -1033,13 +1088,34 @@ const placeLightPanels = (rng: PlanRng, m: Massing, ramps: RampSpec[]): [number,
       for (let z = -m.interiorHalfDepth + LIGHT_PANEL_SPACING / 2; z < m.interiorHalfDepth - 1; z += LIGHT_PANEL_SPACING) {
         if (!pointInRing(m.intPts, [x, z], 1)) continue;
         if (holes.some((h) => x > h.x0 - 1.6 && x < h.x1 + 1.6 && z > h.z0 - 1.6 && z < h.z1 + 1.6)) continue;
-        if (rng() > 0.15) panels.push([x, z]);
+        // Drawn before the corner test so the rng stream (child slots after it) is unchanged.
+        if (rng() > 0.15 && panelClearOfShell(m.intPts, x, z)) panels.push([x, z]);
       }
     }
     lightPanelsPerStory.push(panels);
   }
   return lightPanelsPerStory;
 };
+
+/** Dome lights: one per DOME_LIGHT_AREA of room (1–3), spaced along the room's long axis; none over a ramp hole. */
+const placeDomeLights = (m: Massing, storyLayouts: StoryLayout[], ramps: RampSpec[]): [number, number][][] =>
+  storyLayouts.slice(0, m.stories).map((layout, s) => {
+    const holes = ramps.filter((r) => r.story === s).map((r) => r.hole);
+    const lights: [number, number][] = [];
+    for (const r of layout.rooms) {
+      const w = r.x1 - r.x0;
+      const d = r.z1 - r.z0;
+      const n = clamp(Math.round((w * d) / DOME_LIGHT_AREA), 1, 3);
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.5) / n;
+        const x = w >= d ? r.x0 + t * w : (r.x0 + r.x1) / 2;
+        const z = w >= d ? (r.z0 + r.z1) / 2 : r.z0 + t * d;
+        if (holes.some((h) => x > h.x0 - 1 && x < h.x1 + 1 && z > h.z0 - 1 && z < h.z1 + 1)) continue;
+        lights.push([x, z]);
+      }
+    }
+    return lights;
+  });
 
 /** Seeded spots for a building's `children`, each in a room and clear of the ramps. */
 const placeChildSlots = (rng: PlanRng, m: Massing, storyLayouts: StoryLayout[], ramps: RampSpec[]): ChildSlot[] => {

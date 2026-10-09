@@ -1,6 +1,6 @@
 import type { ActorAttributes } from "../../types";
 import type { ActorSpec } from "../spec";
-import { BuildingAttributes, ROOF_STYLE } from "./types";
+import { BuildingAttributes, LIGHT_TYPE, ROOF_STYLE } from "./types";
 
 // The server (physics/buildings.ts) generates the SAME plan from a spec's `hull` to build the
 // sealed collider, and its domain config derives the flatten pads from the placement here — a
@@ -17,6 +17,7 @@ const HULL_KEY_SET: Record<BuildingHullKey, true> = {
   aspectRange: true,
   roof: true,
   roofColors: true,
+  lightType: true,
   palette: true,
   accentColors: true,
   accentChance: true,
@@ -98,12 +99,13 @@ const HOUSE_ATTRS: BuildingAttributes = {
   aspectRange: [0.6, 1 / 0.6],
   stories: [1, 2],
   roomCount: [2, 3, 4],
-  ceilingHeight: 4.6,
+  ceilingHeight: 5.52,
   palette: HOUSE_PALETTE,
   accentColors: HOUSE_ACCENTS,
   accentChance: 0.12,
   windowSize: [1.6, 2.6],
-  windowLightChance: 0.5,
+  windowLightChance: 0.3, // half the city default (0.6): fewer homes are up at night
+  lightType: LIGHT_TYPE.DOME,
 };
 
 /** The grassland's scattered houses; the grass biome's mount sets the density. */

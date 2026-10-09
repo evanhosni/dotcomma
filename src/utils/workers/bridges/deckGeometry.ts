@@ -399,6 +399,10 @@ const crotchWidening = (b: FreewayBridge, f: CrotchFlare, px: number, pz: number
   }
   const qx = ex - f.cx;
   const qz = ez - f.cz;
+  // The edge point already inside the circle: the child's edge bends out past its line within the fillet
+  // (a path vertex inside the tangent length), so it lies past the arc and nothing is left to fill. The
+  // host's line would read as the boundary there and spike the slab (and its wall) out across the crotch.
+  if (qx * qx + qz * qz <= f.radius * f.radius) return 0;
   const A = sx * sx + sz * sz;
   const B = 2 * (qx * sx + qz * sz);
   const C = qx * qx + qz * qz - f.radius * f.radius;

@@ -93,7 +93,7 @@ export interface ChildSlot {
 }
 
 /** One straight-run ramp flight from `story` to story+1; BSP walls, pillars,
- *  doorways, light panels and child slots all avoid `rect`. */
+ *  doorways, lights and child slots all avoid `rect`. */
 export interface RampSpec {
   story: number;
   /** Full shaft footprint on `story`'s floor: bottom landing + run + top landing. */
@@ -135,8 +135,9 @@ export interface InteriorPlan {
   wallBoxesPerStory: WallBox[][];
   /** ramps[g] climbs story g → g+1. */
   ramps: RampSpec[];
-  /** Ceiling light panel centers [x, z] per story. */
-  lightPanelsPerStory: [number, number][][];
+  lightType: LIGHT_TYPE;
+  /** Ceiling light centers [x, z] per story, drawn as `lightType`. */
+  lightsPerStory: [number, number][][];
   childSlots: ChildSlot[];
 }
 
@@ -181,6 +182,13 @@ export enum WINDOW_SHAPE {
 
 /** Generation knobs; anything unset is seeded-random per building. Array
  *  knobs are CHOICES, one picked per building (or per floor for roomCount). */
+export enum LIGHT_TYPE {
+  /** Flat fluorescent rectangles on a grid across the whole ceiling. */
+  PANEL = "panel",
+  /** Round dome fixtures, one to three per room. */
+  DOME = "dome",
+}
+
 export enum ROOF_STYLE {
   /** Lofted segments that lean, taper and lip, topped by caps and pipes. */
   FLAT = "flat",
@@ -199,6 +207,8 @@ export interface BuildingAttributes extends ActorAttributes {
   aspectRange?: [number, number];
   /** Default FLAT. */
   roof?: ROOF_STYLE;
+  /** Ceiling fixtures (default PANEL). */
+  lightType?: LIGHT_TYPE;
   /** PITCHED roof colors (default dark shingles). */
   roofColors?: number[];
   palette?: number[];

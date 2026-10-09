@@ -5,6 +5,7 @@
  *  road flush wherever its edge lies over pavement. On the real compute module with the overworld's
  *  shared config. */
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { crotchFlares } from "./deckGeometry";
 import { drawnCovers } from "./drawnSlab";
 import { BRIDGE_PLACEMENT, BRIDGE_PARAPET_HEIGHT } from "../../../objects/dressing/bridges/bridgeSpec";
 import {
@@ -234,5 +235,18 @@ describe("round-15 deck rules", () => {
     // A deck that follows its own road for longer than a third of its length has no cut; the rest
     // start where their edges leave the pavement.
     expect(ledges).toBeLessThanOrEqual(Math.ceil(paved * 0.1));
+  });
+});
+
+describe("crotch fillets", () => {
+  it("never widen a child deck past the fillet's own corner, even where its road bends inside the fillet", () => {
+    // (-14200, -8500): a Y whose child bends 4u before its cut, so its edge there lies inside the fillet's
+    // circle; the host's line read as the boundary there spiked the slab 14u across the crotch.
+    const decks = decksNear(-14200, -8500, 1).filter((b) => crotchFlares(b).some((f) => f.acute));
+    expect(decks.length).toBeGreaterThan(0);
+    for (const b of decks) {
+      const reach = Math.max(...crotchFlares(b).filter((f) => f.acute).map((f) => f.tangent * Math.sin(f.theta)));
+      for (const s of bridgeSections(b)) expect(Math.max(s.wl, s.wr) - b.width / 2).toBeLessThanOrEqual(reach + 0.5);
+    }
   });
 });
