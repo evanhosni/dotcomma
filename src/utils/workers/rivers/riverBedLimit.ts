@@ -152,13 +152,16 @@ export const bedLimitOfPiece = (p: RiverPiece, t: number, sideCos: number, outCo
 };
 
 /** The riverbed paint distance capped at the bed's limit (riverSample.bedLimit): beyond the limit
- *  the point reads as out of the bed's reach, fading over RIVER_BED_CAP_FADE inward of it. Unchanged
+ *  the point reads as out of the bed's reach, fading over RIVER_BED_CAP_FADE inward of it — but never
+ *  starting inside the half-width, under the water: a bank steep right at the water's edge faded the
+ *  ground in over the channel's last 8u (snow under a mountain river, Evan's screenshot). Unchanged
  *  where no limit lies within reach (every flat bank). */
 export const capRiverBed = (bed: number, limit: number): number => {
   const rv = domainConfig!.river;
   const reach = rv.halfWidth + rv.bank;
   if (limit >= reach) return bed;
-  return bed + (reach - limit) * smoothstep(limit - RIVER_BED_CAP_FADE, limit, bed);
+  const fadeStart = Math.max(limit - RIVER_BED_CAP_FADE, rv.halfWidth);
+  return bed + (reach - limit) * smoothstep(fadeStart, fadeStart + RIVER_BED_CAP_FADE, bed);
 };
 
 export const clearRiverBedLimits = (): void => {

@@ -8,7 +8,7 @@ import {
   getFreewayBridges,
   initCompute,
 } from "../../../utils/workers/vertexCompute";
-import { BRIDGE_DECK_THICKNESS, BRIDGE_PARAPET_HEIGHT, BRIDGE_PIER_SIZE, BRIDGE_PLACEMENT, bridgeColliderPoints, bridgePierColumns, type BridgeColliderPoint } from "./bridgeSpec";
+import { BRIDGE_DECK_THICKNESS, BRIDGE_PARAPET_HEIGHT, BRIDGE_PIER_SIZE, BRIDGE_PLACEMENT, bridgeColliderPoints, bridgePierColumns, bridgeRibbon, type BridgeColliderPoint } from "./bridgeSpec";
 
 // Bridge colliders against the drawn deck: one body per chord whose mesh IS what the ribbon draws there
 // — the slab's top, underside and edges, and each standing wall — so a player stands exactly on the
@@ -197,5 +197,26 @@ describe("bridge colliders", () => {
     }
     expect(checked).toBeGreaterThan(500);
     expect(worst).toBeLessThan(1e-4);
+  });
+});
+
+describe("bridge ribbon", () => {
+  it("faces every slab top up, even a T end's sweep with a near-zero triangle", () => {
+    // (-8000, -13500): a Y whose child's first top quad (its cut to the first square section) has two
+    // corners nearly coinciding; its normal came from that triangle and flipped the slab top over.
+    const decks = [-31, -32].flatMap((gx) => [-53, -54].flatMap((gz) => getFreewayBridges(gx * 256, gz * 256, (gx + 1) * 256, (gz + 1) * 256, BRIDGE_PLACEMENT)));
+    expect(decks.length).toBeGreaterThan(0);
+    for (const b of decks) {
+      const out = { positions: [] as number[], normals: [] as number[], colors: [] as number[], uvs: [] as number[], road: [] as number[] };
+      bridgeRibbon(b, b.x, 0, b.z, 0, 0, out);
+      const p = out.positions;
+      for (let v = 0; v < p.length / 3; v += 3) {
+        const [ax, , az, bx, , bz, cx, , cz] = p.slice(v * 3, v * 3 + 9);
+        const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az); // twice the up-facing area
+        // Only the road surface (road.w ≥ 1) and only real triangles (a zero-area one has no facing).
+        const top = out.road[v * 4 + 3] >= 1 && Math.abs(ny) >= 0.01;
+        expect(!top || ny > 0).toBe(true);
+      }
+    }
   });
 });

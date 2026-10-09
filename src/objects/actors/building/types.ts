@@ -39,6 +39,9 @@ export interface ExteriorLoft {
   /** Ring rotation for polygon lofts. */
   ringRotation: number;
   levels: RingLevel[];
+  /** Explicit rings, one per level (only `y` is read from the level), for shapes no RingLevel
+   *  describes — the hip roof's skeleton. Equal point counts; coincident points are allowed. */
+  points?: [number, number][][];
   color: number;
   /** False when the next loft covers the top ring. */
   hasRoofFan: boolean;
@@ -90,7 +93,7 @@ export interface ChildSlot {
 }
 
 /** One straight-run ramp flight from `story` to story+1; BSP walls, pillars,
- *  doorways, light panels and child slots all avoid `rect`. */
+ *  doorways, lights and child slots all avoid `rect`. */
 export interface RampSpec {
   story: number;
   /** Full shaft footprint on `story`'s floor: bottom landing + run + top landing. */
@@ -132,8 +135,9 @@ export interface InteriorPlan {
   wallBoxesPerStory: WallBox[][];
   /** ramps[g] climbs story g → g+1. */
   ramps: RampSpec[];
-  /** Ceiling light panel centers [x, z] per story. */
-  lightPanelsPerStory: [number, number][][];
+  lightType: LIGHT_TYPE;
+  /** Ceiling light centers [x, z] per story, drawn as `lightType`. */
+  lightsPerStory: [number, number][][];
   childSlots: ChildSlot[];
 }
 
@@ -151,10 +155,18 @@ export interface BuildingPlan {
   bodyLoftCount: number;
   doors: DoorPlan[];
   doorColor: number;
+  doorHandle: DoorHandle;
   windowLightChance: number;
   windowLightIntensity: number;
   windows: WindowSpec[];
   interior: InteriorPlan;
+}
+
+/** Drawn on both faces of every door leaf, on the side away from the hinge. */
+export interface DoorHandle {
+  /** A lever pointing at the hinge; otherwise a round knob. */
+  lever: boolean;
+  color: number;
 }
 
 /** Both defaults use per-building baked vertex colors; a custom material must respect or deliberately ignore them. */
@@ -170,11 +182,35 @@ export enum WINDOW_SHAPE {
 
 /** Generation knobs; anything unset is seeded-random per building. Array
  *  knobs are CHOICES, one picked per building (or per floor for roomCount). */
+export enum LIGHT_TYPE {
+  /** Flat fluorescent rectangles on a grid across the whole ceiling. */
+  PANEL = "panel",
+  /** Round dome fixtures, one to three per room. */
+  DOME = "dome",
+}
+
+export enum ROOF_STYLE {
+  /** Lofted segments that lean, taper and lip, topped by caps and pipes. */
+  FLAT = "flat",
+  /** A house: straight walls under an overhanging hip roof, windows on every floor. */
+  PITCHED = "pitched",
+}
+
 export interface BuildingAttributes extends ActorAttributes {
   /** [width, height, depth] at ground level. */
   exteriorSize?: [number, number, number];
-  /** 4 = boxy slab, 5–8 = faceted canister. Default [4, 5, 6, 7, 8]. */
+  /** 4 = boxy slab, 3 and 5–8 = faceted canister. Default [4, 5, 6, 7, 8]. */
   numberOfSides?: number[];
+  /** [min, max] multiplier on the room-sized footprint, one roll for both axes (default [1, 1.5]). */
+  widthScale?: [number, number];
+  /** [min, max] depth ÷ width of the plan, any story count. Default 0.8–1.25 (1 story), 0.92–1.08 (more). */
+  aspectRange?: [number, number];
+  /** Default FLAT. */
+  roof?: ROOF_STYLE;
+  /** Ceiling fixtures (default PANEL). */
+  lightType?: LIGHT_TYPE;
+  /** PITCHED roof colors (default dark shingles). */
+  roofColors?: number[];
   palette?: number[];
   accentColors?: number[];
   /** Chance the primary color is an accent (default 0.2). */
@@ -189,8 +225,8 @@ export interface BuildingAttributes extends ActorAttributes {
   maxLean?: number;
   /** Overrides the floors-derived height (clamped to fit them) — NOT the terrain-height spawn filter `heightRange`. */
   shellHeightRange?: [number, number];
-  /** Default seeded 1–5. */
-  stories?: number;
+  /** A count, or CHOICES one is picked from. Default seeded 1–5. */
+  stories?: number | number[];
   /** Each floor rolls its own count from an array; the LARGEST choice sizes the footprint. Default seeded 3–6. */
   roomCount?: number | number[];
   doorCount?: 1 | 2;

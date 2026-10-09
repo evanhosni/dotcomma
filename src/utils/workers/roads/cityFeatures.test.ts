@@ -132,9 +132,9 @@ describe("flatten-ground pads", () => {
     }
   });
 
-  it("pads work in ANY biome — grass-biome buildings level the rolling terrain", () => {
+  it("pads work in ANY biome — grass-biome houses level the rolling terrain", () => {
     const points = getFlattenPoints(gx - 500, gz - 500, gx + 500, gz + 500).filter(
-      (p) => p.descId === "grass-building"
+      (p) => p.descId === "house"
     );
     expect(points.length).toBeGreaterThan(0);
     const p = points[0];

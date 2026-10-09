@@ -2,6 +2,7 @@ import { useFrame } from "@react-three/fiber";
 import { useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { markFullSpeedSlope } from "../../physics/characterMovement";
 import type { DressingColliderBody, DressingColliderMesh, DressingColliderPart } from "./types";
 
 /**
@@ -64,12 +65,16 @@ export const DressingPartColliders = ({
       );
       for (const p of c.parts ?? parts) {
         _colliderQuat.setFromEuler(_colliderEuler.set(0, p.yaw ?? 0, 0));
-        world.createCollider(
+        const part = world.createCollider(
           rapier.ColliderDesc.cuboid(p.w / 2, p.h / 2, p.d / 2).setTranslation(p.x, p.y, p.z ?? 0).setRotation(_colliderQuat),
           body,
         );
+        if (p.fullSpeedSlope) markFullSpeedSlope(part);
       }
-      if (c.mesh) world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
+      if (c.mesh) {
+        const mesh = world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
+        if (c.mesh.fullSpeedSlope) markFullSpeedSlope(mesh);
+      }
       bodies.set(c.key, body);
     }
   }, [colliders, parts, world, rapier, bodies]);

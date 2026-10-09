@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { bakeVertexColor, cross, mergeOrThrow, normalize, sub, TriangleSink, wallBoxGeometry, type Vec3 } from "./buildingGeometry";
 import { emitLoft } from "./exteriorGeometry";
-import { FLOOR_LIFT, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
+import { FLOOR_LIFT, LIGHT_PANEL_SIZE, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
 import { edgePoint, ringPoints } from "./rings";
-import { BuildingPlan, ExteriorLoft, RampSpec, WallBox } from "./types";
+import { BuildingPlan, ExteriorLoft, LIGHT_TYPE, RampSpec, WallBox } from "./types";
 
 // The interior from one plan: the colliders every building needs from spawn on, and the merged mesh
 // built only once the player comes close — so the two cannot disagree.
@@ -15,6 +15,28 @@ export interface RampCollider {
 }
 
 const LIGHT_PANEL_COLOR = 0xfff7d6;
+/** Warmer than the fluorescent panels: a home's bulbs. */
+const DOME_LIGHT_COLOR = 0xffe2b0;
+const DOME_LIGHT_RADIUS = 0.55;
+
+const DOME_RIM_SHADE = 0.7;
+
+/** A flattened half-sphere hanging from y = 0, cloned per light. Unlit and one flat color it reads as a
+ *  disc, so its color fades to DOME_RIM_SHADE at the rim. */
+const domeLightGeometry = (): THREE.BufferGeometry => {
+  const depth = DOME_LIGHT_RADIUS * 0.5;
+  const g = bakeVertexColor(
+    new THREE.SphereGeometry(DOME_LIGHT_RADIUS, 16, 5, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI).scale(1, 0.5, 1).toNonIndexed(),
+    DOME_LIGHT_COLOR,
+  );
+  const pos = g.getAttribute("position");
+  const col = g.getAttribute("color");
+  for (let i = 0; i < pos.count; i++) {
+    const f = DOME_RIM_SHADE + (1 - DOME_RIM_SHADE) * Math.min(1, -pos.getY(i) / depth);
+    col.setXYZ(i, col.getX(i) * f, col.getY(i) * f, col.getZ(i) * f);
+  }
+  return g;
+};
 
 type SlabHole = { x0: number; z0: number; x1: number; z1: number };
 
@@ -245,20 +267,25 @@ export const addInteriorSlabsAndRamps = (plan: BuildingPlan, parts: THREE.Buffer
   slabs.dispose();
 };
 
-/** The baked shading over every part so far, then the light panels — added AFTER it: they stay full-bright. */
-export const shadeInteriorAndAddPanels = (plan: BuildingPlan, parts: THREE.BufferGeometry[]): void => {
-  const { stories, storyHeight, ceilingHeight: ch, lightPanelsPerStory } = plan.interior;
+/** The baked shading over every part so far, then the ceiling lights — added AFTER it: they stay full-bright. */
+export const shadeInteriorAndAddLights = (plan: BuildingPlan, parts: THREE.BufferGeometry[]): void => {
+  const { stories, storyHeight, ceilingHeight: ch, lightType, lightsPerStory } = plan.interior;
   bakeInteriorShading(parts);
+  const dome = lightType === LIGHT_TYPE.DOME ? domeLightGeometry() : null;
   for (let s = 0; s < stories; s++) {
-    for (const [x, z] of lightPanelsPerStory[s]) {
+    for (const [x, z] of lightsPerStory[s]) {
+      const y = s * storyHeight + ch;
       parts.push(
-        bakeVertexColor(
-          new THREE.PlaneGeometry(1.4, 2.8).toNonIndexed().rotateX(Math.PI / 2).translate(x, s * storyHeight + ch - 0.02, z),
-          LIGHT_PANEL_COLOR,
-        ),
+        dome
+          ? dome.clone().translate(x, y - 0.01, z)
+          : bakeVertexColor(
+              new THREE.PlaneGeometry(...LIGHT_PANEL_SIZE).toNonIndexed().rotateX(Math.PI / 2).translate(x, y - 0.02, z),
+              LIGHT_PANEL_COLOR,
+            ),
       );
     }
   }
+  dome?.dispose();
 };
 
 export const mergeInteriorParts = (parts: THREE.BufferGeometry[]): THREE.BufferGeometry => {

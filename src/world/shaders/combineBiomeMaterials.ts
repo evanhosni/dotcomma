@@ -14,6 +14,7 @@ import {
   RIVER_BED_FULL_INSET,
   RIVER_BED_SLOPE_END_DEG,
   RIVER_BED_SLOPE_START_DEG,
+  RIVER_BED_UNDERWATER_FADE,
   bedYieldsToSteepGround,
   glslFloat,
 } from "./constants";
@@ -318,7 +319,8 @@ const riverbedWeightsGLSL = (slotCount: number, bedGroupOf: number[], bedHalves:
  *  cross-faded softly across biome walls (riverbedWeightsGLSL). It yields where the CITY's road field
  *  says pavement (a quay's asphalt, curb and 4u sidewalk band, crisp: the sidewalk along a river is as
  *  wide as along any road) and on steep banks of ROCK (`rockSlots`: a domed biome — a mountainside
- *  keeps its rock). Any other ground (grass, dunes, snow) never yields to slope: it cut into the band in
+ *  keeps its rock) — on the BANKS only: under the water the slope rule fades out over
+ *  RIVER_BED_UNDERWATER_FADE of depth (a mountain channel's steep walls showed the snow through the water). Any other ground (grass, dunes, snow) never yields to slope: it cut into the band in
  *  wedges reaching the water wherever a bank steepened (Evan, screenshot at (-8900, 1100)). */
 const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number[] | undefined, cityIdx: number, rockSlots: boolean[]): string => `if (vRiverBedDistance < RIVER_BED_REACH) {
         vec2 bedUV = fract(vWorldUv);
@@ -333,7 +335,8 @@ const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number
         riverColor.rgb *= mix(vec3(0.72, 0.7, 0.66), vec3(1.0), smoothstep(RIVER_HALF_WIDTH * 0.5, RIVER_HALF_WIDTH * 1.3, vRiverBedDistance));
         float riverBlend = smoothstep(RIVER_BED_REACH - ${glslFloat(RIVER_BED_FULL_INSET)}, RIVER_BED_REACH - ${glslFloat(RIVER_BED_FADE_INSET)}, vRiverBedDistance);
         float pavement = ${cityIdx >= 0 ? `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", cityIdx)})` : "0.0"} * (1.0 - smoothstep(ROAD_HALF_WIDTH + 4.0, ROAD_HALF_WIDTH + 5.0, vDistanceToRoadCenter));
-        float bedSteep = (1.0 - smoothstep(${cosDegGLSL(RIVER_BED_SLOPE_END_DEG)}, ${cosDegGLSL(RIVER_BED_SLOPE_START_DEG)}, normalize(vWorldNormal).y)) * min(bedRock, 1.0);
+        float bedSteep = (1.0 - smoothstep(${cosDegGLSL(RIVER_BED_SLOPE_END_DEG)}, ${cosDegGLSL(RIVER_BED_SLOPE_START_DEG)}, normalize(vWorldNormal).y)) * min(bedRock, 1.0)
+          * (1.0 - smoothstep(0.0, ${glslFloat(RIVER_BED_UNDERWATER_FADE)}, vUnderwaterDepth));
         gl_FragColor = mix(riverColor, gl_FragColor, max(max(riverBlend, pavement), bedSteep));
       }`;
 

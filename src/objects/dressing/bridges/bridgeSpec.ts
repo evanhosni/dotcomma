@@ -230,14 +230,20 @@ export const bridgeRibbon = (b: FreewayBridge, ox: number, oy: number, oz: numbe
   // A quad of four [point, lateral, dash] corners facing `hint`; flat-shaded unless `normal` is given.
   type Corner = [number[], number, number, number?];
   const quad = (c: Corner[], hint: number[], color: number[], surface: number, paint = 0, normal?: number[]) => {
-    // A wall rising out of the ground at a ramp's end has a zero-height edge: take the face from the other triangle.
-    const degenerate = Math.hypot(c[1][0][0] - c[0][0][0], c[1][0][1] - c[0][0][1], c[1][0][2] - c[0][0][2]) < 1e-6;
-    const [p0, p1, p2] = degenerate ? [c[0][0], c[2][0], c[3][0]] : [c[0][0], c[1][0], c[2][0]];
-    const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
-    const vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
-    let nx = uy * vz - uz * vy;
-    let ny = uz * vx - ux * vz;
-    let nz = ux * vy - uy * vx;
+    // The face's normal from ALL four corners (Newell), never one triangle: a quad can have a ~zero-area
+    // triangle (a wall rising out of the ground at a ramp's end; a T end's sweep from its cut, two corners
+    // nearly coinciding at the cut's far end), whose normal points anywhere — it flipped a whole slab top
+    // over, showing its underside from above (the dark patch at (-8000, -13500)).
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    for (let k = 0; k < 4; k++) {
+      const p = c[k][0];
+      const q = c[(k + 1) % 4][0];
+      nx += (p[1] - q[1]) * (p[2] + q[2]);
+      ny += (p[2] - q[2]) * (p[0] + q[0]);
+      nz += (p[0] - q[0]) * (p[1] + q[1]);
+    }
     const nl = Math.hypot(nx, ny, nz);
     if (nl < 1e-9) return;
     nx /= nl;

@@ -37,6 +37,9 @@ export const RIVER_BED_TEXTURE_HALF = 8;
  *  instead of a band of gravel. */
 export const RIVER_BED_SLOPE_START_DEG = 30;
 export const RIVER_BED_SLOPE_END_DEG = 40;
+/** …on the BANKS: under the water (vUnderwaterDepth) the slope rule fades out over this depth (real
+ *  units), so a steep channel wall is riverbed, the ground's texture fading into it at the waterline. */
+export const RIVER_BED_UNDERWATER_FADE = 1.5;
 
 /** Whether a biome's ground is ROCK on steep banks, the only ground the bed yields to by slope (the
  *  shader's fade, the bed limit's marches): a domed biome (the mountain). Grass, dunes and snow

@@ -1,4 +1,5 @@
 import { RootState, useThree } from "@react-three/fiber";
+import type Rapier from "@dimforge/rapier3d-compat";
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -8,6 +9,7 @@ import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
 import { framePhaseFromCoords } from "../../../utils/utils";
+import { useFullSpeedSlope } from "../../../physics/useFullSpeedSlope";
 import { useActorLifecycle, withinGate } from "../Actor";
 import {
   beginBuildingInteriorBuild,
@@ -20,6 +22,7 @@ import {
 } from "./buildingAssets";
 import { DEFAULT_EXTERIOR_MATERIAL, DEFAULT_INTERIOR_MATERIAL, DOOR_MATERIAL, updateWindowLightUniforms } from "./buildingMaterials";
 import { addFarDoor, FarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
+import type { RampCollider } from "./interiorGeometry";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
 import { BUILDING_HULL_KEYS, buildingSeedAt, DOOR_INTERACT_REACH } from "./spec";
 import { BuildingAttributes, BuildingMaterials, BuildingProps } from "./types";
@@ -444,7 +447,7 @@ export const Building = (props: BuildingProps) => {
             />
           ))}
           {assets.rampColliders.map((r, i) => (
-            <CuboidCollider key={`ramp-${i}`} args={r.halfExtents} position={r.position} rotation={r.rotation} />
+            <RampCuboid key={`ramp-${i}`} ramp={r} />
           ))}
           {assets.doors.map(
             (d, i) =>
@@ -478,3 +481,10 @@ const BuildingWarmup = ({ descriptor }: { descriptor: { materials?: BuildingMate
 Building.Warmup = BuildingWarmup;
 Building.warmupKey = (descriptor: { materials?: BuildingMaterials }) =>
   `${descriptor.materials?.exterior?.uuid ?? "default"}|${descriptor.materials?.interior?.uuid ?? "default"}`;
+
+/** A ramp's collider: walked at full speed (a ramp is ≈38°, which the terrain-tuned uphill fade would crawl up). */
+const RampCuboid = ({ ramp }: { ramp: RampCollider }) => {
+  const ref = useRef<Rapier.Collider>(null);
+  useFullSpeedSlope(ref);
+  return <CuboidCollider ref={ref} args={ramp.halfExtents} position={ramp.position} rotation={ramp.rotation} />;
+};

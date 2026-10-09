@@ -24,7 +24,7 @@ describe("biome listings are an actor's biomes", () => {
       beeble: [1],
       building: [1],
       skyscraper: [1],
-      "grass-building": [3],
+      house: [3],
     });
   });
 });

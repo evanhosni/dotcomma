@@ -100,7 +100,71 @@ export const ringSpanAt = (pts: Pt2[], axis: "x" | "z", at: number): [number, nu
   return [lo, hi];
 };
 
-export const interpRing = (levels: RingLevel[], y: number): RingLevel => {
+/** Each vertex's velocity when every edge of the convex ring moves INWARD at unit speed. */
+const inwardVelocities = (pts: Pt2[]): Pt2[] =>
+  pts.map((_, i) => {
+    const a = edgeNormal(pts, (i - 1 + pts.length) % pts.length); // outward normals of the edges meeting here
+    const b = edgeNormal(pts, i);
+    const det = a[0] * b[1] - a[1] * b[0]; // v·(−a) = v·(−b) = 1
+    return Math.abs(det) < 1e-12 ? [0, 0] : [(a[1] - b[1]) / det, (b[0] - a[0]) / det];
+  });
+
+/** The convex ring with every edge moved `d` inward (negative: outward), corners kept sharp. */
+export const offsetRing = (pts: Pt2[], d: number): Pt2[] => {
+  const v = inwardVelocities(pts);
+  return pts.map((p, i) => [p[0] + v[i][0] * d, p[1] + v[i][1] * d]);
+};
+
+/** The straight skeleton of a CONVEX ring, as the ring shrinking with every edge moving inward at
+ *  unit speed, snapshotted at each event (an edge collapsing). Every snapshot keeps the input's point
+ *  count, so ring j → j+1 between snapshots traces exactly edge j's face, and a face lofted at
+ *  height ∝ offset is planar: a hip roof at one pitch. Ends on the ridge (two points left) or the peak. */
+export const hipRoofRings = (pts: Pt2[]): { rings: Pt2[][]; offsets: number[] } => {
+  let active = pts.map((p, i) => ({ p: [p[0], p[1]] as Pt2, members: [i] }));
+  const snapshot = (): Pt2[] => {
+    const ring: Pt2[] = new Array(pts.length);
+    for (const v of active) for (const m of v.members) ring[m] = [v.p[0], v.p[1]];
+    return ring;
+  };
+  const rings = [snapshot()];
+  const offsets = [0];
+  let offset = 0;
+  for (let guard = 0; active.length >= 3 && guard < pts.length; guard++) {
+    const ps = active.map((v) => v.p);
+    const vel = inwardVelocities(ps);
+    const collapseAt = ps.map((_, i) => {
+      const j = (i + 1) % ps.length;
+      const L = edgeLength(ps, i);
+      const closing = ((vel[i][0] - vel[j][0]) * (ps[j][0] - ps[i][0]) + (vel[i][1] - vel[j][1]) * (ps[j][1] - ps[i][1])) / (L || 1);
+      return closing > 1e-9 ? L / closing : Infinity;
+    });
+    const dt = Math.min(...collapseAt);
+    if (!Number.isFinite(dt)) break;
+    active.forEach((v, i) => (v.p = [v.p[0] + vel[i][0] * dt, v.p[1] + vel[i][1] * dt]));
+    offset += dt;
+    // Edges collapsing together (a rectangle's two ends, a triangle's three) merge in one event.
+    const collapsed = collapseAt.map((t) => t - dt <= 1e-6 * (1 + dt));
+    const n = active.length;
+    const start = collapsed.findIndex((_, i) => !collapsed[(i - 1 + n) % n]);
+    if (start < 0) {
+      const apex = active[0].p;
+      active = [{ p: apex, members: active.flatMap((v) => v.members) }];
+    } else {
+      const merged: typeof active = [];
+      for (let k = 0; k < n; k++) {
+        const i = (start + k) % n;
+        if (k > 0 && collapsed[(i - 1 + n) % n]) merged[merged.length - 1].members.push(...active[i].members);
+        else merged.push({ p: active[i].p, members: [...active[i].members] });
+      }
+      active = merged;
+    }
+    rings.push(snapshot());
+    offsets.push(offset);
+  }
+  return { rings, offsets };
+};
+
+export const interpRing =(levels: RingLevel[], y: number): RingLevel => {
   if (y <= levels[0].y) return levels[0];
   for (let i = 0; i < levels.length - 1; i++) {
     const a = levels[i];

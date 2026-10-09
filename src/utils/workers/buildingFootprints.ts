@@ -21,8 +21,8 @@ export interface Footprint {
   radius: number;
 }
 
-/** The widest half-extent a building shell reaches from its origin (interior cap 13u, canister corners, lean). */
-const MAX_FOOTPRINT_REACH = 24;
+/** The widest half-extent a building shell reaches from its origin (interior cap 16u × the 1.5 width scale, rect corners). */
+const MAX_FOOTPRINT_REACH = 36;
 
 const ringCache = new Map<string, Float64Array | null>();
 

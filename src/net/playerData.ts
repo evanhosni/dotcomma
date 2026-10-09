@@ -18,13 +18,13 @@ const setData = (next: PlayerData | null): void => {
 
 export const getPlayerData = (): PlayerData | null => data;
 
-const subscribe = (l: () => void) => {
+export const subscribePlayerData = (l: () => void): (() => void) => {
   listeners.add(l);
   return () => {
     listeners.delete(l);
   };
 };
-export const usePlayerData = (): PlayerData | null => useSyncExternalStore(subscribe, getPlayerData);
+export const usePlayerData = (): PlayerData | null => useSyncExternalStore(subscribePlayerData, getPlayerData);
 
 /** False (nothing sent) before the first init or when the merge would exceed the cap. */
 export const updatePlayerData = (patch: PlayerData): boolean => {

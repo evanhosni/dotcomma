@@ -12,6 +12,8 @@ export interface DressingColliderPart {
   y: number;
   z?: number;
   yaw?: number;
+  /** Walked at full speed whatever its slope, by the player and every server NPC (a ramp, stairs). */
+  fullSpeedSlope?: boolean;
 }
 
 /** A triangle mesh in body-local space (xyz triples, three indices per triangle): what a bridge chord's
@@ -19,6 +21,8 @@ export interface DressingColliderPart {
 export interface DressingColliderMesh {
   vertices: Float32Array;
   indices: Uint32Array;
+  /** Walked at full speed whatever its slope, by the player and every server NPC. */
+  fullSpeedSlope?: boolean;
 }
 
 /** One fixed body: rotation = yaw about y after `pitch` about local Z (Euler XYZ [0, yaw, pitch]).

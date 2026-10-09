@@ -31,7 +31,9 @@ if (currentDomain === "home") currentPath = HOME_PATH;
 const domainListeners = new Set<(domain: DomainId) => void>();
 
 const historyState = () => ({ dotcomma: true, domain: currentDomain });
-const pushEntry = () => window.history.pushState(historyState(), "", PUBLIC_URL + currentPath);
+/** The path is ours; the query string (`?devmode=true`, context/DevContext.tsx) rides along untouched. */
+const urlOf = (path: string): string => PUBLIC_URL + path + window.location.search;
+const pushEntry = () => window.history.pushState(historyState(), "", urlOf(currentPath));
 
 export const getCurrentDomain = (): DomainId => currentDomain;
 
@@ -77,7 +79,7 @@ export const navigateToAddress = (path: string) => {
 export const replaceAddressPath = (path: string) => {
   if (currentDomain !== "overworld" || path === currentPath) return;
   currentPath = path;
-  window.history.replaceState(window.history.state ?? historyState(), "", PUBLIC_URL + path);
+  window.history.replaceState(window.history.state ?? historyState(), "", urlOf(path));
 };
 
 export const initDomainNavigation = () => {

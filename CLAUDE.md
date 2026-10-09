@@ -186,6 +186,8 @@ src/
   net/                   protocol.ts (THE wire copy), connection, playerData, players/, entities/  net/README.md
   context/               GameContext, DevContext, constants.ts (DEV_TOGGLES)                context/README.md
   menus/overlay/         StatsOverlay, DevOverlay, LogsOverlay, NetOverlay, styles.ts            menus/README.md
+  save/                  save.ts (getSave/useSave, saveToDevice, saveToAccount): ONE JSON save in two stores —
+                         device (localStorage) and account (the hosted player blob)               save/README.md
   vfx/                   PostProcessing, curvature, quantization, spawnFade, dither, frameCap,
                          materialPatch (chainMaterialPatch, shared by every patcher)        vfx/README.md
   utils/                 _math (seedRand), TaskQueue, warmPrograms, uploadOnFirstDraw, contentError,
@@ -243,6 +245,7 @@ Each flow's step-by-step checklist lives in the README of the folder it touches;
 | a glow source / glow color | `registerLampHeads(...)` + its disposer / 1 `LAMP_COLORS` entry | [lighting/README.md](src/lighting/README.md) |
 | an overlay | 1 new file (styles from `menus/overlay/styles.ts`) + 1 mount | [menus/README.md](src/menus/README.md) |
 | a dev toggle | 1 `DEV_TOGGLES` entry | [context/README.md](src/context/README.md) |
+| a saved field | 1 `SaveData` field + `saveToDevice`/`saveToAccount` | [save/README.md](src/save/README.md) |
 | a CRT page | 1 `EXTRA_PAGES` line (a region's page is automatic) | [home/README.md](src/world/domains/home/README.md) |
 | a world-wide VFX | a patcher in `vfx/` + a `<PostProcessing>` prop + the five class-base call sites | [vfx/README.md](src/vfx/README.md) |
 | a network message | `protocol.ts` + server validation/handler + a client sender/listener | [net/README.md](src/net/README.md) |

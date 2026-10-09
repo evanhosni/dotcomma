@@ -1,4 +1,5 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
+import { markFullSpeedSlope } from "../../../../src/physics/characterMovement";
 import type { ObstaclePoint } from "./obstaclePoints.js";
 import type { PhysicsWorld } from "./physicsWorld.js";
 
@@ -20,10 +21,14 @@ export const createObstacleBodies = (pw: PhysicsWorld, points: ObstaclePoint[]):
       const py = (part.yaw ?? 0) / 2;
       const desc = RAPIER.ColliderDesc.cuboid(part.w / 2, part.h / 2, part.d / 2).setTranslation(part.x, part.y, part.z ?? 0);
       if (part.yaw) desc.setRotation({ x: 0, y: Math.sin(py), z: 0, w: Math.cos(py) });
-      pw.world.createCollider(desc, body);
+      const collider = pw.world.createCollider(desc, body);
+      if (part.fullSpeedSlope) markFullSpeedSlope(collider);
     }
     // A bridge chord's drawn slab and walls, exactly: the client's <TrimeshCollider args={[vertices, indices]}>.
-    if (p.mesh) pw.world.createCollider(RAPIER.ColliderDesc.trimesh(p.mesh.vertices, p.mesh.indices), body);
+    if (p.mesh) {
+      const mesh = pw.world.createCollider(RAPIER.ColliderDesc.trimesh(p.mesh.vertices, p.mesh.indices), body);
+      if (p.mesh.fullSpeedSlope) markFullSpeedSlope(mesh);
+    }
     bodies.push(body);
   }
   return bodies;

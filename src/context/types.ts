@@ -17,7 +17,7 @@ export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
 export type DevToggleFlags = Record<DevToggleFlag, boolean>;
 
 export type DevContextType = DevToggleFlags & {
-  /** Toggled by F1; mirrored to the `?devmode` URL param so a refresh keeps it. */
+  /** Toggled by F1; the URL says `?devmode=true` while on, so a refresh keeps it. */
   devMode: boolean;
   toggleDevMode: () => void;
   setToggle: (flag: DevToggleFlag, on: boolean) => void;
