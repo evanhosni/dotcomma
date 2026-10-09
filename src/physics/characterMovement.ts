@@ -181,16 +181,14 @@ const _step = { x: 0, y: 0, z: 0 };
 const _trans = { x: 0, y: 0, z: 0 };
 const _notSensor = (c: Rapier.Collider) => !c.isSensor();
 
-/** Colliders walked at FULL speed whatever their slope: building ramps (≈38°), which the uphill fade
- *  (tuned on terrain) would slow to a crawl. Identity, not handle: Rapier reuses a removed collider's
- *  handle. Empty on the server, which builds no interiors. */
-const fullSpeedSlopes = new Set<Rapier.Collider>();
-/** Marks a collider as a full-speed slope; returns its unmark. */
-export const markFullSpeedSlope = (c: Rapier.Collider): (() => void) => {
+/** Colliders every capsule (the player, every server NPC) walks at FULL speed whatever their slope: the
+ *  uphill fade is tuned on terrain and slows a building ramp (≈38°) to a crawl. A WeakSet of the collider
+ *  OBJECTS (a ray hit returns the world's own object for its handle): a removed collider drops out by
+ *  itself, and a reused handle never inherits the tag. Tag colliders at creation, in the process that
+ *  creates them: physics/README.md "full-speed slopes". */
+const fullSpeedSlopes = new WeakSet<Rapier.Collider>();
+export const markFullSpeedSlope = (c: Rapier.Collider): void => {
   fullSpeedSlopes.add(c);
-  return () => {
-    fullSpeedSlopes.delete(c);
-  };
 };
 
 /** Fills while active, decays faster when not, saturates at 2× the delay (hysteresis on the way out). */
@@ -270,12 +268,14 @@ const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionStat
     mx = input.dirX * inv;
     mz = input.dirZ * inv;
     let scale = input.speed;
-    if (g.nearGround && !g.fullSpeed && g.angle > SLOPE_SOFT_START && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
-      const hLen = Math.hypot(g.nX, g.nZ);
-      if (hLen > 1e-5) {
-        const upX = -g.nX / hLen;
-        const upZ = -g.nZ / hLen;
-        const uphillFactor = Math.max(0, mx * upX + mz * upZ);
+    const hLen = Math.hypot(g.nX, g.nZ);
+    if (g.nearGround && hLen > 1e-5) {
+      const uphillFactor = Math.max(0, (mx * -g.nX + mz * -g.nZ) / hLen);
+      if (g.fullSpeed) {
+        // The solve slides the walk up the slope plane, keeping cos² of its horizontal (62% at 38°):
+        // 1/cos up front makes the speed ALONG the surface the walk speed.
+        scale = input.speed * (1 + uphillFactor * (1 / Math.max(Math.cos(g.angle), 0.5) - 1));
+      } else if (g.angle > SLOPE_SOFT_START && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
         const climb = 1 - smoothstep(SLOPE_SOFT_START, SLOPE_SOFT_END, g.angle);
         scale = input.speed * (1 - uphillFactor * (1 - climb));
       }

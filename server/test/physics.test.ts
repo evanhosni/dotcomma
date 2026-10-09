@@ -371,3 +371,38 @@ describe("server physics", () => {
     for (const file of out.outputFiles) assert.ok(!/from\s*["']@dimforge\/rapier3d-compat["']/.test(file.text), `${file.path} leaves Rapier external`);
   });
 });
+
+describe("full-speed slopes", () => {
+  // A 38° ramp (a building ramp's pitch) far above any terrain, built through the server's obstacle path.
+  const PITCH = (38 * Math.PI) / 180;
+  const climb = async (fullSpeedSlope: boolean): Promise<number> => {
+    const world = await PhysicsWorld.create();
+    try {
+      const [X, Y, Z] = [patch0.x, 3000, patch0.z];
+      createObstacleBodies(world, [{ x: X, y: Y, z: Z, yaw: 0, pitch: PITCH, parts: [{ w: 60, h: 1, d: 10, x: 0, y: 0, fullSpeedSlope }] }]);
+      const lx = -20; // the ramp's lower half, along its local +x
+      const w = new Walker(world, X + lx * Math.cos(PITCH) - 0.5 * Math.sin(PITCH), Y + lx * Math.sin(PITCH) + 0.5 * Math.cos(PITCH) + 0.1, Z, CAPSULE);
+      for (let i = 0; i < 5; i++) {
+        w.step(TICK_SECONDS, 0, 0);
+        world.step();
+      }
+      const x0 = w.position().x;
+      for (let i = 0; i < Math.round(1 / TICK_SECONDS); i++) {
+        w.step(TICK_SECONDS, SPEED, 0);
+        world.step();
+      }
+      return w.position().x - x0;
+    } finally {
+      world.free();
+    }
+  };
+  const patch0 = { x: 0, z: 0 };
+
+  it("an NPC climbs a fullSpeedSlope ramp at full speed, an untagged one at the terrain's uphill crawl", async () => {
+    const tagged = await climb(true);
+    const untagged = await climb(false);
+    // Full speed ALONG the surface: its horizontal is cos(38°) of the walk.
+    assert.ok(tagged > SPEED * Math.cos(PITCH) * 0.9, `tagged ramp: ${tagged.toFixed(2)}u in 1s`);
+    assert.ok(untagged < tagged * 0.5, `untagged ramp: ${untagged.toFixed(2)}u vs ${tagged.toFixed(2)}u`);
+  });
+});

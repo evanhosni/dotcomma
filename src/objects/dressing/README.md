@@ -34,3 +34,5 @@ Mass, identical, stateless scenery drawn as one `InstancedMesh` per chunk, with 
    ```
 3. **Solid** (optional): a Three-free `<name>Spec.ts` exporting its `DressingColliderSpec`, listed in `DRESSING_COLLIDER_SPECS`; swap `useDressingChunks` for `useSolidDressing`, take `SolidDressingProps` and draw from `bodies`. Patterns: [StreetLamps.tsx](street-lamps/StreetLamps.tsx) (`onRemove`), [TrafficLights.tsx](traffic-lights/TrafficLights.tsx) (`registry.forEachAlive`).
 4. **Mount** it once, in one biome's `<Dressing>` (mounting twice draws it twice).
+
+A collider part or mesh that capsules should climb at full speed (a ramp, stairs) sets `fullSpeedSlope: true` in its spec. The client and server mounts both tag it (physics/README.md).
