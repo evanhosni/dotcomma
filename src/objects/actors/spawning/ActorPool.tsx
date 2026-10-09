@@ -10,6 +10,8 @@ import type { ModelActorAttributes } from "../ModelActor";
 import { collectDescriptors } from "./collectDescriptors";
 import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
+import { SpriteLods, spriteKindsOf } from "../../sprite-lod/SpriteLods";
+import { despawnRadiusOf, spawnRadiusOf } from "./radii";
 import {
   cleanupSpawnCache,
   getCachedSpawnChunks,
@@ -19,14 +21,13 @@ import {
   serializeDescriptors,
   updateSpawnFootprint,
 } from "./spawnWorker";
-import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SPAWN_ONLY_KEYS, SpawnPoint } from "./types";
+import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SPAWN_ONLY_KEYS, SpawnPoint, spawnPointId } from "./types";
 
 // Spawn lifecycle radii and the despawn ledger are described in CLAUDE.md → Actor Spawn Lifecycle.
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps
 /** Spawning waits for half the initial terrain (foliage lands first, at 0). */
 const MIN_TERRAIN_PROGRESS = 0.5;
 const RESPAWN_COOLDOWN_MS = 1000;
-const DESPAWN_HYSTERESIS = 1.2; // despawn radius = spawn radius × this
 const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius × this
 
 // Generous on purpose: unchanged nodes are stable element references (React
@@ -34,11 +35,8 @@ const IMMEDIATE_RADIUS_FACTOR = 0.5; // immediate radius = spawn radius × this
 // TaskQueue. Too LOW pays the O(mounted) walk repeatedly for a few objects.
 const MAX_MOUNTS_PER_BATCH = 20;
 
-const getSpawnRadius = (desc: AnyActorDescriptor): number => desc.renderDistance + desc.footprint / 2;
-const getDespawnRadius = (desc: AnyActorDescriptor): number =>
-  desc.despawnDistance ?? getSpawnRadius(desc) * DESPAWN_HYSTERESIS;
-const getRespawnBlockRadius = (desc: AnyActorDescriptor): number =>
-  desc.immediateRadius ?? getSpawnRadius(desc) * IMMEDIATE_RADIUS_FACTOR;
+const respawnBlockRadiusOf = (desc: AnyActorDescriptor): number =>
+  desc.immediateRadius ?? spawnRadiusOf(desc) * IMMEDIATE_RADIUS_FACTOR;
 
 const CHUNK_HALF_DIAGONAL = (SPAWN_CHUNK_SIZE * Math.SQRT2) / 2;
 
@@ -58,11 +56,9 @@ interface DespawnRecord {
   point: SpawnPoint;
 }
 
-/** `${x}_${z}_${descriptorId}` — descriptor ids may contain underscores. NOT
- *  called in the candidate scan: float→string for ~3,000 points per batch was
+/** NOT called in the candidate scan: float→string for ~3,000 points per batch was
  *  its dominant cost, so the scan uses point identity instead. */
-const objIdOf = (point: SpawnPoint): string =>
-  `${point.x}_${point.z}_${point.descriptorId}`;
+const objIdOf = (point: SpawnPoint): string => spawnPointId(point.x, point.z, point.descriptorId);
 
 interface SpawnCandidate {
   point: SpawnPoint;
@@ -98,7 +94,7 @@ const collectSpawnCandidates = (
       const dx = point.x - cameraX;
       const dz = point.z - cameraZ;
       const distSq = dx * dx + dz * dz;
-      const spawnRadius = getSpawnRadius(desc);
+      const spawnRadius = spawnRadiusOf(desc);
       if (distSq > spawnRadius * spawnRadius) continue;
 
       candidates.push({ point, desc, distSq });
@@ -108,12 +104,13 @@ const collectSpawnCandidates = (
 };
 
 /** A descriptor's attributes minus the spawn-only ones, plus the per-instance props (the pool is the
- *  one source of every radius). */
+ *  one source of every radius). A sprite kind hands off at its spec renderDistance. */
 const actorPropsOf = (
   desc: AnyActorDescriptor,
   point: SpawnPoint,
   id: string,
   onDestroy: (id: string) => void,
+  hasSprite: boolean,
 ): ActorProps => {
   const attributes: Record<string, unknown> = { ...desc };
   delete attributes.component;
@@ -123,9 +120,10 @@ const actorPropsOf = (
     id,
     descriptorId: point.descriptorId,
     coordinates: [point.x, point.height, point.z],
-    renderDistance: getSpawnRadius(desc),
-    despawnDistance: getDespawnRadius(desc),
+    renderDistance: spawnRadiusOf(desc),
+    despawnDistance: despawnRadiusOf(desc),
     frustumPadding: desc.frustumPadding ?? DEFAULT_FRUSTUM_PADDING,
+    ...(hasSprite ? { spriteHandoffDistance: desc.renderDistance } : {}),
     onDestroy,
   };
 };
@@ -176,16 +174,18 @@ export const ActorPool = () => {
 
   const serializedDescriptors = useMemo(() => serializeDescriptors(descriptors), [descriptors]);
 
-  const maxSpawnRadius = useMemo(() => Math.max(...descriptors.map((d) => getSpawnRadius(d)), 500), [descriptors]);
+  const spriteKinds = useMemo(() => spriteKindsOf(descriptors), [descriptors]);
+
+  const maxSpawnRadius = useMemo(() => Math.max(...descriptors.map((d) => spawnRadiusOf(d)), 500), [descriptors]);
 
   // Without the 500u chunk-fetch floor: the tightest bound for the per-bucket early-out.
   const maxDescSpawnRadius = useMemo(
-    () => descriptors.reduce((m, d) => Math.max(m, getSpawnRadius(d)), 0),
+    () => descriptors.reduce((m, d) => Math.max(m, spawnRadiusOf(d)), 0),
     [descriptors]
   );
 
   // The worker cache must never evict chunks that still have mounted objects.
-  const maxDespawnRadius = useMemo(() => Math.max(...descriptors.map((d) => getDespawnRadius(d)), 600), [descriptors]);
+  const maxDespawnRadius = useMemo(() => Math.max(...descriptors.map((d) => despawnRadiusOf(d)), 600), [descriptors]);
 
   const maxFootprint = useMemo(() => Math.max(...descriptors.map((d) => d.footprint), 10), [descriptors]);
 
@@ -220,7 +220,7 @@ export const ActorPool = () => {
       if (desc) {
         const dx = camera.position.x - rec.x;
         const dz = camera.position.z - rec.z;
-        const immediateRadius = getRespawnBlockRadius(desc);
+        const immediateRadius = respawnBlockRadiusOf(desc);
         if (dx * dx + dz * dz <= immediateRadius * immediateRadius) return;
       }
       respawnBlockedRef.current.delete(objId);
@@ -276,7 +276,7 @@ export const ActorPool = () => {
       if (!desc) return;
       const dx = obj.point.x - camera.position.x;
       const dz = obj.point.z - camera.position.z;
-      const despawnRadius = getDespawnRadius(desc);
+      const despawnRadius = despawnRadiusOf(desc);
       if (dx * dx + dz * dz > despawnRadius * despawnRadius) {
         objectsMapRef.current.delete(objId);
         mountedPointsRef.current.delete(obj.point);
@@ -338,7 +338,7 @@ export const ActorPool = () => {
         if (repointRedelivered(objId, point)) continue;
 
         const Component = desc.component;
-        const props = actorPropsOf(desc, point, objId, (id: string) => recordDespawn(id, point));
+        const props = actorPropsOf(desc, point, objId, (id: string) => recordDespawn(id, point), spriteKinds.has(desc.id));
 
         objectsMapRef.current.set(objId, {
           node: <Component key={objId} {...props} />,
@@ -360,6 +360,7 @@ export const ActorPool = () => {
     descriptors,
     serializedDescriptors,
     descriptorMap,
+    spriteKinds,
     maxSpawnRadius,
     maxDescSpawnRadius,
     maxDespawnRadius,
@@ -394,6 +395,7 @@ export const ActorPool = () => {
     <>
       {stableComponents}
       <Suspense fallback={null}>{warmups}</Suspense>
+      <SpriteLods kinds={spriteKinds} descriptors={serializedDescriptors} maxFootprint={maxFootprint} />
     </>
   );
 };

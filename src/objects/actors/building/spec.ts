@@ -1,5 +1,6 @@
 import type { ActorAttributes } from "../../types";
 import type { ActorSpec } from "../spec";
+import type { SpriteLodAttributes } from "../../sprite-lod/types";
 import { BuildingAttributes, LIGHT_TYPE, ROOF_STYLE } from "./types";
 
 // The server (physics/buildings.ts) generates the SAME plan from a spec's `hull` to build the
@@ -48,6 +49,11 @@ export const BUILDING_ATTRS: BuildingAttributes = {};
  *  its center, and facade doors sit 9–16u from it — measured over 200 seeds). */
 export const DOOR_INTERACT_REACH = 6;
 
+/** Every building kind's far tier: the whole skyline as sprites out to here; the full building hands off at
+ *  its renderDistance. At 600u a 95u skyscraper is ~110px tall at 1080p, so an earlier handoff shows the flat
+ *  sprite (building/DECISIONS.md). */
+export const BUILDING_SPRITE_LOD: SpriteLodAttributes = { renderDistance: 3000 };
+
 /** Max floors under a much taller shell (mechanical levels), a gentler lean so tall
  *  neighbors don't collide, most windows lit so towers read as busy from afar. */
 const SKYSCRAPER_ATTRS: BuildingAttributes = {
@@ -73,6 +79,7 @@ export const BUILDING_SPEC: ActorSpec = {
   priority: 55,
   roadDistanceRange: [28, 99999],
   flattenGround: true,
+  spriteLod: BUILDING_SPRITE_LOD,
   hull: BUILDING_ATTRS,
 };
 

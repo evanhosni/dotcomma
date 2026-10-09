@@ -6,6 +6,8 @@ import { _quantization } from "../../vfx/quantization";
 import { framePhaseFromCoords, getDistance2DSq, stopMatrixUpdatesWhenFrozen } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
 import { _spawnFade } from "../../vfx/spawnFade";
+import { reportContentError } from "../../utils/contentError";
+import { setSpriteDetail, SPRITE_LOD_HYSTERESIS } from "../sprite-lod/detail";
 import { PosePlayback } from "../../net/entities/posePlayback";
 import { useSyncedEntity, type PuppetTarget, type SyncHandle } from "../../net/entities/useSyncedEntity";
 import type { MotionOutput } from "./state/motion";
@@ -85,6 +87,9 @@ export interface ActorLifecycleOptions {
   /** Dither OUT past renderDistance (then self-destroy) instead of popping at despawnDistance. Every
    *  actor dithers IN when its group first appears (vfx/spawnFade.ts). */
   fadeOut?: boolean;
+  /** A kind with a sprite tier (sprite-lod/README.md): past this distance the actor spawn-fades out and is held
+   *  hidden while its sprite draws the pixels it gives up; back inside it fades in again. Not with `fadeOut`. */
+  spriteHandoffDistance?: number;
   /** Omit to skip the frustum test (meshes that cull themselves). */
   boundsRadius?: number;
   frustumPadding?: number;
@@ -146,6 +151,7 @@ export const useActorLifecycle = ({
   onDestroy,
   checkInterval = 1,
   fadeOut = false,
+  spriteHandoffDistance,
   boundsRadius,
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   forceVisibleFrames = 3,
@@ -164,7 +170,8 @@ export const useActorLifecycle = ({
   const destroyedRef = useRef(false);
   const distanceSqRef = useRef(Infinity);
   const spawnFade = useRef(new _spawnFade.SpawnFade()).current;
-  const fadeRef = useRef({ started: false, fadingOut: false });
+  // shown: the fade is headed toward visible. reported: the visibility last told to the sprite (0 = none).
+  const fadeRef = useRef({ started: false, shown: false, reported: 0 });
   const lastVisibleRef = useRef<boolean | null>(null);
   const forceVisibleFramesRef = useRef(forceVisibleFrames);
   const matricesFrozenRef = useRef(false);
@@ -202,37 +209,64 @@ export const useActorLifecycle = ({
     onDestroy(id);
   };
 
+  /** Whether the actor should be drawn at this distance: inside its sprite handoff (held past it by the
+   *  hysteresis), or for a `fadeOut` actor inside renderDistance. */
+  const shownAt = (distanceSq: number, wasShown: boolean): boolean => {
+    if (spriteHandoffDistance !== undefined) return withinGate(distanceSq, spriteHandoffDistance, wasShown, SPRITE_LOD_HYSTERESIS);
+    return !fadeOut || distanceSq <= renderDistanceSq;
+  };
+
   /** The fade starts when the group first exists (a Building or a pool-miss ModelActor renders null until
-   *  its assets land) and before its first draw: useFrame precedes render. A `fadeOut` actor dithers out
-   *  past renderDistance and is destroyed once gone. Returns this frame's visibility. */
+   *  its assets land) and before its first draw: useFrame precedes render. It fades in, or starts hidden where
+   *  the actor should not be drawn; crossing the boundary fades it out or back in from where it is. Hidden,
+   *  a `fadeOut` actor is destroyed and a sprite kind is held (the fade stops advancing). Returns this
+   *  frame's visibility. */
   const advanceSpawnFade = (fadeRoot: THREE.Group, distanceSq: number): number => {
     const fade = fadeRef.current;
     spawnFade.setRoot(fadeRoot);
+    const shown = shownAt(distanceSq, fade.shown);
     if (!fade.started) {
       fade.started = true;
-      spawnFade.fadeIn(0);
-    }
-    if (fadeOut) {
-      const beyond = distanceSq > renderDistanceSq;
-      if (beyond !== fade.fadingOut) {
-        fade.fadingOut = beyond;
-        if (beyond) spawnFade.fadeOut();
-        else spawnFade.fadeIn();
-      }
+      fade.shown = shown;
+      if (shown) spawnFade.fadeIn(0);
+      else spawnFade.hide();
+    } else if (shown !== fade.shown) {
+      fade.shown = shown;
+      if (shown) spawnFade.fadeIn();
+      else spawnFade.fadeOut();
     }
     if (!spawnFade.fading) return 1;
+    if (!fade.shown && spawnFade.hidden()) {
+      if (fadeOut) destroy();
+      return 0;
+    }
     const visibility = spawnFade.update();
-    if (fade.fadingOut && visibility <= 0) destroy();
+    if (!fade.shown && fadeOut && visibility <= 0) destroy();
     return visibility;
   };
 
-  /** The frustum test, held true over the warm-up frames; written to the group only on change. */
-  const updateVisibility = (group: THREE.Group | null, position: THREE.Vector3, distanceSq: number): boolean => {
-    if (boundsRadius === undefined) return true;
-    boundsRef.center.copy(position);
-    boundsRef.radius = paddedBoundsRadius;
-    let visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
-    if (forceVisibleFramesRef.current > 0) {
+  /** The sprite draws the pixels this actor's fade gives up (sprite-lod/detail.ts); an actor without a group
+   *  draws nothing, which is the same as no report. */
+  const reportSpriteDetail = (visibility: number): void => {
+    const fade = fadeRef.current;
+    if (visibility === fade.reported) return;
+    fade.reported = visibility;
+    setSpriteDetail(id, visibility);
+  };
+
+  /** The frustum test (when there are bounds), off for a sprite kind fully faded into its sprite, held true over
+   *  the warm-up frames; written to the group only on change. */
+  const updateVisibility = (group: THREE.Group | null, position: THREE.Vector3, distanceSq: number, fadeVisibility: number): boolean => {
+    if (boundsRadius === undefined && spriteHandoffDistance === undefined) return true;
+    let visible = true;
+    if (boundsRadius !== undefined) {
+      boundsRef.center.copy(position);
+      boundsRef.radius = paddedBoundsRadius;
+      visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
+    }
+    if (spriteHandoffDistance !== undefined && fadeVisibility <= 0) visible = false;
+    // A sprite kind's warm-up frames count from its group's first frame: a Building mounts it only once built.
+    if (forceVisibleFramesRef.current > 0 && (group || spriteHandoffDistance === undefined)) {
       forceVisibleFramesRef.current--;
       visible = true;
     }
@@ -307,8 +341,9 @@ export const useActorLifecycle = ({
     const group = groupRef.current;
     const fadeVisibility = group ? advanceSpawnFade(group, distanceSq) : 1;
     if (destroyedRef.current) return;
+    if (spriteHandoffDistance !== undefined) reportSpriteDetail(group ? fadeVisibility : 0);
 
-    const visible = updateVisibility(group, position, distanceSq);
+    const visible = updateVisibility(group, position, distanceSq, fadeVisibility);
     if (freezeMatrices && group) freezeMatricesOnce(group);
 
     const checked = !everCheckedRef.current || frameRef.current++ % checkInterval === 0;
@@ -344,10 +379,14 @@ export const useActorLifecycle = ({
   const resetFade = (): void => {
     spawnFade.release();
     fadeRef.current.started = false;
-    fadeRef.current.fadingOut = false;
+    fadeRef.current.shown = false;
+    reportSpriteDetail(0);
   };
 
   useEffect(() => {
+    if (fadeOut && spriteHandoffDistance !== undefined) {
+      reportContentError(`[actors] "${descriptorId ?? id}" has both a sprite handoff and fadeOut: a held-hidden actor would never destroy itself.`);
+    }
     frameUpdaters.add(frameUpdaterRef);
     return () => {
       frameUpdaters.delete(frameUpdaterRef);

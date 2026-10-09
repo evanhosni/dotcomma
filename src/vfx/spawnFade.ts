@@ -238,6 +238,18 @@ export namespace _spawnFade {
       this.switchRamp(acquireRamp(-1, now - (1 - lin) * DURATION));
     }
 
+    /** Hidden at once, no fade: held at 0 (an object appearing where it should not be drawn) until fadeIn()
+     *  or release(). Bound immediately, so its first draw is already hidden. */
+    hide(now = clock()): void {
+      // One quantum earlier: the ramp start rounds up, and must still be a full DURATION ago.
+      this.switchRamp(acquireRamp(-1, now - DURATION - TRACK_QUANTUM));
+    }
+
+    /** True while held at 0 by a finished fade out (or hide()). */
+    hidden(now = clock()): boolean {
+      return this.ramp !== null && this.ramp.dir < 0 && this.ramp.finished(now);
+    }
+
     /** Per frame while fading: visibility now. A finished fade IN hands the object back to its base materials. */
     update(now = clock()): number {
       const ramp = this.ramp;

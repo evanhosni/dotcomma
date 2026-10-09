@@ -24,6 +24,7 @@ import { DEFAULT_EXTERIOR_MATERIAL, DEFAULT_INTERIOR_MATERIAL, DOOR_MATERIAL, up
 import { addFarDoor, FarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
 import type { RampCollider } from "./interiorGeometry";
 import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
+import { BUILDING_SPRITE_LOOK } from "./buildingSpriteLook";
 import { BUILDING_HULL_KEYS, buildingSeedAt, DOOR_INTERACT_REACH } from "./spec";
 import { BuildingAttributes, BuildingMaterials, BuildingProps } from "./types";
 
@@ -177,6 +178,7 @@ export const Building = (props: BuildingProps) => {
     renderDistance,
     colliderDistance = COLLIDER_DISTANCE,
     despawnDistance,
+    spriteHandoffDistance,
     onDestroy,
     children,
   } = props;
@@ -251,6 +253,7 @@ export const Building = (props: BuildingProps) => {
     coordinates,
     renderDistance,
     despawnDistance: despawnDistance ?? renderDistance * BUILDING_DESPAWN_DISTANCE_FACTOR,
+    spriteHandoffDistance,
     onDestroy,
     checkInterval: DISTANCE_CHECK_INTERVAL,
     colliderDistance,
@@ -479,6 +482,7 @@ const BuildingWarmup = ({ descriptor }: { descriptor: { materials?: BuildingMate
   return null;
 };
 Building.Warmup = BuildingWarmup;
+Building.spriteLook = BUILDING_SPRITE_LOOK;
 Building.warmupKey = (descriptor: { materials?: BuildingMaterials }) =>
   `${descriptor.materials?.exterior?.uuid ?? "default"}|${descriptor.materials?.interior?.uuid ?? "default"}`;
 

@@ -11,6 +11,7 @@
  */
 
 import type * as THREE from "three";
+import type { SpriteLodAttributes } from "./sprite-lod/types";
 
 /** All optional here — a class's descriptor/props type re-declares the ones it requires. */
 export interface GameObjectAttributes {
@@ -61,6 +62,9 @@ export interface ActorAttributes extends GameObjectAttributes {
   flattenRadius?: number;
   /** Default footprint * 0.35. */
   flattenSkirt?: number;
+  /** A far tier: past renderDistance the actor hands off to an upright billboard drawn out to this one. Its member
+   *  needs a `spriteLook` (sprite-lod/README.md). */
+  spriteLod?: SpriteLodAttributes;
 }
 
 /** Empty today — every feature's knobs belong to its own placement enumerator. Kept as the class's extension point. */

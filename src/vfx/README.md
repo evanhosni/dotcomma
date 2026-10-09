@@ -15,8 +15,10 @@ World-wide visual effects, configured once per domain through `<PostProcessing>`
 
 Effects reach materials through `prepareActorMaterial`, `prepareDressingMaterial`, the foliage shader, and the terrain/water shaders. Each `patchMaterial` is idempotent and goes through `chainMaterialPatch`.
 
+The sprite tier's base material (`objects/sprite-lod/spriteMaterial.ts`) is a call site too: it takes curvature, and deliberately not quantization (a flat billboard has nothing to snap) nor lamp glow (wrong on a far stand-in). Its fade is its own screen-door dither, complementary to the actors' spawn fade.
+
 ## How to add another
 
 1. Create `vfx/<effect>.ts` with its uniform, GLSL and an idempotent `patchMaterial` built on `chainMaterialPatch` ([curvature.ts](curvature.ts) is the template).
 2. Add a prop to `PostProcessing` that sets it and resets it on unmount.
-3. Call the patcher from the class bases (`prepareActorMaterial`, `prepareDressingMaterial`, the foliage shader) and the terrain/water shaders — not from individual objects.
+3. Call the patcher from the class bases (`prepareActorMaterial`, `prepareDressingMaterial`, the foliage shader, the sprite material, unless it is wrong for a far billboard) and the terrain/water shaders — not from individual objects.
