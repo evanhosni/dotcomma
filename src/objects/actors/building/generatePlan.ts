@@ -4,7 +4,9 @@ import {
   edgeLength,
   edgeNormal,
   edgePoint,
+  hipRoofRings,
   inscribedRectFactor,
+  offsetRing,
   pointInRing,
   Pt2,
   RECT_EDGE,
@@ -21,8 +23,10 @@ import {
   RingLevel,
   RoomRect,
   WallBox,
+  ROOF_STYLE,
   WallSide,
   WINDOW_SHAPE,
+  WindowSpec,
 } from "./types";
 
 /**
@@ -52,11 +56,19 @@ const CHILD_SLOT_COUNT = 32;
 const FOUNDATION_DEPTH = 1;
 /** Exterior half-extent minus the interior's: the shell's thickness at the door band. */
 const SHELL_INSET = 0.24;
-/** Interior half-extent cap for a sized (not `exteriorSize`d) building, so shells never intersect at the spawn spacing. */
+/** Interior half-extent cap for a sized (not `exteriorSize`d) building BEFORE its width scale. With the
+ *  scale (≤ 1.5 by default) it sets the spawn spacing (spec.ts `footprint`) and MAX_FOOTPRINT_REACH
+ *  (workers/buildingFootprints.ts). */
 const MAX_INTERIOR_HALF = 13;
-/** How far a multi-story interior may grow to fit its ramp shaft. */
+/** How far a multi-story interior may grow to fit its ramp shaft (also before the width scale). */
 const MAX_GROWN_INTERIOR_HALF = 16;
 const MAX_STORIES = 6;
+const DEFAULT_WIDTH_SCALE: [number, number] = [1, 1.5];
+/** sRGB luminance bounds of the derived interior wall color: the interior is UNLIT, so a near-white
+ *  exterior band made rooms glare (and the ceiling, 1.3× brighter, clipped to white). */
+const INTERIOR_WALL_LUMINANCE: [number, number] = [0.28, 0.46];
+/** Bounds every interior surface color (overrides included) is clamped into. */
+const INTERIOR_LUMINANCE: [number, number] = [0.1, 0.56];
 
 const SIDES: WallSide[] = ["+z", "-z", "+x", "-x"];
 
@@ -67,6 +79,8 @@ const DEFAULT_WINDOW_SIZE: [number, number] = [2.4, 4.4];
 const GLASS_COLORS = [0x9fd8ec, 0x8ec7de, 0xaad4ea];
 const PIPE_COLORS = [0x6b4a2f, 0x8a8f96, 0x3c4046];
 const DOOR_BROWNS = [0x4a352a, 0x5a4030, 0x6b4a2f, 0x7a5a3a, 0x8a6a4a];
+const HANDLE_METALS = [0xc9a54a, 0xb08d3c, 0x9ea3a8, 0x2c2e31];
+const ROOF_SHINGLES = [0x3b3f45, 0x4a3b35, 0x5c3a2e, 0x7a3a2c, 0x4d5544, 0x2f3338];
 
 const WINDOW_ROW_SPACING = 6.0;
 
@@ -91,6 +105,14 @@ const shade = (hex: number, f: number): number => {
   const g = Math.min(255, Math.round(((hex >> 8) & 0xff) * f));
   const b = Math.min(255, Math.round((hex & 0xff) * f));
   return (r << 16) | (g << 8) | b;
+};
+
+/** Scales the color so its sRGB luminance lies in [lo, hi] (hue kept). */
+const clampLuminance = (hex: number, lo: number, hi: number): number => {
+  const lum = (0.2126 * ((hex >> 16) & 0xff) + 0.7152 * ((hex >> 8) & 0xff) + 0.0722 * (hex & 0xff)) / 255;
+  if (lum > hi) return shade(hex, hi / lum);
+  if (lum < lo) return lum > 0.01 ? shade(hex, lo / lum) : shade(0xffffff, lo);
+  return hex;
 };
 
 const rectsOverlap = (a: RoomRect, b: RoomRect, m: number): boolean =>
@@ -125,6 +147,7 @@ const createPlanRng = (seed: string): PlanRng => {
 /** Everything the phases after sizing share: the shell's shape, the story dimensions, the interior
  *  footprint and the BSP domain rooms are split within. */
 interface Massing {
+  pitched: boolean;
   sides: number;
   rect: boolean;
   ringRotation: number;
@@ -156,17 +179,18 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
   const m = sizeMassing(rng, opts);
   const shellHeight = chooseShellHeight(rng, opts, m);
   const ringAt = createShellRings(rng, opts, m, shellHeight);
-  const segmentColor = createSegmentColors(rng, opts);
-  const { lofts, bandTop, bandColor, segBounds } = buildLofts(rng, m, shellHeight, ringAt, segmentColor);
+  const segmentColor = createSegmentColors(rng, opts, m.pitched);
+  const { lofts, bandTop, bandColor, segBounds } = buildLofts(rng, opts, m, shellHeight, ringAt, segmentColor);
   const interiorColors = interiorColorsOf(opts, bandColor);
-  const doorColor = chooseDoorColor(rng, lofts);
+  const { doorColor, doorHandle } = chooseDoorLook(rng, lofts);
   const bandPts = ringPoints(m.rect, m.sides, bandTop, m.ringRotation);
   const doors = placeDoors(rng, opts, m, bandPts);
-  const windows = placeWindows(rng, opts, lofts, segBounds, bandPts);
+  const placedWindows = placeWindows(rng, opts, m, lofts, segBounds, bandPts, shellHeight);
   const { ramps, storyLayouts } = layoutStories(rng, m, doors);
   stretchSplitWallsToShell(storyLayouts, m);
   const wallBoxesPerStory = buildWallBoxes(rng, storyLayouts, m.ceilingHeight);
   nudgeDoorsClearOfWalls(doors, storyLayouts[0].splitWalls, m.intPts, bandPts);
+  const windows = placedWindows.filter((w) => !windowOverlapsDoor(w, doors, bandPts));
   const lightPanelsPerStory = placeLightPanels(rng, m, ramps);
   const childSlots = placeChildSlots(rng, m, storyLayouts, ramps);
 
@@ -180,6 +204,7 @@ export const generateBuildingPlan = (seed: string, opts: BuildingAttributes): Bu
     bodyLoftCount: 1 + segBounds.length,
     doors,
     doorColor,
+    doorHandle,
     windowLightChance: clamp(opts.windowLightChance ?? 0.6, 0, 1),
     windowLightIntensity: Math.max(0, opts.windowLightIntensity ?? 1.4),
     windows,
@@ -213,7 +238,12 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
   const doorHeight = Math.min(opts.doorSize?.[1] ?? 3.2, ceilingHeight - 0.2);
   const doorBandTop = doorHeight + rng.range(0.8, 2);
 
-  const requestedStories = clamp(Math.round(opts.stories ?? rng.rangeInt(1, 5)), 1, MAX_STORIES);
+  const storyRoll = Array.isArray(opts.stories)
+    ? opts.stories.length
+      ? rng.pick(opts.stories)
+      : rng.rangeInt(1, 5)
+    : opts.stories ?? rng.rangeInt(1, 5);
+  const requestedStories = clamp(Math.round(storyRoll), 1, MAX_STORIES);
   const roomChoices = (
     Array.isArray(opts.roomCount) ? opts.roomCount : opts.roomCount !== undefined ? [opts.roomCount] : null
   )?.map((n) => Math.max(1, Math.round(n)));
@@ -223,8 +253,13 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
   const roomArea = rng.range(70, 110);
   const shaftLen = storyHeight * RAMP_RUN_FACTOR + 2 * RAMP_LANDING;
   const shaftWidth = RAMP_WIDTH + WALKWAY_WIDTH;
-  // Near-square when multi-story so the inscribed room block fits the shaft.
-  const aspect = requestedStories > 1 ? rng.range(0.92, 1.08) : rng.range(0.8, 1.25);
+  // Near-square when multi-story so the inscribed room block fits the shaft. `aspectRange` is rolled
+  // log-uniform, so 1/k and k are equally likely; a multi-story plan too stretched for its shaft grows to fit.
+  const aspect = opts.aspectRange
+    ? Math.exp(rng.range(Math.log(opts.aspectRange[0]), Math.log(opts.aspectRange[1])))
+    : requestedStories > 1
+      ? rng.range(0.92, 1.08)
+      : rng.range(0.8, 1.25);
 
   let interiorHalfWidth: number;
   let interiorHalfDepth: number;
@@ -267,6 +302,14 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
       block = blockOf(interiorHalfWidth, interiorHalfDepth);
     }
   }
+  if (!opts.exteriorSize) {
+    // After the shaft fit: widening only enlarges the block, so the fit holds.
+    const [scaleMin, scaleMax] = opts.widthScale ?? DEFAULT_WIDTH_SCALE;
+    const widthScale = rng.range(scaleMin, scaleMax);
+    interiorHalfWidth *= widthScale;
+    interiorHalfDepth *= widthScale;
+    block = blockOf(interiorHalfWidth, interiorHalfDepth);
+  }
   const bsp: RoomRect = { x0: -block.halfW, z0: -block.halfD, x1: block.halfW, z1: block.halfD };
 
   // Prefer the ≈34° run, steepen to ≈39°, and only as a last resort give up on stories.
@@ -283,6 +326,7 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
   }
 
   return {
+    pitched: opts.roof === ROOF_STYLE.PITCHED,
     sides,
     rect,
     ringRotation,
@@ -308,6 +352,8 @@ const sizeMassing = (rng: PlanRng, opts: BuildingAttributes): Massing => {
 /** shellHeightRange only applies when the floors it advertises actually exist. */
 const chooseShellHeight = (rng: PlanRng, opts: BuildingAttributes, m: Massing): number => {
   if (opts.exteriorSize) return opts.exteriorSize[1];
+  // Eaves just above the top ceiling: the roof, not the wall, gives a house its height.
+  if (m.pitched) return m.stories * m.storyHeight + rng.range(0.7, 1.3);
   if (opts.shellHeightRange && m.stories === m.requestedStories) {
     return Math.max(rng.range(opts.shellHeightRange[0], opts.shellHeightRange[1]), m.stories * m.storyHeight + 2);
   }
@@ -330,9 +376,9 @@ type ShellRingAt = ((y: number, rScale: number) => RingLevel) & {
 const createShellRings = (rng: PlanRng, opts: BuildingAttributes, m: Massing, shellHeight: number): ShellRingAt => {
   const interiorTop = m.stories * m.storyHeight + 0.5;
   const leanAngle = rng.range(0, Math.PI * 2);
-  const leanMag = rng.range(0, opts.maxLean ?? 0.08) * shellHeight;
+  const leanMag = m.pitched ? 0 : rng.range(0, opts.maxLean ?? 0.08) * shellHeight;
   const leanExp = rng.range(1.2, 1.9);
-  const topScale = rng.range(0.7, 1.25);
+  const topScale = m.pitched ? 1 : rng.range(0.7, 1.25);
   // Polygon faces sit at apothem distance (over-provision by 1/cos(π/N)); the
   // FULL lean is charged to both axes, since per-axis components under-cover diagonals.
   const apothem = m.rect ? 1 : Math.cos(Math.PI / m.sides);
@@ -355,12 +401,13 @@ const createShellRings = (rng: PlanRng, opts: BuildingAttributes, m: Massing, sh
   return Object.assign(ringAt, { interiorTop, clampMargin });
 };
 
-/** The primary color is rolled once; each segment mostly repeats it. */
-const createSegmentColors = (rng: PlanRng, opts: BuildingAttributes): (() => number) => {
+/** The primary color is rolled once; each segment mostly repeats it (`uniform`: always). */
+const createSegmentColors = (rng: PlanRng, opts: BuildingAttributes, uniform: boolean): (() => number) => {
   const palette = opts.palette?.length ? opts.palette : GRAYSCALE;
   const accents = opts.accentColors?.length ? opts.accentColors : ACCENTS;
   const accentChance = opts.accentChance ?? 0.2;
   const primary = rng() < accentChance ? rng.pick(accents) : rng.pick(palette);
+  if (uniform) return () => primary;
   return () => (rng() < 0.55 ? primary : rng() < accentChance * 0.4 ? rng.pick(accents) : rng.pick(palette));
 };
 
@@ -372,6 +419,7 @@ interface SegmentBounds {
 
 const buildLofts = (
   rng: PlanRng,
+  opts: BuildingAttributes,
   m: Massing,
   shellHeight: number,
   ringAt: ShellRingAt,
@@ -383,6 +431,15 @@ const buildLofts = (
   const bandBot: RingLevel = { y: -FOUNDATION_DEPTH, cx: 0, cz: 0, halfWidth: m.halfWidth, halfDepth: m.halfDepth };
   const bandTop: RingLevel = { ...bandBot, y: m.doorBandTop };
   const lofts: ExteriorLoft[] = [{ rect, sides, ringRotation, levels: [bandBot, bandTop], color: bandColor, hasRoofFan: false }];
+
+  if (m.pitched) {
+    // The band's own ring continued up: it already wraps the interior, and ringAt's lean clearance
+    // would step the wall out into a ledge above the doors.
+    const wallTop: RingLevel = { ...bandTop, y: shellHeight };
+    lofts.push({ rect, sides, ringRotation, levels: [{ ...bandTop }, wallTop], color: segmentColor(), hasRoofFan: false });
+    addHipRoof(rng, opts, m, lofts, wallTop);
+    return { lofts, bandTop, bandColor, segBounds: [{ loft: 1, y0: m.doorBandTop, y1: shellHeight }] };
+  }
 
   const segCount = rng.rangeInt(2, 4);
   const weights = Array.from({ length: segCount }, () => rng.range(0.6, 1.6));
@@ -409,6 +466,27 @@ const buildLofts = (
   const capTop = addRoofCaps(rng, m, lofts, prevTop, segmentColor);
   addRoofPipes(rng, m, lofts, capTop);
   return { lofts, bandTop, bandColor, segBounds };
+};
+
+/** An overhanging hip roof: a soffit out to the eave, a fascia, then every face at ONE pitch up the
+ *  eave's straight skeleton (hipRoofRings) — a ridge on a rectangle, a peak over a triangle's incenter.
+ *  Not a body loft, so the proxy hull ignores it. */
+const addHipRoof = (rng: PlanRng, opts: BuildingAttributes, m: Massing, lofts: ExteriorLoft[], wallTop: RingLevel): void => {
+  const wallPts = ringPoints(m.rect, m.sides, wallTop, m.ringRotation);
+  const eavePts = offsetRing(wallPts, -rng.range(0.6, 1.2));
+  const fasciaY = wallTop.y + 0.35;
+  const slope = Math.tan(rng.range(0.55, 0.8)); // ≈32–46°
+  const skeleton = hipRoofRings(eavePts);
+  const roofColors = opts.roofColors?.length ? opts.roofColors : ROOF_SHINGLES;
+  lofts.push({
+    rect: m.rect,
+    sides: m.sides,
+    ringRotation: m.ringRotation,
+    levels: [wallTop.y, wallTop.y, fasciaY, ...skeleton.offsets.slice(1).map((d) => fasciaY + d * slope)].map((y) => ({ ...wallTop, y })),
+    points: [wallPts, eavePts, eavePts, ...skeleton.rings.slice(1)],
+    color: rng.pick(roofColors),
+    hasRoofFan: false,
+  });
 };
 
 /** ringAt clamps only AT levels: a wall lerping from a clamped ring to a tapered one above
@@ -529,20 +607,22 @@ const addRoofPipes = (rng: PlanRng, m: Massing, lofts: ExteriorLoft[], roof: Rin
 };
 
 const interiorColorsOf = (opts: BuildingAttributes, bandColor: number) => {
-  const wall = opts.interiorColors?.wall ?? bandColor;
+  const wall = opts.interiorColors?.wall ?? clampLuminance(bandColor, ...INTERIOR_WALL_LUMINANCE);
+  const [lo, hi] = INTERIOR_LUMINANCE;
   return {
-    wall,
-    floor: opts.interiorColors?.floor ?? shade(wall, 0.65),
-    ceiling: opts.interiorColors?.ceiling ?? shade(wall, 1.3),
-    ramp: opts.interiorColors?.ramp ?? shade(wall, 0.8),
+    wall: clampLuminance(wall, lo, hi),
+    floor: clampLuminance(opts.interiorColors?.floor ?? shade(wall, 0.65), lo, hi),
+    ceiling: clampLuminance(opts.interiorColors?.ceiling ?? shade(wall, 1.2), lo, hi),
+    ramp: clampLuminance(opts.interiorColors?.ramp ?? shade(wall, 0.8), lo, hi),
   };
 };
 
 /** Doors never introduce a new bright hue. */
-const chooseDoorColor = (rng: PlanRng, lofts: ExteriorLoft[]): number => {
+const chooseDoorLook = (rng: PlanRng, lofts: ExteriorLoft[]): Pick<BuildingPlan, "doorColor" | "doorHandle"> => {
   const doorRoll = rng();
-  if (doorRoll < 0.4) return rng.pick(lofts.map((l) => l.color));
-  return doorRoll < 0.7 ? rng.pick(DOOR_BROWNS) : rng.pick(GRAYSCALE);
+  const doorColor =
+    doorRoll < 0.4 ? rng.pick(lofts.map((l) => l.color)) : doorRoll < 0.7 ? rng.pick(DOOR_BROWNS) : rng.pick(GRAYSCALE);
+  return { doorColor, doorHandle: { lever: rng() < 0.5, color: rng.pick(HANDLE_METALS) } };
 };
 
 // ─── Doors and windows ──────────────────────────────────────────────────────
@@ -600,38 +680,53 @@ const placeDoors = (rng: PlanRng, opts: BuildingAttributes, m: Massing, bandPts:
 const placeWindows = (
   rng: PlanRng,
   opts: BuildingAttributes,
+  m: Massing,
   lofts: ExteriorLoft[],
   segBounds: SegmentBounds[],
   bandPts: Pt2[],
-): BuildingPlan["windows"] => {
-  const windows: BuildingPlan["windows"] = [];
+  shellHeight: number,
+): WindowSpec[] => {
+  const windows: WindowSpec[] = [];
   const glass = rng.pick(GLASS_COLORS);
   const windowShapes = opts.windowShapes?.length ? opts.windowShapes : [WINDOW_SHAPE.SQUARE];
   const [winMin, winMax] = opts.windowSize ?? DEFAULT_WINDOW_SIZE;
   const primaryShape = rng.pick(windowShapes);
 
-  const cells: { loft: number; edge: number; slots: number; k: number; baseY: number; frame: number }[] = [];
-  for (const seg of segBounds) {
-    const frame = shade(lofts[seg.loft].color, 0.55);
-    const segH = seg.y1 - seg.y0;
-    if (segH < 6) continue;
-    const rows = Math.max(1, Math.floor((segH - 3.4) / WINDOW_ROW_SPACING));
-    for (let r = 0; r < rows; r++) {
-      const baseY = seg.y0 + 3.0 + r * WINDOW_ROW_SPACING;
-      for (let edge = 0; edge < bandPts.length; edge++) {
-        const slots = Math.max(1, Math.floor(edgeLength(bandPts, edge) / 4.6));
-        for (let k = 0; k < slots; k++) cells.push({ loft: seg.loft, edge, slots, k, baseY, frame });
-      }
+  // A house's straight walls are one surface: a row per story, ground floor included (the doors are
+  // kept clear afterwards, windowOverlapsDoor), each in whichever loft holds its center.
+  const rows: { loft: number; baseY: number }[] = [];
+  if (m.pitched) {
+    for (let s = 0; s < m.stories; s++) {
+      const baseY = s * m.storyHeight + FLOOR_LIFT + m.ceilingHeight * 0.5;
+      if (baseY + 1.2 < shellHeight) rows.push({ loft: baseY < m.doorBandTop ? 0 : 1, baseY });
+    }
+  } else {
+    for (const seg of segBounds) {
+      const segH = seg.y1 - seg.y0;
+      if (segH < 6) continue;
+      const rowCount = Math.max(1, Math.floor((segH - 3.4) / WINDOW_ROW_SPACING));
+      for (let r = 0; r < rowCount; r++) rows.push({ loft: seg.loft, baseY: seg.y0 + 3.0 + r * WINDOW_ROW_SPACING });
     }
   }
+  const cells: { loft: number; edge: number; slots: number; k: number; baseY: number; frame: number }[] = [];
+  for (const { loft, baseY } of rows) {
+    const frame = shade(lofts[loft].color, 0.55);
+    for (let edge = 0; edge < bandPts.length; edge++) {
+      const slots = Math.max(1, Math.floor(edgeLength(bandPts, edge) / 4.6));
+      for (let k = 0; k < slots; k++) cells.push({ loft, edge, slots, k, baseY, frame });
+    }
+  }
+  const [fillMin, fillMax] = m.pitched ? [0.5, 0.75] : [0.35, 0.55];
   const windowTarget = opts.windowCount?.length
     ? clamp(Math.round(rng.pick(opts.windowCount)), 0, cells.length)
-    : Math.round(cells.length * rng.range(0.35, 0.55));
+    : Math.round(cells.length * rng.range(fillMin, fillMax));
+  // A house window stays inside its story.
+  const maxH = m.pitched ? Math.min(4.6, m.ceilingHeight * 0.55) : 4.6;
   for (const cell of rng.shuffle(cells).slice(0, windowTarget)) {
     const slotW = edgeLength(bandPts, cell.edge) / cell.slots;
     const shape = rng() < 0.75 ? primaryShape : rng.pick(windowShapes);
     const w = Math.min(rng.range(winMin, winMax), slotW * 0.8);
-    const h = clamp(w * rng.range(0.65, 1.4), 2.0, 4.6);
+    const h = clamp(w * rng.range(0.65, 1.4), Math.min(2.0, maxH), maxH);
     windows.push({
       loft: cell.loft,
       edge: cell.edge,
@@ -649,6 +744,15 @@ const placeWindows = (
   }
   return windows;
 };
+
+/** A window reaching down into a door's opening (plus a margin) on the door's facet. Run after the doors'
+ *  final nudge, so it sees where they really are. */
+const windowOverlapsDoor = (w: WindowSpec, doors: DoorPlan[], bandPts: Pt2[]): boolean =>
+  doors.some((d) => {
+    if (d.edge !== w.edge || w.y - w.h / 2 > d.height + 0.4) return false;
+    const L = edgeLength(bandPts, d.edge);
+    return Math.abs(w.edgeParam - (d.t0 + d.t1) / 2) * L < (w.w + d.width) / 2 + 0.6;
+  });
 
 // ─── Interior: ramps, rooms, walls ──────────────────────────────────────────
 

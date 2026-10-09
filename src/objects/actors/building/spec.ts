@@ -1,6 +1,6 @@
 import type { ActorAttributes } from "../../types";
 import type { ActorSpec } from "../spec";
-import type { BuildingAttributes } from "./types";
+import { BuildingAttributes, ROOF_STYLE } from "./types";
 
 // The server (physics/buildings.ts) generates the SAME plan from a spec's `hull` to build the
 // sealed collider, and its domain config derives the flatten pads from the placement here — a
@@ -13,6 +13,10 @@ type BuildingHullKey = Exclude<keyof BuildingAttributes, keyof ActorAttributes>;
 const HULL_KEY_SET: Record<BuildingHullKey, true> = {
   exteriorSize: true,
   numberOfSides: true,
+  widthScale: true,
+  aspectRange: true,
+  roof: true,
+  roofColors: true,
   palette: true,
   accentColors: true,
   accentChance: true,
@@ -55,17 +59,18 @@ const SKYSCRAPER_ATTRS: BuildingAttributes = {
 
 /** Buildings only place inside block interiors, so density is high to keep blocks
  *  packed — footprint spacing is the real limiter (half this density visibly thins the
- *  city). flattenGround: sloped block interiors otherwise clip floors. */
+ *  city). flattenGround: sloped block interiors otherwise clip floors. Footprint and road
+ *  setback are sized for the widest shell (widthScale up to 1.5×; was 30 / 23 at 1×). */
 export const BUILDING_SPEC: ActorSpec = {
   id: "building",
   component: "building",
   renderDistance: 625,
   frustumPadding: 3.25,
-  footprint: 30,
+  footprint: 40,
   density: 3800,
   clustering: 0,
   priority: 55,
-  roadDistanceRange: [23, 99999],
+  roadDistanceRange: [28, 99999],
   flattenGround: true,
   hull: BUILDING_ATTRS,
 };
@@ -74,13 +79,32 @@ export const BUILDING_SPEC: ActorSpec = {
 export const SKYSCRAPER_SPEC: ActorSpec = {
   ...BUILDING_SPEC,
   id: "skyscraper",
-  footprint: 36,
+  footprint: 48,
   density: 240,
   priority: 45,
-  roadDistanceRange: [28, 99999],
+  roadDistanceRange: [33, 99999],
   hull: SKYSCRAPER_ATTRS,
 };
 
-/** The grassland's scattered buildings: the city building's kind under its own id (descriptors
- *  dedupe by id, and "building" is the city's); the grass biome's mount sets its density. */
-export const GRASS_BUILDING_SPEC: ActorSpec = { ...BUILDING_SPEC, id: "grass-building" };
+/** Siding and paint: lighter and warmer than the city's concrete. */
+const HOUSE_PALETTE = [0xe8dcc0, 0xd9c7a3, 0xc9d3b4, 0xa9bfa0, 0xb7c9d6, 0x9fb4c7, 0xe3d27f, 0xd8a48f, 0xb5654a, 0xf0ece2];
+const HOUSE_ACCENTS = [0x8a3b32, 0x3f5a73, 0x5b6e3f, 0x6d4c7a];
+
+/** 1–2 stories of 2–4 rooms under a hip roof on a 3–5-sided plan (mostly 4), with lower ceilings
+ *  than the city's. */
+const HOUSE_ATTRS: BuildingAttributes = {
+  roof: ROOF_STYLE.PITCHED,
+  numberOfSides: [3, 4, 4, 4, 5],
+  aspectRange: [0.6, 1 / 0.6],
+  stories: [1, 2],
+  roomCount: [2, 3, 4],
+  ceilingHeight: 4.6,
+  palette: HOUSE_PALETTE,
+  accentColors: HOUSE_ACCENTS,
+  accentChance: 0.12,
+  windowSize: [1.6, 2.6],
+  windowLightChance: 0.5,
+};
+
+/** The grassland's scattered houses; the grass biome's mount sets the density. */
+export const HOUSE_SPEC: ActorSpec = { ...BUILDING_SPEC, id: "house", hull: HOUSE_ATTRS };

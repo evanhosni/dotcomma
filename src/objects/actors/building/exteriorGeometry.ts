@@ -17,13 +17,26 @@ export const emitLoft = (
   const flip = o?.flip ?? false;
   const adj = (L: { y: number; cx: number; cz: number; halfWidth: number; halfDepth: number }) =>
     inset ? { ...L, halfWidth: Math.max(L.halfWidth - inset, 0.4), halfDepth: Math.max(L.halfDepth - inset, 0.4) } : L;
-  const q = (a: Vec3, b: Vec3, c: Vec3, d: Vec3): void => (flip ? sink.quad(d, c, b, a) : sink.quad(a, b, c, d));
+  // Explicit rings may hold coincident points (a hip roof's collapsed edges): their zero-area triangles
+  // are dropped, they would only be degenerate triangles in the trimesh collider.
+  const solidTri = (a: Vec3, b: Vec3, c: Vec3): void => {
+    const n = cross(sub(b, a), sub(c, a));
+    if (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 1e-10) sink.tri(a, b, c);
+  };
+  const q = (a: Vec3, b: Vec3, c: Vec3, d: Vec3): void => {
+    if (flip) [a, b, c, d] = [d, c, b, a];
+    if (!loft.points) return sink.quad(a, b, c, d);
+    solidTri(a, b, c);
+    solidTri(a, c, d);
+  };
+  const ringAtLevel = (i: number, level: ExteriorLoft["levels"][number]) =>
+    loft.points?.[i] ?? ringPoints(loft.rect, loft.sides, level, loft.ringRotation);
 
   for (let i = 0; i < loft.levels.length - 1; i++) {
     const A = adj(loft.levels[i]);
     const B = adj(loft.levels[i + 1]);
-    const ptsA = ringPoints(loft.rect, loft.sides, A, loft.ringRotation);
-    const ptsB = ringPoints(loft.rect, loft.sides, B, loft.ringRotation);
+    const ptsA = ringAtLevel(i, A);
+    const ptsB = ringAtLevel(i + 1, B);
     const n = ptsA.length;
     for (let j = 0; j < n; j++) {
       const door = i === 0 ? doors.find((d) => d.edge === j) : undefined;
@@ -51,7 +64,7 @@ export const emitLoft = (
   }
   if (loft.hasRoofFan && !flip) {
     const top = loft.levels[loft.levels.length - 1];
-    const pts = ringPoints(loft.rect, loft.sides, top, loft.ringRotation);
+    const pts = ringAtLevel(loft.levels.length - 1, top);
     const c: Vec3 = [top.cx, top.y, top.cz];
     for (let j = 0; j < pts.length; j++) {
       const j1 = (j + 1) % pts.length;

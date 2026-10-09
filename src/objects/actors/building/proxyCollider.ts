@@ -47,15 +47,25 @@ export const buildProxyHullVertices = (plan: BuildingPlan): Float32Array => {
   return out;
 };
 
+/** A corner standing less than this (u) off the line past it is dropped as collinear: a near-straight
+ *  corner from a slight lean flipped in or out of the hull between float64 and the Float32Array copy
+ *  (float32 error here is ~2e-6u), and dropping it moves the hull by under a millimeter. */
+const COLLINEAR_TOLERANCE = 1e-3;
+
 /** Andrew's monotone chain. Deterministic — cached per seed, every client must agree. */
 const convexHull2D = (points: number[][]): number[][] => {
   const pts = points.slice().sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] - b[0]));
-  const cross = (o: number[], a: number[], b: number[]) =>
-    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const turnsLeft = (o: number[], a: number[], b: number[]) => {
+    const ax = a[0] - o[0];
+    const az = a[1] - o[1];
+    const bx = b[0] - o[0];
+    const bz = b[1] - o[1];
+    return ax * bz - az * bx > COLLINEAR_TOLERANCE * Math.hypot(bx, bz);
+  };
   const halfHull = (input: number[][]): number[][] => {
     const out: number[][] = [];
     for (const p of input) {
-      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      while (out.length >= 2 && !turnsLeft(out[out.length - 2], out[out.length - 1], p)) out.pop();
       out.push(p);
     }
     out.pop(); // the other half supplies the shared endpoint

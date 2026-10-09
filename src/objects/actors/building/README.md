@@ -13,7 +13,13 @@ Distance gates in [Building.tsx](Building.tsx):
 - `LIVE_DISTANCE`: inside, matrices update and real doors draw; outside, matrices freeze and doors are drawn by [farDoors.ts](farDoors.ts) as one shared InstancedMesh.
 - `colliderDistance`: inside, real colliders; outside, one sealed convex hull of the silhouette ([proxyCollider.ts](proxyCollider.ts) `buildProxyHullVertices`, `createProxyCollider`). A building always has a collider. The server builds the same hull from the same plan.
 
-Kinds live in [spec.ts](spec.ts): `BUILDING_SPEC`, `SKYSCRAPER_SPEC`, `GRASS_BUILDING_SPEC`. A kind is an `ActorSpec` with `component: "building"`, `flattenGround: true` (the terrain flattens a pad under it) and a `hull`: the `BuildingAttributes` its shape comes from.
+Kinds live in [spec.ts](spec.ts): `BUILDING_SPEC`, `SKYSCRAPER_SPEC` (the city), `HOUSE_SPEC` (the grass biome). A kind is an `ActorSpec` with `component: "building"`, `flattenGround: true` (the terrain flattens a pad under it) and a `hull`: the `BuildingAttributes` its shape comes from.
+
+Two roof styles (`roof`, `ROOF_STYLE`):
+- `FLAT`, the default: 2–4 lofted segments that lean, taper and lip, topped by caps and pipes.
+- `PITCHED`, a house (`HOUSE_SPEC` also widens `aspectRange` to 0.6–1.67, so plans read as rectangles and stretched triangles): the door band's ring runs straight up to the eaves. On top sits an overhanging hip roof (`addHipRoof`): a soffit, a fascia, then every face at one pitch up the eave's straight skeleton (`hipRoofRings` in `rings.ts`, lofted through `ExteriorLoft.points`). It peaks over a triangle's incenter and ridges along a rectangle's long axis. Windows go in one row per story, ground floor included, and are kept clear of the doors. The walls are one color, and the roof's color comes from `roofColors`.
+
+Every sized building is widened after the shaft fit by `widthScale` (default 1–1.5×), one roll for both axes. The spawn `footprint`, the road setback and `MAX_FOOTPRINT_REACH` (`workers/buildingFootprints.ts`) are sized for the widest shell, so change them together. Interior colors are clamped to a luminance band (`INTERIOR_WALL_LUMINANCE`, `INTERIOR_LUMINANCE`), because the interior is unlit. Every door leaf has a knob or lever on both faces (`doorHandle`); the far-door instances stay bare boxes.
 
 ## How to add another
 
