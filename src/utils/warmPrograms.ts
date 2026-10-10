@@ -72,13 +72,17 @@ type AsyncCompiler = THREE.WebGLRenderer & {
   compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera, targetScene?: THREE.Object3D | null) => Promise<unknown>;
 };
 
-let compiler: { renderer: AsyncCompiler; camera: THREE.Camera } | null = null;
+let compiler: { renderer: AsyncCompiler; camera: THREE.Camera; parallel: boolean } | null = null;
 
 /** The canvas binds its renderer and camera once (CustomCanvas): templates are then compiled
- *  asynchronously before their warm draw. Unbound, or on a three without compileAsync, the warm draw
- *  links them itself. Returns the unbind. */
+ *  asynchronously before their warm draw. Unbound, on a three without compileAsync, or on a browser without
+ *  KHR_parallel_shader_compile (Firefox), the warm draw links them itself, one template per frame: there
+ *  compileAsync would link every queued program in ONE task (nothing runs off-thread without the extension),
+ *  and three warns once that the extension is missing. Returns the unbind. */
 export const bindProgramCompiler = (renderer: THREE.WebGLRenderer, camera: THREE.Camera): (() => void) => {
-  const bound = { renderer: renderer as AsyncCompiler, camera };
+  // `has` probes without three's missing-extension warning (`get` warns).
+  const parallel = renderer.extensions.has("KHR_parallel_shader_compile");
+  const bound = { renderer: renderer as AsyncCompiler, camera, parallel };
   compiler = bound;
   return () => {
     if (compiler === bound) compiler = null;
@@ -91,7 +95,7 @@ export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[],
   const holder = new THREE.Group();
   holder.scale.setScalar(0);
   const bound = compiler;
-  const compilesAhead = bound?.renderer.compileAsync !== undefined;
+  const compilesAhead = !!bound?.parallel && bound.renderer.compileAsync !== undefined;
   // Linking inside the draw instead, the templates draw one per frame, so their links never stack
   // into one long task.
   const waiting: THREE.Object3D[] = [];
