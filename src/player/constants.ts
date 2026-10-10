@@ -1,3 +1,3 @@
-/** Camera far plane, world units. The terrain LOD rings (world/terrain/lodConfig.ts) are sized
- *  against it — it must lie between the LOD4 and LOD5 rings, which lodConfig.ts asserts. */
+/** Camera far plane, world units. The outermost terrain LOD ring (world/terrain/lodConfig.ts) reaches
+ *  exactly this far, and the ground's far fade ends here (world/shaders/farFade.ts). */
 export const CAMERA_FAR = 7200;

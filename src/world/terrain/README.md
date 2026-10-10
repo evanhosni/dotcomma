@@ -14,6 +14,7 @@ An infinite LOD quadtree of chunk meshes around the camera (plus optional water 
 - [chunkObjects.ts](chunkObjects.ts): what a chunk owns — its plane (`createChunkPlane`), its water child (`ensureWaterMesh` / `releaseWater`, see [../water/README.md](../water/README.md)), its imperative Rapier heightfield on collider LODs (`generateColliders`, removed in `destroyChunk`), and `syncLodFade`, which writes the chunk's dither range before each draw.
 - [lodConfig.ts](lodConfig.ts): `LOD_LEVELS` (chunk size, segments, ring distance, `hasCollider`, `skirtDepth`).
 - [lodSwaps.ts](lodSwaps.ts): `LodSwapper`. Old chunks stay drawn until their replacements are built, then cross-fade over `LOD_FADE_SECONDS` with complementary screen-door dither (`lodFadeDiscards`) on the fade twin material (`createLodFadeMaterial`, [material.ts](material.ts)); overlap tests use `ChunkIndex` ([chunkIndex.ts](chunkIndex.ts)).
+- Far fade ([../shaders/farFade.ts](../shaders/farFade.ts)): the chunks whose farthest corner reaches the last 72% before `camera.far` (`chunkReachesFarFade` in [lodConfig.ts](lodConfig.ts), re-checked with every desired-set recompute) draw with the far-fade twin (`createFarFadeMaterial`), so the horizon dithers into the sky. The swap twin carries the far fade too. `TerrainRenderer` writes the live `camera.far` into the range every frame. Change the render distance through `CAMERA_FAR`, which the sky, the LOD rings and this fade all follow.
 - [material.ts](material.ts) (`getMaterial`): the one terrain material — the shared vertex shader, the defines, and the fragment shader generated from every region and biome ([../shaders/README.md](../shaders/README.md)).
 - **Skirts** hang below each chunk edge to hide cracks (shaded at the edge they hang from via the static `skirtDrop` attribute, so a seam shows matching ground).
 - [vertexData.ts](vertexData.ts): the same pipeline on the main thread (`getVertexData`, `getVertexDataRaw`, `ensureVertexCompute`).
@@ -25,4 +26,4 @@ Seam debugging: devmode (F1) "tint skirts" paints every skirt face magenta (`ski
 
 N/A — there is one terrain system; content comes from regions and biomes.
 
-Tune: `LOD*_MAX_DISTANCE`, `LOD*_SEGMENTS`, `skirtDepth` in [lodConfig.ts](lodConfig.ts) (`CAMERA_FAR` must sit between the LOD4 and LOD5 rings), `BUILD_BUDGET_MS` in [TerrainRenderer.tsx](TerrainRenderer.tsx), and `REQUESTS_IN_FLIGHT` / `LOADING_REQUESTS_IN_FLIGHT` in [buildRequests.ts](buildRequests.ts).
+Tune: `LOD*_MAX_DISTANCE`, `LOD*_SEGMENTS`, `skirtDepth` in [lodConfig.ts](lodConfig.ts) (the outermost ring, LOD4, reaches exactly `CAMERA_FAR`), `BUILD_BUDGET_MS` in [TerrainRenderer.tsx](TerrainRenderer.tsx), and `REQUESTS_IN_FLIGHT` / `LOADING_REQUESTS_IN_FLIGHT` in [buildRequests.ts](buildRequests.ts).

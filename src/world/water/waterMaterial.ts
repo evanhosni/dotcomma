@@ -1,10 +1,11 @@
 import * as THREE from "three";
 import { FADE_OPAQUE_HI } from "../terrain/lodSwaps";
 import { NIGHT_BLEND_UNIFORM, nightDimGLSL, SUN_DIRECTION } from "../../lighting/dayNight";
-import { ditherGLSL } from "../../vfx/dither";
+import { ditherGLSL, SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { _curvature } from "../../vfx/curvature";
 import { glslFloat, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "../shaders/lodFade";
+import { FAR_DISTANCE_GLSL, FAR_FADE_GLSL, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS } from "../shaders/farFade";
 import commonShader from "../shaders/common.glsl";
 
 /**
@@ -25,7 +26,10 @@ varying float vWaterDepth;
 varying vec3 vWorldPosWrapped;
 varying vec3 vWorldPosAbs;
 varying vec3 vViewDir;
+varying float vFarDistance;
 uniform float uTime;
+
+${FAR_DISTANCE_GLSL}
 
 void main() {
   vWaterDepth = waterDepth;
@@ -45,6 +49,7 @@ void main() {
   vViewDir = cameraPosition - vWorldPosAbs;
 
   vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldPos - wrapOrigin);
+  vFarDistance = farFadeDistance(viewPos);
   gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);
 }
 `;
@@ -57,16 +62,22 @@ varying vec3 vViewDir;
 uniform float uTime;
 uniform float uNightBlend;
 uniform vec3 uSunDirection;
+varying float vFarDistance;
 uniform vec2 ${LOD_FADE_UNIFORM};
+uniform vec2 ${FAR_FADE_UNIFORM};
 
 ${commonShader}
+${SCREEN_DOOR_GLSL}
 ${LOD_FADE_GLSL}
+${FAR_FADE_GLSL}
 
 void main() {
   // The surface dives under the ground where the CPU found no water; nothing to draw there.
   if (vWaterDepth <= 0.02) discard;
   // Follows its terrain chunk through a LOD swap: the old and new sheets never both draw a pixel.
   if (lodFadeDiscards(${LOD_FADE_UNIFORM})) discard;
+  // Dissolves into the sky with the far terrain (world/shaders/farFade.ts).
+  if (farFadeDiscards(vFarDistance, ${FAR_FADE_UNIFORM})) discard;
 
   // Scrolling noise normal: two octaves drifting in different directions.
   vec2 p = vWorldPosWrapped.xz;
@@ -119,6 +130,7 @@ export const getWaterMaterial = (): THREE.ShaderMaterial => {
       [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) },
       uCurveStart: _curvature.uniforms.uCurveStart,
       uCurveK: _curvature.uniforms.uCurveK,
+      ...FAR_FADE_UNIFORMS,
     },
     transparent: true,
     depthWrite: false,

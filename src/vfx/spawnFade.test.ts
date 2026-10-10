@@ -71,6 +71,42 @@ describe("spawn fade", () => {
     expect(mesh.material).toBe(base);
   });
 
+  it("hide() starts an object held at 0 with no fade, and it fades in from there", () => {
+    const base = patched();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), base);
+    const fade = new _spawnFade.SpawnFade(mesh);
+    fade.hide(5000);
+    expect(fade.value(5000)).toBe(0);
+    expect(fade.hidden(5000)).toBe(true);
+    expect(mesh.material).not.toBe(base);
+    expect(fade.update(5000 + D * 4)).toBe(0);
+    expect(fade.hidden(5000 + D * 4)).toBe(true);
+
+    fade.fadeIn(undefined, 5010);
+    expect(fade.hidden(5010)).toBe(false);
+    const mid = fade.update(5010 + D * 0.5);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(1);
+    expect(fade.update(5010 + D + 0.1)).toBe(1);
+    expect(mesh.material).toBe(base);
+  });
+
+  it("fades out again after hide() → fadeIn(), reaches hidden() after DURATION, and release() restores the base", () => {
+    const base = patched();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), base);
+    const fade = new _spawnFade.SpawnFade(new THREE.Group().add(mesh));
+    const t = 6000;
+    fade.hide(t);
+    fade.fadeIn(undefined, t);
+    expect(fade.update(t + D * 0.5)).toBeGreaterThan(0);
+    fade.fadeOut(t + D * 0.5);
+    expect(fade.hidden(t + D * 0.5)).toBe(false);
+    expect(fade.hidden(t + D * 0.5 + D)).toBe(true);
+    expect(mesh.material).not.toBe(base);
+    fade.release();
+    expect(mesh.material).toBe(base);
+  });
+
   it("shadows a ShaderMaterial's uniforms without copying the shared ones", () => {
     const shared = { value: 0.25 };
     const base = new THREE.ShaderMaterial({ uniforms: { uShared: shared }, vertexShader: "void main() {}", fragmentShader: "void main() {}" });

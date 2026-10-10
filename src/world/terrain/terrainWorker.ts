@@ -76,7 +76,7 @@ export const resetTerrainWorker = (): void => {
   }
 };
 
-/** Visual-only LODs skip flatten pads: a LOD5 chunk spans ~256 pad tiles, and computing them made far
+/** Visual-only LODs skip flatten pads: a LOD4 chunk spans ~64 pad tiles, and computing them made far
  *  city builds ~9× slower (stalling spawning too). */
 export const requestChunkBuild = (lod: LODLevel, centerX: number, centerZ: number): Promise<ChunkBuildResult> => {
   const worker = pickWorker(centerX, centerZ);

@@ -20,7 +20,7 @@ variants per vertex:
 | variant | used by | what it skips |
 |---|---|---|
 | `computeVertexData` | LOD1–2 (they have colliders), the spawn, foliage and dressing workers, the main thread's padded lookups ([`terrain/vertexData.ts`](terrain/vertexData.ts) `getVertexData`, the dressing worker's `getVertexSample`), the server's heightfields and bodies ([`server/src/game/physics/terrain.ts`](../../server/src/game/physics/terrain.ts), `groundBody.ts`, `freeBody.ts`) | nothing |
-| `computeVertexDataFar(x, z, rivers)` | visual-only LODs (`!hasCollider`: LOD3–5) | flatten pads, bridge decks, road fragments, block islands, the inter-city freeway RUNS (the belt stays); with `rivers = false` (`carvesRivers: false`, LOD4–5) also the river field: no channel, river water, bed paint or quay |
+| `computeVertexDataFar(x, z, rivers)` | visual-only LODs (`!hasCollider`: LOD3–4) | flatten pads, bridge decks, road fragments, block islands, the inter-city freeway RUNS (the belt stays); with `rivers = false` (`carvesRivers: false`, LOD4–5) also the river field: no channel, river water, bed paint or quay |
 | `computeVertexDataRaw` ([`flattenPads.ts`](../utils/workers/flattenPads.ts)) | pad candidates, the road-fragment and block-island flood fills, sparse scans, the main thread's `getVertexDataRaw` pre-filter | flatten pads, bridge decks, road fragments, block islands |
 
 `computeVertexDataFar` is `computeVertexDataRaw` with two flags set (`farVisual`, `farDry`), so
@@ -346,7 +346,7 @@ The main thread (`TerrainRenderer.tsx`) writes these arrays into the geometry. I
 | `distanceToFreewayCenter` | `distFreeway` |
 | `freewayAlong` | `freewayAlong` |
 
-Skirt vertices copy their edge vertex's attributes. On LODs with `clampBlendFields` (LOD3–5) the
+Skirt vertices copy their edge vertex's attributes. On LODs with `clampBlendFields` (LOD3–4) the
 sdf is clamped to ±1 and presence to 0..1 before upload. Those are the values where the shader's
 smoothsteps already saturate, and clamping makes them interpolate as a plain cross-fade: unclamped,
 a coarse triangle spanning three zones interpolates every slot below −1, which renders black. LOD1–2

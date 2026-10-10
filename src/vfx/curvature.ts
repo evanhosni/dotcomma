@@ -3,8 +3,8 @@ import { chainMaterialPatch } from "./materialPatch";
 
 /**
  * WORLD CURVATURE (CLAUDE.md → vfx/curvature.ts): a VERTEX effect on the camera-relative
- * view position, applied from exactly five places (terrain vertex.glsl, the water shader, the
- * foliage shader, prepareActorMaterial, prepareDressingMaterial) — never per object, or content floats off
+ * view position, applied from exactly six places (terrain vertex.glsl, the water shader, the
+ * foliage shader, prepareActorMaterial, prepareDressingMaterial, the sprite material) — never per object, or content floats off
  * the ground it stands on. Three easy-to-break rules live in curveViewPos:
  *  1. sink along WORLD down (viewMatrix[1].xyz), not view down — view-y swings the world as the camera pitches;
  *  2. measure HORIZONTAL distance — with 3D distance a tall building overhead sinks as if far away;

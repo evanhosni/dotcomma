@@ -7,7 +7,7 @@
   - `getWindowLightsProgress()` — drives window lights and lamp glow;
   - `getNightIndex()` — changes each nightfall so different windows light;
   - `NIGHT_BLEND_UNIFORM` + `nightDimGLSL()` (darkens by `NIGHT_GROUND_DIM`) for unlit shaders.
-- **Scene lights** ([DayNightLights.tsx](DayNightLights.tsx)): one ambient and one directional light, dimmed by the blend; the directional swings from sun to moon. Only lit materials see them.
+- **Scene lights** ([DayNightLights.tsx](DayNightLights.tsx)): a hemisphere light (cool sky above, warm ground bounce below — so up, side and down faces differ), a key directional that swings from sun to moon, and a dim low fill from off the sun's opposite azimuth (so the two shadow-side walls differ); by night the hemisphere turns neutral and the fill goes out. All dimmed by the blend. Only lit materials see them.
 - **Lamp glow** ([lampGlow.ts](lampGlow.ts)): street lamps and signals light the ground with no real lights.
   - Each source is a `LampHead` (position + index into `LAMP_COLORS`) in `activeLampHeads`.
   - The heads are periodically written into a camera-centered grid texture of `LAMP_CELL_SIZE` cells, one head per cell.

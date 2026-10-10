@@ -104,7 +104,7 @@ Rule of thumb: unique geometry, interaction, or behavior → actor; many + ident
   - Indicators combine by CRISPNESS PRECEDENCE (`combineZoneWeights`), never by plain normalization.
   - A biome fades into its region's BASE by `presence`.
   - The material feather uses the SMALLER side's width.
-  - Only LOD3–5 clamp the blend fields.
+  - Only LOD3–4 clamp the blend fields.
   - `biomeSdf`/`biomePresence` are returned in their OWN buffers, because the pad recursion clobbers the scratch.
   - Widths resolve biome → region → domain default.
   - Every vertex attribute is FINITE (`RIVER_BED_FAR`, `BIOME_SDF_FAR`): one Infinity vertex makes the whole triangle NaN, and Metal's fast-math compares took it as true (the Mac's dark seam triangles).
@@ -157,6 +157,7 @@ src/
                          + the distance-gated collider bodies                                dressing/README.md
       enumerators.ts     DRESSING_ENUMERATORS (name → placement); catalog.ts = DRESSING_COLLIDER_SPECS; types.ts (Three-free)
       street-lamps/ road-markers/ traffic-lights/ power-lines/ bridges/   one folder + README per feature
+    sprite-lod/          far billboards (one instanced mesh per look), handed off by spawn-point id  sprite-lod/README.md
     foliage/             FOLIAGE class: Foliage.tsx (pipeline + createFoliage), foliageLod.ts (bands,
                          taper), foliageMaterial.ts (the shader)                             foliage/README.md
       grass/GrassField.tsx  the one plant
@@ -205,7 +206,7 @@ CHANGES.md, SERVER_CHANGES.md  history logs
 2. New chunks queued → `buildChunk()` async generator
 3. Per-vertex: `computeVertexData` (or its raw/far variants). The full ordered journey of one vertex — every height step (warp, zones, city, lakes/shore, river carve, freeway grade, pads, deck cut, fragments), what each overrides, the uploaded attributes and the fragment shader's mix order — is [`src/world/VERTEX_JOURNEY.md`](src/world/VERTEX_JOURNEY.md)
 4. Geometry buffers written, normals computed, skirt vertices set
-5. LOD swaps CROSS-FADE (`lodSwaps.ts`): the old and new chunks are drawn together with a complementary screen-door dither, and only fading chunks use the `discard` FADE TWIN material. Colliders keep their own lifecycle. → terrain/DECISIONS.md
+5. LOD swaps CROSS-FADE (`lodSwaps.ts`): the old and new chunks are drawn together with a complementary screen-door dither, and only fading chunks use the `discard` FADE TWIN material (chunks reaching the far fade use a far-fade twin: the ground dithers out over the last 72% of `camera.far`). Colliders keep their own lifecycle. → terrain/DECISIONS.md
 
 ### Actor Spawn Lifecycle
 
@@ -238,6 +239,7 @@ Each flow's step-by-step checklist lives in the README of the folder it touches;
 | an NPC | 2 new (`stateMachine.ts`, `spec.ts`) + 1 line in a biome's `actors` — placing it IS cataloging it; nothing on the server | same, and [NPC_TRACKING.md](NPC_TRACKING.md) §6 |
 | an NPC with scene logic | + 1 component, 2 registration lines (`ACTOR_COMPONENTS`, `ActorComponentName`), `component` on the spec; `withModelActorWarmup` | [actors/README.md](src/objects/actors/README.md) |
 | a building variant | 2 edits: a spec in `building/spec.ts` + a biome mount (flatten pads and the server's hull follow) | [building/README.md](src/objects/actors/building/README.md) |
+| a far sprite | `spriteLod` on the spec + a describer + a `SpriteLook` | [sprite-lod/README.md](src/objects/sprite-lod/README.md) |
 | a plant | 1 new (`<Name>Field.tsx` = `createFoliage`) + 1 mount; its own `seed` | [foliage/README.md](src/objects/foliage/README.md) |
 | a dressing feature | 1 new component + 1 mount (density-placed); + an enumerator function, its re-export, one `DRESSING_ENUMERATORS` entry and a test (structured) | [dressing/README.md](src/objects/dressing/README.md) |
 | …solid (client + server colliders) | + a Three-free `*Spec.ts` + 1 `DRESSING_COLLIDER_SPECS` line; the component calls `useSolidDressing`; placement lives in the spec only | same |
@@ -247,7 +249,7 @@ Each flow's step-by-step checklist lives in the README of the folder it touches;
 | a dev toggle | 1 `DEV_TOGGLES` entry | [context/README.md](src/context/README.md) |
 | a saved field | 1 `SaveData` field + `saveToDevice`/`saveToAccount` | [save/README.md](src/save/README.md) |
 | a CRT page | 1 `EXTRA_PAGES` line (a region's page is automatic) | [home/README.md](src/world/domains/home/README.md) |
-| a world-wide VFX | a patcher in `vfx/` + a `<PostProcessing>` prop + the five class-base call sites | [vfx/README.md](src/vfx/README.md) |
+| a world-wide VFX | a patcher in `vfx/` + a `<PostProcessing>` prop + the six class-base call sites | [vfx/README.md](src/vfx/README.md) |
 | a network message | `protocol.ts` + server validation/handler + a client sender/listener | [net/README.md](src/net/README.md) |
 | a domain (a genuinely separate page — today only `home`) | `domain.tsx` + its regions + `DOMAIN_IDS`, `DOMAIN_COMPONENTS`, `DOMAIN_REGIONS` entries (the compiler asks for the last two) + its path in `navigation.ts` | [domains/README.md](src/world/domains/README.md) |
 
@@ -271,6 +273,7 @@ Rules no checklist can enforce:
 - `scene.matrixAutoUpdate = false`: static content is frozen with `freezeStaticSubtree`, including its parent.
 - Generation is time-budgeted, nearest-first, and never waits for terrain.
 - Player movement (`physics/characterMovement.ts`, shared with server NPCs): slope bands ≤ 25° / 25–45° / slide > 40°, ray-gated support. Never weaken the fall-through defenses (fall clamp, substepping, contact offset, the analytic backstop). → physics/DECISIONS.md
+- LOD tiers are each a `renderDistance` under one spawn/despawn rule (`spawning/radii.ts`). Past its own, an actor spawn-fades into its sprite (by spawn-point id, COMPLEMENTARY pixels). → building/DECISIONS.md
 - Buildings are never without a collider (detail < 120u, a sealed convex hull beyond). An NPC frozen inside a far building is DELIBERATE. → building/DECISIONS.md
 
 ## UI / Overlay Styling

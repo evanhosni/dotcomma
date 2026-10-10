@@ -202,7 +202,7 @@ let farVisual = false;
 let farDry = false;
 const NO_RUNS: WallNetwork["freeways"] = [];
 
-/** A vertex of a far visual-only terrain LOD (LOD3–5, no collider): pad-free like
+/** A vertex of a far visual-only terrain LOD (LOD3–4, no collider): pad-free like
  *  computeVertexDataRaw, and blind to the inter-city freeway RUNS (a 14u road cannot be resolved
  *  between such vertices; routing them was half of the startup ring's worker time). With `rivers`
  *  false (LODLevel.carvesRivers) it is blind to the river field too — no channel, water, bed paint or

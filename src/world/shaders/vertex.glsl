@@ -28,6 +28,7 @@ varying float vHeight;
 varying vec3 vWorldNormal;
 varying vec3 vWorldPosWrapped;
 varying vec3 vWorldPosAbs;
+varying float vFarDistance;
 varying float vSkirt;
 
 // quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
@@ -81,5 +82,6 @@ void main() {
   vHeight = worldPos.y;
 
   vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldPos - wrapOrigin);
+  vFarDistance = farFadeDistance(viewPos);
   gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);
 }

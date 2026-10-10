@@ -6,8 +6,14 @@
  *   IN:  { type: "GENERATE_SPAWNS", id: number, chunkKeys: string[], descriptors: SerializedDescriptor[] }
  *   IN:  { type: "CLEANUP", playerX: number, playerZ: number, cleanupRadius: number }
  *   IN:  { type: "UPDATE_FOOTPRINT", maxFootprint: number }
+ *   IN:  { type: "GENERATE_SPRITES", id: number, chunkKeys: string[], descriptors: SerializedDescriptor[],
+ *          kinds: SpriteKindSource[], budgetMs: number, forget: { x: number, z: number, distance: number } }
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "SPAWNS_RESULT", id: number, points: SpawnPoint[] }
+ *   OUT: { type: "SPRITES_RESULT", id: number, chunks: SpriteChunkResult[] }
+ *
+ * GENERATE_SPRITES runs on the sprite tier's own instances of this worker (sprite-lod/spriteWorker.ts): the
+ * same placement, then each sprite kind's describer per point.
  */
 
 import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, outsideBiomes, riverKeepOff } from "./vertexCompute";
@@ -16,6 +22,9 @@ import { slopeDegreesAt } from "./densityPoints";
 import { SPAWN_CHUNK_SIZE } from "./constants";
 // Type-only: keeps the React-dependent module out of the worker bundle.
 import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
+import { describeChunkSprites } from "../../objects/sprite-lod/describers";
+import { chunkGap } from "../../objects/sprite-lod/utils";
+import type { SpriteChunkResult, SpriteKindSource } from "../../objects/sprite-lod/types";
 
 class SpatialHash {
   private cellSize: number;
@@ -115,6 +124,16 @@ interface CachedChunk {
 
 const chunkCache = new Map<string, CachedChunk>();
 
+/** Evicts from the hash too: stale copies block their own deterministic regeneration (every candidate
+ *  lands on its old copy and fails spacing). */
+const forgetChunk = (key: string, entry: CachedChunk): void => {
+  if (entry.inHash) {
+    for (const p of entry.points) spatialHash!.remove(p);
+    entry.inHash = false;
+  }
+  chunkCache.delete(key);
+};
+
 /** Every flatten-pad point of a chunk (getFlattenPoints returns all descriptors' at once), bucketed
  *  by descriptor id in the engine's order. */
 const flattenPointsByDescriptor = (chunkMinX: number, chunkMinZ: number): Map<string, FlattenPoint[]> => {
@@ -184,6 +203,12 @@ const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunk
   }
 };
 
+/** A chunk key, `${cx}_${cz}`, to its min corner. */
+const chunkMinOf = (chunkKey: string): [number, number] => {
+  const sep = chunkKey.indexOf("_");
+  return [Number(chunkKey.slice(0, sep)) * SPAWN_CHUNK_SIZE, Number(chunkKey.slice(sep + 1)) * SPAWN_CHUNK_SIZE];
+};
+
 const generateForChunk = (
   chunkKey: string,
   descriptorsByPriority: SerializedDescriptor[] // pre-sorted by priority (once per message)
@@ -197,11 +222,7 @@ const generateForChunk = (
     return cached.points;
   }
 
-  const sep = chunkKey.indexOf("_");
-  const cx = Number(chunkKey.slice(0, sep));
-  const cz = Number(chunkKey.slice(sep + 1));
-  const chunkMinX = cx * SPAWN_CHUNK_SIZE;
-  const chunkMinZ = cz * SPAWN_CHUNK_SIZE;
+  const [chunkMinX, chunkMinZ] = chunkMinOf(chunkKey);
 
   const chunkPoints: SpawnPoint[] = [];
   // Fetched once per chunk, on the first flatten descriptor; consumption in priority order keeps
@@ -223,6 +244,25 @@ const generateForChunk = (
     inHash: true,
   });
   return chunkPoints;
+};
+
+/** One chunk's sprites. A throw (placement or a describer) is logged and answered as a failed chunk: the
+ *  client retries it, then loads it empty, so it never stalls. */
+const describeSpriteChunk = (
+  key: string,
+  descriptorsByPriority: SerializedDescriptor[],
+  kinds: ReadonlyMap<string, SpriteKindSource>,
+  transfer: Transferable[],
+): SpriteChunkResult => {
+  try {
+    const [chunkMinX, chunkMinZ] = chunkMinOf(key);
+    const looks = describeChunkSprites(generateForChunk(key, descriptorsByPriority), kinds, chunkMinX, chunkMinZ);
+    for (const look of looks) transfer.push(look.instances.buffer);
+    return { key, failed: false, looks };
+  } catch (error) {
+    console.error(`[sprite-lod] generating chunk ${key} failed:`, error);
+    return { key, failed: true, looks: [] };
+  }
 };
 
 self.onmessage = (e: MessageEvent) => {
@@ -268,6 +308,33 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
+  if (type === "GENERATE_SPRITES") {
+    const { id, chunkKeys, descriptors, kinds, budgetMs, forget } = e.data;
+    if (!initialized) {
+      (self as any).postMessage({ type: "SPRITES_RESULT", id, chunks: [] });
+      return;
+    }
+    // The client's rule: a chunk is forgotten once its nearest edge is past the drop distance.
+    chunkCache.forEach((entry, key) => {
+      const minX = entry.centerX - SPAWN_CHUNK_SIZE / 2;
+      const minZ = entry.centerZ - SPAWN_CHUNK_SIZE / 2;
+      if (chunkGap(forget.x, forget.z, minX, minZ) > forget.distance) forgetChunk(key, entry);
+    });
+
+    const deadline = performance.now() + budgetMs;
+    const descriptorsByPriority = ([...descriptors] as SerializedDescriptor[]).sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50));
+    const kindsById = new Map((kinds as SpriteKindSource[]).map((kind) => [kind.id, kind]));
+    const chunks: SpriteChunkResult[] = [];
+    const transfer: Transferable[] = [];
+    for (const key of chunkKeys as string[]) {
+      chunks.push(describeSpriteChunk(key, descriptorsByPriority, kindsById, transfer));
+      // After the first chunk, so an over-budget chunk still makes progress.
+      if (performance.now() >= deadline) break;
+    }
+    (self as any).postMessage({ type: "SPRITES_RESULT", id, chunks }, transfer);
+    return;
+  }
+
   if (type === "CLEANUP") {
     const { playerX, playerZ, cleanupRadius } = e.data;
     const cleanupRadiusSq = cleanupRadius * cleanupRadius;
@@ -277,14 +344,7 @@ self.onmessage = (e: MessageEvent) => {
       const dx = playerX - entry.centerX;
       const dz = playerZ - entry.centerZ;
       if (dx * dx + dz * dz <= cleanupRadiusSq) return;
-
-      // Evict from the hash too: stale copies block their own deterministic
-      // regeneration (every candidate lands on its old copy and fails spacing).
-      if (entry.inHash) {
-        for (const p of entry.points) spatialHash!.remove(p);
-        entry.inHash = false;
-      }
-      chunkCache.delete(key);
+      forgetChunk(key, entry);
     });
     return;
   }

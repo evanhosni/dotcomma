@@ -19,6 +19,8 @@ import {
   glslFloat,
 } from "./constants";
 import { LOD_FADE_DEFINE, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "./lodFade";
+import { FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM } from "./farFade";
+import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "./skirtTint";
 
 // THE TERRAIN FRAGMENT SHADER GENERATOR: every region's base shader and every biome's shader become
@@ -213,10 +215,17 @@ const crispnessTiers = (slots: number[], halfOf: (k: number) => number): number[
   return tiers;
 };
 
-/** Everything that is not a biome frag: the LOD fade, the scene's point lights. */
-const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#ifdef ${LOD_FADE_DEFINE}
+/** Everything that is not a biome frag: the LOD and far fades, the scene's point lights. */
+const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || defined(${FAR_FADE_DEFINE})
+      ${SCREEN_DOOR_GLSL}
+    #endif
+    #ifdef ${LOD_FADE_DEFINE}
       uniform vec2 ${LOD_FADE_UNIFORM};
       ${LOD_FADE_GLSL}
+    #endif
+    #ifdef ${FAR_FADE_DEFINE}
+      uniform vec2 ${FAR_FADE_UNIFORM};
+      ${FAR_FADE_GLSL}
     #endif
 
     #if NUM_POINT_LIGHTS > 0
@@ -423,6 +432,10 @@ export const combineBiomeMaterials = async (
       // A chunk mid LOD swap draws its fade twin, which keeps only its dither share (world/terrain/lodSwaps.ts).
       #ifdef ${LOD_FADE_DEFINE}
       if (lodFadeDiscards(${LOD_FADE_UNIFORM})) discard;
+      #endif
+      // The far chunks dissolve into the sky before the far plane (world/shaders/farFade.ts).
+      #ifdef ${FAR_FADE_DEFINE}
+      if (farFadeDiscards(vFarDistance, ${FAR_FADE_UNIFORM})) discard;
       #endif
       vec4 blended = vec4(0.0);
       float weightSum = 0.0;

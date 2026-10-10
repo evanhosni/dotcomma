@@ -20,6 +20,15 @@ export const DEFAULT_EXTERIOR_MATERIAL = new THREE.MeshStandardMaterial({
 // hashed against a per-night seed so a different subset lights each night.
 const WINDOW_LIGHTS_UNIFORM = { value: 0 };
 const NIGHT_SEED_UNIFORM = { value: 0 };
+/** The same uniform objects for every material that lights windows (the exterior, the far sprite), so one
+ *  value drives both. */
+export const WINDOW_LIGHT_UNIFORMS = { uWindowLights: WINDOW_LIGHTS_UNIFORM, uNightSeed: NIGHT_SEED_UNIFORM };
+/** The night window rule, shared with the far sprite (buildingSpriteLook.ts) so both light alike: a lit
+ *  window's color and glow, and tonight's roll for a window's stable random. */
+export const LIT_WINDOW_COLOR_GLSL = "vec3(1.0, 0.78, 0.28)";
+export const WINDOW_GLOW_COLOR_GLSL = "vec3(1.0, 0.85, 0.1)";
+export const nightWindowRollGLSL = (random: string): string => `fract(sin((${random} * 91.17 + uNightSeed) * 47.53) * 43758.5453)`;
+
 DEFAULT_EXTERIOR_MATERIAL.onBeforeCompile = (shader) => {
   shader.uniforms.uWindowLights = WINDOW_LIGHTS_UNIFORM;
   shader.uniforms.uNightSeed = NIGHT_SEED_UNIFORM;
@@ -38,7 +47,7 @@ DEFAULT_EXTERIOR_MATERIAL.onBeforeCompile = (shader) => {
     .replace(
       "#include <begin_vertex>",
       `#include <begin_vertex>
-      float winRoll = fract(sin((fract(aWindow.x) * 91.17 + uNightSeed) * 47.53) * 43758.5453);
+      float winRoll = ${nightWindowRollGLSL("fract(aWindow.x)")};
       float winOrder = winRoll / max(aWindow.y, 1e-3);
       // The last step gates progress == 0: a hash landing exactly on 0 would
       // otherwise satisfy step(winOrder, 0) and glow in daylight.
@@ -63,12 +72,12 @@ DEFAULT_EXTERIOR_MATERIAL.onBeforeCompile = (shader) => {
     .replace(
       "#include <color_fragment>",
       `#include <color_fragment>
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.78, 0.28), vWindowLit);`,
+      diffuseColor.rgb = mix(diffuseColor.rgb, ${LIT_WINDOW_COLOR_GLSL}, vWindowLit);`,
     )
     .replace(
       "#include <emissivemap_fragment>",
       `#include <emissivemap_fragment>
-      totalEmissiveRadiance += vec3(1.0, 0.85, 0.1) * vWindowGlow;`,
+      totalEmissiveRadiance += ${WINDOW_GLOW_COLOR_GLSL} * vWindowGlow;`,
     );
 };
 
