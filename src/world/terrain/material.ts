@@ -8,11 +8,12 @@ import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainPar
 import { combineBiomeMaterials } from "../shaders/combineBiomeMaterials";
 import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
+import { FAR_DISTANCE_GLSL, FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS } from "../shaders/farFade";
 import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
 
 // The raw .glsl asset can't import the shared chunks, so they are prepended here.
-const vertexShader = `${_quantization.QUANTIZE_GLSL}\n${_curvature.CURVE_GLSL}\n${terrainVertexBody}`;
+const vertexShader = `${_quantization.QUANTIZE_GLSL}\n${_curvature.CURVE_GLSL}\n${FAR_DISTANCE_GLSL}\n${terrainVertexBody}`;
 
 /** Two vec4 attributes carry the per-biome signed distances (two more the presences, two the riverbed's). */
 export const MAX_BIOME_SLOTS = 8;
@@ -79,6 +80,7 @@ export const getMaterial = async () => {
       "varying vec3 vWorldNormal;",
       "varying vec3 vWorldPosWrapped;",
       "varying vec3 vWorldPosAbs;",
+      "varying float vFarDistance;",
       "varying float vSkirt;",
     ],
   });
@@ -88,18 +90,28 @@ export const getMaterial = async () => {
   // it; assigned here (vertex-only) to stay out of the generated fragment block.
   material.uniforms.uCurveStart = _curvature.uniforms.uCurveStart;
   material.uniforms.uCurveK = _curvature.uniforms.uCurveK;
+  // Read only by the variants compiled with FAR_FADE_DEFINE.
+  material.uniforms[FAR_FADE_UNIFORM] = FAR_FADE_UNIFORMS[FAR_FADE_UNIFORM];
 
   return material;
 };
 
-/** The terrain material's LOD cross-fade twin (lodSwaps.ts): the same shader with the dither
- *  `discard` compiled in, drawn only by chunks mid-fade. Every uniform object is SHARED with the
- *  opaque material except the per-mesh dither range. */
-export const createLodFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
+/** The same program source with extra defines: every uniform object is SHARED with the base. */
+const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, string>, uniforms: Record<string, THREE.IUniform> = {}): THREE.ShaderMaterial =>
   new THREE.ShaderMaterial({
-    uniforms: { ...base.uniforms, [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } },
-    defines: { ...base.defines, [LOD_FADE_DEFINE]: "" },
+    uniforms: { ...base.uniforms, ...uniforms },
+    defines: { ...base.defines, ...defines },
     vertexShader: base.vertexShader,
     fragmentShader: base.fragmentShader,
     lights: base.lights,
   });
+
+/** The opaque material of chunks reaching the far fade (lodConfig.ts chunkReachesFarFade): the far-fade `discard` compiled in. Its own
+ *  program, so the near terrain keeps its early depth test. */
+export const createFarFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial => terrainVariant(base, { [FAR_FADE_DEFINE]: "" });
+
+/** The terrain material's LOD cross-fade twin (lodSwaps.ts): the dither `discard` compiled in, drawn only by
+ *  chunks mid-fade. It carries the far fade too, so a far chunk mid-swap still dissolves at the horizon. Every
+ *  uniform object is SHARED with the opaque material except the per-mesh dither range. */
+export const createLodFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
+  terrainVariant(base, { [LOD_FADE_DEFINE]: "", [FAR_FADE_DEFINE]: "" }, { [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } });

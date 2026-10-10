@@ -53,3 +53,8 @@ export const bedYieldsToSteepGround = (noise: { dome?: unknown } | undefined): b
  *  riverbed as a dark triangle on the Mac (D3D's IEEE compare hid it on Windows). Far enough that a
  *  triangle mixing it with any in-field distance never crosses the paint reach. */
 export const RIVER_BED_FAR = 1e4;
+
+/** The ground dithers out over this last share of the camera's far distance (world/shaders/farFade.ts): six times
+ *  the building sprites' share, at Evan's request, for a gradual horizon (eased, so still ~90% solid at 3km). Here,
+ *  not there: lodConfig.ts gates its chunks on it, and the server imports lodConfig (Three-free). */
+export const FAR_FADE_FRACTION = 0.72;

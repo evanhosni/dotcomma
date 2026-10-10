@@ -1,4 +1,4 @@
-import { LOD5_CHUNK_SIZE } from "./lodConfig";
+import { LOD4_CHUNK_SIZE } from "./lodConfig";
 import type { SwapChunk } from "./lodSwaps";
 
 const overlaps = (a: SwapChunk, b: SwapChunk): boolean => {
@@ -15,7 +15,7 @@ const overlaps = (a: SwapChunk, b: SwapChunk): boolean => {
 // Tile = the largest chunk size, so any chunk spans at most 2×2 tiles. Scanning the whole set per
 // overlap query was O(chunks × queue), which grows into the hundreds on both sides when the player
 // outruns generation.
-const INDEX_TILE = LOD5_CHUNK_SIZE;
+const INDEX_TILE = LOD4_CHUNK_SIZE;
 
 /** Coarse spatial index over chunks. A chunk may sit in several buckets: forEachOverlap can repeat one. */
 export class ChunkIndex<C extends SwapChunk> {

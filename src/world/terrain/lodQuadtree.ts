@@ -1,4 +1,4 @@
-import { CHUNK_SIZE, LOD5_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
+import { CHUNK_SIZE, LOD3_CHUNK_SIZE, LOD4_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
 
 export type DesiredChunks = { [key: string]: { position: number[]; lod: LODLevel } };
 
@@ -6,9 +6,8 @@ const lodBySize: { [size: number]: LODLevel } = {};
 for (const lod of LOD_LEVELS) lodBySize[lod.chunkSize] = lod;
 
 const subdivideThreshold: { [size: number]: number } = {
-  [LOD5_CHUNK_SIZE]: LOD_LEVELS[3].maxDistance, // 3360 subdivides at LOD4.maxDist (6720)
-  [LOD5_CHUNK_SIZE / 2]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
-  [LOD5_CHUNK_SIZE / 4]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
+  [LOD4_CHUNK_SIZE]: LOD_LEVELS[2].maxDistance, // 1680 subdivides at LOD3.maxDist (3360)
+  [LOD3_CHUNK_SIZE]: LOD_LEVELS[1].maxDistance, // 840 subdivides at LOD2.maxDist (1680)
 };
 
 /** Distance from (px, pz) to the nearest point of the square [ox, ox + size] × [oz, oz + size]. */
@@ -18,7 +17,7 @@ const distanceToSquare = (ox: number, oz: number, size: number, px: number, pz: 
   return Math.sqrt((clampedX - px) ** 2 + (clampedZ - pz) ** 2);
 };
 
-/** The quadtree's leaves around the player: a PARTITION of every LOD5 root within the render disc,
+/** The quadtree's leaves around the player: a PARTITION of every LOD4 root within the render disc,
  *  keyed `${level}/${gx}/${gz}`. */
 export const computeDesiredChunks = (playerX: number, playerZ: number): DesiredChunks => {
   const desired: DesiredChunks = {};
@@ -49,7 +48,7 @@ export const computeDesiredChunks = (playerX: number, playerZ: number): DesiredC
     desired[`${lod.level}/${gx}/${gz}`] = { position: [cx, cz], lod };
   };
 
-  const rootSize = LOD5_CHUNK_SIZE;
+  const rootSize = LOD4_CHUNK_SIZE;
   const radius = Math.ceil(MAX_RENDER_DISTANCE / rootSize);
   const rootGX = Math.floor(playerX / rootSize);
   const rootGZ = Math.floor(playerZ / rootSize);

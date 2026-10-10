@@ -7,6 +7,7 @@ The terrain is ONE `ShaderMaterial` whose fragment shader is generated at domain
 - [vertex.glsl](vertex.glsl): passes the worker's per-vertex attributes through as varyings; builds world position as a wrapped chunk origin plus a local offset (never an absolute float32 coordinate); applies quantization and curvature.
 - [common.glsl](common.glsl): helpers for every fragment: `hash`, `valueNoise`, `worldFbm`, `triplanarSample`, `slopeBlendedSample` (the flat texture read fading into a triplanar one on steep ground) and `fakeSunLight` (the unlit ground's directional shade).
 - [lodFade.ts](lodFade.ts): `lodFadeDiscards`, the LOD cross-fade screen door.
+- [farFade.ts](farFade.ts): `farFadeDiscards`, the ground's far fade. Terrain and water dither out over the last `FAR_FADE_FRACTION` (72%, [constants.ts](constants.ts)) of the LIVE `camera.far`, measured as the horizontal camera distance (`vFarDistance`, taken in the vertex stage before curvature). Both fades share one `SCREEN_DOOR_GLSL` per shader.
 - [constants.ts](constants.ts): `WORLD_WRAP`, `TERRAIN_TEXTURE_TILE`, `glslFloat`, `FREEWAY_CORRIDOR_INNER`/`FREEWAY_CORRIDOR_OUTER`, `RIVER_BED_SLOPE_START_DEG`/`RIVER_BED_SLOPE_END_DEG`.
 - [../terrain/material.ts](../terrain/material.ts) (`getMaterial`): prepends the quantization/curvature chunks and sets the `defines` (`WORLD_WRAP`, `TEXTURE_TILE`, `ROAD_HALF_WIDTH`, `FREEWAY_HALF_WIDTH`, `RIVER_HALF_WIDTH`, `RIVER_BED_REACH`).
 - [combineBiomeMaterials.ts](combineBiomeMaterials.ts) generates the fragment shader:

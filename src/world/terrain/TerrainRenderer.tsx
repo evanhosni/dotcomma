@@ -21,10 +21,11 @@ import {
 } from "./buildRequests";
 import { releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
 import { createChunkPlane, ensureWaterMesh, generateColliders, releaseWater, syncLodFade } from "./chunkObjects";
-import { LODLevel } from "./lodConfig";
+import { chunkReachesFarFade, LODLevel } from "./lodConfig";
 import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
 import { FADE_OPAQUE_HI, LOD_FADE_SECONDS, LodSwapper, SwapHooks } from "./lodSwaps";
-import { createLodFadeMaterial, getMaterial } from "./material";
+import { createFarFadeMaterial, createLodFadeMaterial, getMaterial } from "./material";
+import { setFarFade } from "../shaders/farFade";
 import { ensureTerrainWorker, resetTerrainWorker } from "./terrainWorker";
 import { Chunk, TerrainState } from "./types";
 
@@ -47,6 +48,9 @@ if (process.env.NODE_ENV !== "production") (window as any).__terrainLod = { swap
 // and the whole pass is skipped once queues are drained — the quadtree
 // descent (~270 leaves, ~800 allocations) otherwise ran every parked frame.
 const DESIRED_MOVE_EPS_SQ = 8 * 8;
+/** Travel a chunk's far-fade gate allows between re-checks (they run with every desired-set recompute, every
+ *  DESIRED_MOVE_EPS; a pass can lag behind a build). */
+const FAR_FADE_GATE_MARGIN = 64;
 let cachedDesired: DesiredChunks | null = null;
 let desiredAtX = Infinity;
 let desiredAtZ = Infinity;
@@ -204,6 +208,13 @@ export const TerrainRenderer = () => {
   /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
    *  opaque terrain its early depth test). */
   const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+  /** The opaque variant with the far fade's `discard`, for chunks reaching the fade (lodConfig.ts chunkReachesFarFade). */
+  const farMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+  const opaqueMaterialFor = (chunk: Chunk, base: THREE.Material): THREE.Material => {
+    const { x, z } = camera.position;
+    const far = chunkReachesFarFade(chunk.offset.x, chunk.offset.z, chunk.lod.chunkSize, x, z, FAR_FADE_GATE_MARGIN);
+    return (far && farMaterialRef.current) || base;
+  };
 
   // Devmode seam diagnostics (terrain/README.md).
   const { tintSkirts, noLodFade } = useDevContext();
@@ -251,7 +262,7 @@ export const TerrainRenderer = () => {
     destroy: destroyChunk,
     redraw: (chunk) => {
       chunk.plane.visible = chunk.drawn;
-      const material = chunk.transition !== null ? fadeMaterialRef.current : terrainMaterial;
+      const material = chunk.transition !== null ? fadeMaterialRef.current : terrainMaterial && opaqueMaterialFor(chunk, terrainMaterial);
       if (material) chunk.plane.material = material;
     },
   };
@@ -265,8 +276,10 @@ export const TerrainRenderer = () => {
     getMaterial().then((material) => {
       if (unmounted) return;
       const fade = createLodFadeMaterial(material);
+      const far = createFarFadeMaterial(material);
       fadeMaterialRef.current = fade;
-      cancelWarm = warmPrograms(scene, [meshTemplate(material), meshTemplate(fade)], () => setTerrainMaterial(material));
+      farMaterialRef.current = far;
+      cancelWarm = warmPrograms(scene, [meshTemplate(material), meshTemplate(fade), meshTemplate(far)], () => setTerrainMaterial(material));
     });
     return () => {
       unmounted = true;
@@ -276,6 +289,7 @@ export const TerrainRenderer = () => {
 
   useFrame(({ clock }, delta) => {
     tickWater(clock.elapsedTime);
+    setFarFade((camera as THREE.PerspectiveCamera).far);
     // Every frame, even while an update pass is awaiting a build: a fade is timed in frames' delta.
     swapper.tick(delta, swapHooks);
     if (!terrainMaterial) {
@@ -309,6 +323,10 @@ export const TerrainRenderer = () => {
       cachedDesired = computeDesiredChunks(playerX, playerZ);
       desiredAtX = playerX;
       desiredAtZ = playerZ;
+      // The far-fade gate is per chunk and the player moved: re-pick every settled chunk's opaque variant.
+      for (const chunk of terrain.chunks.values()) {
+        if (chunk.transition === null && chunk.drawn) chunk.plane.material = opaqueMaterialFor(chunk, material);
+      }
     }
     const desiredChunks = cachedDesired!;
 
@@ -380,7 +398,7 @@ export const TerrainRenderer = () => {
     if (result.waterHeights) writeWaterBuffers(ensureWaterMesh(chunk).geometry, geom, lod, result.heights, result.waterHeights);
     else releaseWater(chunk);
 
-    chunk.plane.material = material;
+    chunk.plane.material = opaqueMaterialFor(chunk, material);
     chunk.plane.position.set(offset.x, 0, offset.z);
     chunk.plane.updateMatrix();
 

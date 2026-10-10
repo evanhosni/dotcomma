@@ -104,7 +104,7 @@ Rule of thumb: unique geometry, interaction, or behavior → actor; many + ident
   - Indicators combine by CRISPNESS PRECEDENCE (`combineZoneWeights`), never by plain normalization.
   - A biome fades into its region's BASE by `presence`.
   - The material feather uses the SMALLER side's width.
-  - Only LOD3–5 clamp the blend fields.
+  - Only LOD3–4 clamp the blend fields.
   - `biomeSdf`/`biomePresence` are returned in their OWN buffers, because the pad recursion clobbers the scratch.
   - Widths resolve biome → region → domain default.
   - Every vertex attribute is FINITE (`RIVER_BED_FAR`, `BIOME_SDF_FAR`): one Infinity vertex makes the whole triangle NaN, and Metal's fast-math compares took it as true (the Mac's dark seam triangles).
@@ -206,7 +206,7 @@ CHANGES.md, SERVER_CHANGES.md  history logs
 2. New chunks queued → `buildChunk()` async generator
 3. Per-vertex: `computeVertexData` (or its raw/far variants). The full ordered journey of one vertex — every height step (warp, zones, city, lakes/shore, river carve, freeway grade, pads, deck cut, fragments), what each overrides, the uploaded attributes and the fragment shader's mix order — is [`src/world/VERTEX_JOURNEY.md`](src/world/VERTEX_JOURNEY.md)
 4. Geometry buffers written, normals computed, skirt vertices set
-5. LOD swaps CROSS-FADE (`lodSwaps.ts`): the old and new chunks are drawn together with a complementary screen-door dither, and only fading chunks use the `discard` FADE TWIN material. Colliders keep their own lifecycle. → terrain/DECISIONS.md
+5. LOD swaps CROSS-FADE (`lodSwaps.ts`): the old and new chunks are drawn together with a complementary screen-door dither, and only fading chunks use the `discard` FADE TWIN material (chunks reaching the far fade use a far-fade twin: the ground dithers out over the last 72% of `camera.far`). Colliders keep their own lifecycle. → terrain/DECISIONS.md
 
 ### Actor Spawn Lifecycle
 
