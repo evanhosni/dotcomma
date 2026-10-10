@@ -1,7 +1,5 @@
-/** Floats a look's describer fills per instance. */
-export const SPRITE_DATA_FLOATS = 28;
-/** The prefix of them that reaches the fragment stage: varyings are scarce. */
-export const FRAGMENT_DATA_FLOATS = 16;
+/** Floats a look's describer fills per instance (a multiple of 4: one vec4 attribute and varying each). */
+export const SPRITE_DATA_FLOATS = 20;
 
 // One instance: offset xyz (chunk-relative from the worker, rebase-relative once loaded), size (width,
 // height), the LOD vec4 (detail, renderDistance, born, a spare slot that keeps the data vec4-aligned),

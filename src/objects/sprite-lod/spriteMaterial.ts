@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { _curvature } from "../../vfx/curvature";
 import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { chainMaterialPatch } from "../../vfx/materialPatch";
-import { FRAGMENT_DATA_FLOATS, SPRITE_DATA_FLOATS, SPRITE_UNPACK_GLSL } from "./layout";
+import { SPRITE_DATA_FLOATS, SPRITE_UNPACK_GLSL } from "./layout";
 import type { SpriteLook } from "./types";
 
 /**
@@ -28,20 +28,18 @@ export const SPRITE_UNIFORMS = {
   uSpriteTime: { value: 0 },
 };
 
-const VERTEX_VECS = SPRITE_DATA_FLOATS / 4;
-const FRAGMENT_VECS = FRAGMENT_DATA_FLOATS / 4;
+const DATA_VECS = SPRITE_DATA_FLOATS / 4;
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
 
-const sharedDeclarations = (look: SpriteLook, dataVecs: number): string => /* glsl */ `
+const sharedDeclarations = (look: SpriteLook): string => /* glsl */ `
   uniform vec3 uSpriteCamera;
   uniform float uSpriteTime;
   varying vec2 vSpriteUv;
   flat varying vec2 vSpriteSize;
   flat varying float vSpriteDetail;
   flat varying float vSpriteVisibility;
-  ${range(FRAGMENT_VECS).map((i) => `flat varying vec4 vSpriteData${i};`).join("\n")}
-  ${(look.flatVaryings ?? []).map((declaration) => `flat varying ${declaration};`).join("\n")}
-  vec4 spriteData[${dataVecs}];
+  ${range(DATA_VECS).map((i) => `flat varying vec4 vSpriteData${i};`).join("\n")}
+  vec4 spriteData[${DATA_VECS}];
   float spriteDatum(int i) { return spriteData[i / 4][i % 4]; }
   ${SPRITE_UNPACK_GLSL}
   ${look.header ?? ""}
@@ -51,25 +49,22 @@ const vertexHeader = (look: SpriteLook): string => /* glsl */ `
   attribute vec3 aSpriteOffset;
   attribute vec2 aSpriteSize;
   attribute vec4 aSpriteLod; // detail, renderDistance, born, spare
-  ${range(VERTEX_VECS).map((i) => `attribute vec4 aSpriteData${i};`).join("\n")}
-  ${sharedDeclarations(look, VERTEX_VECS)}
+  ${range(DATA_VECS).map((i) => `attribute vec4 aSpriteData${i};`).join("\n")}
+  ${sharedDeclarations(look)}
 `;
 
 // Replaces beginnormal_vertex: everything below needs the view direction.
-const vertexSetup = (look: SpriteLook): string => /* glsl */ `
-  ${range(VERTEX_VECS).map((i) => `spriteData[${i}] = aSpriteData${i};`).join("\n")}
+const VERTEX_SETUP = /* glsl */ `
   vec2 spriteToCamera = uSpriteCamera.xz - aSpriteOffset.xz;
   float spriteDistance = length(spriteToCamera);
   vec2 spriteViewDir = spriteDistance > 1e-4 ? spriteToCamera / spriteDistance : vec2(1.0, 0.0);
-  float spriteViewAngle = atan(spriteViewDir.y, spriteViewDir.x);
   float spriteFar = clamp((aSpriteLod.y - spriteDistance) / (aSpriteLod.y * ${FAR_FADE_FRACTION.toFixed(4)}), 0.0, 1.0);
   float spriteArrival = clamp((uSpriteTime - aSpriteLod.z) / ${ARRIVAL_SECONDS.toFixed(4)}, 0.0, 1.0);
   vSpriteVisibility = smoothstep(0.0, 1.0, spriteFar) * smoothstep(0.0, 1.0, spriteArrival);
   vSpriteDetail = aSpriteLod.x;
   vSpriteSize = aSpriteSize;
   vSpriteUv = uv;
-  ${range(FRAGMENT_VECS).map((i) => `vSpriteData${i} = aSpriteData${i};`).join("\n")}
-  ${look.vertex ?? ""}
+  ${range(DATA_VECS).map((i) => `vSpriteData${i} = aSpriteData${i};`).join("\n")}
   vec3 objectNormal = vec3(spriteViewDir.x, 0.0, spriteViewDir.y);
 `;
 
@@ -90,7 +85,7 @@ const FRAGMENT_SETUP = /* glsl */ `
   float spriteThreshold = screenDoorThreshold(gl_FragCoord.xy);
   if (vSpriteDetail >= 1.0 || vSpriteDetail > spriteThreshold) discard;
   if (vSpriteVisibility < 1.0 && vSpriteVisibility <= spriteThreshold) discard;
-  ${range(FRAGMENT_VECS).map((i) => `spriteData[${i}] = vSpriteData${i};`).join("\n")}
+  ${range(DATA_VECS).map((i) => `spriteData[${i}] = vSpriteData${i};`).join("\n")}
   vec2 spriteUv = vSpriteUv;
   vec2 spriteSize = vSpriteSize;
 `;
@@ -108,10 +103,10 @@ export const createSpriteMaterial = (look: SpriteLook): THREE.MeshStandardMateri
     Object.assign(shader.uniforms, SPRITE_UNIFORMS, look.uniforms);
     shader.vertexShader = shader.vertexShader
       .replace("void main() {", vertexHeader(look) + "\nvoid main() {")
-      .replace("#include <beginnormal_vertex>", vertexSetup(look))
+      .replace("#include <beginnormal_vertex>", VERTEX_SETUP)
       .replace("#include <begin_vertex>", VERTEX_POSITION);
     shader.fragmentShader = shader.fragmentShader
-      .replace("void main() {", sharedDeclarations(look, FRAGMENT_VECS) + SCREEN_DOOR_GLSL + "\nvoid main() {\n" + FRAGMENT_SETUP)
+      .replace("void main() {", sharedDeclarations(look) + SCREEN_DOOR_GLSL + "\nvoid main() {\n" + FRAGMENT_SETUP)
       .replace("#include <color_fragment>", "#include <color_fragment>\n" + look.fragment)
       .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n" + (look.emissive ?? ""));
   });

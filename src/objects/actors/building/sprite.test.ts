@@ -1,19 +1,16 @@
 import { packUnitPair, unpackUnitPair } from "../../sprite-lod/layout";
 import { generateBuildingPlan } from "./generatePlan";
 import { BUILDING_SPEC, buildingSeedAt, HOUSE_SPEC, SKYSCRAPER_SPEC } from "./spec";
-import { describeBuildingSprite, HEIGHTS_OFFSET, PROFILE_POINTS, SPRITE_REFRESH_ANGLE, VIEW_SAMPLES, VIEW_WIDTHS_OFFSET } from "./sprite";
+import { describeBuildingSprite, OUTLINE_OFFSET, PROFILE_POINTS } from "./sprite";
 import type { BuildingAttributes } from "./types";
 
 const describeSeeded = (hull: BuildingAttributes | undefined, seed: string) => describeBuildingSprite({ ...hull, seed }, 0, 0)!;
 
-const heightsOf = (data: ArrayLike<number>): number[] =>
-  Array.from({ length: PROFILE_POINTS / 2 }, (_, i) => unpackUnitPair(data[HEIGHTS_OFFSET + i])).flat();
-
-/** widths[view][point], as fractions of the box width. */
-const widthsOf = (data: ArrayLike<number>): number[][] => {
-  const flat = Array.from({ length: (VIEW_SAMPLES * PROFILE_POINTS) / 2 }, (_, i) => unpackUnitPair(data[VIEW_WIDTHS_OFFSET + i])).flat();
-  return Array.from({ length: VIEW_SAMPLES }, (_, k) => flat.slice(k * PROFILE_POINTS, (k + 1) * PROFILE_POINTS));
-};
+const outlineOf = (data: ArrayLike<number>): [number, number][] =>
+  Array.from({ length: PROFILE_POINTS }, (_, i) => unpackUnitPair(data[OUTLINE_OFFSET + i]));
+const heightsOf = (data: ArrayLike<number>): number[] => outlineOf(data).map(([height]) => height);
+/** As fractions of the box width. */
+const widthsOf = (data: ArrayLike<number>): number[] => outlineOf(data).map(([, width]) => width);
 
 describe("building sprite", () => {
   it("is a pure function of seed and hull", () => {
@@ -63,9 +60,9 @@ describe("building sprite", () => {
     }
   });
 
-  it("makes the box exactly as wide as the widest view", () => {
+  it("makes the box exactly as wide as the widest height", () => {
     for (let i = 0; i < 10; i++) {
-      const widest = Math.max(...widthsOf(describeSeeded(SKYSCRAPER_SPEC.hull, `w${i}`).data).flat());
+      const widest = Math.max(...widthsOf(describeSeeded(SKYSCRAPER_SPEC.hull, `w${i}`).data));
       expect(widest).toBeCloseTo(1, 3);
     }
   });
@@ -73,21 +70,20 @@ describe("building sprite", () => {
   it("narrows a house's hip roof above its walls", () => {
     for (let i = 0; i < 10; i++) {
       const widths = widthsOf(describeSeeded(HOUSE_SPEC.hull, `roof${i}`).data);
-      for (const view of widths) expect(view[PROFILE_POINTS - 1]).toBeLessThan(view[0]);
+      expect(widths[PROFILE_POINTS - 1]).toBeLessThan(widths[0]);
     }
   });
 
-  it("is as wide end-on and broadside as the plan is deep and wide", () => {
+  it("draws a rectangular house at its mean width, perimeter ÷ π", () => {
     let checked = 0;
     for (let i = 0; checked < 5 && i < 200; i++) {
       const seed = `rect${i}`;
       const plan = generateBuildingPlan(seed, HOUSE_SPEC.hull!);
       if (!plan.lofts[0].rect) continue;
       checked++;
-      const widths = widthsOf(describeSeeded(HOUSE_SPEC.hull, seed).data);
-      const broadside = 90 / SPRITE_REFRESH_ANGLE;
-      // View 0 looks along x (sees the depth); the broadside view looks along z (sees the width).
-      expect(widths[0][0] / widths[broadside][0]).toBeCloseTo(plan.footprint[1] / plan.footprint[0], 2);
+      const sprite = describeSeeded(HOUSE_SPEC.hull, seed);
+      const [w, d] = plan.footprint;
+      expect(widthsOf(sprite.data)[0] * sprite.width).toBeCloseTo((2 * (w + d)) / Math.PI, 1);
     }
     expect(checked).toBe(5);
   });

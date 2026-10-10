@@ -8,7 +8,7 @@ export interface SpriteLodAttributes {
 }
 
 /** What a describer makes of one spawn point: the billboard's box (u) and the look's data
- *  (≤ SPRITE_DATA_FLOATS numbers; the first FRAGMENT_DATA_FLOATS also reach the fragment stage). */
+ *  (≤ SPRITE_DATA_FLOATS numbers). */
 export interface SpriteDescription {
   width: number;
   height: number;
@@ -22,11 +22,9 @@ export type SpriteDescriber = (attributes: Readonly<Record<string, unknown>>, x:
 /**
  * A member's far look (`ActorWarmupHooks.spriteLook`, a static on the member component). GLSL runs inside
  * the sprite base's MeshStandardMaterial (spriteMaterial.ts), which declares for it:
- *  - both stages: `spriteData[]` (vec4s; `spriteDatum(i)` reads float i) and the unpack helpers (layout.ts);
- *  - vertex `main`: `spriteViewAngle` (radians, atan(z, x) of `spriteViewDir`) and `spriteViewDir` (unit x/z
- *    direction from the sprite to the camera); all SPRITE_DATA_FLOATS data floats;
+ *  - `spriteData[]` (vec4s; `spriteDatum(i)` reads float i) and the unpack helpers (layout.ts);
  *  - fragment `main`: `spriteUv` (0..1 across and up the box), `spriteSize` (the box, u), `spriteUvPixel`
- *    (fwidth of spriteUv, taken before any discard); the first FRAGMENT_DATA_FLOATS data floats.
+ *    (fwidth of spriteUv, taken before any discard).
  */
 export interface SpriteLook {
   /** The SPRITE_DESCRIBERS entry that fills this look's data. One draw per look. */
@@ -35,10 +33,6 @@ export interface SpriteLook {
   fragment: string;
   /** Fragment `main`, after the emissive map: adds to `totalEmissiveRadiance`. */
   emissive?: string;
-  /** Vertex `main`, before positioning: typically writes `flatVaryings`. */
-  vertex?: string;
-  /** Declarations without the qualifier ("vec3 vWidths"): declared `flat varying` in both stages. */
-  flatVaryings?: string[];
   /** Before `main` in BOTH stages: uniform declarations and helpers (no stage-only builtins). */
   header?: string;
   uniforms?: Record<string, THREE.IUniform>;

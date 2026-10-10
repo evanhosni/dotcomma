@@ -9,12 +9,10 @@ import {
 import {
   COLORS_OFFSET,
   GLASS_OFFSET,
-  HEIGHTS_OFFSET,
   MAX_PACKED_HEIGHT,
+  OUTLINE_OFFSET,
   PATTERN_SEED_OFFSET,
   PROFILE_POINTS,
-  VIEW_SAMPLES,
-  VIEW_WIDTHS_OFFSET,
   WINDOW_ASPECT,
   WINDOW_BAND_OFFSET,
   WINDOW_COLUMN_PITCH,
@@ -29,9 +27,6 @@ const glslFloat = (x: number): string => x.toFixed(4);
 const list = (count: number, item: (i: number) => string): string => Array.from({ length: count }, (_, i) => item(i)).join(", ");
 const unitPairHigh = (packed: number): string => `spriteUnitPairHigh(spriteDatum(${packed}))`;
 const unitPairLow = (packed: number): string => `spriteUnitPairLow(spriteDatum(${packed}))`;
-/** The blended widths travel to the fragment as flat vec4s. */
-const WIDTH_VECS = Math.ceil(N / 4);
-const widthComponent = (j: number): string => `vBuildingWidths${j >> 2}[${j % 4}]`;
 /** The silhouette edge's shade, relative to the center. */
 const EDGE_SHADE = 0.8;
 const WINDOW_GLOW_GAIN = 1.4;
@@ -43,13 +38,6 @@ const HEADER = /* glsl */ `
   uniform float uNightSeed;
 
   float buildingHash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
-
-  /** View widths are in the vertex-only data: sample \`view\`, profile height \`point\`. */
-  float buildingViewWidth(int view, int point) {
-    int q = view * ${N} + point;
-    float packed = spriteDatum(${VIEW_WIDTHS_OFFSET} + q / 2);
-    return q % 2 == 0 ? spriteUnitPairHigh(packed) : spriteUnitPairLow(packed);
-  }
 
   /** The silhouette's half-width (of the box width) at height y (of the box height), -1 outside it; \`band\`
    *  is the profile height below y (the upper one where two share a height). */
@@ -66,22 +54,9 @@ const HEADER = /* glsl */ `
   }
 `;
 
-// The two nearest sampled views, blended by angle; opposite views are equally wide, so the period is π.
-const VERTEX = /* glsl */ `
-  float buildingViewT = mod(spriteViewAngle, PI) / (PI / ${VIEW_SAMPLES}.0);
-  int buildingView0 = int(buildingViewT) % ${VIEW_SAMPLES};
-  int buildingView1 = (buildingView0 + 1) % ${VIEW_SAMPLES};
-  float buildingViewMix = fract(buildingViewT);
-  float buildingWidths[${N}];
-  for (int j = 0; j < ${N}; j++) {
-    buildingWidths[j] = mix(buildingViewWidth(buildingView0, j), buildingViewWidth(buildingView1, j), buildingViewMix);
-  }
-  ${Array.from({ length: N }, (_, j) => `${widthComponent(j)} = buildingWidths[${j}];`).join("\n")}
-`;
-
 const FRAGMENT = /* glsl */ `
-  float buildingHeights[${N}] = float[${N}](${list(N, (j) => (j % 2 === 0 ? unitPairHigh : unitPairLow)(HEIGHTS_OFFSET + (j >> 1)))});
-  float buildingWidths[${N}] = float[${N}](${list(N, widthComponent)});
+  float buildingHeights[${N}] = float[${N}](${list(N, (j) => unitPairHigh(OUTLINE_OFFSET + j))});
+  float buildingWidths[${N}] = float[${N}](${list(N, (j) => unitPairLow(OUTLINE_OFFSET + j))});
   int buildingBand;
   float buildingHalf = buildingHalfWidthAt(spriteUv.y, buildingHeights, buildingWidths, buildingBand);
   float buildingX = spriteUv.x - 0.5;
@@ -143,8 +118,6 @@ const FRAGMENT = /* glsl */ `
 export const BUILDING_SPRITE_LOOK: SpriteLook = {
   describer: "building",
   header: HEADER,
-  vertex: VERTEX,
-  flatVaryings: Array.from({ length: WIDTH_VECS }, (_, k) => `vec4 vBuildingWidths${k}`),
   fragment: FRAGMENT,
   emissive: `totalEmissiveRadiance += ${WINDOW_GLOW_COLOR_GLSL} * buildingGlow;`,
   uniforms: WINDOW_LIGHT_UNIFORMS,
