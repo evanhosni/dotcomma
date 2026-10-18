@@ -1,6 +1,9 @@
 import type * as THREE from "three";
+import type { DoorHandle } from "../../doors/types";
 import { ActorAttributes } from "../../types";
 import { ActorProps } from "../spawning/types";
+
+export type { DoorHandle } from "../../doors/types";
 
 export type WallSide = "+z" | "-z" | "+x" | "-x";
 
@@ -160,13 +163,6 @@ export interface BuildingPlan {
   windowLightIntensity: number;
   windows: WindowSpec[];
   interior: InteriorPlan;
-}
-
-/** Drawn on both faces of every door leaf, on the side away from the hinge. */
-export interface DoorHandle {
-  /** A lever pointing at the hinge; otherwise a round knob. */
-  lever: boolean;
-  color: number;
 }
 
 /** Both defaults use per-building baked vertex colors; a custom material must respect or deliberately ignore them. */

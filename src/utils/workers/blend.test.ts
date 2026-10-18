@@ -15,6 +15,7 @@ import {
   initCompute,
   terrainOnlyAt,
   unwarp,
+  warp,
 } from "./vertexCompute";
 import { biomeSiteAt, getBiomeContext, getBiomeGrid, getZoneWalls } from "./voronoi";
 import { biomeSdf, zoneFinal } from "./zoneBlend";
@@ -160,6 +161,7 @@ describe("the city edge", () => {
           prev = null;
           continue;
         }
+        if (prev !== null && Math.abs(vd.height - prev) >= 2.5) console.log("EDGESTEP", x, z, ux, uz, t, vd.height, prev, vd.biomeId, vd.distanceToRoadCenter, vd.distanceToFreewayCenter, vd.waterHeight, vd.underDeck);
         if (prev !== null) expect(Math.abs(vd.height - prev)).toBeLessThan(2.5);
         prev = vd.height;
       }

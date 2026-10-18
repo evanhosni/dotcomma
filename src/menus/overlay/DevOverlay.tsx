@@ -55,8 +55,8 @@ export const DevOverlay = () => {
     title.style.cssText = "margin-bottom:4px;";
     panel.appendChild(title);
 
-    inputsRef.current = DEV_TOGGLES.map(({ label, flag }) => {
-      const checkbox = createCheckbox(label, (checked) => devRef.current.setToggle(flag, checked));
+    inputsRef.current = DEV_TOGGLES.map(({ label, flag, key }) => {
+      const checkbox = createCheckbox(`${label} [${key}]`, (checked) => devRef.current.setToggle(flag, checked));
       panel.appendChild(checkbox.row);
       return checkbox.input;
     });
@@ -74,7 +74,7 @@ export const DevOverlay = () => {
     if (panelRef.current) panelRef.current.style.display = dev.devMode ? "block" : "none";
   }, [dev.devMode]);
 
-  // Devmode turning off resets the toggles externally. One character per flag: re-syncs on any change.
+  // The function keys flip toggles outside the panel. One character per flag: re-syncs on any change.
   const flagsKey = DEV_TOGGLES.map(({ flag }) => (dev[flag] ? "1" : "0")).join("");
   useEffect(() => {
     inputsRef.current.forEach((input, i) => {

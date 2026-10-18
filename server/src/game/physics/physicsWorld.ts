@@ -1,7 +1,8 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import type { DomainId } from "../../../../src/net/protocol";
 import { GRAVITY } from "../../../../src/physics/characterMovement";
-import { computeVertexData, initCompute } from "../../../../src/utils/workers/vertexCompute";
+import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
+import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
 import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import { TICK_SECONDS } from "../tick.js";
 import { ChunkGenerator } from "./chunkGenerator.js";
@@ -94,6 +95,17 @@ export class PhysicsWorld {
       return;
     }
     query.then(answer, () => answer(computeVertexData(x, z).height));
+  }
+
+  /** The movement modifiers at (x, z) for a walker's CharacterInput.surface, answered like heightAt:
+   *  on the worker when there is one, else in place (a cold cell generates its caves, ~250ms). */
+  surfaceModifiersAt(x: number, z: number, feetY: number, answer: (m: MovementModifiers) => void): void {
+    const query = this.generator?.surface(x, z, feetY);
+    if (!query) {
+      answer(surfaceModifiersAt(x, z, feetY));
+      return;
+    }
+    query.then(answer, () => answer(surfaceModifiersAt(x, z, feetY)));
   }
 
   /** Rapier only rebuilds its query structure inside step(), so a body stepped against

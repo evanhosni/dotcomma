@@ -1,6 +1,9 @@
+import { traceEvent } from "../../utils/spikeTrace";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { reportContentError } from "../../utils/contentError";
+import { BiomeContext } from "../../world/components/context";
 import { DRESSING_COLLIDER_DISTANCE, DressingPartColliders, useDressingColliders } from "./dressingColliders";
 import { DRESSING_CHUNK_SIZE, type DressingBounds, type DressingColliderBody, type DressingColliderSpec } from "./types";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
@@ -60,6 +63,25 @@ export const prepareDressingMaterial = (material: THREE.Material): void => {
 };
 
 const isMaterial = (asset: unknown): asset is THREE.Material => !!(asset as THREE.Material | undefined)?.isMaterial;
+
+/** A feature's own ShaderMaterial in a holder: it carries the chunk projection (quantization, curvature:
+ *  world/shaders/chunkProjection.ts) itself, so `useDressingAssets` disposes it but does not patch it
+ *  again; only the spawn fade — the one effect the projection does not carry — is applied here. */
+export interface SelfPatchedMaterial<M extends THREE.Material = THREE.ShaderMaterial> {
+  material: M;
+  dispose: () => void;
+}
+export const selfPatchedMaterial = <M extends THREE.Material>(material: M): SelfPatchedMaterial<M> => {
+  _spawnFade.patchMaterial(material);
+  return { material, dispose: () => material.dispose() };
+};
+
+/** A FLAG-DRIVEN feature (snow, rocks, tunnels, particles: every biome that opts in by a spec flag is drawn
+ *  by ONE mount) belongs under <Domain>; inside a <Biome> it would draw its biomes once per mount. */
+export const useDomainWideDressing = (name: string): void => {
+  const biome = useContext(BiomeContext);
+  if (biome) reportContentError(`<${name}/> draws every biome that sets its flag: mount it once under <Domain>, not inside a <Biome>`);
+};
 
 /** `warm`: the objects this feature draws, as program templates (utils/warmPrograms.ts) — linked at
  *  domain load, not when the first chunk streams in. Default: one InstancedMesh per material (what
@@ -146,6 +168,7 @@ export const finalizeInstancedChunk = (
   maxZ: number,
   boundsPad: number
 ): void => {
+  const t0 = performance.now();
   const originX = (minX + maxX) / 2;
   const originY = (minY + maxY) / 2;
   const originZ = (minZ + maxZ) / 2;
@@ -163,6 +186,7 @@ export const finalizeInstancedChunk = (
     Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2 + boundsPad
   );
   uploadOnFirstDraw(mesh);
+  traceEvent("dressing:finalize", performance.now() - t0);
 };
 
 /** Caller sets mesh.instanceMatrix.needsUpdate after the last write. */
@@ -186,7 +210,7 @@ interface ChunkRegistryEntry {
 /** Per-chunk side-state pruned lazily from the feature's own frame loop (forEachAlive) and
  *  flushed on unmount — without the unmount flush, external registrations (lamp heads in
  *  the glow grid) leaked as phantom lights across domain switches / HMR. */
-const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
+export const useChunkRegistry = <T extends ChunkRegistryEntry>(onRemove?: (entry: T) => void) => {
   const onRemoveRef = useRef(onRemove);
   onRemoveRef.current = onRemove;
   const registryRef = useRef<{

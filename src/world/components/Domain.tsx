@@ -99,6 +99,11 @@ const mergeBiomes = (store: DomainStore): Map<number, Biome> => {
       prohibitRoads: record.prohibitRoads,
       prohibitRivers: record.prohibitRivers,
       noise: record.noise,
+      caves: record.caves,
+      snow: record.snow,
+      sewers: record.sewers,
+      rocks: record.rocks,
+      riverBankRelief: record.riverBankRelief,
       actors: [],
     });
   }

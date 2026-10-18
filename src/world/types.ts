@@ -1,6 +1,7 @@
 import type { ActorMount } from "../objects/actors/spec";
 import type { AnyActorDescriptor } from "../objects/actors/spawning/types";
 import type { BiomeDomeConfig, TerrainNoiseParams } from "../utils/workers/vertexCompute";
+import type { CaveParams, RiverBankReliefParams, RockParams, SewerParams, SnowParams } from "../utils/workers/types";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
@@ -82,14 +83,21 @@ export interface BiomeNoiseConfig {
   absNeg?: boolean;
   scale?: number;
   offset?: number;
+  /** A domed biome is ROCK: rivers build through it, its banks end a riverbed, caves open in it. */
   dome?: BiomeDomeConfig;
+  /** Layers added linearly at every depth (a domed biome's foot keeps them). */
+  detail?: TerrainNoiseParams[];
 }
 
-/** A water-filled biome (lakes): the terrain bowls `depth` below the region base and the
+/** A water-filled biome (lakes, seas): the terrain bowls `depth` below the region base and the
  *  Water system fills it to the level of the base at the cell's site. */
 export interface BiomeWaterConfig {
   depth: number;
 }
+
+/** A flag on a biome spec: `true` for the system's defaults, or an object overriding any of them.
+ *  Every behaviour keys on these fields — never on a biome's id or name (CLAUDE.md "Adding Content"). */
+export type BiomeFlag<T extends object> = boolean | Partial<T>;
 
 /** What a biome folder's `spec.ts` exports — read by the JSX and by the server's shared config. */
 export interface BiomeSpec extends BlendWidthProps {
@@ -106,6 +114,17 @@ export interface BiomeSpec extends BlendWidthProps {
   prohibitRoads?: boolean;
   /** No river reaches this biome: one approaching it ends in a pond before its footprint gets there. */
   prohibitRivers?: boolean;
+  /** Cave systems generate under this biome's cells and their mouths reshape the ground (the one
+   *  domain-level <Caves/> draws them). */
+  caves?: BiomeFlag<CaveParams>;
+  /** Snow lies on this biome's ground, the terrain whitens under it, capsules wade in it (<SnowDrift/>). */
+  snow?: BiomeFlag<SnowParams>;
+  /** Sewers under this street-bearing biome (<Sewers/>). */
+  sewers?: BiomeFlag<SewerParams>;
+  /** Rocks strewn over this biome by slope (<Rocks/>). */
+  rocks?: BiomeFlag<RockParams>;
+  /** A levee river bank here takes this biome's own noise as bumps; unset, the bank is smooth. */
+  riverBankRelief?: BiomeFlag<RiverBankReliefParams>;
   /** The actors spawned from this biome, with this biome's overrides — read by <Biome> (the client
    *  registrations) and by the domain's config.ts (the flatten pads the server's terrain needs). */
   actors?: ActorMount[];

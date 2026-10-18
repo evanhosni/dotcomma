@@ -12,6 +12,8 @@ export const CITY_BIOME: BiomeSpec = {
   // freeway's centerline, which sits on the wall) against any neighbor — the smaller side wins at a wall.
   // Heights inherit it too, so the plateau holds to the wall and the neighbor ramps.
   blendWidth: 2,
+  // Sewers under its street lattice (the one domain-level <Sewers/> draws them).
+  sewers: true,
   // Everything that spawns here, and only here (a kind for several biomes is listed in each).
   actors: [{ actor: BEEBLE_SPEC }, { actor: BUILDING_SPEC }, { actor: SKYSCRAPER_SPEC }],
 };

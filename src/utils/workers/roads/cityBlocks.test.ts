@@ -7,7 +7,7 @@
 import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/poleSpec";
-import { computeVertexData, computeVertexDataRaw, initCompute } from "../vertexCompute";
+import { computeVertexData, computeVertexDataRaw, initCompute, warp } from "../vertexCompute";
 import { getCityFreewayEdgePoints } from "./freewaySidePoints";
 
 const STEP = 2;
@@ -142,18 +142,22 @@ describe("city blocks beside the edge roads", () => {
         const z = Z0 + (j + 0.5) * STEP;
         if (computeVertexDataRaw(x, z).distanceToRoadCenter < 5.5) continue;
         removed++;
+        const relative = (m: number, _px: number, _pz: number) => raster.height[m];
         let lo = Infinity;
         let hi = -Infinity;
         for (let b = -R; b <= R; b++) {
           for (let a = -R; a <= R; a++) {
             const m = k + b * N + a;
             if (!raster.city[m] || raster.field[m] >= 5) continue;
-            if (computeVertexDataRaw(X0 + (i + a + 0.5) * STEP, Z0 + (j + b + 0.5) * STEP).distanceToRoadCenter >= 5) continue;
-            lo = Math.min(lo, raster.height[m]);
-            hi = Math.max(hi, raster.height[m]);
+            const px = X0 + (i + a + 0.5) * STEP;
+            const pz = Z0 + (j + b + 0.5) * STEP;
+            if (computeVertexDataRaw(px, pz).distanceToRoadCenter >= 5) continue;
+            lo = Math.min(lo, relative(m, px, pz));
+            hi = Math.max(hi, relative(m, px, pz));
           }
         }
-        if (raster.height[k] > hi + 0.05 || raster.height[k] < lo - 0.05) off.push(`${x},${z} ${raster.height[k].toFixed(2)} in [${lo.toFixed(2)}, ${hi.toFixed(2)}]`);
+        const island = relative(k, x, z);
+        if (island > hi + 0.05 || island < lo - 0.05) off.push(`${x},${z} ${island.toFixed(2)} in [${lo.toFixed(2)}, ${hi.toFixed(2)}]`);
       }
     }
     expect(removed).toBeGreaterThan(20);

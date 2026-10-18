@@ -206,7 +206,7 @@ export const ActorPool = () => {
     for (const desc of descriptors) {
       const model = (desc as Partial<ModelActorAttributes>).model;
       if (model) {
-        useGLTF.preload(model);
+        useGLTF.preload(model, false);
       }
     }
   }, [descriptors]);

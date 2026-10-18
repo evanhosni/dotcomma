@@ -104,6 +104,31 @@ const createStatsPanel = (): StatsPanel => {
     container.appendChild(span);
     panel.spans.push(span);
 
+    if (i === I_POS) {
+      // Copies the position as "x, y, z" (the panel itself takes no pointer events).
+      const copy = document.createElement("span");
+      copy.textContent = " ⧉";
+      copy.title = "copy position";
+      copy.style.cssText = "cursor:pointer;pointer-events:auto;opacity:0.7;";
+      copy.addEventListener("click", () => {
+        const text = panel.spans[I_POS].textContent?.split(",").map((v) => v.trim()).join(", ") ?? "";
+        const report = (mark: string) => {
+          copy.textContent = ` ${mark}`;
+          setTimeout(() => (copy.textContent = " ⧉"), 800);
+        };
+        // navigator.clipboard is undefined over plain http on some browsers: say so instead of doing nothing.
+        if (!navigator.clipboard) {
+          report("✗ no clipboard");
+          return;
+        }
+        navigator.clipboard.writeText(text).then(
+          () => report("✓"),
+          () => report("✗"),
+        );
+      });
+      container.appendChild(copy);
+    }
+
     if (i <= I_MEM) {
       const avg = document.createElement("span");
       avg.style.color = "rgba(0,255,0,0.55)";

@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import type { DomainId } from "../../../../src/net/protocol";
-import { computeVertexData, initCompute } from "../../../../src/utils/workers/vertexCompute";
+import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
 import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import type { ChunkGeneratorReply, ChunkGeneratorRequest, ChunkLayer, ChunkLayerData } from "./chunkGenerator.js";
 import { enumerateObstacles } from "./obstaclePoints.js";
@@ -14,7 +14,7 @@ import { sampleChunkHeights } from "./terrain.js";
  */
 
 type Job = ChunkGeneratorRequest & { t: "job" };
-type HeightQuery = ChunkGeneratorRequest & { t: "height" };
+type PointQuery = ChunkGeneratorRequest & { t: "height" | "surface" };
 
 const SAMPLERS: { [L in ChunkLayer]: (gx: number, gz: number) => { data: ChunkLayerData[L]; transfer: ArrayBuffer[] } } = {
   terrain: (gx, gz) => {
@@ -29,7 +29,7 @@ const port = parentPort!;
 initCompute(DOMAIN_CONFIGS[(workerData as { domain: DomainId }).domain]!); // PhysicsWorld.create checked it
 
 const queue = new Map<number, Job>();
-const heights: HeightQuery[] = [];
+const points: PointQuery[] = [];
 let pumping = false;
 
 const run = (id: number, job: Job): void => {
@@ -41,18 +41,19 @@ const run = (id: number, job: Job): void => {
   }
 };
 
-const answerHeight = ({ id, x, z }: HeightQuery): void => {
+const answerPoint = (query: PointQuery): void => {
+  const { id, x, z } = query;
   try {
-    port.postMessage({ id, data: computeVertexData(x, z).height } satisfies ChunkGeneratorReply);
+    port.postMessage({ id, data: query.t === "surface" ? surfaceModifiersAt(x, z, query.feetY) : computeVertexData(x, z).height } satisfies ChunkGeneratorReply);
   } catch (err) {
     port.postMessage({ id, error: err instanceof Error ? err.stack ?? err.message : String(err) } satisfies ChunkGeneratorReply);
   }
 };
 
 const runNext = (): void => {
-  const query = heights.shift();
+  const query = points.shift();
   if (query) {
-    answerHeight(query);
+    answerPoint(query);
     setImmediate(runNext);
     return;
   }
@@ -72,7 +73,7 @@ port.on("message", (msg: ChunkGeneratorRequest) => {
     queue.delete(msg.id);
     return;
   }
-  if (msg.t === "height") heights.push(msg);
+  if (msg.t === "height" || msg.t === "surface") points.push(msg);
   else queue.set(msg.id, msg);
   if (!pumping) {
     pumping = true;

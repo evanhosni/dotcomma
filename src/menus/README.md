@@ -4,7 +4,7 @@
 
 HUD panels in [overlay/](overlay/), plain DOM over the canvas:
 
-- [StatsOverlay.tsx](overlay/StatsOverlay.tsx): devmode stats (FPS, frame time, memory, position, place, draw calls, terrain); mounted inside the canvas ([world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) because it reads `gl.info` in `useFrame`.
+- [StatsOverlay.tsx](overlay/StatsOverlay.tsx): devmode stats (FPS, frame time, memory, position — with a ⧉ that copies it as "x, y, z" (✓ for 0.8s, or ✗ where no clipboard API is available) — place, draw calls, terrain); mounted inside the canvas ([world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) because it reads `gl.info` in `useFrame`.
 - [DevOverlay.tsx](overlay/DevOverlay.tsx): one checkbox per `DEV_TOGGLES` entry ([context/constants.ts](../context/constants.ts)).
 - [LogsOverlay.tsx](overlay/LogsOverlay.tsx): captured console output (devmode only).
 - [NetOverlay.tsx](overlay/NetOverlay.tsx): connection status and players here.

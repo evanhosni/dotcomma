@@ -2,14 +2,18 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { CitySitePoint, getCityLightSites } from "../../../../../../../objects/dressing/dressingWorker";
+import { BUILDING_SPRITE_LOD } from "../../../../../../../objects/actors/building/spec";
 import { getNightBlend } from "../../../../../../../lighting/dayNight";
 import { smoothstep } from "../../../../../../../utils/math/_math";
 import { ditherGLSL } from "../../../../../../../vfx/dither";
 import { BACKGROUND_RANK, TaskQueue } from "../../../../../../../utils/task-queue/TaskQueue";
 
-// FIXED pool: a changing scene light count recompiles every lit material.
+// FIXED pools: a changing scene light count recompiles every lit material.
 // Unused lights park below the world at zero intensity.
-const POOL_SIZE = 6;
+const LIGHT_POOL_SIZE = 6;
+/** The auras reach as far as the buildings' far sprites, so a far city's glow reads at night though its
+ *  light would light nothing: more slots than lights. */
+const AURA_POOL_SIZE = 16;
 const PARK_Y = -1e6;
 const RESCAN_DISTANCE = 200; // camera travel between site scans
 // Small: a light's fade is measured against the site just outside the pool, which a late re-pick misjudges.
@@ -20,6 +24,8 @@ const RANK_FADE_BAND = 250;
 /** Sites fade in from the scan's edge (fractions of scanRadius) instead of appearing when a scan finds them. */
 const SCAN_FADE_START = 0.6;
 const SCAN_FADE_END = 0.9;
+/** An aura fades out over this last share of its distance. */
+const AURA_FADE_SHARE = 0.25;
 /** An aura fades out as its center nears the camera's view plane (view depth, units): a sprite is
  *  screen-aligned, so it vanished whole the moment the camera passed it — an abrupt change in light. */
 const AURA_NEAR_HIDE = 120;
@@ -45,6 +51,8 @@ export interface CityLightsProps {
   auraOpacity?: number;
   /** Height / width; low and wide reads as skyline glow, not a floating ball. */
   auraAspect?: number;
+  /** How far an aura reaches (default: the buildings' sprite distance), fading over its last quarter. */
+  auraDistance?: number;
 }
 
 /** A soft radial glow. Deliberately NO hot core: overlapping sprites must read as one hazy area, not glowing balls. */
@@ -115,9 +123,33 @@ const selectNearestSites = (
   });
 };
 
+/** A pool's slots: the nearest `size` sites plus the first outside it (each slot's fade is measured against that one). */
+class SitePool {
+  readonly assigned: (CitySitePoint | null)[];
+  readonly distSq: Float64Array;
+  constructor(readonly size: number) {
+    this.assigned = Array.from({ length: size + 1 }, () => null);
+    this.distSq = new Float64Array(size + 1);
+  }
+  select(sites: ReadonlyMap<string, CitySitePoint>, camX: number, camZ: number): void {
+    selectNearestSites(sites, camX, camZ, this.assigned, this.distSq);
+  }
+  /** How lit slot `i` is (0–1): fading out as the first site outside the pool closes in on it, and
+   *  over the last share of `reach`. Continuous through every re-pick: a slot changes sites only at weight ~0. */
+  weight(i: number, camX: number, camZ: number, fadeStart: number, reach: number): number {
+    const site = this.assigned[i];
+    if (!site) return 0;
+    const d = Math.hypot(site.x - camX, site.z - camZ);
+    const next = this.assigned[this.size];
+    const rank = next ? Math.min(1, Math.max(0, (Math.hypot(next.x - camX, next.z - camZ) - d) / RANK_FADE_BAND)) : 1;
+    return rank * (1 - smoothstep(fadeStart, reach, d));
+  }
+}
+
 const _forward = new THREE.Vector3();
 
-/** One far-throw point light per city-biome voronoi cell (see CLAUDE.md). */
+/** One far-throw point light per city-biome voronoi cell (see CLAUDE.md), and an aura sprite per cell
+ *  out to the sprite distance. */
 export const CityLights = ({
   color = "#ffdb8d",
   // Brightness = intensity / d^decay at hundreds of units, so decay is the
@@ -131,21 +163,23 @@ export const CityLights = ({
   auraSize = 1400,
   auraOpacity = 0.1,
   auraAspect = 0.35,
+  auraDistance = BUILDING_SPRITE_LOD.renderDistance,
 }: CityLightsProps) => {
   const lightRefs = useRef<(THREE.PointLight | null)[]>([]);
   const spriteRefs = useRef<(THREE.Sprite | null)[]>([]);
   const sites = useRef(new Map<string, CitySitePoint>()).current;
   const scanning = useRef(false);
   const lastScan = useRef<{ x: number; z: number } | null>(null);
-  // The pool plus the first site outside it: each light's fade is measured against that one.
-  const nearestSitesRef = useRef<(CitySitePoint | null)[]>(Array.from({ length: POOL_SIZE + 1 }, () => null));
-  const nearestSiteDistSq = useRef(new Float64Array(POOL_SIZE + 1)).current;
+  const lightPool = useRef(new SitePool(LIGHT_POOL_SIZE)).current;
+  const auraPool = useRef(new SitePool(AURA_POOL_SIZE)).current;
   const sitesVersion = useRef(0);
   const lastSelect = useRef({ x: Infinity, z: Infinity, version: -1 });
+  // Sites are scanned as far as the farther of the lights and the auras.
+  const scanReach = Math.max(scanRadius, auraDistance);
 
   const auraTexture = useMemo(createAuraTexture, []);
   const auraMaterials = useMemo(
-    () => Array.from({ length: POOL_SIZE }, () => createAuraMaterial(auraTexture, color)),
+    () => Array.from({ length: AURA_POOL_SIZE }, () => createAuraMaterial(auraTexture, color)),
     [auraTexture, color],
   );
 
@@ -162,7 +196,7 @@ export const CityLights = ({
     lastSelect.current.version = -1;
   }, [intensity, heightOffset]);
 
-  /** Every RESCAN_DISTANCE of travel, refreshes the city sites within scanRadius (background work). */
+  /** Every RESCAN_DISTANCE of travel, refreshes the city sites within the scan reach (background work). */
   const rescanSites = (camX: number, camZ: number): void => {
     const movedSq = lastScan.current
       ? (camX - lastScan.current.x) ** 2 + (camZ - lastScan.current.z) ** 2
@@ -173,10 +207,10 @@ export const CityLights = ({
     const sz = camZ;
     scanQueue.addTask(async () => {
       try {
-        const points = await getCityLightSites(sx - scanRadius, sz - scanRadius, sx + scanRadius, sz + scanRadius);
+        const points = await getCityLightSites(sx - scanReach, sz - scanReach, sx + scanReach, sz + scanReach);
         points.forEach((p) => sites.set(p.key, p));
         sites.forEach((p, key) => {
-          if (Math.hypot(p.x - sx, p.z - sz) > scanRadius * 1.5) sites.delete(key);
+          if (Math.hypot(p.x - sx, p.z - sz) > scanReach * 1.5) sites.delete(key);
         });
         lastScan.current = { x: sx, z: sz };
         sitesVersion.current++;
@@ -186,9 +220,9 @@ export const CityLights = ({
     });
   };
 
-  /** Moves the pool onto the nearest POOL_SIZE sites (parking the rest), only after RESELECT_DISTANCE of
+  /** Moves each pool onto its nearest sites (parking the rest), only after RESELECT_DISTANCE of
    *  travel or a site-set change. Lights are interchangeable, so a site changing slots changes nothing. */
-  const reassignLights = (camX: number, camZ: number): void => {
+  const reassignPools = (camX: number, camZ: number): void => {
     const sel = lastSelect.current;
     const moved = (camX - sel.x) ** 2 + (camZ - sel.z) ** 2 > RESELECT_DISTANCE * RESELECT_DISTANCE;
     if (!moved && sel.version === sitesVersion.current) return;
@@ -196,33 +230,22 @@ export const CityLights = ({
     sel.z = camZ;
     sel.version = sitesVersion.current;
 
-    const assigned = nearestSitesRef.current;
-    selectNearestSites(sites, camX, camZ, assigned, nearestSiteDistSq);
-
-    for (let i = 0; i < POOL_SIZE; i++) {
+    lightPool.select(sites, camX, camZ);
+    auraPool.select(sites, camX, camZ);
+    for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
       const light = lightRefs.current[i];
       if (!light) continue;
-      const site = assigned[i];
-      const sprite = spriteRefs.current[i];
-      if (site) {
-        light.position.set(site.x, site.y + heightOffset, site.z);
-        if (sprite) sprite.position.copy(light.position);
-      } else {
-        light.position.set(0, PARK_Y, 0);
-      }
+      const site = lightPool.assigned[i];
+      if (site) light.position.set(site.x, site.y + heightOffset, site.z);
+      else light.position.set(0, PARK_Y, 0);
     }
-  };
-
-  /** How lit pool slot `i` is (0–1): fading out as the first site outside the pool closes in on it, and
-   *  toward the scan's edge. Continuous through every re-pick: a slot changes sites only at weight ~0. */
-  const slotWeight = (i: number, camX: number, camZ: number): number => {
-    const assigned = nearestSitesRef.current;
-    const site = assigned[i];
-    if (!site) return 0;
-    const d = Math.hypot(site.x - camX, site.z - camZ);
-    const next = assigned[POOL_SIZE];
-    const rank = next ? Math.min(1, Math.max(0, (Math.hypot(next.x - camX, next.z - camZ) - d) / RANK_FADE_BAND)) : 1;
-    return rank * (1 - smoothstep(scanRadius * SCAN_FADE_START, scanRadius * SCAN_FADE_END, d));
+    for (let i = 0; i < AURA_POOL_SIZE; i++) {
+      const sprite = spriteRefs.current[i];
+      if (!sprite) continue;
+      const site = auraPool.assigned[i];
+      if (site) sprite.position.set(site.x, site.y + heightOffset, site.z);
+      else sprite.position.set(0, PARK_Y, 0);
+    }
   };
 
   /** Light intensities and the auras' opacities follow the night blend and each slot's weight; an aura
@@ -234,16 +257,16 @@ export const CityLights = ({
     const nightBlend = getNightBlend();
     const auraBase = aura ? auraOpacity * (0.2 + 0.8 * nightBlend) : 0;
     camera.getWorldDirection(_forward);
-    for (let i = 0; i < POOL_SIZE; i++) {
-      const weight = slotWeight(i, camX, camZ);
+    for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
       const light = lightRefs.current[i];
-      if (light) {
-        const target = intensity * nightBlend * weight;
-        if (light.intensity !== target) light.intensity = target;
-      }
+      if (!light) continue;
+      const target = intensity * nightBlend * lightPool.weight(i, camX, camZ, scanRadius * SCAN_FADE_START, scanRadius * SCAN_FADE_END);
+      if (light.intensity !== target) light.intensity = target;
+    }
+    for (let i = 0; i < AURA_POOL_SIZE; i++) {
       const sprite = spriteRefs.current[i];
       if (!sprite) continue;
-      let opacity = auraBase * weight;
+      let opacity = auraBase * auraPool.weight(i, camX, camZ, auraDistance * (1 - AURA_FADE_SHARE), auraDistance);
       if (opacity >= AURA_MIN_VISIBLE_OPACITY) {
         const p = sprite.position;
         const viewDepth =
@@ -257,13 +280,13 @@ export const CityLights = ({
 
   useFrame(({ camera }) => {
     rescanSites(camera.position.x, camera.position.z);
-    reassignLights(camera.position.x, camera.position.z);
+    reassignPools(camera.position.x, camera.position.z);
     applyWeights(camera);
   });
 
   return (
     <>
-      {Array.from({ length: POOL_SIZE }, (_, i) => (
+      {Array.from({ length: LIGHT_POOL_SIZE }, (_, i) => (
         <pointLight
           key={i}
           ref={(l) => {
@@ -277,7 +300,7 @@ export const CityLights = ({
         />
       ))}
       {aura &&
-        Array.from({ length: POOL_SIZE }, (_, i) => (
+        Array.from({ length: AURA_POOL_SIZE }, (_, i) => (
           <sprite
             key={i}
             ref={(s) => {

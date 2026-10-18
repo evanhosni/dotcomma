@@ -17,8 +17,7 @@ export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
 export type DevToggleFlags = Record<DevToggleFlag, boolean>;
 
 export type DevContextType = DevToggleFlags & {
-  /** Toggled by F1; the URL says `?devmode=true` while on, so a refresh keeps it. */
+  /** On exactly while the URL carries `?devmode`; there is no in-game switch. */
   devMode: boolean;
-  toggleDevMode: () => void;
   setToggle: (flag: DevToggleFlag, on: boolean) => void;
 };

@@ -14,7 +14,7 @@ An actor is one spawned object rendered as its own React component (a beeble, a 
 
 ## How to add another
 
-1. Model in `public/models/<name>.glb` (tag colliders, see [colliders/](colliders/README.md)).
+1. Model in `public/models/<name>.glb`, exported WITHOUT Draco compression and with SEPARATE (non-interleaved) vertex buffers (tag colliders, see [colliders/](colliders/README.md)). `useGLTF` is called with Draco off, so a Draco file fails to load; interleaved buffers break the clone pool's geometry merge (objects/DECISIONS.md).
 2. For an NPC: `src/objects/actors/<name>/stateMachine.ts` ([state/](state/README.md)).
 3. `src/objects/actors/<name>/spec.ts`:
    ```ts

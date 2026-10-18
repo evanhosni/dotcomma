@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
 import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
+import { PERSONAL_LIGHT_UNIFORMS } from "../../lighting/personalLight";
 import { reportContentError } from "../../utils/contentError";
 import { textureFileOf } from "../../utils/material/_material";
 import { ditherGLSL } from "../../vfx/dither";
@@ -22,6 +23,8 @@ import { LOD_FADE_DEFINE, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "./lodFade";
 import { FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM } from "./farFade";
 import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "./skirtTint";
+import { ENTRANCE_FADE_UNIFORM, ENTRANCE_PATCH_DEFINE, ENTRANCE_PATCH_GLSL, PATCH_GROUND_SHARE, TERRAIN_HOLES_DEFINE, TERRAIN_HOLES_GLSL, TERRAIN_HOLE_UNIFORMS } from "./terrainHoles";
+import { TUNNEL_ROCK_GLSL } from "./tunnelRock";
 
 // THE TERRAIN FRAGMENT SHADER GENERATOR: every region's base shader and every biome's shader become
 // named functions of ONE program, mixed per pixel (shaders/README.md walks through the result).
@@ -31,6 +34,8 @@ const cosDegGLSL = (deg: number): string => Math.cos((deg * Math.PI) / 180).toFi
 
 /** Below this a biome's fragment function is skipped: its color could not be seen. */
 const BIOME_WEIGHT_VISIBLE = 0.002;
+/** The terrain's own snow whitens the ground fully by this depth. */
+const SNOW_WHITE_DEPTH = 0.35;
 
 const reportShaderError = (message: string): void => reportContentError(`[terrain material] ${message}`);
 
@@ -215,8 +220,9 @@ const crispnessTiers = (slots: number[], halfOf: (k: number) => number): number[
   return tiers;
 };
 
-/** Everything that is not a biome frag: the LOD and far fades, the scene's point lights. */
-const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || defined(${FAR_FADE_DEFINE})
+/** Everything that is not a biome frag: the LOD and far fades, the terrain holes, the entrance patch,
+ *  the scene's point lights. */
+const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || defined(${FAR_FADE_DEFINE}) || defined(${TERRAIN_HOLES_DEFINE}) || defined(${ENTRANCE_PATCH_DEFINE})
       ${SCREEN_DOOR_GLSL}
     #endif
     #ifdef ${LOD_FADE_DEFINE}
@@ -226,6 +232,13 @@ const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || d
     #ifdef ${FAR_FADE_DEFINE}
       uniform vec2 ${FAR_FADE_UNIFORM};
       ${FAR_FADE_GLSL}
+    #endif
+    #if defined(${TERRAIN_HOLES_DEFINE}) || defined(${ENTRANCE_PATCH_DEFINE})
+      ${TERRAIN_HOLES_GLSL}
+    #endif
+    #ifdef ${ENTRANCE_PATCH_DEFINE}
+      varying vec2 vEntranceRock;
+      ${ENTRANCE_PATCH_GLSL}
     #endif
 
     #if NUM_POINT_LIGHTS > 0
@@ -325,12 +338,14 @@ const riverbedWeightsGLSL = (slotCount: number, bedGroupOf: number[], bedHalves:
 
 /** River BED and BANKS: the riverbed from the channel out to the bank's edge, fading into the ground
  *  beyond over RIVER_BED_BLEND_WIDTH (the Water system draws the surface) — each biome's own bed,
- *  cross-faded softly across biome walls (riverbedWeightsGLSL). It yields where the CITY's road field
- *  says pavement (a quay's asphalt, curb and 4u sidewalk band, crisp: the sidewalk along a river is as
- *  wide as along any road) and on steep banks of ROCK (`rockSlots`: a domed biome — a mountainside
- *  keeps its rock) — on the BANKS only: under the water the slope rule fades out over
- *  RIVER_BED_UNDERWATER_FADE of depth (a mountain channel's steep walls showed the snow through the water). Any other ground (grass, dunes, snow) never yields to slope: it cut into the band in
- *  wedges reaching the water wherever a bank steepened (Evan, screenshot at (-8900, 1100)). */
+ *  cross-faded softly across biome walls (riverbedWeightsGLSL), darkened by the ONE bed shade
+ *  (common.glsl bedShade). It yields where the CITY's road field says pavement (a quay's asphalt, curb
+ *  and 4u sidewalk band, crisp: the sidewalk along a river is as wide as along any road) and on steep
+ *  banks of ROCK (`rockSlots`: a domed biome — a mountainside keeps its rock) — on the BANKS only:
+ *  under the water the slope rule fades out over RIVER_BED_UNDERWATER_FADE of depth (a mountain
+ *  channel's steep walls showed the snow through the water). Any other ground (grass, dunes, snow)
+ *  never yields to slope: it cut into the band in wedges reaching the water wherever a bank steepened
+ *  (Evan, screenshot at (-8900, 1100)). */
 const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number[] | undefined, cityIdx: number, rockSlots: boolean[]): string => `if (vRiverBedDistance < RIVER_BED_REACH) {
         vec2 bedUV = fract(vWorldUv);
         ${bedKeys.map((_, g) => `float bedW${g} = 0.0;`).join(" ")}
@@ -340,8 +355,7 @@ const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number
         vec3 bed = vec3(0.0);
         float bedSum = 0.0;
         ${bedKeys.map((_, g) => `if (bedW${g} > ${BIOME_WEIGHT_VISIBLE}) { bed += ${riverbedSampleGLSL(g, bedKeys)} * bedW${g}; bedSum += bedW${g}; }`).join("\n        ")}
-        vec4 riverColor = vec4(bed / max(bedSum, 1e-4), 1.0);
-        riverColor.rgb *= mix(vec3(0.72, 0.7, 0.66), vec3(1.0), smoothstep(RIVER_HALF_WIDTH * 0.5, RIVER_HALF_WIDTH * 1.3, vRiverBedDistance));
+        vec4 riverColor = vec4(bedShade(bed / max(bedSum, 1e-4), vWorldPosWrapped, vUnderwaterDepth), 1.0);
         float riverBlend = smoothstep(RIVER_BED_REACH - ${glslFloat(RIVER_BED_FULL_INSET)}, RIVER_BED_REACH - ${glslFloat(RIVER_BED_FADE_INSET)}, vRiverBedDistance);
         float pavement = ${cityIdx >= 0 ? `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", cityIdx)})` : "0.0"} * (1.0 - smoothstep(ROAD_HALF_WIDTH + 4.0, ROAD_HALF_WIDTH + 5.0, vDistanceToRoadCenter));
         float bedSteep = (1.0 - smoothstep(${cosDegGLSL(RIVER_BED_SLOPE_END_DEG)}, ${cosDegGLSL(RIVER_BED_SLOPE_START_DEG)}, normalize(vWorldNormal).y)) * min(bedRock, 1.0)
@@ -362,6 +376,14 @@ const cityCorridorGLSL = (cityName: string | null): string =>
         vec4 ground = gl_FragColor;
         ${cityName}_frag();
         gl_FragColor = mix(ground, gl_FragColor, corridor);
+      }`;
+
+/** The terrain's own snow at every LOD, after the biome mix, the bed and the road corridor: the ground
+ *  whitens by its depth in a drift-varied white under the fake sun — the colour the near sheet stands in. */
+const TERRAIN_SNOW_GLSL = `if (vFarSnow > 0.0) {
+        float snowGrain = worldFbm(vWorldPosWrapped.xz, 0.02, 2);
+        vec3 snowWhite = mix(vec3(0.93, 0.95, 0.98), vec3(0.98, 0.99, 1.0), snowGrain) * (0.6 + 0.4 * fakeSunLight(vWorldNormal));
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, snowWhite, smoothstep(0.0, ${glslFloat(SNOW_WHITE_DEPTH)}, vFarSnow));
       }`;
 
 /**
@@ -393,13 +415,14 @@ export const combineBiomeMaterials = async (
   } = {},
 ): Promise<THREE.ShaderMaterial> => {
   const { riverTexture, slotRiverbeds = [], riverbedTextures = new Map(), varyingDeclarations = [], defines = {}, slotHalves, bedSlotHalves, slotRegions } = options;
-  // uNightBlend and the lamp-grid uniforms are SHARED objects so every terrain material dims in lockstep.
-  const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS, [SKIRT_TINT_UNIFORM]: skirtTintUniform };
+  // uNightBlend, the lamp-grid, the holes' and the personal light's uniforms are SHARED objects so every
+  // terrain material dims, cuts and lights in lockstep.
+  const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS, [SKIRT_TINT_UNIFORM]: skirtTintUniform, ...TERRAIN_HOLE_UNIFORMS, ...PERSONAL_LIGHT_UNIFORMS, [ENTRANCE_FADE_UNIFORM]: { value: 0 } };
 
   // The scene point lights' struct/array uniforms are written by the renderer (material.lights),
-  // so they must NOT go through the scalar declaration generator.
+  // so they must NOT go through the scalar declaration generator; nor the declared-by-hand ones.
   Object.assign(combinedUniforms, THREE.UniformsUtils.clone(THREE.UniformsLib.lights));
-  const LIGHTS_UNIFORM_KEYS = new Set(Object.keys(THREE.UniformsLib.lights));
+  const UNDECLARED_KEYS = new Set([...Object.keys(THREE.UniformsLib.lights), ...Object.keys(TERRAIN_HOLE_UNIFORMS), ...Object.keys(PERSONAL_LIGHT_UNIFORMS), ENTRANCE_FADE_UNIFORM]);
 
   if (riverTexture) {
     combinedUniforms.rivertexture = { value: riverTexture };
@@ -418,7 +441,7 @@ export const combineBiomeMaterials = async (
     ${varyingDeclarations.join("\n    ")}
 
     ${Object.entries(combinedUniforms)
-      .filter(([name]) => !LIGHTS_UNIFORM_KEYS.has(name))
+      .filter(([name]) => !UNDECLARED_KEYS.has(name))
       .map(([name, uniform]) => uniformDeclarationOf(name, uniform as { value: any }))
       .join("\n    ")}
 
@@ -426,16 +449,31 @@ export const combineBiomeMaterials = async (
 
     ${commonShader}
 
+    ${TUNNEL_ROCK_GLSL}
+
     ${functions.join("\n\n    ")}
 
     void main() {
-      // A chunk mid LOD swap draws its fade twin, which keeps only its dither share (world/terrain/lodSwaps.ts).
+      // A chunk mid LOD swap keeps only its dither share (world/terrain/lodSwaps.ts); a settled chunk's range keeps every pixel.
       #ifdef ${LOD_FADE_DEFINE}
       if (lodFadeDiscards(${LOD_FADE_UNIFORM})) discard;
       #endif
       // The far chunks dissolve into the sky before the far plane (world/shaders/farFade.ts).
       #ifdef ${FAR_FADE_DEFINE}
       if (farFadeDiscards(vFarDistance, ${FAR_FADE_UNIFORM})) discard;
+      #endif
+      // The tunnels' openings and skirt masks, by ABSOLUTE position (world/shaders/terrainHoles.ts).
+      #ifdef ${TERRAIN_HOLES_DEFINE}
+      if (terrainHoleDiscards(vWorldPosAbs, vSkirt)) discard;
+      #endif
+      // The entrance patch draws by the fade's complement and never a skirt. On the GROUND (rock share
+      // under PATCH_GROUND_SHARE) it draws exactly the pixels its mouth's cut gives up, the terrain the
+      // rest — one per-pixel rule on both sides. A WALL pixel is never cut: past the footprint's end and
+      // above the cut's ceiling the walls have no terrain behind them, and cutting them opened a ring of
+      // holes around every tube at its mouth section's inner end.
+      #ifdef ${ENTRANCE_PATCH_DEFINE}
+      if (vSkirt > 0.0 || entranceFadeDiscards()) discard;
+      if (vEntranceRock.x < ${glslFloat(PATCH_GROUND_SHARE)} && !mouthCutsHere(vWorldPosAbs)) discard;
       #endif
       vec4 blended = vec4(0.0);
       float weightSum = 0.0;
@@ -449,7 +487,20 @@ export const combineBiomeMaterials = async (
 
       ${cityCorridor}
 
+      ${TERRAIN_SNOW_GLSL}
+
       ${nightDimGLSL("gl_FragColor.rgb")}
+
+      #ifdef ${ENTRANCE_PATCH_DEFINE}
+      // The patch IS the terrain on the ground and the cave's rock under it, lit as the tunnel is: the
+      // rock share carries its own night dim (tunnelShade dims only what daylight reaches), after the
+      // ground's.
+      {
+        vec3 patchNormal = normalize(vWorldNormal);
+        vec3 rock = tunnelShade(tunnelRockColor(vWorldPosAbs, patchNormal), patchNormal, vEntranceRock.y, vWorldPosAbs - cameraPosition);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, rock, vEntranceRock.x);
+      }
+      #endif
 
       // Lamp glow after the night dim so lamps brighten the ground; ABSOLUTE position (the lamp grid's).
       ${lampGlowAccumGLSL("vWorldPosAbs")}

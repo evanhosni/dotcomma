@@ -10,6 +10,7 @@ import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
 import { framePhaseFromCoords } from "../../../utils/utils";
 import { useFullSpeedSlope } from "../../../physics/useFullSpeedSlope";
+import { DOOR_OPEN_ANGLE, hoveredDoor, swingDoors } from "../../doors/door";
 import { useActorLifecycle, withinGate } from "../Actor";
 import {
   beginBuildingInteriorBuild,
@@ -41,8 +42,6 @@ const LIVE_DISTANCE = 150;
 const INTERIOR_DISTANCE = 60;
 const DOOR_RAYCAST_DISTANCE = 30; // building distance under which the door raycast runs
 const DOOR_RAYCAST_INTERVAL_FRAMES = 3;
-const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
-const DOOR_SWING_RATE = 4;
 
 const DISTANCE_GATE_HYSTERESIS = 12;
 
@@ -85,59 +84,6 @@ const driveSharedBuildingState = (state: RootState): void => {
   sharedStateTime = time;
   updateWindowLightUniforms();
   followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
-};
-
-const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
-const _sphere = new THREE.Sphere();
-const _hits: THREE.Intersection[] = [];
-
-/** The door leaf under the screen-center ray within DOOR_INTERACT_REACH, or −1. */
-const raycastHoveredDoor = (camera: THREE.Camera, doorMeshes: (THREE.Mesh | null)[]): number => {
-  let hover = -1;
-  _raycaster.setFromCamera(_center, camera);
-  _raycaster.far = DOOR_INTERACT_REACH;
-  for (let i = 0; i < doorMeshes.length; i++) {
-    const mesh = doorMeshes[i];
-    if (!mesh) continue;
-    const geo = mesh.geometry;
-    if (geo.boundingSphere === null) geo.computeBoundingSphere();
-    _sphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
-    if (!_raycaster.ray.intersectsSphere(_sphere)) continue;
-    _hits.length = 0;
-    if (_raycaster.intersectObject(mesh, false, _hits).length > 0) {
-      hover = i;
-      break;
-    }
-  }
-  _raycaster.far = Infinity;
-  return hover;
-};
-
-/** Eases every hinge toward its open/closed angle, mirrored onto its far-door instance. Returns
- *  whether any is still moving. */
-const swingDoors = (
-  hinges: (THREE.Group | null)[],
-  doorsOpen: boolean[],
-  farDoors: FarDoor[] | null,
-  delta: number,
-): boolean => {
-  let stillMoving = false;
-  for (let i = 0; i < hinges.length; i++) {
-    const hinge = hinges[i];
-    if (!hinge) continue;
-    const target = doorsOpen[i] ? DOOR_OPEN_ANGLE : 0;
-    const diff = target - hinge.rotation.y;
-    if (Math.abs(diff) < 1e-3) {
-      if (diff !== 0) hinge.rotation.y = target;
-    } else {
-      hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
-      stillMoving = true;
-    }
-    const far = farDoors?.[i];
-    if (far) setFarDoorAngle(far, hinge.rotation.y);
-  }
-  return stillMoving;
 };
 
 /** This building's doors as far-door instances (farDoors.ts), at their current swing. */
@@ -293,7 +239,7 @@ export const Building = (props: BuildingProps) => {
 
       if (doorRaycastFrameRef.current++ % DOOR_RAYCAST_INTERVAL_FRAMES === 0) {
         const hover =
-          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? raycastHoveredDoor(state.camera, doorMeshRefs.current) : -1;
+          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? hoveredDoor(state.camera, doorMeshRefs.current, DOOR_INTERACT_REACH) : -1;
         if (hover !== hoverDoorRef.current) {
           if (hover >= 0 && hoverDoorRef.current < 0) showCursor();
           if (hover < 0 && hoverDoorRef.current >= 0) hideCursor();
@@ -302,9 +248,13 @@ export const Building = (props: BuildingProps) => {
       }
 
       // Skipped once settled: the asymptotic lerp otherwise writes rotation.y
-      // (Euler→quaternion trig) on every door of every building forever.
+      // (Euler→quaternion trig) on every door of every building forever. Each moved angle is
+      // mirrored onto the far-door instance.
       if (doorsMovingRef.current) {
-        doorsMovingRef.current = swingDoors(hingeRefs.current, doorsOpenRef.current, farDoorsRef.current, delta);
+        doorsMovingRef.current = swingDoors(hingeRefs.current, doorsOpenRef.current, delta, (i, angle) => {
+          const far = farDoorsRef.current?.[i];
+          if (far) setFarDoorAngle(far, angle);
+        });
       }
     },
   });

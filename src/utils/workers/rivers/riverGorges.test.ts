@@ -77,7 +77,15 @@ describe("river gorges", () => {
     expect(near(-14439, 18755)).toBeGreaterThan(0);
     // Image 88: a desert river cut in two by a 23u rise over dunes the relief rule read as rock.
     expect(near(-5800, 3790)).toBeGreaterThan(0);
-    expect(near(-38021, -11251)).toBe(0);
+    // Image 87's high snow ridge is the mountain's ROCK: since Oct 2026 the river climbs it (waterfalls,
+    // peak pools) instead of stopping in two ponds — its rock pieces are built, not gorged.
+    const w = warp(-38021, -11251);
+    const rockBuilt = edgesNear(w.x - 300, w.z - 300, w.x + 300, w.z + 300).reduce((n, e) => {
+      const blocked = riverEdgeBlocked(e);
+      for (let i = 0; i < e.count; i++) if (e.rock![i] === 1 && blocked[i] === 0) n++;
+      return n;
+    }, 0);
+    expect(rockBuilt).toBeGreaterThan(0);
   });
 
   it("are decided the same whatever order the river windows are built in", () => {

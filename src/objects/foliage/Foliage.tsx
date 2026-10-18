@@ -1,3 +1,4 @@
+import { traceSpan } from "../../utils/spikeTrace";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -287,7 +288,7 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
 
     const dNear = chunkNearDistance(cx, cz, camera.position.x, camera.position.z);
     const lowDetail = held ? held.lowDetail : wantsLowBladeDetail(false, dNear);
-    const geo = buildChunkGeometry(result, lowDetail, foliageDrawFraction(dNear, renderDistance), height, sway);
+    const geo = traceSpan("foliage:chunk", () => buildChunkGeometry(result, lowDetail, foliageDrawFraction(dNear, renderDistance), height, sway));
 
     const chunk: FoliageChunk = {
       cx,

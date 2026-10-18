@@ -1,8 +1,8 @@
 /**
  * THE height pipeline (CLAUDE.md: "Heights have a single source of truth"): one vertex evaluation
  * (computeVertexData) over the modules beside this file — noise, the voronoi grids, the zone wall
- * pass, lakes, flatten pads, and the rivers/, roads/ and bridges/ folders — run identically by every
- * worker, the main thread and the server. Three-free.
+ * pass, lakes, flatten pads, and the rivers/, roads/, bridges/ and underground/ folders — run
+ * identically by every worker, the main thread and the server. Three-free.
  *
  * This file is also the pipeline's PUBLIC API: every caller outside utils/workers/ imports from here
  * (the re-exports at the bottom), never from the modules themselves.
@@ -14,6 +14,7 @@
  */
 
 import { smoothstep } from "../math/_math";
+import type { PointXZ } from "../math/types";
 import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges";
@@ -24,7 +25,7 @@ import { clearLakeCaches, lakeBedBumps, lakeBowlHeight, lakeLevelAt, lakeSurface
 import { biomeNoiseHeight, terrainNoise, warp } from "./noise";
 import { initPlaces } from "./places";
 import { capRiverBed } from "./rivers/riverBedLimit";
-import { carveRiverChannel, riverWaterBand } from "./rivers/riverChannel";
+import { blendedRiverBankBump, carveRiverChannel, riverWaterBand } from "./rivers/riverChannel";
 import { clearRiverField, noRiverQuay, noRiverSample, riverFieldAt, riverQuay, riverQuayAt, riverSample } from "./rivers/riverField";
 import { initRivers } from "./rivers/riverNetwork";
 import { NO_ROAD_DISTANCE } from "./roads/cityRoadField";
@@ -45,6 +46,13 @@ import {
 import { FREEWAY_GRADE_RAMP, clearFreewayGrades, freewayGradeAt } from "./roads/freewayGrade";
 import { FREEWAY_SMIN_K, type WallNetwork, clearNetworkCache, nearestFreewayRun, nearestRun, networkOf, smoothMin } from "./roads/freewayNetwork";
 import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, ISLAND_LAND_FIELD, TO_BANK, TO_ROAD, blockIslandAt, clearRoadFragments, islandRoad, inRoadFragment } from "./roads/roadFragments";
+import { clearSnowCaches, snowMovementAt } from "./snow/snowDrift";
+import { createMovementModifiers, resetMovementModifiers, type MovementModifiers } from "../../physics/movementModifiers";
+import { clearMouthTiles, mouthBulgeAt, mouthsNear, NO_MOUTHS } from "./underground/mouthBulge";
+import { clearSpringWaterTiles, springWaterAt, type SpringWaterSample } from "./underground/springWater";
+import { clearSewerGeometry } from "./underground/sewerMesh";
+import { clearSewerLayouts } from "./underground/sewers";
+import { clearTunnelCaches, generatingTunnels } from "./underground/systems";
 import type { BiomeContext, DomainConfig, SerializedRegion, VertexResult, Zone } from "./types";
 import { clearVoronoiCaches, getBiomeContext, cityWallsOf } from "./voronoi";
 import {
@@ -99,6 +107,12 @@ export function initCompute(config: DomainConfig): void {
   clearDeckCells();
   clearRoadFragments();
   clearBridgeCaches();
+  clearTunnelCaches();
+  clearMouthTiles();
+  clearSpringWaterTiles();
+  clearSewerLayouts();
+  clearSewerGeometry();
+  clearSnowCaches();
   initRivers(config);
   initZones(config);
   initPlaces(config);
@@ -114,9 +128,9 @@ export const getRegions = (): SerializedRegion[] => {
 /** The own zone's city terrain, when zoneBiomeHeight evaluated one for the current vertex. */
 let ownCityTerrain: CityTerrain | null = null;
 
-/** A zone's BIOME height at (x, z) (the region base is added by the caller), already
- *  scaled by the biome's PRESENCE: 0 at the biome's own edge (the region base shows),
- *  1 one height-blend width inside; a crisp biome (city) has presence 1 everywhere, so
+/** A zone's BIOME height at (x, z) (the region base is added by the caller), already scaled by the
+ *  biome's PRESENCE: 0 at the biome's own edge (the region base
+ *  shows), 1 one height-blend width inside; a crisp biome (city) has presence 1 everywhere, so
  *  evaluated OUTSIDE its zone it continues at the belt freeway's grade — the value its
  *  own rim already holds at the wall (getCityTerrain) — and the neighbor's ramp starts
  *  on the road surface. Water biomes bowl `depth` below the base. */
@@ -197,6 +211,7 @@ export const outsideBiomes = (biomeIds: readonly number[] | undefined, x: number
   !!biomeIds && biomeIds.length > 0 && !biomeIds.includes(getBiomeContext(warp(x, z)).zone.biome.id);
 
 /** Set while a FAR VISUAL-ONLY terrain vertex is evaluated (computeVertexDataFar). */
+const springWater: SpringWaterSample = { level: NaN, depth: 0, flowX: 0, flowZ: 0 };
 let farVisual = false;
 /** Set while a far vertex is evaluated WITHOUT the river field (computeVertexDataFar, rivers = false). */
 let farDry = false;
@@ -226,10 +241,14 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
   if (!domainConfig) throw new Error("vertexCompute not initialized");
   const river = domainConfig.river;
 
-  // Step 0: the decks whose ground this vertex may have to cut (step 7) — fetched FIRST: enumerating a
-  // cell's decks evaluates the terrain (their landed ends), which clobbers every scratch buffer below.
+  // Step 0: the decks whose ground this vertex may have to cut (step 7), and the cave mouths whose
+  // bulge it may take (step 6) — fetched FIRST: enumerating a cell's decks or generating a cave
+  // evaluates the terrain, which clobbers every scratch buffer below. The raw path (pad candidates,
+  // far LODs) and a vertex read during cave generation see no bulge, so no mouth depends on its own.
   const decksKnown = !evaluatingPadCandidates && enumeratingBridges === 0;
   const cellDecks = decksKnown && cutDecks ? decksAround(x, z) : NO_DECKS;
+  const tunnelsKnown = decksKnown && generatingTunnels === 0;
+  const mouths = tunnelsKnown ? mouthsNear(x, z) : NO_MOUTHS;
 
   // Step 1: the road-noise warp — every grid, wall, road and river lives in warped space.
   const currentVertex = warp(x, z);
@@ -288,6 +307,9 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
   let distanceToFreewayCenter = NO_ROAD_DISTANCE;
   let freewayAlong = 0;
   ownCityTerrain = null;
+  // The relief a levee bank takes, blended like the heights (riverChannel.ts blendedRiverBankBump), read
+  // while these weights are this vertex's; step 4 and the deck approach (step 7) see the same.
+  const bankBump = distanceToRiver < river.halfWidth + river.bank ? blendedRiverBankBump(x, z) : 0;
   for (let i = 0; i < zones.length; i++) {
     const w = zoneFinal[i];
     if (w < ZONE_WEIGHT_EPS) continue;
@@ -352,13 +374,16 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     riverBedDistance += (capped - riverBedDistance) * (quayBeside ? smoothstep(0, BELT_FIELD_HANDOFF, nearestCityWall.wall) : 1);
   }
   let mouth = 0;
-  // The river's water as drawn here (NaN outside its water band).
+  // The river's water as drawn here (NaN outside its water band), and its FLOW (world/water: the
+  // surface's motion runs downhill along the river; still on a lake, stilled over a mouth).
   let riverWater = NaN;
+  let waterFlowX = 0;
+  let waterFlowZ = 0;
   if (!Number.isNaN(riverSurface)) {
     // A river MOUTH (riverMouthShare): over the lakebed the channel only deepens the ground and the
     // water is the lake's — no bank rim, no surface above the lake's, no bed paint across the mouth.
     mouth = riverMouthShare(height, waterHeight);
-    const carved = carveRiverChannel(height, distanceToRiver, riverSurface, riverSample.factor);
+    const carved = carveRiverChannel(height, distanceToRiver, riverSurface, riverSample.factor, bankBump);
     let surface = riverSurface;
     if (mouth > 0) {
       height = carved + (Math.min(carved, height) - carved) * mouth;
@@ -369,6 +394,12 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
       riverWater = surface;
       waterHeight = Number.isNaN(waterHeight) ? surface : Math.max(waterHeight, surface);
     }
+    // The flow reaches the dry bank, fading over it: a dry vertex next to a wet one carries nearly its
+    // flow, so the water sheet's edge triangles never interpolate from full flow to none within one
+    // quad (the shader's advection sheared the noise into lines along every bank).
+    const flowShare = (1 - mouth) * (1 - smoothstep(waterBand, riverReach, distanceToRiver));
+    waterFlowX = riverSample.flowX * flowShare;
+    waterFlowZ = riverSample.flowZ * flowShare;
   }
   // A river BESIDE a lake (riverLakeMerge): the land between them, the river's lake-side bank and the
   // lake's beach there go under the lake's level — one water, no levee. Never in a city or on a road
@@ -416,14 +447,17 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     // (carveRiverChannel) — under the deck only (step 7), or a cut's end sits on a bowed road again.
     if (approachDelta !== 0 && !Number.isNaN(riverSurface) && mouth === 0) {
       const approach = height + approachDelta;
-      approachRimLift = Math.max(0, carveRiverChannel(approach, distanceToRiver, riverSurface, riverFactor) - approach);
+      approachRimLift = Math.max(0, carveRiverChannel(approach, distanceToRiver, riverSurface, riverFactor, bankBump) - approach);
     }
   }
 
-  // Step 6: flatten pads — not while evaluating pad candidates (they are defined against the RAW
-  // terrain), and only in biomes some flatten descriptor targets. Pads RECURSE into the pipeline and
-  // clobber every scratch buffer: everything returned was captured above, and the per-slot buffers
-  // are copied into the result buffers the recursion (raw, returning the scratch itself) never writes.
+  // Step 6: the cave mouths' bulge (underground/mouthBulge.ts) — the one height step the tunnels
+  // make, zero on roads, rivers and water — then the flatten pads, which still override it. Pads are
+  // not applied while evaluating pad candidates (they are defined against the RAW terrain), and only
+  // in biomes some flatten descriptor targets. Pads RECURSE into the pipeline and clobber every scratch
+  // buffer: everything returned was captured above, and the per-slot buffers are copied into the
+  // result buffers the recursion (raw, returning the scratch itself) never writes.
+  if (mouths.length > 0) height = mouthBulgeAt(mouths, x, z, height, { waterHeight, distanceToRoadCenter, distanceToFreewayCenter, distanceToRiverCenter: distanceToRiver });
   let sdfOut = biomeSdf;
   let presenceOut = biomePresence;
   if (!evaluatingPadCandidates) {
@@ -489,6 +523,20 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
   if ((riverBedDistance - riverReach) * riverFactor < RIVERBED_SDF_MARGIN) riverbedSdfAt(cvx, cvz, ctx.zoneWalls, own, sdfOut, bedSdfOut);
   else bedSdfOut.set(sdfOut);
 
+  // Step 8: the water sheet's depth. Over the ground it is the water's; under the mountain a spring
+  // cave's water (springWater.ts) joins the sheet with its own depth and flow, and the sheet dives
+  // under that water around it.
+  let waterDepth = Number.isNaN(waterHeight) || waterHeight <= height ? 0 : waterHeight - height;
+  if (waterDepth === 0 && tunnelsKnown && springWaterAt(x, z, springWater)) {
+    // A dive vertex stays DRY to everything that tests "water over the ground" (the swim probe, the
+    // underwater shading, the bed paint): its level is clamped under the ground (the sheet dives
+    // under the lower of the two anyway).
+    waterHeight = springWater.depth > 0 ? springWater.level : Math.min(springWater.level, height - 0.01);
+    waterDepth = springWater.depth;
+    waterFlowX = springWater.flowX;
+    waterFlowZ = springWater.flowZ;
+  }
+
   return {
     height,
     biomeId: own.biome.id,
@@ -502,6 +550,9 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     distanceToFreewayCenter,
     freewayAlong,
     waterHeight,
+    waterDepth,
+    waterFlowX,
+    waterFlowZ,
     approachHeight,
     biomeSdf: sdfOut,
     biomePresence: presenceOut,
@@ -543,3 +594,18 @@ export { bridgeDrawnTopAt } from "./bridges/drawnSlab";
 export { bridgeDebug, getFreewayBridges } from "./bridges/freewayBridges";
 export { getFreewayMouths } from "./bridges/mouths";
 export { bridgeRiverCrossing } from "./bridges/rules";
+export { type RockPlacementParams, type RockPoint, type RockField, ROCK_SHAPE_COUNT, getRocks } from "./rocks/rockPlacement";
+export { type SnowDriftMesh, getSnowDrift, snowMovementAt } from "./snow/snowDrift";
+export { type SplashEmitter, type SplashEmitterParams, getRiverSplashEmitters } from "./rivers/riverSplashes";
+export { type WaterfallBoulder, WATERFALL_GRADE, getWaterfallBoulders, getWaterfallRocks } from "./rivers/waterfallRocks";
+export { type BubbleEmitter, type BubbleEmitterParams, getLakeBubbleEmitters, waterBiomeIds } from "./lakeBubbles";
+
+/** Every surface source's movement modifiers at a world point (physics/movementModifiers.ts), into
+ *  `out` (reset first): what a capsule's caller samples off the stepping thread for CharacterInput.surface.
+ *  `feetY` is the capsule's feet (NaN = on the ground): a source on the ground's surface ignores a capsule
+ *  standing well under it (a tunnel) or over it. */
+export const surfaceModifiersAt = (x: number, z: number, feetY = NaN, out: MovementModifiers = createMovementModifiers()): MovementModifiers => {
+  resetMovementModifiers(out);
+  snowMovementAt(x, z, out, feetY);
+  return out;
+};

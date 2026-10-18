@@ -1,4 +1,5 @@
 import { useFrame, useThree } from "@react-three/fiber";
+import { getDarkness } from "../../lighting/personalLight";
 import { getServerTime } from "../../net/connection";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -145,6 +146,11 @@ export const DayNightCycle = ({
       if (sunMesh) sunMesh.visible = true;
       if (moonMesh) moonMesh.visible = true;
       if (starsRef.current) starsRef.current.visible = true;
+    } else if (getDarkness() > 0.99) {
+      // Deep in a tunnel the sky is black (Skybox.tsx): nothing hangs in it.
+      if (sunMesh) sunMesh.visible = false;
+      if (moonMesh) moonMesh.visible = false;
+      if (starsRef.current) starsRef.current.visible = false;
     }
 
     jitterTimer.current += delta;

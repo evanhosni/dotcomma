@@ -9,6 +9,8 @@ import type { PlayerSnapshot } from "../protocol";
  * transform toward the last intent.
  */
 
+import type { PointXZ } from "../../utils/math/types";
+
 export interface RemotePlayer {
   id: string;
   color: string;
@@ -27,6 +29,8 @@ export interface RemotePlayer {
   displayYaw: number;
   needsInitialPlacement: boolean;
   object: THREE.Object3D | null;
+  /** Where its last snow stamp was laid (RemotePlayers.tsx, snow-drift/snowTrail.ts). */
+  lastStamp: PointXZ;
 }
 
 const players = new Map<string, RemotePlayer>();
@@ -55,6 +59,7 @@ const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   displayYaw: p.ry,
   needsInitialPlacement: true,
   object: null,
+  lastStamp: { x: Infinity, z: Infinity },
 });
 
 /** The live map — iterate it, never copy per frame. */

@@ -1,4 +1,4 @@
-import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo } from "react";
 import { getSave, saveToDevice, useSave } from "../save/save";
 import { DEV_TOGGLES } from "./constants";
 import { DevContextType, DevToggleFlag, DevToggleFlags } from "./types";
@@ -20,28 +20,15 @@ const togglesFromSave = (saved: Partial<DevToggleFlags> | undefined): DevToggleF
   return toggles;
 };
 
-/** Older links carried a bare `?devmode` (or `=`); anything but "false" counts as on. */
-const readDevParam = (): boolean => {
-  const value = new URLSearchParams(window.location.search).get(DEV_PARAM);
-  return value !== null && value !== "false";
-};
-
-/** `?devmode=true` while on; off drops the param. Navigation (world/domains/navigation.ts) carries the
- *  query string through every path change. */
-const writeDevParam = (devMode: boolean): void => {
-  const url = new URL(window.location.href);
-  if (devMode) url.searchParams.set(DEV_PARAM, "true");
-  else url.searchParams.delete(DEV_PARAM);
-  if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url.href);
-};
+/** Devmode is the `?devmode` param's PRESENCE (any value); navigation (world/domains/navigation.ts) carries
+ *  the query string through every path change, so it holds for the page's lifetime. */
+const readDevParam = (): boolean => new URLSearchParams(window.location.search).has(DEV_PARAM);
 
 export const DevContextProvider: React.FC<DevContextProviderProps> = ({ children }) => {
-  const [devMode, setDevMode] = useState(readDevParam);
+  const devMode = useMemo(readDevParam, []);
   // The checkboxes as last selected (device save), remembered while devmode is off.
   const selected = togglesFromSave(useSave().devmode);
   const selectedKey = DEV_TOGGLES.map(({ flag }) => (selected[flag] ? "1" : "0")).join("");
-
-  useEffect(() => writeDevParam(devMode), [devMode]);
 
   // Reads the save at call time: a render's `selected` is stale for a second click landing before the
   // re-render, and would overwrite the first.
@@ -50,23 +37,24 @@ export const DevContextProvider: React.FC<DevContextProviderProps> = ({ children
     [],
   );
 
-  const toggleDevMode = useCallback(() => setDevMode((prev) => !prev), []);
-
+  // Each toggle's function key flips it. Unmodified only, so Ctrl+F5 still hard-reloads.
   useEffect(() => {
+    if (!devMode) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "F1") {
-        e.preventDefault();
-        toggleDevMode();
-      }
+      if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      const toggle = DEV_TOGGLES.find(({ key }) => key === e.code);
+      if (!toggle) return;
+      e.preventDefault();
+      setToggle(toggle.flag, !togglesFromSave(getSave().devmode)[toggle.flag]);
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [toggleDevMode]);
+  }, [devMode, setToggle]);
 
   const value: DevContextType = useMemo(
-    () => ({ ...(devMode ? selected : ALL_TOGGLES_OFF), devMode, toggleDevMode, setToggle }),
+    () => ({ ...(devMode ? selected : ALL_TOGGLES_OFF), devMode, setToggle }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedKey IS selected's value
-    [selectedKey, devMode, toggleDevMode, setToggle],
+    [selectedKey, devMode, setToggle],
   );
 
   return <DevContext.Provider value={value}>{children}</DevContext.Provider>;

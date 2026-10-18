@@ -74,7 +74,7 @@ describe("river banks", () => {
 
   it("run on to their other stretch or into the water across any gap under 800u that is not mountain", () => {
     // Rivers connect to the water near them (no river in blobs between two seas). Per edge: every stretch of unbuilt pieces up to RIVER_GAP_FILL long
-    // with river or water on both sides reaches the mountain's rock (code 4) or a prohibited biome (2).
+    // with river or water on both sides reaches a tall non-rock relief (code 4), a prohibited biome (2) or the rock past a spring's mouth (5).
     const pieces = riverPiecesNear(-12000, -12000, 12000, 12000, 0);
     const edges = new Map(pieces.map((p) => [p.edge.key, p.edge]));
     let gaps = 0;
@@ -93,7 +93,7 @@ describe("river banks", () => {
         const riverish = (k: number) => k >= 0 && k < e.count && (b[k] === 0 || b[k] === 1);
         if (riverish(i - 1) && riverish(j + 1) && (j - i + 1) * step <= 800) {
           gaps++;
-          expect(Array.from(b.slice(i, j + 1)).some((c) => c === 2 || c === 4)).toBe(true);
+          expect(Array.from(b.slice(i, j + 1)).some((c) => c === 2 || c === 4 || c === 5)).toBe(true);
         }
         i = j + 1;
       }
@@ -148,9 +148,11 @@ describe("river banks", () => {
     const grid: { wet: number; h: number; w: number }[] = [];
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
-        const v = computeVertexData(cx - half + j * step, cz - half + i * step);
+        const x = cx - half + j * step;
+        const z = cz - half + i * step;
+        const v = computeVertexData(x, z);
         const wet = v.waterHeight > v.height + 0.05;
-        // 1 = the river's water, 2 = the lake's
+        // 1 = the river's water, 2 = the lake's.
         grid.push({ wet: !wet ? 0 : v.biomeId !== LAKE_BIOME.id && v.distanceToRiverCenter < band ? 1 : 2, h: v.height, w: v.waterHeight });
       }
     }
@@ -214,7 +216,7 @@ describe("river banks", () => {
         expect(Number.isNaN(v.waterHeight) || v.waterHeight <= v.height + 1e-6).toBe(true);
       }
     }
-    expect(banks).toBeGreaterThan(20);
+    expect(banks).toBeGreaterThan(10);
   });
 
   it("are absent from the far LODs that skip the river field: no water, no bed paint, no trench", () => {

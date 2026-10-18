@@ -1,5 +1,6 @@
 /** NO Three/React here — the server (physics/obstacles.ts) imports this to build the same colliders. */
 
+import type { RectXZ } from "../../utils/math/types";
 import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./enumerators";
 
 /** A box in instance-local space (+X along the arm, y up); `x`/`y`/`z` are the box center (z defaults to 0)
@@ -17,7 +18,7 @@ export interface DressingColliderPart {
 }
 
 /** A triangle mesh in body-local space (xyz triples, three indices per triangle): what a bridge chord's
- *  drawn slab and walls are, exactly. */
+ *  drawn slab and walls are, exactly — or a rock's lump. */
 export interface DressingColliderMesh {
   vertices: Float32Array;
   indices: Uint32Array;
@@ -27,7 +28,7 @@ export interface DressingColliderMesh {
 
 /** One fixed body: rotation = yaw about y after `pitch` about local Z (Euler XYZ [0, yaw, pitch]).
  *  `parts` overrides the feature's shared boxes (bridge chords differ per body); `mesh`, when present,
- *  is one more collider of the body. */
+ *  is one more collider of the body — a body may be solid through its mesh alone (a rock). */
 export interface DressingColliderBody {
   x: number;
   y: number;
@@ -51,12 +52,8 @@ export interface DressingColliderSpec<K extends DressingEnumeratorName = Dressin
   bodiesOf(point: EnumeratorPoint<K>): DressingColliderBody[];
 }
 
-export interface DressingBounds {
-  minX: number;
-  minZ: number;
-  maxX: number;
-  maxZ: number;
-}
+/** A chunk's horizontal rectangle (the shared RectXZ). */
+export type DressingBounds = RectXZ;
 
 /** rotateY(θ) maps +X to (cosθ, 0, −sinθ) — the yaw aligning local +X with a direction. */
 export const yawFromDir = (dirX: number, dirZ: number): number => Math.atan2(-dirZ, dirX);

@@ -1,3 +1,4 @@
+import { traceEvent } from "../../utils/spikeTrace";
 import { useFrame } from "@react-three/fiber";
 import { useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +33,9 @@ const _colliderQuat = new THREE.Quaternion();
  *  building proxies): r-t-r's frame loop syncs every mounted <RigidBody> each frame and a fixed
  *  body never reads as sleeping. Same shapes and transforms as `<RigidBody rotation={[0, yaw,
  *  pitch]}>` + a `<CuboidCollider>` per part — the server builds the same (physics/obstacles.ts). */
+/** How many collider bodies a frame makes at most (a trimesh column is ~1ms; a fresh sewer is dozens). */
+const COLLIDER_BODIES_PER_FRAME = 3;
+
 export const DressingPartColliders = ({
   colliders,
   parts,
@@ -42,13 +46,18 @@ export const DressingPartColliders = ({
   const { world, rapier } = useRapier();
   const bodies = useRef(new Map<string, RapierRigidBody>()).current;
   const partsRef = useRef(parts);
+  /** The points whose bodies are still to be made, nearest first (createBodies). */
+  const pending = useRef<DressingColliderPoint[]>([]).current;
+  /** Bodies built on the previous `parts`: each stays until its successor is made in the same frame
+   *  (a frame with no body let a walking capsule into a tunnel wall; `parts` must be one array per
+   *  spec, never an inline literal). */
+  const stale = useRef(new Set<string>()).current;
 
   useEffect(() => {
-    // The shared boxes changed: every body is rebuilt.
+    // The shared boxes changed: every body is rebuilt, each replaced as its successor is made.
     if (partsRef.current !== parts) {
       partsRef.current = parts;
-      bodies.forEach((body) => world.removeRigidBody(body));
-      bodies.clear();
+      bodies.forEach((_, key) => stale.add(key));
     }
     const wanted = new Set<string>();
     for (const c of colliders) wanted.add(c.key);
@@ -56,9 +65,31 @@ export const DressingPartColliders = ({
       if (wanted.has(key)) return;
       world.removeRigidBody(body);
       bodies.delete(key);
+      stale.delete(key);
     });
-    for (const c of colliders) {
-      if (bodies.has(c.key)) continue;
+    pending.length = 0;
+    for (const c of colliders) if (!bodies.has(c.key) || stale.has(c.key)) pending.push(c);
+  }, [colliders, parts, world, rapier, bodies, pending, stale]);
+
+  // The bodies are made a few per frame, nearest the camera first: a fresh set (a sewer's trimesh
+  // columns, a bridge's ribbons) made in one effect was a lag spike while flying.
+  useFrame(({ camera }) => {
+    if (pending.length === 0) return;
+    if (pending.length > COLLIDER_BODIES_PER_FRAME) {
+      const cx = camera.position.x;
+      const cz = camera.position.z;
+      pending.sort((a, b) => (a.x - cx) ** 2 + (a.z - cz) ** 2 - ((b.x - cx) ** 2 + (b.z - cz) ** 2));
+    }
+    const batch = pending.splice(0, COLLIDER_BODIES_PER_FRAME);
+    const t0 = performance.now();
+    for (const c of batch) {
+      const old = bodies.get(c.key);
+      if (old) {
+        if (!stale.has(c.key)) continue;
+        world.removeRigidBody(old);
+        bodies.delete(c.key);
+        stale.delete(c.key);
+      }
       _colliderQuat.setFromEuler(_colliderEuler.set(0, c.yaw, c.pitch));
       const body = world.createRigidBody(
         rapier.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z).setRotation(_colliderQuat),
@@ -77,14 +108,16 @@ export const DressingPartColliders = ({
       }
       bodies.set(c.key, body);
     }
-  }, [colliders, parts, world, rapier, bodies]);
+    traceEvent("colliders:bodies", performance.now() - t0);
+  });
 
   useEffect(
     () => () => {
       bodies.forEach((body) => world.removeRigidBody(body));
       bodies.clear();
+      stale.clear();
     },
-    [world, bodies],
+    [world, bodies, stale],
   );
 
   return null;

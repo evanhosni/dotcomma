@@ -1,5 +1,6 @@
 import { Worker } from "node:worker_threads";
 import type { DomainId } from "../../../../src/net/protocol";
+import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
 import type { ChunkFetch } from "./chunks.js";
 import type { ObstaclePoint } from "./obstaclePoints.js";
 
@@ -27,6 +28,7 @@ export type ChunkLayer = keyof ChunkLayerData;
 export type ChunkGeneratorRequest =
   | { t: "job"; id: number; layer: ChunkLayer; gx: number; gz: number }
   | { t: "height"; id: number; x: number; z: number }
+  | { t: "surface"; id: number; x: number; z: number; feetY: number }
   | { t: "cancel"; id: number };
 
 export type ChunkGeneratorReply = { id: number; data?: unknown; error?: string };
@@ -75,6 +77,15 @@ export class ChunkGenerator {
     const id = this.nextId++;
     const promise = this.expect<number>(id);
     this.worker.postMessage({ t: "height", id, x, z } satisfies ChunkGeneratorRequest);
+    return promise;
+  }
+
+  /** The movement modifiers at (x, z) (CharacterInput.surface), answered like a height; null once the worker is gone. */
+  surface(x: number, z: number, feetY: number): Promise<MovementModifiers> | null {
+    if (this.dead) return null;
+    const id = this.nextId++;
+    const promise = this.expect<MovementModifiers>(id);
+    this.worker.postMessage({ t: "surface", id, x, z, feetY } satisfies ChunkGeneratorRequest);
     return promise;
   }
 

@@ -1,5 +1,11 @@
+import { QUANTIZATION_GRID } from "../../constants";
 import React from "react";
 import { DayNightLights } from "../../../lighting/DayNightLights";
+import { Dressing } from "../../../objects/dressing/Dressing";
+import { LakeBubbles } from "../../../objects/dressing/particles/LakeBubbles";
+import { RiverSplashes } from "../../../objects/dressing/particles/RiverSplashes";
+import { Rocks } from "../../../objects/dressing/rocks/Rocks";
+import { SnowDrift } from "../../../objects/dressing/snow-drift/SnowDrift";
 import { PostProcessing } from "../../../vfx/PostProcessing";
 import { Domain, Material, Regions, Skybox, Terrain } from "../../components";
 import { DayNightCycle } from "../../sky/DayNightCycle";
@@ -20,8 +26,17 @@ export const OverworldDomain = React.memo(() => (
     <Material riverTexture="potato_sack.jpg" />
     <Skybox topColor="#4a90d9" horizonColor="#87ceeb" bottomColor="#666666" />
     <DayNightCycle />
-    <PostProcessing quantization={0.025} />
+    <PostProcessing quantization={QUANTIZATION_GRID} />
     <FastTravel />
     <Regions specs={OVERWORLD_REGIONS} components={{ city: CityRegion, desert: DesertRegion, snow: SnowRegion, ocean: OceanRegion }} />
+    {/* FLAG-DRIVEN dressing, mounted ONCE: each draws every biome whose spec sets its flag (snow, rocks) or
+        stands on any river or water (spray, bubbles). The tunnels (<Caves/>, <Sewers/>) are mounted in the
+        biomes that hold them: their chunks are built per biome. Biome-specific features stay in the biomes. */}
+    <Dressing>
+      <SnowDrift />
+      <Rocks />
+      <RiverSplashes />
+      <LakeBubbles />
+    </Dressing>
   </Domain>
 ));

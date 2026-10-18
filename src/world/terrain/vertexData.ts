@@ -1,12 +1,12 @@
 import {
   computeVertexData,
-  computeVertexDataRaw,
   initCompute,
   VertexResult,
 } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
 
 // Main-thread adapter over the SAME compute module the workers run — never a second height implementation.
+// For one-off queries only (a teleport, a fall reset): a frequent one samples on the worker (getVertexSample).
 
 let lastConfig: object | null = null;
 
@@ -27,15 +27,7 @@ export const getVertexData = async (x: number, z: number): Promise<VertexResult>
   return computeVertexData(x, z);
 };
 
-/** PAD-FREE height for frequent callers (the padded path can spend 30–70ms
- *  building a flatten tile). NOT a lower bound on the real surface: pads
- *  EXCAVATE (up to 8.3u measured), so use it only as a pre-filter and confirm
- *  with the padded height before acting (Player.tsx resolveEmbeddedSurface). */
-export const getVertexDataRaw = async (x: number, z: number): Promise<VertexResult> => {
-  await ensureVertexCompute();
-  return computeVertexDataRaw(x, z);
-};
-
-/** PADDED height computed in the dressing worker (absorbs the flatten-tile
- *  cost). null until the worker is up — fall back to getVertexData. */
+/** A height sample computed in the dressing worker, padded or raw: what any FREQUENT caller uses (a
+ *  flatten-tile miss is 30–70ms and a cell's first river list and road network ~70ms on this thread).
+ *  null until the worker is up. */
 export { getVertexSample } from "../../objects/dressing/dressingWorker";

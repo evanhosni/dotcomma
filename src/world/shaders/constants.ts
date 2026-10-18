@@ -42,9 +42,10 @@ export const RIVER_BED_SLOPE_END_DEG = 40;
 export const RIVER_BED_UNDERWATER_FADE = 1.5;
 
 /** Whether a biome's ground is ROCK on steep banks, the only ground the bed yields to by slope (the
- *  shader's fade, the bed limit's marches): a domed biome (the mountain). Grass, dunes and snow
- *  stay under the bed — yielding, they cut into it in wedges and strips reaching the water. */
-export const bedYieldsToSteepGround = (noise: { dome?: unknown } | undefined): boolean => !!noise?.dome;
+ *  shader's fade, the bed limit's marches): THE one rock predicate, utils/workers/biomeFlags.ts
+ *  isRockBiome (a domed biome). Grass, dunes and snow stay under the bed — yielding, they cut into it
+ *  in wedges and strips reaching the water. */
+export { isRockBiome as bedYieldsToSteepGround } from "../../utils/workers/biomeFlags";
 
 /** The riverBedDistance ATTRIBUTE's "no river" value. The pipeline reports Infinity out of a river's
  *  reach, but a vertex attribute must stay FINITE: a triangle with one Infinity vertex interpolates to

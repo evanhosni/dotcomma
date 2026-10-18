@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { prepareActorMaterial } from "../../objects/actors/Actor";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
+import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/snowTrail";
 import { wrapAngle } from "../../utils/math/_math";
 import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
@@ -99,6 +100,8 @@ export const RemotePlayers = () => {
 
       obj.position.set(p.x, p.y, p.z);
       obj.rotation.y = p.displayYaw;
+      // Their tracks in the snow too (a stamp dents only where the sheet has snow under it).
+      stampSnowTrailAlong(p.lastStamp, p.x, p.z);
     }
   });
 

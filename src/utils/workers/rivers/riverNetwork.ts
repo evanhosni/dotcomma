@@ -28,8 +28,8 @@ import { CellCache, dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import type { DomainConfig, SerializedRegion } from "../types";
 import { getRegionGrid, nearestCell, regionSiteAt } from "../voronoi";
-import { RIVER_FIZZLE_FACTOR, RIVER_FIZZLE_LENGTH, RIVER_POND_FACTOR, RIVER_POND_LENGTH, RIVER_WIDTH_MAX } from "./constants";
-import { initRiverPieceRules, riverEdgeBlocked } from "./riverPieceRules";
+import { RIVER_BLOCK_SPRING, RIVER_FIZZLE_FACTOR, RIVER_FIZZLE_LENGTH, RIVER_POND_FACTOR, RIVER_POND_LENGTH, RIVER_SPRING_MOUTH_FACTOR, RIVER_SPRING_TAPER, RIVER_WIDTH_MAX } from "./constants";
+import { initRiverPieceRules, riverEdgeBlocked, riverEdgeSprings } from "./riverPieceRules";
 import { clearRiverRoadLayer, riverPieceSuppressed } from "./riverRoadLayer";
 import type { RiverEdge, RiverPiece, RiverSegment } from "./types";
 
@@ -153,14 +153,25 @@ const riverEdgeWidths = (e: RiverEdge, continuesAt: (junction: string) => boolea
     }
     let i1 = i0;
     while (i1 + 1 < e.count && !blocked[i1 + 1]) i1++;
-    const startShape = i0 === 0 ? naturalEnd(e.keyA) : RIVER_END_POND;
-    const endShape = i1 === e.count - 1 ? naturalEnd(e.keyB) : RIVER_END_POND;
+    // A stretch running into a spring's mouth keeps its width (it narrows to the mouth below), no pond.
+    const startShape = i0 === 0 ? naturalEnd(e.keyA) : blocked[i0 - 1] === RIVER_BLOCK_SPRING ? RIVER_END_NONE : RIVER_END_POND;
+    const endShape = i1 === e.count - 1 ? naturalEnd(e.keyB) : blocked[i1 + 1] === RIVER_BLOCK_SPRING ? RIVER_END_NONE : RIVER_END_POND;
     if (i0 === 0) e.endA = startShape !== RIVER_END_NONE;
     if (i1 === e.count - 1) e.endB = endShape !== RIVER_END_NONE;
     for (let k = i0; k <= i1 + 1; k++) {
       widths[k] *= riverEndShape(startShape, (k - i0) * step) * riverEndShape(endShape, (i1 + 1 - k) * step);
     }
     i0 = i1 + 1;
+  }
+  // Toward a spring's mouth the river narrows to RIVER_SPRING_MOUTH_FACTOR over RIVER_SPRING_TAPER.
+  for (const spring of riverEdgeSprings(e)) {
+    for (let j = 0; ; j++) {
+      const k = spring.forward ? spring.end - j : spring.end + j;
+      if (k < 0 || k > e.count || blocked[spring.forward ? Math.max(0, k - 1) : Math.min(e.count - 1, k)] !== 0) break;
+      const taper = smoothstep(0, RIVER_SPRING_TAPER, j * step);
+      if (taper >= 1) break;
+      widths[k] *= RIVER_SPRING_MOUTH_FACTOR + (1 - RIVER_SPRING_MOUTH_FACTOR) * taper;
+    }
   }
   e.widths = widths;
   return widths;
@@ -405,7 +416,7 @@ export const getRiverSegments = (warped: PointXZ): RiverSegment[] => riverCellEn
 /** Network-build diagnostics (probes): pieces blocked per reason, over every edge built. */
 export const riverDebug = {
   pieces: 0,
-  blocked: [0, 0, 0, 0, 0],
+  blocked: [0, 0, 0, 0, 0, 0],
   gorgePieces: 0,
   along: 0,
   undeckable: 0,

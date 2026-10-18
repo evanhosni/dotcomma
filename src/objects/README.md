@@ -13,6 +13,7 @@ Everything placed in the world that is not terrain, water or sky is a game objec
 - **Attributes** ([types.ts](types.ts)): `GameObjectAttributes` (every class: distances, quantization, `serverSynced`, placement filters, `density`, `footprint`) → `ActorAttributes` / `DressingAttributes` / `FoliageAttributes`. Member-only attributes live next to the member (`ModelActorAttributes`, `BuildingAttributes`). A field lives at the highest level at least two members share.
 - **Group defaults**: objects mount inside `<Actors>`, `<Dressing>` or `<Foliage>` in a biome; group props are defaults, a child's own props win. `<Dressing>`/`<Foliage>` come from `createDefaultsGroup` ([utils.tsx](utils.tsx)).
 - **Placement** is deterministic and off-thread: spawn.worker, dressing.worker and foliage.worker in [../utils/workers/](../utils/workers/). Same seed, same points, on every client and the server.
+- **Shared parts**: [geometry.ts](geometry.ts) (`bakeVertexColor`, `mergeOrThrow`: vertex-colored parts merged into one mesh, for buildings, doors and the tunnels' fittings) and [doors/](doors/README.md), THE hinged door.
 - **Sync**: only actors are server-synced; dressing and foliage are deterministic scenery.
 
 ## How to add another

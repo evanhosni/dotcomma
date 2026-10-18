@@ -406,3 +406,42 @@ describe("full-speed slopes", () => {
     assert.ok(untagged < tagged * 0.5, `untagged ramp: ${untagged.toFixed(2)}u vs ${tagged.toFixed(2)}u`);
   });
 });
+
+describe("movement modifiers", () => {
+  // The snow's drag and traction reach a server walker through the ONE character step: its sampled
+  // `surface` (physics/movementModifiers.ts) scales the walk and moves the slide angle, exactly as the
+  // player's does (the depth → factor rule itself is pinned in src/utils/workers/snow/snow.test.ts).
+  const walk = async (speedFactor: number, slopeBonus: number) => {
+    const world = await PhysicsWorld.create();
+    try {
+      const spot = findBiomePatch(GRASS_BIOME.id)!;
+      const height = computeVertexData(spot.x, spot.z).height;
+      world.holdTerrainAround(spot.x, spot.z);
+      world.workFor(Infinity);
+      // The sample is answered in place, at once: the walker reads it from its next step on.
+      world.surfaceModifiersAt = (_x, _z, _feetY, answer) => answer({ speedFactor, slopeBonus, snowDepth: slopeBonus > 0 ? 1 : 0 });
+      const w = new Walker(world, spot.x, height + 0.1, spot.z, CAPSULE);
+      for (let i = 0; i < 12; i++) {
+        w.step(TICK_SECONDS, 0, 0);
+        world.step();
+      }
+      const p0 = w.position();
+      for (let i = 0; i < Math.round(1 / TICK_SECONDS); i++) {
+        w.step(TICK_SECONDS, SPEED, 0);
+        world.step();
+      }
+      const p = w.position();
+      return { along: p.x - p0.x, slideAngle: w.character.slideAngle };
+    } finally {
+      world.free();
+    }
+  };
+
+  it("a walker wades at the surface's speed factor and its slide angle moves by the bonus", async () => {
+    const neutral = await walk(1, 0);
+    const snow = await walk(0.5, 0.1);
+    assert.ok(neutral.along > SPEED * 0.6, `neutral walk: ${neutral.along.toFixed(2)}u in 1s`);
+    assert.ok(Math.abs(snow.along / neutral.along - 0.5) < 0.15, `wading: ${snow.along.toFixed(2)}u vs ${neutral.along.toFixed(2)}u`);
+    assert.ok(Math.abs(snow.slideAngle - (neutral.slideAngle + 0.1)) < 1e-6, `slide angle ${snow.slideAngle} vs ${neutral.slideAngle} + 0.1`);
+  });
+});

@@ -1,6 +1,6 @@
 /**
  * Terrain chunk worker: heights + shader attributes (the shared vertex pipeline),
- * vertex normals, the water surface and the Rapier column-major collider heights —
+ * vertex normals, the water surface, the snow depths and the Rapier column-major collider heights —
  * the main thread only writes buffers.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
@@ -8,11 +8,13 @@
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "CHUNK_BUILT", id, heights, biomeSdf, biomePresence (count × slots, interleaved),
  *          slots, riverBed, distRoad, distFreeway, freewayAlong, normals,
- *          waterHeights (NaN = none) | null when the chunk has no water, colliderHeights? }
+ *          waterHeights (NaN = none) + waterDepths + waterFlow (x/z pairs) | null when the chunk has no water, snowDepths | null, colliderHeights? }
  */
 
 import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, getBiomeSlots, setDeckCutSpacing } from "./vertexCompute";
 import { RIVER_BED_FAR } from "../../world/shaders/constants";
+import { snowCoverOf, terrainSnowDepthFrom } from "./snow/snowDrift";
+import { snowBiomeIds } from "./biomeFlags";
 
 let initialized = false;
 
@@ -70,6 +72,27 @@ const columnMajorHeights = (heights: Float32Array, n: number): Float32Array => {
   return out;
 };
 
+/** The snow depth per vertex from its height, cover and the slope of its own grid (central differences). */
+const gridSnowDepths = (localX: Float64Array, offsetX: number, offsetZ: number, heights: Float32Array, cover: Float32Array, segments: number, spacing: number): Float32Array => {
+  const n = segments + 1;
+  const out = new Float32Array(n * n);
+  for (let iz = 0; iz < n; iz++) {
+    const z0 = Math.max(0, iz - 1);
+    const z1 = Math.min(n - 1, iz + 1);
+    for (let ix = 0; ix < n; ix++) {
+      const i = iz * n + ix;
+      if (cover[i] <= 0) continue;
+      const x0 = Math.max(0, ix - 1);
+      const x1 = Math.min(n - 1, ix + 1);
+      const dhdx = (heights[iz * n + x1] - heights[iz * n + x0]) / ((x1 - x0) * spacing);
+      const dhdz = (heights[z1 * n + ix] - heights[z0 * n + ix]) / ((z1 - z0) * spacing);
+      const slope = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
+      out[i] = terrainSnowDepthFrom(localX[ix] + offsetX, iz * spacing - (spacing * segments) / 2 + offsetZ, heights[i], cover[i], slope);
+    }
+  }
+  return out;
+};
+
 self.onmessage = (e: MessageEvent) => {
   const { type } = e.data;
 
@@ -100,6 +123,8 @@ self.onmessage = (e: MessageEvent) => {
     const slots = getBiomeSlots().length;
     // The ground under decks is cut as far beside them as this chunk's triangles reach.
     setDeckCutSpacing(chunkSize / segments);
+    // Every LOD carries its snow: the terrain whitens at every LOD (world/terrain/README.md).
+    const snow = snowBiomeIds().length > 0;
 
     // PlaneGeometry local frame (y flipped vs world Z); fround keeps heights
     // bit-identical to the float32 positions.
@@ -119,6 +144,9 @@ self.onmessage = (e: MessageEvent) => {
     const distFreeway = new Float32Array(count);
     const freewayAlong = new Float32Array(count);
     const waterHeights = new Float32Array(count);
+    const waterDepths = new Float32Array(count);
+    const waterFlow = new Float32Array(count * 2);
+    const snowCover = snow ? new Float32Array(count) : null;
     let hasWater = false;
 
     for (let iz = 0; iz < n; iz++) {
@@ -137,12 +165,17 @@ self.onmessage = (e: MessageEvent) => {
         distFreeway[i] = result.distanceToFreewayCenter;
         freewayAlong[i] = result.freewayAlong;
         waterHeights[i] = result.waterHeight;
-        if (!Number.isNaN(result.waterHeight) && result.waterHeight > result.height) hasWater = true;
+        waterDepths[i] = result.waterDepth;
+        waterFlow[i * 2] = result.waterFlowX;
+        waterFlow[i * 2 + 1] = result.waterFlowZ;
+        if (result.waterDepth > 0) hasWater = true;
+        if (snowCover) snowCover[i] = snowCoverOf(result);
       }
     }
 
     const normals = gridNormals(localX, localY, heights, segments);
     const colliderHeights = needCollider ? columnMajorHeights(heights, n) : null;
+    const snowDepths = snowCover ? gridSnowDepths(localX, offsetX, offsetZ, heights, snowCover, segments, chunkSize / segments) : null;
 
     const transfer: Transferable[] = [
       heights.buffer,
@@ -155,8 +188,9 @@ self.onmessage = (e: MessageEvent) => {
       freewayAlong.buffer,
       normals.buffer,
     ];
-    if (hasWater) transfer.push(waterHeights.buffer);
+    if (hasWater) transfer.push(waterHeights.buffer, waterDepths.buffer, waterFlow.buffer);
     if (colliderHeights) transfer.push(colliderHeights.buffer);
+    if (snowDepths) transfer.push(snowDepths.buffer);
     (self as any).postMessage(
       {
         type: "CHUNK_BUILT",
@@ -172,6 +206,9 @@ self.onmessage = (e: MessageEvent) => {
         freewayAlong,
         normals,
         waterHeights: hasWater ? waterHeights : null,
+        waterDepths: hasWater ? waterDepths : null,
+        waterFlow: hasWater ? waterFlow : null,
+        snowDepths,
         colliderHeights,
       },
       transfer

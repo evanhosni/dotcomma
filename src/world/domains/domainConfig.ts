@@ -1,11 +1,11 @@
 import { reportContentError } from "../../utils/contentError";
 import { mergeActorListings, mountAttributesOf } from "../../objects/actors/spec";
-import type {
-  DomainConfig,
-  FlattenDescriptor,
-  SerializedBiome,
-  SerializedRegion,
-} from "../../utils/workers/vertexCompute";
+import { resolveFlag } from "../../utils/workers/biomeFlags";
+import { RIVER_BANK_RELIEF_DEFAULTS } from "../../utils/workers/rivers/riverBankParams";
+import { ROCK_DEFAULTS } from "../../utils/workers/rocks/rockParams";
+import { SNOW_DEFAULTS } from "../../utils/workers/snow/snowParams";
+import { CAVE_DEFAULTS, SEWER_DEFAULTS } from "../../utils/workers/underground/constants";
+import type { DomainConfig, FlattenDescriptor, SerializedBiome, SerializedRegion } from "../../utils/workers/vertexCompute";
 import type { Biome, BiomeNoiseConfig, BiomeSpec, RegionSpec, RegionSpecBase, TerrainParams } from "../types";
 
 /**
@@ -104,7 +104,8 @@ export const assembleDomainConfig = (
   };
 };
 
-/** Serializers keep one KEY ORDER per level (the dev drift check compares JSON). */
+/** Serializers keep one KEY ORDER per level (the dev drift check compares JSON). The flags are
+ *  serialized RESOLVED against their systems' defaults (null where unset), always present. */
 export const serializeBiome = (b: BiomeSpec | Biome): SerializedBiome => ({
   id: b.id,
   name: b.name,
@@ -116,6 +117,11 @@ export const serializeBiome = (b: BiomeSpec | Biome): SerializedBiome => ({
   // the dev drift check compared `false` against a missing key for every biome.
   prohibitRoads: !!b.prohibitRoads,
   prohibitRivers: !!b.prohibitRivers,
+  caves: resolveFlag(b.caves, CAVE_DEFAULTS),
+  snow: resolveFlag(b.snow, SNOW_DEFAULTS),
+  sewers: resolveFlag(b.sewers, SEWER_DEFAULTS),
+  rocks: resolveFlag(b.rocks, ROCK_DEFAULTS),
+  riverBankRelief: resolveFlag(b.riverBankRelief, RIVER_BANK_RELIEF_DEFAULTS),
 });
 
 export const serializeRegion = (r: RegionSpecBase, biomes: SerializedBiome[]): SerializedRegion => ({

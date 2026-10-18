@@ -30,8 +30,17 @@ export const RIVER_SURFACE_BELOW = 2.5;
 export const RIVER_BLOCK_WATER = 1;
 export const RIVER_BLOCK_PROHIBITED = 2;
 export const RIVER_BLOCK_HIGH = 3;
-/** High ground that is genuinely mountainous (the biome relief past RIVER_MAX_RELIEF): never filled. */
+/** High ground that is genuinely mountainous (the biome relief past RIVER_MAX_RELIEF) and not the
+ *  mountain's rock: never filled, cut through only as a gorge. */
 export const RIVER_BLOCK_MOUNTAIN = 4;
+/** The rock past a SPRING's mouth (riverPieceRules.ts placeSprings): the river went underground. */
+export const RIVER_BLOCK_SPRING = 5;
+/** The pieces before a spring's mouth narrow to this width factor over RIVER_SPRING_TAPER (real
+ *  units), so the river fits a cave mouth (underground/springs.ts sizes the mouth to it). */
+export const RIVER_SPRING_MOUTH_FACTOR = 0.28;
+export const RIVER_SPRING_TAPER = 120;
+/** A PEAK POOL (riverSurface.ts riverEdgePools) widens the river by this over its three piece ends. */
+export const RIVER_POOL_FACTOR = 1.25;
 
 /** Dressing keeps this far (factor-1 river units) from a river centerline: the channel and its banks. */
 export const riverKeepOff = (): number => domainConfig!.river.halfWidth + domainConfig!.river.bank;

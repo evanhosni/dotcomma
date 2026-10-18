@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { bakeVertexColor, cross, mergeOrThrow, normalize, sub, TriangleSink, wallBoxGeometry, type Vec3 } from "./buildingGeometry";
+import { bakeVertexColor, mergeOrThrow } from "../../geometry";
+import { cross, normalize, sub, TriangleSink, wallBoxGeometry, type Vec3 } from "./buildingGeometry";
 import { emitLoft } from "./exteriorGeometry";
 import { FLOOR_LIFT, LIGHT_PANEL_SIZE, RAMP_THICKNESS, RAMP_WIDTH, SLAB_THICKNESS } from "./generatePlan";
 import { edgePoint, ringPoints } from "./rings";

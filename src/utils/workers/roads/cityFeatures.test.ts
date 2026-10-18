@@ -22,6 +22,7 @@ import { DRESSING_ENUMERATORS, runDressingEnumerator } from "../../../objects/dr
 import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/poleSpec";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_DECK_LIFT } from "../bridges/constants";
 import type { FreewayBridge } from "../bridges/types";
+import { riverQuay } from "../rivers/riverField";
 
 const config = OVERWORLD_CONFIG;
 const CITY = config.cityConfig;
@@ -422,6 +423,15 @@ describe("rivers through the city", () => {
     expect(quayHits).toBe(2); // a road centerline at the quay offset on both banks
   });
 
+  it("measures the quay from the nearest footprint beside a river's narrow tip", () => {
+    // ~530u from the tip (factor 0.27) and ~600u from the wide river downstream (1.93): the quay read
+    // 84u, scaling the wide piece's factor-1 distance by the tip's width, and its phantom road emptied
+    // the blocks around the tip of buildings.
+    const vd = computeVertexDataRaw(-14551, -534);
+    expect(vd.biomeId).toBe(CITY_BIOME_ID);
+    expect(riverQuay.distance).toBeGreaterThan(400);
+  });
+
   it("bridges the belt and arterials the river crosses, deterministically, ending on road or a hanging junction", () => {
     const c = findInteriorCrossing();
     expect(c).not.toBeNull();
@@ -477,11 +487,12 @@ describe("dressing enumerator table", () => {
     );
   });
 
-  it("every collider spec names a table entry and yields bodies with parts to build", () => {
+  it("every collider spec names a table entry and yields bodies with parts or a mesh to build", () => {
     for (const spec of DRESSING_COLLIDER_SPECS) {
       expect(Object.keys(DRESSING_ENUMERATORS)).toContain(spec.enumerator);
       for (const point of runDressingEnumerator(spec.enumerator, chunkAt(cx, cz), spec.placement)) {
-        for (const body of spec.bodiesOf(point)) expect((body.parts ?? spec.colliderParts).length).toBeGreaterThan(0);
+        // A body is solid through its boxes or through a mesh of its own (a rock, a bridge chord).
+        for (const body of spec.bodiesOf(point)) expect((body.parts ?? spec.colliderParts).length > 0 || body.mesh !== undefined).toBe(true);
       }
     }
   });

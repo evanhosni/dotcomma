@@ -1,4 +1,6 @@
 import { resetDressingWorker } from "../../objects/dressing/dressingWorker";
+import { resetFarMouths } from "../../objects/dressing/underground/farMouths";
+import { resetUndergroundWorker } from "../../objects/dressing/underground/undergroundWorker";
 import { resetFoliageWorker } from "../../objects/foliage/foliageWorker";
 import { resetSpawnWorker } from "../../objects/actors/spawning/spawnWorker";
 import { resetSpriteWorkers } from "../../objects/sprite-lod/spriteWorker";
@@ -15,5 +17,7 @@ export const resetDomainSystems = () => {
   resetSpriteWorkers();
   resetFoliageWorker();
   resetDressingWorker();
+  resetUndergroundWorker();
+  resetFarMouths();
   resetActiveDomain();
 };

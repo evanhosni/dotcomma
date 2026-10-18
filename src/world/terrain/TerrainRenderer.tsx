@@ -9,6 +9,7 @@ import { traceEvent } from "../../utils/spikeTrace";
 import { chargeFrameWork, isMachineStruggling } from "../../utils/task-queue/TaskQueue";
 import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
 import { skirtTintUniform } from "../shaders/skirtTint";
+import { isCameraUnderground, squareTouchesTerrainHoles, terrainHolesVersion } from "../shaders/terrainHoles";
 import { getWaterMaterial, tickWater } from "../water/waterMaterial";
 import {
   adoptEarlyRequest,
@@ -21,10 +22,10 @@ import {
 } from "./buildRequests";
 import { releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
 import { createChunkPlane, ensureWaterMesh, generateColliders, releaseWater, syncLodFade } from "./chunkObjects";
-import { chunkReachesFarFade, LODLevel } from "./lodConfig";
-import { computeDesiredChunks, DesiredChunks } from "./lodQuadtree";
+import { CHUNK_SIZE, chunkReachesFarFade, LODLevel } from "./lodConfig";
+import { computeDesiredChunks, DesiredChunks, getLod1SitesVersion, lod1KeyAt } from "./lodQuadtree";
 import { FADE_OPAQUE_HI, LOD_FADE_SECONDS, LodSwapper, SwapHooks } from "./lodSwaps";
-import { createFarFadeMaterial, createLodFadeMaterial, getMaterial } from "./material";
+import { createDiscardMaterial, createEntranceMaterial, getMaterial, publishTerrainMaterial, resetTerrainMaterial } from "./material";
 import { setFarFade } from "../shaders/farFade";
 import { ensureTerrainWorker, resetTerrainWorker } from "./terrainWorker";
 import { Chunk, TerrainState } from "./types";
@@ -55,6 +56,8 @@ let cachedDesired: DesiredChunks | null = null;
 let desiredAtX = Infinity;
 let desiredAtZ = Infinity;
 let terrainDirty = true;
+/** The LOD1 sites the desired set was computed for (lodQuadtree.ts setLod1Sites). */
+let desiredSitesVersion = -1;
 
 /** Wall-clock, not chunk-count: per-chunk cost varies >10× with LOD and terrain. At least one chunk
  *  builds per pass. */
@@ -78,6 +81,7 @@ let lastFarBuildAt = -Infinity;
  *  geometry pool is kept: pooled geometries are fully rewritten on acquire. */
 export const resetTerrainSystem = () => {
   resetTerrainWorker();
+  resetTerrainMaterial();
   for (const chunk of terrain.chunks.values()) {
     releaseGeometry(chunk.lod, chunk.plane.geometry);
     releaseWater(chunk);
@@ -98,6 +102,39 @@ export const resetTerrainSystem = () => {
   lastSortX = Infinity;
   lastSortZ = Infinity;
 };
+
+/**
+ * The LOD1 swap's own progress under a point: the least over the LOD1 chunks within `radius` of it —
+ * 1 settled, a fade's progress mid-swap, 0 while any such chunk is missing or undrawn. What a cave
+ * entrance fades in by (objects/dressing/underground), so it never shows before its ground is LOD1.
+ */
+export const lod1ShareAt = (x: number, z: number, radius: number): number => {
+  let share = 1;
+  // The centre and the four corners of the square, each chunk once: it runs every frame per entrance,
+  // so the duplicates are found by their grid cell, with no set.
+  let n = 0;
+  for (let corner = 0; corner < 5; corner++) {
+    const px = corner === 4 ? x : corner & 1 ? x + radius : x - radius;
+    const pz = corner === 4 ? z : corner & 2 ? z + radius : z - radius;
+    const gx = Math.floor(px / CHUNK_SIZE);
+    const gz = Math.floor(pz / CHUNK_SIZE);
+    let seen = false;
+    for (let i = 0; i < n && !seen; i++) seen = _lod1Gx[i] === gx && _lod1Gz[i] === gz;
+    if (seen) continue;
+    _lod1Gx[n] = gx;
+    _lod1Gz[n] = gz;
+    n++;
+    const chunk = terrain.chunks.get(lod1KeyAt(px, pz));
+    if (!chunk || !chunk.drawn) return 0;
+    const t = chunk.transition;
+    if (t === null) continue;
+    const s = t.news.includes(chunk) ? t.p : 1 - t.p;
+    if (s < share) share = s;
+  }
+  return share;
+};
+const _lod1Gx = new Int32Array(5);
+const _lod1Gz = new Int32Array(5);
 
 /** Drops pruned chunks from the build queue in place, then re-sorts it (LOD1 first, then LOD2, …, each
  *  nearest-first; popped from the END) when it changed or the camera moved. */
@@ -205,15 +242,24 @@ export const TerrainRenderer = () => {
   const { terrainLoaded, playerSpawn } = useGameContext();
   const reportRemaining = useLoadingGate();
   const isUpdatingTerrain = React.useRef(false);
-  /** The dithered variant drawn by chunks mid-fade (its own program: a `discard` would cost the
-   *  opaque terrain its early depth test). */
-  const fadeMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
-  /** The opaque variant with the far fade's `discard`, for chunks reaching the fade (lodConfig.ts chunkReachesFarFade). */
-  const farMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
-  const opaqueMaterialFor = (chunk: Chunk, base: THREE.Material): THREE.Material => {
+  /** The one `discard` variant (material.ts createDiscardMaterial): every chunk mid-fade, and the settled
+   *  chunks that need a discard. The rest keep the base program and its early depth test. */
+  const discardMaterialRef = React.useRef<THREE.ShaderMaterial | null>(null);
+  /** The cut set and the underground flag the settled chunks' variants were picked for. */
+  const variantPickRef = React.useRef({ holesVersion: -1, underground: false });
+  const needsDiscard = (chunk: Chunk): boolean => {
+    if (isCameraUnderground()) return true;
     const { x, z } = camera.position;
-    const far = chunkReachesFarFade(chunk.offset.x, chunk.offset.z, chunk.lod.chunkSize, x, z, FAR_FADE_GATE_MARGIN);
-    return (far && farMaterialRef.current) || base;
+    if (chunkReachesFarFade(chunk.offset.x, chunk.offset.z, chunk.lod.chunkSize, x, z, FAR_FADE_GATE_MARGIN)) return true;
+    const half = chunk.lod.chunkSize / 2;
+    return squareTouchesTerrainHoles(chunk.offset.x - half, chunk.offset.z - half, chunk.offset.x + half, chunk.offset.z + half);
+  };
+  const opaqueMaterialFor = (chunk: Chunk, base: THREE.Material): THREE.Material =>
+    (discardMaterialRef.current && needsDiscard(chunk) && discardMaterialRef.current) || base;
+  const repickVariants = (material: THREE.Material): void => {
+    for (const chunk of terrain.chunks.values()) {
+      if (chunk.transition === null && chunk.drawn) chunk.plane.material = opaqueMaterialFor(chunk, material);
+    }
   };
 
   // Devmode seam diagnostics (terrain/README.md).
@@ -262,28 +308,32 @@ export const TerrainRenderer = () => {
     destroy: destroyChunk,
     redraw: (chunk) => {
       chunk.plane.visible = chunk.drawn;
-      const material = chunk.transition !== null ? fadeMaterialRef.current : terrainMaterial && opaqueMaterialFor(chunk, terrainMaterial);
+      const material = chunk.transition !== null ? discardMaterialRef.current : terrainMaterial && opaqueMaterialFor(chunk, terrainMaterial);
       if (material) chunk.plane.material = material;
     },
   };
 
-  // Both terrain programs link during the load, together (utils/warmPrograms.ts), and the chunks wait
-  // for them: the fade twin otherwise linked at the first swap, mid-walk, and the opaque one inside the
-  // first chunk's draw — the load's two longest tasks (~1s each).
+  // Every terrain program links during the load, together (utils/warmPrograms.ts), and the chunks wait
+  // for them: the discard variant otherwise linked at the first swap, mid-walk, and the opaque one inside
+  // the first chunk's draw — the load's two longest tasks (~1s each).
   useEffect(() => {
     let cancelWarm = () => {};
     let unmounted = false;
     getMaterial().then((material) => {
       if (unmounted) return;
-      const fade = createLodFadeMaterial(material);
-      const far = createFarFadeMaterial(material);
-      fadeMaterialRef.current = fade;
-      farMaterialRef.current = far;
-      cancelWarm = warmPrograms(scene, [meshTemplate(material), meshTemplate(fade), meshTemplate(far)], () => setTerrainMaterial(material));
+      const discard = createDiscardMaterial(material);
+      // The entrance patches (objects/dressing/underground) draw with the terrain's own program: linked here with the rest.
+      const entrance = createEntranceMaterial(material);
+      discardMaterialRef.current = discard;
+      cancelWarm = warmPrograms(scene, [meshTemplate(material), meshTemplate(discard), meshTemplate(entrance)], () => {
+        setTerrainMaterial(material);
+        publishTerrainMaterial(material, entrance);
+      });
     });
     return () => {
       unmounted = true;
       cancelWarm();
+      resetTerrainMaterial();
     };
   }, []);
 
@@ -295,6 +345,20 @@ export const TerrainRenderer = () => {
     if (!terrainMaterial) {
       if (playerSpawn) prefetchTerrainAround(playerSpawn[0], playerSpawn[2]);
       return;
+    }
+    // A change of the cut set or of the underground flag re-picks every settled chunk's variant.
+    const pick = variantPickRef.current;
+    const holesVersion = terrainHolesVersion();
+    const underground = isCameraUnderground();
+    if (holesVersion !== pick.holesVersion || underground !== pick.underground) {
+      pick.holesVersion = holesVersion;
+      pick.underground = underground;
+      repickVariants(terrainMaterial);
+    }
+    // A change of the LOD1 sites recomputes the desired set.
+    if (getLod1SitesVersion() !== desiredSitesVersion) {
+      desiredAtX = Infinity;
+      terrainDirty = true;
     }
     if (isUpdatingTerrain.current) return;
     // Synchronous early-out: reaching the same gate inside the async updateTerrain
@@ -320,13 +384,12 @@ export const TerrainRenderer = () => {
     const moved = cachedDesired === null || mdx * mdx + mdz * mdz > DESIRED_MOVE_EPS_SQ;
     if (!moved && !terrainDirty) return;
     if (moved) {
+      desiredSitesVersion = getLod1SitesVersion();
       cachedDesired = computeDesiredChunks(playerX, playerZ);
       desiredAtX = playerX;
       desiredAtZ = playerZ;
       // The far-fade gate is per chunk and the player moved: re-pick every settled chunk's opaque variant.
-      for (const chunk of terrain.chunks.values()) {
-        if (chunk.transition === null && chunk.drawn) chunk.plane.material = opaqueMaterialFor(chunk, material);
-      }
+      repickVariants(material);
     }
     const desiredChunks = cachedDesired!;
 
@@ -395,7 +458,7 @@ export const TerrainRenderer = () => {
 
     const geom = chunk.plane.geometry;
     writeTerrainBuffers(geom, lod, result);
-    if (result.waterHeights) writeWaterBuffers(ensureWaterMesh(chunk).geometry, geom, lod, result.heights, result.waterHeights);
+    if (result.waterHeights && result.waterDepths && result.waterFlow) writeWaterBuffers(ensureWaterMesh(chunk).geometry, geom, lod, result.heights, result.waterHeights, result.waterDepths, result.waterFlow);
     else releaseWater(chunk);
 
     chunk.plane.material = opaqueMaterialFor(chunk, material);

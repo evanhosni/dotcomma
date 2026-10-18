@@ -31,7 +31,7 @@ if (currentDomain === "home") currentPath = HOME_PATH;
 const domainListeners = new Set<(domain: DomainId) => void>();
 
 const historyState = () => ({ dotcomma: true, domain: currentDomain });
-/** The path is ours; the query string (`?devmode=true`, context/DevContext.tsx) rides along untouched. */
+/** The path is ours; the query string (`?devmode`, context/DevContext.tsx) rides along untouched. */
 const urlOf = (path: string): string => PUBLIC_URL + path + window.location.search;
 const pushEntry = () => window.history.pushState(historyState(), "", urlOf(currentPath));
 

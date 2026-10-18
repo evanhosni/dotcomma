@@ -1,5 +1,7 @@
 import * as THREE from "three";
-import { bakeVertexColor, mergeOrThrow, type Vec3 } from "./buildingGeometry";
+import { makeDoorGeometry } from "../../doors/door";
+import type { DoorLeafBox } from "../../doors/types";
+import { type Vec3 } from "./buildingGeometry";
 import { buildExteriorGeometry } from "./exteriorGeometry";
 import { generateBuildingPlan } from "./generatePlan";
 import {
@@ -35,10 +37,10 @@ export interface ProceduralBuildingAssets {
   rampColliders: RampCollider[];
   interiorSlabVertices: Float32Array;
   interiorSlabIndices: Uint32Array;
-  /** Origin = hinge edge, leaf extends +x, so rotating the parent group swings it. */
+  /** Origin = hinge edge, leaf extends +x, so rotating the parent group swings it (objects/doors). */
   doorGeometry: THREE.BufferGeometry;
   /** The same leaf as a box (hinge-relative center + size + color) for the far-door instances. */
-  doorLeaf: { center: Vec3; size: Vec3; color: number };
+  doorLeaf: DoorLeafBox;
   doors: DoorPlacement[];
   /** Plain typed array — nothing to dispose (see proxyCollider.ts). */
   proxyHullVertices: Float32Array;
@@ -179,27 +181,6 @@ export const beginProceduralBuildingBuild = (
   };
 };
 
-/** The handle on both faces of the leaf, near its free edge at about a third of the door's height: a
- *  spindle through the leaf, then a knob, or a lever pointing back at the hinge. Near leaves only — the
- *  far-door instances are bare boxes. */
-const doorHandleParts = (plan: BuildingPlan, leaf: ProceduralBuildingAssets["doorLeaf"]): THREE.BufferGeometry[] => {
-  const { lever, color } = plan.doorHandle;
-  const doorHeight = plan.doors[0].height;
-  const x = leaf.center[0] + leaf.size[0] / 2 - 0.4;
-  const y = -doorHeight / 2 + doorHeight * 0.33;
-  const face = leaf.size[2] / 2;
-  const parts: THREE.BufferGeometry[] = [new THREE.CylinderGeometry(0.04, 0.04, leaf.size[2] + 0.36, 8).rotateX(Math.PI / 2).translate(x, y, 0)];
-  for (const side of [1, -1]) {
-    const z = side * (face + 0.16);
-    parts.push(
-      lever
-        ? new THREE.BoxGeometry(0.42, 0.07, 0.08).translate(x - 0.17, y, z)
-        : new THREE.SphereGeometry(0.11, 10, 8).translate(x, y, z),
-    );
-  }
-  return parts.map((g) => bakeVertexColor(g.toNonIndexed(), color));
-};
-
 const assembleBuildingAssets = (
   key: string,
   plan: ReturnType<typeof generateBuildingPlan>,
@@ -216,16 +197,8 @@ const assembleBuildingAssets = (
   const exteriorIndices = new Uint32Array(exteriorVertices.length / 3);
   for (let i = 0; i < exteriorIndices.length; i++) exteriorIndices[i] = i;
 
-  // The leaf overlaps the jamb and header so a closed door never shows a gap.
-  const leafW = plan.doors[0].width + 0.16;
-  const doorLeaf = { center: [leafW / 2 - 0.08, 0.05, 0] as Vec3, size: [leafW, plan.doors[0].height + 0.2, 0.1] as Vec3, color: plan.doorColor };
-  const doorGeometry = mergeOrThrow(
-    [
-      bakeVertexColor(new THREE.BoxGeometry(...doorLeaf.size).translate(...doorLeaf.center).toNonIndexed(), plan.doorColor),
-      ...doorHandleParts(plan, doorLeaf),
-    ],
-    "door leaf",
-  );
+  // One leaf per building (every door of a plan shares the first door's size).
+  const { geometry: doorGeometry, leaf: doorLeaf } = makeDoorGeometry(plan.doors[0].width, plan.doors[0].height, plan.doorColor, plan.doorHandle);
 
   const assets: ProceduralBuildingAssets = {
     plan,

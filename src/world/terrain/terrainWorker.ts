@@ -2,7 +2,7 @@ import { createWorkerClient } from "../../utils/workers/workerClient";
 import { getActiveDomainConfig } from "../domains/utils";
 import type { LODLevel } from "./lodConfig";
 
-// Worker clients for terrain.worker.ts (heights, blend fields, normals and collider heights per chunk).
+// Worker clients for terrain.worker.ts (heights, blend fields, normals, water, snow and collider heights per chunk).
 
 /** One chunk's buffers, per main-grid vertex (the skirt is filled on the main thread, chunkGeometry.ts). */
 export interface ChunkBuildResult {
@@ -18,8 +18,13 @@ export interface ChunkBuildResult {
   distFreeway: Float32Array;
   freewayAlong: Float32Array;
   normals: Float32Array;
-  /** Water surface per vertex (NaN = none); null when nothing in the chunk is under water. */
+  /** Water surface per vertex (NaN = none), its depth (negative = a dive toward a cave's water) and its
+   *  flow (x/z pairs); all three present, or all null when no vertex has water over the ground. */
   waterHeights: Float32Array | null;
+  waterDepths: Float32Array | null;
+  waterFlow: Float32Array | null;
+  /** The terrain's own snow depth per vertex; null when no vertex has snow. */
+  snowDepths: Float32Array | null;
   /** Rapier column-major heightfield; null unless the LOD has a collider. */
   colliderHeights: Float32Array | null;
 }
@@ -29,10 +34,10 @@ export interface ChunkBuildResult {
  *  workers and the server already evaluate it independently and must agree — so any worker may build any
  *  chunk (MEASURED: 30 LOD1/LOD2 chunks built on two workers in opposite orders, 4.5M values, bit-identical).
  *  Each worker keeps its own caches (+30–50MB of heap each), hence the cap — a city spawn's startup ring
- *  (16 cores) took 7.1s on one worker, 6.1s on two, 6.0s on three; the spawn, foliage, dressing and
+ *  (16 cores) took 7.1s on one worker, 6.1s on two, 6.0s on three; the spawn, foliage, dressing, tunnel and
  *  collider workers keep a core each. */
 const MAX_TERRAIN_WORKERS = 2;
-const OTHER_WORKERS = 4;
+const OTHER_WORKERS = 5;
 export const TERRAIN_WORKER_COUNT = Math.max(
   1,
   Math.min(MAX_TERRAIN_WORKERS, (typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2) - 1 - OTHER_WORKERS),

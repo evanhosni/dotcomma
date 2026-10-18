@@ -8,6 +8,7 @@ import {
   type CharacterInput,
   type CharacterStepResult,
 } from "../../../../src/physics/characterMovement";
+import { createSurfaceSampler } from "../../../../src/physics/movementModifiers";
 import type { PhysicsWorld } from "./physicsWorld.js";
 
 /** A kinematic capsule on THE shared character resolver (src/physics/characterMovement.ts) — no server copy of any movement rule. */
@@ -18,6 +19,9 @@ export interface CapsuleShape {
   height: number;
 }
 
+/** Ticks between surface samples (PhysicsWorld.surfaceModifiersAt): a drift's edge is metres wide, an NPC walks ~0.1u a tick. */
+const SURFACE_SAMPLE_TICKS = 10;
+
 export class Walker {
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
@@ -25,7 +29,8 @@ export class Walker {
   readonly halfHeight: number;
   /** Filled by every step(). */
   readonly lastStep: CharacterStepResult = createStepResult();
-  private readonly input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null };
+  private readonly surface = createSurfaceSampler(SURFACE_SAMPLE_TICKS, (x, z, feetY, answer) => this.pw.surfaceModifiersAt(x, z, feetY, answer));
+  private readonly input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null, surface: this.surface.modifiers };
 
   constructor(private readonly pw: PhysicsWorld, x: number, feetY: number, z: number, shape: CapsuleShape) {
     this.halfHeight = shape.height / 2;
@@ -56,6 +61,7 @@ export class Walker {
     this.input.dirZ = vz;
     this.input.speed = Math.hypot(vx, vz);
     this.input.vyOverride = vy;
+    this.surface.sample(p.x, p.z, p.y - this.halfHeight);
     return stepCharacter(this.pw.world, this.character, this.body, this.collider, p.x, p.y, p.z, this.input, dt, this.lastStep);
   }
 

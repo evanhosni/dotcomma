@@ -29,10 +29,16 @@ export const FastTravel = () => {
   useEffect(() => {
     let cancelled = false;
 
-    // Closes the terrain gate and moves the spawn onto the ground (or the water) at (x, z).
-    const landAt = async (x: number, z: number) => {
+    // Closes the terrain gate and moves the spawn onto the ground (or the water) at (x, z). With `y` (the
+    // debug teleport into a tunnel) the gate stays open: closing it would drop the player from 100u above,
+    // onto the street over the tunnel.
+    const landAt = async (x: number, z: number, y?: number) => {
       // The terrain worker starts on the destination while the height lookup round-trips.
       prefetchTerrainAround(x, z);
+      if (y !== undefined) {
+        setPlayerSpawn([x, y, z]);
+        return;
+      }
       // Padded height in the worker when it is up (a flatten-tile miss is 30–70ms on the main thread).
       const vd = (await getVertexSample(x, z)) ?? (await getVertexData(x, z));
       if (cancelled) return;
@@ -60,10 +66,10 @@ export const FastTravel = () => {
     window.addEventListener(ADDRESS_TRAVEL_EVENT, onTravel);
 
     // Console/debug access only (like __game / __net): teleport to raw world coordinates.
-    const travelTo = async (x: number, z: number) => {
+    const travelTo = async (x: number, z: number, y?: number) => {
       await ensureVertexCompute();
       if (cancelled) return;
-      await landAt(x, z);
+      await landAt(x, z, y);
     };
     (window as any).__dotcomma = { travelTo, camera, scene };
 

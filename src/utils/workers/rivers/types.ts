@@ -33,8 +33,9 @@ export interface RiverEdge {
   blocked: Uint8Array | null;
   /** `blocked` before the junction gaps are joined (the edge on its own). null until needed. */
   ownBlocked: Uint8Array | null;
-  /** Per piece: 1 where its relief rule (RIVER_BLOCK_MOUNTAIN) is the mountain's ROCK (a domed
-   *  biome), 0 where it is a tall but ordinary relief (dunes, hills). Set with ownBlocked. */
+  /** Per piece: 1 where the piece lies on the mountain's ROCK (a domed biome's relief past
+   *  RIVER_MAX_RELIEF — built whatever its slope: waterfalls, peak pools, springs), 0 elsewhere
+   *  (a tall but ordinary relief, dunes or hills, is RIVER_BLOCK_MOUNTAIN). Set with ownBlocked. */
   rock: Uint8Array | null;
   /** The gorges built through its gaps (riverEdgeBlocked). */
   gorges: RiverGorge[];

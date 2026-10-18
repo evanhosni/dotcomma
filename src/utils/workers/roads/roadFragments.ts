@@ -26,6 +26,7 @@ import { decksAround } from "../bridges/deckGround";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
+import { warp } from "../noise";
 
 const FRAGMENT_CELL = 8;
 const FRAGMENT_MAX_CELLS = 78; // ≈ 5000u²
@@ -330,7 +331,9 @@ const roadHeightAround = (x: number, z: number): number => {
     const dx = Math.cos(a);
     const dz = Math.sin(a);
     for (let d = ISLAND_FILL_STEP; d <= ISLAND_FILL_REACH; d += ISLAND_FILL_STEP) {
-      const v = computeVertexDataRaw(x + dx * d, z + dz * d);
+      const px = x + dx * d;
+      const pz = z + dz * d;
+      const v = computeVertexDataRaw(px, pz);
       if (v.distanceToRoadCenter >= ISLAND_LAND_FIELD) continue;
       const w = 1 / (d * d * d * d);
       sum += w * v.height;

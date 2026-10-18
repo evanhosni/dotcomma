@@ -10,6 +10,8 @@
 
 import {
   type BridgePlacementParams,
+  type BubbleEmitter,
+  type BubbleEmitterParams,
   type CityFreewaySidePoint,
   type CitySitePoint,
   type CityTrafficLightPoint,
@@ -17,6 +19,11 @@ import {
   type FreewayLampParams,
   type FreewayLampPoint,
   type RoadMarkerPoint,
+  type RockPlacementParams,
+  type RockPoint,
+  type SnowDriftMesh,
+  type SplashEmitter,
+  type SplashEmitterParams,
   computeVertexData,
   getCityFreewayEdgePoints,
   getCityRoadMarkers,
@@ -25,20 +32,28 @@ import {
   getFreewayBridges,
   getFreewayRunLamps,
   getFreewayRunMarkers,
+  getLakeBubbleEmitters,
+  getRiverSplashEmitters,
+  getRocks,
+  getWaterfallRocks,
+  getSnowDrift,
+  waterBiomeIds,
 } from "../../utils/workers/vertexCompute";
+import { rockFieldBiomeIds, snowBiomeIds } from "../../utils/workers/biomeFlags";
+import { biomesWeighWithin } from "../../utils/workers/zoneBlend";
 import { type DensityPointParams, generateDensityPoints } from "../../utils/workers/densityPoints";
 import { CITY_BIOME_ID } from "../../world/constants";
 import type { DressingBounds } from "./types";
 
-/** A chunk's center within this fraction of the chunk size of a biome wall may hold another biome. */
-const PROBE_WALL_REACH = 0.75;
-
-/** False when no point of `biomeIds` can lie in the chunk: its center is in another biome with no
- *  biome wall in reach. Unset/empty `biomeIds` = every biome. One padded height per call. */
+/** False when no point of the chunk can carry any weight of `biomeIds` (zoneBlend.ts
+ *  `biomesWeighWithin`, from the center's slot sdfs over the chunk's half diagonal). Unset/empty
+ *  `biomeIds` = every biome. One padded height per call. Biome walls are never far (500u cells), so
+ *  a probe by the distance to the nearest wall skipped almost nothing; the slot sdfs say which biome
+ *  is across it. */
 const chunkMayHoldBiomes = (b: DressingBounds, biomeIds: readonly number[] | undefined): boolean => {
   if (!biomeIds || biomeIds.length === 0) return true;
   const vd = computeVertexData((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2);
-  return !(!biomeIds.includes(vd.biomeId) && vd.distanceToBiomeBoundaryCenter > (b.maxX - b.minX) * PROBE_WALL_REACH);
+  return biomeIds.includes(vd.biomeId) || biomesWeighWithin(vd.biomeSdf, biomeIds, (b.maxX - b.minX) * Math.SQRT1_2);
 };
 
 const CITY_ONLY = [CITY_BIOME_ID];
@@ -102,6 +117,24 @@ export const DRESSING_ENUMERATORS = defineEnumerators({
 
   /** Window-sized scans (~1800u), where a chunk-center probe does not apply. */
   cityLightSites: (b, _args: Record<string, never>): CitySitePoint[] => getCityVoronoiSites(b.minX, b.minZ, b.maxX, b.maxZ),
+
+  /** Every `rocks` biome's field and every cave mouth's spots (skipped where none of the fields' biomes can be:
+   *  a mouth's spots lie in its cave biome), plus the boulders of every waterfall (rivers cross every region: no probe). */
+  rocks: (b, params: RockPlacementParams): RockPoint[] => {
+    const fields = chunkMayHoldBiomes(b, rockFieldBiomeIds()) ? getRocks(b.minX, b.minZ, b.maxX, b.maxZ, params) : [];
+    return fields.concat(getWaterfallRocks(b.minX, b.minZ, b.maxX, b.maxZ));
+  },
+
+  /** The chunk's one snow sheet, or nothing. Skipped where no snow biome's cover can reach: the sheet
+   *  samples ~17k drawn-ground heights per 256u chunk before it knows it is empty, and every chunk of
+   *  every region paid that (the dressing worker's time tripled on a city flight; PERFORMANCE.md). */
+  snowDrift: (b, _args: Record<string, never>): SnowDriftMesh[] => (chunkMayHoldBiomes(b, snowBiomeIds()) ? getSnowDrift(b) : []),
+
+  /** Rivers cross every region: no biome probe. */
+  riverSplashes: (b, params: SplashEmitterParams): SplashEmitter[] => getRiverSplashEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params),
+
+  /** Skipped where no water biome can be. */
+  lakeBubbles: (b, params: BubbleEmitterParams): BubbleEmitter[] => (chunkMayHoldBiomes(b, waterBiomeIds()) ? getLakeBubbleEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params) : []),
 });
 
 export type DressingEnumeratorName = keyof typeof DRESSING_ENUMERATORS;

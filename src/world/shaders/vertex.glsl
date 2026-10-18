@@ -9,8 +9,11 @@ attribute float distanceToRoadCenter;
 attribute float distanceToFreewayCenter;
 attribute float freewayAlong;
 attribute float skirtDrop;
+// Water depth ≥ 0 over the ground, else −(the terrain's own snow depth): the program has no attribute
+// slot left (snow never lies under water).
 attribute float underwaterDepth;
 varying float vUnderwaterDepth;
+varying float vFarSnow;
 varying vec4 vBiomeSdf0;
 varying vec4 vBiomeSdf1;
 varying vec4 vBiomePresence0;
@@ -25,14 +28,16 @@ varying vec2 vUv;
 varying vec2 vWorldUv;
 varying float vSlopeAngle;
 varying float vHeight;
-varying vec3 vWorldNormal;
-varying vec3 vWorldPosWrapped;
-varying vec3 vWorldPosAbs;
-varying float vFarDistance;
 varying float vSkirt;
+#ifdef ENTRANCE_PATCH
+// The entrance patch's rock share and daylight (the cave's one isosurface of ground and tunnel).
+attribute vec2 entranceRock;
+varying vec2 vEntranceRock;
+#endif
 
-// quantizeWorldPos() / curveViewPos() and the WORLD_WRAP define are prepended
-// by world/terrain/material.ts.
+// projectChunkLocal() (world/shaders/chunkProjection.ts — the wrapped origin, quantization, the
+// CPU-resolved view-space origin, curvature; it writes vWorldPosWrapped/vWorldPosAbs/vWorldNormal/
+// vFarDistance) and the WORLD_WRAP define are prepended by world/terrain/material.ts.
 //
 // BIOME BLEND: vBiomeSdf* carry a SIGNED DISTANCE per biome slot (scaled so ±1 is
 // the feather edge) and vBiomePresence* the signed distance to the biome's OWN
@@ -40,12 +45,6 @@ varying float vSkirt;
 // interpolates linearly, so the fragment shader's smoothsteps land a 1–3u feather
 // at pixel resolution even on 17.5u quads (a per-triangle `flat` biome id would
 // draw staircase edges and stray outlines at every wall).
-//
-// PRECISION (see CLAUDE.md, Coordinate Precision): NEVER form an absolute
-// world coordinate here — float32 swims the quantization grid past ~100k
-// units. World position = WRAPPED chunk origin + chunk-local offset, projected
-// through the CPU-resolved view-space origin. Any new world-space period read
-// from vWorldPosWrapped must divide WORLD_WRAP or it seams every 4200 units.
 
 void main() {
   vBiomeSdf0 = biomeSdf0;
@@ -58,30 +57,16 @@ void main() {
   vDistanceToRoadCenter = distanceToRoadCenter;
   vDistanceToFreewayCenter = distanceToFreewayCenter;
   vFreewayAlong = freewayAlong;
-  vUnderwaterDepth = underwaterDepth;
+  vUnderwaterDepth = max(underwaterDepth, 0.0);
+  vFarSnow = max(-underwaterDepth, 0.0);
   vUv = uv;
+  vSkirt = skirtDrop;
+  #ifdef ENTRANCE_PATCH
+  vEntranceRock = entranceRock;
+  #endif
 
-  vec3 chunkOrigin = modelMatrix[3].xyz;
-  vec3 wrapOrigin = vec3(mod(chunkOrigin.x, WORLD_WRAP), chunkOrigin.y, mod(chunkOrigin.z, WORLD_WRAP));
-  vec3 localWorld = mat3(modelMatrix) * position;
-
-  vec3 worldPos = quantizeWorldPos(wrapOrigin + localWorld);
-
-  vSkirt = skirtDrop > 0.0 ? 1.0 : 0.0;
-
-  vWorldUv = worldPos.xz / TEXTURE_TILE;
-  vWorldPosWrapped = worldPos;
-
-  // Unwrapped: ONLY for comparing against CPU-side absolute positions (lamp
-  // grid, point lights). Never for tiling, quantization or fwidth() guards.
-  vWorldPosAbs = chunkOrigin + localWorld;
-
-  vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
-  vWorldNormal = worldNormal;
-  vSlopeAngle = 1.0 - abs(worldNormal.y);
-  vHeight = worldPos.y;
-
-  vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldPos - wrapOrigin);
-  vFarDistance = farFadeDistance(viewPos);
-  gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);
+  gl_Position = projectChunkLocal(position, normal);
+  vWorldUv = vWorldPosWrapped.xz / TEXTURE_TILE;
+  vSlopeAngle = 1.0 - abs(vWorldNormal.y);
+  vHeight = vWorldPosWrapped.y;
 }

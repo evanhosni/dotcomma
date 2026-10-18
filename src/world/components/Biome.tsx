@@ -19,10 +19,10 @@ export const Biome = ({ spec, children }: BiomeProps) => {
 
   useLayoutEffect(() => {
     const key = `${regionId}/${id}`;
-    const { name, joinable, blendWidth, heightBlendWidth, water, noise } = spec;
+    const { name, joinable, blendWidth, heightBlendWidth, water, noise, caves, snow, sewers, rocks, riverBankRelief } = spec;
     const prohibitRoads = spec.prohibitRoads ?? false;
     const prohibitRivers = spec.prohibitRivers ?? false;
-    store.biomes.set(key, { regionId, biome: { id, name, joinable, blendWidth, heightBlendWidth, water, prohibitRoads, prohibitRivers, noise } });
+    store.biomes.set(key, { regionId, biome: { id, name, joinable, blendWidth, heightBlendWidth, water, prohibitRoads, prohibitRivers, noise, caves, snow, sewers, rocks, riverBankRelief } });
     store.invalidate();
     return () => {
       store.biomes.delete(key);
