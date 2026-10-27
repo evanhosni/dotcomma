@@ -190,7 +190,7 @@ export const Player = () => {
         // Inside a tunnel its liquid is the water; outside, the water probe's surface.
         liquidY = ug.liquidY;
         liquidLook = ug.liquidLook;
-        const surfaceY = underground.isInside() ? liquidY : water.surfaceY();
+        const surfaceY = underground.isInside() ? liquidY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
         swimInput.surfaceY = surfaceY;
         swimInput.viscosity = underground.isInside() ? ug.liquidViscosity : 1;
         swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
@@ -221,7 +221,7 @@ export const Player = () => {
     followWithCamera(finalPos);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
-    const cameraSurface = underground.isInside() ? liquidY : water.surfaceY();
+    const cameraSurface = underground.isInside() ? liquidY : water.surfaceOver(camera.position.y);
     setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, underground.isInside() ? liquidLook : "water");
   }, -3);
 

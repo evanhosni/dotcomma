@@ -67,7 +67,7 @@ export const waterBiomeIds = (): number[] => current().water;
 export const caveBiomeIds = (): number[] => current().caves;
 /** Biomes with `snow`. */
 export const snowBiomeIds = (): number[] => current().snow;
-/** Biomes with `sewers`. */
+/** Biomes with sewers (a <Sewers> in their spec's `features`). */
 export const sewerBiomeIds = (): number[] => current().sewers;
 /** Biomes with a `rocks` field. */
 export const rockFieldBiomeIds = (): number[] => current().rocks;
@@ -76,6 +76,7 @@ export const roadBearingBiomeIds = (): number[] => current().roadBearing;
 
 export const caveParamsOf = (biomeId: number) => biomeById(biomeId)?.caves ?? null;
 export const snowParamsOf = (biomeId: number) => biomeById(biomeId)?.snow ?? null;
+/** What the biome's <Sewers> mount registered (null: no mount). */
 export const sewerParamsOf = (biomeId: number) => biomeById(biomeId)?.sewers ?? null;
 export const rockParamsOf = (biomeId: number) => biomeById(biomeId)?.rocks ?? null;
 export const riverBankReliefOf = (biomeId: number) => biomeById(biomeId)?.riverBankRelief ?? null;

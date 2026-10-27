@@ -4,13 +4,12 @@ import { PowerLines } from "../../../../../../../objects/dressing/power-lines/Po
 import { RoadMarkers } from "../../../../../../../objects/dressing/road-markers/RoadMarkers";
 import { FreewayLamps, StreetLamps } from "../../../../../../../objects/dressing/street-lamps/StreetLamps";
 import { TrafficLights } from "../../../../../../../objects/dressing/traffic-lights/TrafficLights";
-import { Sewers } from "../../../../../../../objects/dressing/underground/Underground";
 import { Biome, Material } from "../../../../../../components";
 import { CityLights } from "./CityLights";
 import fragmentShader from "./shaders/fragment.glsl";
 import { CITY_BIOME } from "./spec";
 
-/** The sewers under the streets come from the spec's `sewers` flag; the river spray from the domain's one
+/** The sewers are the spec's `features` (drawn by <Biome>); the river spray comes from the domain's one
  *  <RiverSplashes/> mount (overworld/domain.tsx). */
 export const CityBiome = () => (
   <Biome spec={CITY_BIOME}>
@@ -24,7 +23,6 @@ export const CityBiome = () => (
       <PowerLines />
       {/* Every road a river crosses is city infrastructure — including the inter-city runs' decks outside the biome. */}
       <Bridges />
-      <Sewers />
     </Dressing>
     <CityLights />
   </Biome>

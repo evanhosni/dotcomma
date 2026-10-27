@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { specNeedsServer, type ActorSpec } from "../../src/objects/actors/spec";
 import { ACTOR_CATALOG, DOMAIN_REGIONS } from "../../src/world/domains/configs";
+import { featureSpawnId, featureSpawnsOf, featureTreeOf } from "../../src/world/features";
 
 /**
  * THE ACTOR CATALOG is derived from the domains' biome specs (src/world/domains/configs.ts): every
@@ -17,14 +18,28 @@ const actorsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/ob
 const isActorSpec = (v: unknown): v is ActorSpec => typeof v === "object" && v !== null && typeof (v as ActorSpec).id === "string";
 
 describe("actor catalog", () => {
-  it("is every server-simulated kind the domains place, keyed by its id", () => {
+  it("is every server-simulated kind the domains place, keyed by its id (and a feature's <Spawn> by its feature id too)", () => {
     const placed = new Set<ActorSpec>();
+    const ids = new Map<string, ActorSpec>();
     for (const regions of Object.values(DOMAIN_REGIONS)) {
-      for (const r of regions) for (const b of r.biomes) for (const m of b.actors ?? []) if (specNeedsServer(m.actor)) placed.add(m.actor);
+      for (const r of regions) {
+        for (const b of r.biomes) {
+          for (const m of b.actors ?? []) {
+            if (!specNeedsServer(m.actor)) continue;
+            placed.add(m.actor);
+            ids.set(m.actor.id, m.actor);
+          }
+          for (const { path, mount } of featureSpawnsOf(featureTreeOf(b.features))) {
+            if (!specNeedsServer(mount.actor)) continue;
+            placed.add(mount.actor);
+            ids.set(mount.actor.id, mount.actor).set(featureSpawnId(mount.actor.id, path), mount.actor);
+          }
+        }
+      }
     }
     assert.ok(placed.size >= 2, `found ${placed.size} placed server-simulated kinds`);
     assert.deepEqual(new Set(Object.values(ACTOR_CATALOG)), placed);
-    for (const [id, spec] of Object.entries(ACTOR_CATALOG)) assert.equal(spec.id, id, "keyed by its own id");
+    assert.deepEqual(new Map(Object.entries(ACTOR_CATALOG)), ids);
   });
 
   it("no two exported actor specs share an id (a spread variant must set its own)", async () => {

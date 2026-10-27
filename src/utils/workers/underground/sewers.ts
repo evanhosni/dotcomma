@@ -7,6 +7,7 @@
 
 import { seededStream, type SeededStream } from "../../math/seededStream";
 import type { PointXZ } from "../../math/types";
+import type { SewerSideRoomParams } from "../types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { riverKeepOff } from "../rivers/constants";
@@ -17,7 +18,6 @@ import {
   COVER_CLEARANCE,
   COVER_FIT_POINTS,
   COVER_RADIUS,
-  DOOR_CHANCE,
   DOOR_HEIGHT,
   DOOR_WIDTH,
   FRAME_INNER_RADIUS,
@@ -123,6 +123,10 @@ export interface SewerSystem extends TunnelSystem {
 export const isSewerSystem = (s: TunnelSystem): s is SewerSystem => s.style === "sewer";
 
 const nodeKey = (i: number, j: number): string => `${i},${j}`;
+/** A manhole's and a door's toggle id (synced by the server): node keys are local to a district's
+ *  rotated lattice, so two districts share them; the district key makes the id world-unique. */
+export const manholeIdOf = (d: CityDistrict, node: SewerNode): string => `manhole|${d.key}|${node.key}`;
+const doorIdOf = (d: CityDistrict, node: SewerNode): string => `door|${d.key}|${node.key}|${node.door}`;
 const streetKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const cellKey = (c: LatticeCell): string => nodeKey(c[0], c[1]);
 const stepKey = (from: LatticeCell, to: LatticeCell): string => streetKey(cellKey(from), cellKey(to));
@@ -469,7 +473,7 @@ export const layoutPieces = (layout: SewerLayout, systemKey: string): TunnelPiec
     if (node.manhole) {
       const { x, z } = manholeCenter(d, node);
       const street = node.manholeInfo ? node.manholeInfo.streetY : computeVertexData(x, z).height;
-      const shaft: ShaftPiece = withBounds({ kind: "shaft" as const, system: systemKey, path: 0, id: `manhole|${node.key}`, x, z, radius: SHAFT_RADIUS, bottom: node.floor + boxHeight(node) - SHAFT_CEILING_OVERLAP, street });
+      const shaft: ShaftPiece = withBounds({ kind: "shaft" as const, system: systemKey, path: 0, id: manholeIdOf(d, node), x, z, radius: SHAFT_RADIUS, bottom: node.floor + boxHeight(node) - SHAFT_CEILING_OVERLAP, street });
       pieces.push(shaft);
     }
     if (node.door >= 0) {
@@ -509,9 +513,9 @@ const sideRoomClear = (d: CityDistrict, node: SewerNode, side: number, others: r
 };
 
 /** Doors on junctions, one random free wall each, kept only where the side room clears the rest. */
-const placeDoors = (layout: SewerLayout, stream: SeededStream): void => {
+const placeDoors = (layout: SewerLayout, sideRooms: SewerSideRoomParams, stream: SeededStream): void => {
   for (const node of layout.nodes.values()) {
-    if (node.room || stream.next() >= DOOR_CHANCE) continue;
+    if (node.room || stream.next() >= sideRooms.chance) continue;
     const free: number[] = [];
     for (let side = 0; side < 4; side++) if (!node.links[side]) free.push(side);
     if (free.length === 0) continue;
@@ -525,12 +529,16 @@ export const layoutMasks = (layout: SewerLayout): SkirtMask[] => {
   const masks: SkirtMask[] = [];
   for (const n of layout.nodes.values()) {
     const h = boxHalf(n) * Math.SQRT2;
-    masks.push({ ax: n.x, ay: n.floor - (n.room ? POOL_DEPTH : CHANNEL_DEPTH), az: n.z, bx: n.x, by: n.floor + boxHeight(n), bz: n.z, radius: h });
+    masks.push({ ax: n.x, ay: n.floor - (n.room ? POOL_DEPTH : CHANNEL_DEPTH), az: n.z, bx: n.x, by: n.floor + boxHeight(n), bz: n.z, radius: h, ceiling: n.floor + boxHeight(n) });
+    if (n.door >= 0) {
+      const sr = sideRoomOf(layout.district, n, n.door);
+      masks.push({ ax: sr.cx, ay: n.floor, az: sr.cz, bx: sr.cx, by: n.floor + SIDE_ROOM_HEIGHT, bz: sr.cz, radius: SIDE_ROOM_HALF * Math.SQRT2, ceiling: n.floor + SIDE_ROOM_HEIGHT });
+    }
   }
   for (const s of layout.streets) {
     const a = layout.nodes.get(s.a)!;
     const b = layout.nodes.get(s.b)!;
-    masks.push({ ax: a.x, ay: a.floor + PIPE_AXIS_LIFT, az: a.z, bx: b.x, by: b.floor + PIPE_AXIS_LIFT, bz: b.z, radius: PIPE_RADIUS + 1 });
+    masks.push({ ax: a.x, ay: a.floor + PIPE_AXIS_LIFT, az: a.z, bx: b.x, by: b.floor + PIPE_AXIS_LIFT, bz: b.z, radius: PIPE_RADIUS + 1, ceiling: Math.max(a.floor, b.floor) + PIPE_AXIS_LIFT + PIPE_RADIUS });
   }
   return masks;
 };
@@ -538,7 +546,7 @@ export const layoutMasks = (layout: SewerLayout): SkirtMask[] => {
 /** One sewer system for a city cell, or null when no street can be walked from near its site. The
  *  layout draws from one seeded stream in a fixed order: the main path, the node kinds, the
  *  branches, then the doors. */
-export const generateSewer = (key: string, biomeId: number, ix: number, iz: number, site: PointXZ): SewerSystem | null => {
+export const generateSewer = (key: string, biomeId: number, ix: number, iz: number, site: PointXZ, sideRooms: SewerSideRoomParams | null): SewerSystem | null => {
   const stream = seededStream(`${domainConfig!.seed}|${key}|layout`);
   const d = getCityDistrict(site.x, site.z);
   const origin = latticeOrigin(d, site);
@@ -557,7 +565,8 @@ export const generateSewer = (key: string, biomeId: number, ix: number, iz: numb
   addBranches(lattice, graph, mainNodes, stream, visited, used);
 
   const layout: SewerLayout = { key, district: d, nodes: graph.nodes, streets: graph.streets };
-  placeDoors(layout, stream);
+  // Last in the stream: a biome without side rooms draws the same layout otherwise.
+  if (sideRooms) placeDoors(layout, sideRooms, stream);
 
   const pieces = layoutPieces(layout, key);
   const bounds = emptyBounds();
@@ -682,7 +691,7 @@ export const finishSewer = (system: SewerSystem): void => {
     if (!node.manhole) continue;
     node.manholeInfo = manholeInfoOf(layout.district, node);
     const c = manholeCenter(layout.district, node);
-    entrances.push({ kind: "manhole", id: `manhole|${node.key}`, x: c.x, y: node.manholeInfo.streetY, z: c.z, dirX: node.manholeInfo.faceX, dirZ: node.manholeInfo.faceZ, radius: SHAFT_RADIUS, manhole: node.manholeInfo });
+    entrances.push({ kind: "manhole", id: manholeIdOf(layout.district, node), x: c.x, y: node.manholeInfo.streetY, z: c.z, dirX: node.manholeInfo.faceX, dirZ: node.manholeInfo.faceZ, radius: SHAFT_RADIUS, manhole: node.manholeInfo });
   }
   system.entrances = entrances;
 };
@@ -744,7 +753,7 @@ export const layoutDoors = (layout: SewerLayout): SewerDoor[] => {
     if (n.door < 0) continue;
     const sr = sideRoomOf(layout.district, n, n.door);
     const far = boxHalf(n) + REVEAL_DEPTH;
-    out.push({ id: `door|${n.key}|${n.door}`, x: n.x + sr.outX * far, y: n.floor, z: n.z + sr.outZ * far, yaw: Math.atan2(sr.outX, sr.outZ), width: DOOR_WIDTH, height: DOOR_HEIGHT });
+    out.push({ id: doorIdOf(layout.district, n), x: n.x + sr.outX * far, y: n.floor, z: n.z + sr.outZ * far, yaw: Math.atan2(sr.outX, sr.outZ), width: DOOR_WIDTH, height: DOOR_HEIGHT });
   }
   return out;
 };

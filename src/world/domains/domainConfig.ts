@@ -4,7 +4,8 @@ import { resolveFlag } from "../../utils/workers/biomeFlags";
 import { RIVER_BANK_RELIEF_DEFAULTS } from "../../utils/workers/rivers/riverBankParams";
 import { ROCK_DEFAULTS } from "../../utils/workers/rocks/rockParams";
 import { SNOW_DEFAULTS } from "../../utils/workers/snow/snowParams";
-import { CAVE_DEFAULTS, SEWER_DEFAULTS } from "../../utils/workers/underground/constants";
+import { caveParamsFrom, sewerParamsFrom } from "../../objects/dressing/underground/features";
+import { featureTreeOf } from "../features";
 import type { DomainConfig, FlattenDescriptor, SerializedBiome, SerializedRegion } from "../../utils/workers/vertexCompute";
 import type { Biome, BiomeNoiseConfig, BiomeSpec, RegionSpec, RegionSpecBase, TerrainParams } from "../types";
 
@@ -117,9 +118,9 @@ export const serializeBiome = (b: BiomeSpec | Biome): SerializedBiome => ({
   // the dev drift check compared `false` against a missing key for every biome.
   prohibitRoads: !!b.prohibitRoads,
   prohibitRivers: !!b.prohibitRivers,
-  caves: resolveFlag(b.caves, CAVE_DEFAULTS),
+  caves: caveParamsFrom(featureTreeOf(b.features)),
   snow: resolveFlag(b.snow, SNOW_DEFAULTS),
-  sewers: resolveFlag(b.sewers, SEWER_DEFAULTS),
+  sewers: sewerParamsFrom(featureTreeOf(b.features)),
   rocks: resolveFlag(b.rocks, ROCK_DEFAULTS),
   riverBankRelief: resolveFlag(b.riverBankRelief, RIVER_BANK_RELIEF_DEFAULTS),
 });

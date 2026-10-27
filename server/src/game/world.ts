@@ -1,7 +1,7 @@
 import type { DomainId, EntityRegisterItem, MoveIntent, PlayerData, PlayerSnapshot, ServerMessage } from "../../../src/net/protocol";
 import { EntityManager, type PlayerView } from "./entities/manager.js";
 import { PlayerPersistence } from "./persistence.js";
-import type { PhysicsWorld } from "./physics/physicsWorld.js";
+import { PHYSICS_DOMAIN, type PhysicsWorld } from "./physics/physicsWorld.js";
 
 /**
  * Sessions (ephemeral presence), rooms (one per domain — every broadcast is room-scoped,
@@ -23,6 +23,8 @@ export interface Outbox {
 
 const GOLDEN_ANGLE_DEG = 137.508;
 const SPAWN_RING_RADIUS = 3;
+/** Open manholes and doors kept per domain: a client spamming forged ids stops opening more here. */
+const MAX_OPEN_TUNNELS = 20000;
 
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
@@ -57,8 +59,11 @@ export class World {
   private joinCount = 0;
   private readonly entities: EntityManager;
   private readonly persistence = new PlayerPersistence();
+  /** The open manholes and doors, per domain (TunnelToggleMessage): the server's, so its NPCs fall into
+   *  the open manholes every player sees. Not persisted: a restart closes them. */
+  private readonly openTunnels = new Map<DomainId, Set<string>>();
 
-  constructor(private readonly out: Outbox, physics: PhysicsWorld | null = null) {
+  constructor(private readonly out: Outbox, private readonly physics: PhysicsWorld | null = null) {
     this.entities = new EntityManager(
       {
         playersIn: (domain) => this.playerViews(domain),
@@ -156,6 +161,27 @@ export class World {
     if (this.sessions.has(id)) this.entities.interact(id, entityId, action);
   }
 
+  /** Flips a manhole's or door's open state in the player's domain and tells everyone there. The id's
+   *  shape is checked (transport/ws.ts), not that the player stands by it: a forged id opens nothing
+   *  anyone can reach. */
+  toggleTunnel(id: string, tunnelId: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const open = this.tunnelsOpenIn(s.domain);
+    const next = !open.has(tunnelId);
+    if (next && open.size >= MAX_OPEN_TUNNELS) return;
+    if (next) open.add(tunnelId);
+    else open.delete(tunnelId);
+    if (s.domain === PHYSICS_DOMAIN) this.physics?.setTunnelOpen(tunnelId, next);
+    this.out.sendMany(this.room(s.domain), { t: "tunnel:state", id: tunnelId, open: next });
+  }
+
+  private tunnelsOpenIn(domain: DomainId): Set<string> {
+    let open = this.openTunnels.get(domain);
+    if (!open) this.openTunnels.set(domain, (open = new Set()));
+    return open;
+  }
+
   /** Call from a coarse timer, never from a tick. */
   flushDirty(now = Date.now()): number {
     return this.persistence.flushDirty(now);
@@ -200,6 +226,7 @@ export class World {
       players: this.roster(s.domain, s.id),
       serverTime: Date.now(),
       data: this.persistence.get(s.identity)?.data ?? {},
+      tunnelsOpen: [...this.tunnelsOpenIn(s.domain)],
     });
     this.out.sendMany(room, { t: "join", player: snapshotOf(s) }, s.id);
   }

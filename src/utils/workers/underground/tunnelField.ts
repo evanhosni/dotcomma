@@ -18,6 +18,8 @@ import {
   FLOOR_BUMP,
   FOOTPRINT_PAD,
   JUNCTION_BLEND,
+  MOUTH_HOLE_CAP_PAD,
+  MOUTH_HOLE_CAP_RADII,
   MOUTH_RIM_AMP,
   NOISE_SHELL,
   PIPE_AXIS_LIFT,
@@ -115,6 +117,19 @@ export const mouthSectionDistanceToRect = (m: MouthPiece, rect: RectXZ): number 
 export const mouthFootprintRadius = (m: MouthPiece): number => m.width + FOOTPRINT_PAD;
 export const insideMouthFootprint = (m: MouthPiece, x: number, z: number, inset = 0): boolean =>
   mouthSectionDistance(m, x, z) < mouthFootprintRadius(m) - inset;
+
+/** The ceiling of a mouth's terrain CUT over its section's floor: the terrain discards under it inside the
+ *  footprint (world/shaders/terrainHoles.ts mouthCutsHere), so the mountain above the opening stays. */
+export const mouthCutCeiling = (m: MouthPiece): number => m.r0 * MOUTH_HOLE_CAP_RADII + MOUTH_HOLE_CAP_PAD;
+
+/** Whether a point is in a mouth's cut: in its footprint, under the cut's ceiling over the section's floor
+ *  there. The entrance PATCH draws the ground and walls there, and is their collider: a body's step leaves
+ *  the terrain heightfield out inside it (physics/tunnelRules.ts), which draws nothing there. */
+export const insideMouthCut = (m: MouthPiece, x: number, y: number, z: number): boolean => {
+  if (!insideMouthFootprint(m, x, z)) return false;
+  const a = Math.max(0, Math.min(m.length, mouthAlong(m, x, z)));
+  return y < m.oy - m.grade * a + mouthCutCeiling(m);
+};
 
 /** The horizontal extents of a footprint. */
 export const mouthFootprintBounds = (m: MouthPiece): RectXZ => {

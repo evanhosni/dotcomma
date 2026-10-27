@@ -29,6 +29,9 @@ export interface GameObjectAttributes {
 
   /** Unset = every biome. */
   biomeIds?: number[];
+  /** Set for a <Spawn> inside a feature (world/features.ts): that feature's path, which places the
+   *  instances (one per sewer side room…) instead of the density roll and its filters. */
+  feature?: string;
   heightRange?: [number, number];
   /** Degrees. */
   slopeRange?: [number, number];

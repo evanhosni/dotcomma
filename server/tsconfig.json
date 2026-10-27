@@ -16,10 +16,12 @@
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "allowImportingTsExtensions": false
+    "allowImportingTsExtensions": false,
+    "jsx": "react-jsx"
   },
   "include": [
-    "src"
+    "src",
+    "../src/**/spec.tsx"
   ],
   "exclude": [
     "test",

@@ -1,5 +1,6 @@
 import { reportContentError } from "../../utils/contentError";
 import type { RegionSpec } from "../../world/types";
+import { featureSpawnId, featureSpawnsOf, featureTreeOf } from "../../world/features";
 import { specNeedsServer, type ActorSpec } from "./spec";
 
 /**
@@ -15,7 +16,11 @@ export const actorCatalogOf = (regionLists: Iterable<readonly RegionSpec[]>): Re
   for (const regions of regionLists) {
     for (const region of regions) {
       for (const biome of region.biomes) {
-        for (const { actor } of biome.actors ?? []) {
+        const placed = [
+          ...(biome.actors ?? []).map(({ actor }) => ({ actor, id: actor.id })),
+          ...featureSpawnsOf(featureTreeOf(biome.features)).map(({ path, mount }) => ({ actor: mount.actor, id: featureSpawnId(mount.actor.id, path) })),
+        ];
+        for (const { actor, id } of placed) {
           const listed = specById.get(actor.id);
           if (listed && listed !== actor) {
             reportContentError(
@@ -24,7 +29,7 @@ export const actorCatalogOf = (regionLists: Iterable<readonly RegionSpec[]>): Re
             );
           }
           specById.set(actor.id, actor);
-          if (specNeedsServer(actor)) catalog[actor.id] = actor;
+          if (specNeedsServer(actor)) catalog[id] = catalog[actor.id] = actor;
         }
       }
     }

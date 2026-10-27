@@ -1,6 +1,6 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import type { DomainId } from "../../../../src/net/protocol";
-import { GRAVITY } from "../../../../src/physics/characterMovement";
+import { GRAVITY, markTerrainCollider } from "../../../../src/physics/characterMovement";
 import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
 import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
 import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
@@ -10,6 +10,9 @@ import { ChunkStore, JobQueue, type ChunkBuilder } from "./chunks.js";
 import { enumerateObstacles, type ObstaclePoint } from "./obstaclePoints.js";
 import { createObstacleBodies } from "./obstacles.js";
 import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_ROWS, TERRAIN_SEGMENTS } from "./terrain.js";
+import { sampleTunnelChunk, type TunnelPart } from "./tunnels.js";
+import { tunnelColliderBodies } from "../../../../src/utils/workers/underground/colliderBodies";
+import { TunnelSpace } from "../../../../src/utils/workers/underground/tunnelSpace";
 
 /**
  * Headless Rapier (the client's package, bundled from the root install) stepped at the
@@ -29,6 +32,11 @@ export interface PhysicsWorldOptions {
 }
 
 export const PHYSICS_DOMAIN: DomainId = "overworld";
+
+interface TunnelChunk {
+  parts: TunnelPart[];
+  bodies: RAPIER.RigidBody[];
+}
 export const DEFAULT_WORK_BUDGET_MS = 8;
 
 let rapierReady: Promise<void> | null = null;
@@ -40,6 +48,11 @@ export class PhysicsWorld {
   readonly jobs = new JobQueue();
   readonly terrain: ChunkStore<RAPIER.RigidBody, Float32Array>;
   readonly dressing: ChunkStore<RAPIER.RigidBody[], ObstaclePoint[]>;
+  /** The caves and sewers around every NPC, and the space its tunnel rules read (physics/tunnelRules.ts). */
+  readonly tunnels: ChunkStore<TunnelChunk, TunnelPart[]>;
+  readonly tunnelSpace: TunnelSpace;
+  /** The open manholes and doors of this domain (World.toggleTunnel). */
+  private readonly tunnelsOpen = new Set<string>();
   private readonly generator: ChunkGenerator | null;
   private stepMs = 0;
   private maxStepMs = 0;
@@ -62,6 +75,41 @@ export class PhysicsWorld {
       builder: (gx, gz, points) => () => createObstacleBodies(this, points ?? enumerateObstacles(gx, gz)),
       dispose: (bodies) => bodies.forEach((b) => this.removeBody(b)),
       fetch: generator && ((gx, gz) => generator.fetch("dressing", gx, gz)),
+    });
+    this.tunnelSpace = new TunnelSpace((id) => this.tunnelsOpen.has(id));
+    this.tunnels = new ChunkStore(this.jobs, {
+      name: "tunnels",
+      builder: (gx, gz, parts) => () => this.createTunnelChunk(parts ?? sampleTunnelChunk(gx, gz)),
+      dispose: (chunk) => this.disposeTunnelChunk(chunk),
+      fetch: generator && ((gx, gz) => generator.fetch("tunnels", gx, gz)),
+    });
+  }
+
+  private createTunnelChunk(parts: TunnelPart[]): TunnelChunk {
+    for (const p of parts) this.tunnelSpace.add(p);
+    return { parts, bodies: this.tunnelBodies(parts) };
+  }
+
+  private tunnelBodies(parts: TunnelPart[]): RAPIER.RigidBody[] {
+    const isOpen = (id: string): boolean => this.tunnelsOpen.has(id);
+    return parts.flatMap((p) => createObstacleBodies(this, tunnelColliderBodies(p, isOpen).map((b) => ({ ...b, parts: b.parts ?? [] }))));
+  }
+
+  private disposeTunnelChunk(chunk: TunnelChunk): void {
+    chunk.bodies.forEach((b) => this.removeBody(b));
+    for (const p of chunk.parts) this.tunnelSpace.remove(p);
+  }
+
+  /** A manhole's or door's new state: the probe's shafts change, and every built chunk holding the door
+   *  remakes its bodies (a closed door is a slab). */
+  setTunnelOpen(id: string, open: boolean): void {
+    if (open) this.tunnelsOpen.add(id);
+    else this.tunnelsOpen.delete(id);
+    this.tunnelSpace.invalidateFields();
+    this.tunnels.forEachBuilt((chunk) => {
+      if (!chunk.parts.some((p) => p.doors.some((d) => d.id === id))) return;
+      chunk.bodies.forEach((b) => this.removeBody(b));
+      chunk.bodies = this.tunnelBodies(chunk.parts);
     });
   }
 
@@ -145,7 +193,8 @@ export class PhysicsWorld {
     const desc = RAPIER.ColliderDesc.heightfield(TERRAIN_SEGMENTS, TERRAIN_SEGMENTS, heights, { x: TERRAIN_CHUNK_SIZE, y: 1, z: TERRAIN_CHUNK_SIZE });
     // Desc before body: a failure can't leave an empty body.
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(chunkCenter(gx), 0, chunkCenter(gz)));
-    this.world.createCollider(desc, body);
+    // Tagged as the client's are (world/terrain/chunkObjects.ts): a step with `ignoreTerrain` (a tunnel) leaves it out.
+    markTerrainCollider(this.world.createCollider(desc, body));
     this.queriesDirty = true;
     return body;
   }
@@ -185,6 +234,7 @@ export class PhysicsWorld {
       colliders: this.world.colliders.len(),
       terrain: { built: this.terrain.built, pending: this.terrain.pending },
       dressing: { built: this.dressing.built, pending: this.dressing.pending },
+      tunnels: { built: this.tunnels.built, pending: this.tunnels.pending },
       queued: this.jobs.length,
       generating: this.generator?.inFlight ?? 0,
       steps: this.steps,
@@ -201,6 +251,7 @@ export class PhysicsWorld {
     this.world.free();
     this.terrain.clear();
     this.dressing.clear();
+    this.tunnels.clear();
     this.jobs.clear();
   }
 }

@@ -133,6 +133,11 @@ export class ChunkStore<T, D = never> {
     this.chunks.delete(key);
   }
 
+  /** Every built chunk's value. */
+  forEachBuilt(fn: (value: T) => void): void {
+    for (const c of this.chunks.values()) if (c.value !== null) fn(c.value);
+  }
+
   isReady(key: string): boolean {
     return this.chunks.get(key)?.value != null;
   }

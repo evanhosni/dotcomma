@@ -126,7 +126,18 @@ export interface EntityInteractMessage {
   action: string;
 }
 
+/** A click on a tunnel's manhole cover or door (objects/dressing/underground): the server owns every
+ *  one's open state, per domain, so its NPCs fall into the same open manholes the players see. */
+export interface TunnelToggleMessage {
+  t: "tunnel:toggle";
+  id: string;
+}
+
+/** A tunnel toggle id: `manhole|<district>|<node>` or `door|<district>|<node>|<side>` (utils/workers/underground/sewers.ts). */
+export const TUNNEL_TOGGLE_ID = /^(manhole|door)|[-0-9,]{1,24}|[-0-9,]{1,24}(|[0-3])?$/;
+
 export type ClientMessage =
+  | TunnelToggleMessage
   | HelloMessage
   | ClientMoveMessage
   | DomainMessage
@@ -148,6 +159,15 @@ export interface InitMessage {
   players: PlayerSnapshot[];
   serverTime: number;
   data: PlayerData;
+  /** The domain's open manholes and doors (TunnelToggleMessage). */
+  tunnelsOpen: string[];
+}
+
+/** A manhole or door of the domain changed: to every player in it, the toggler included. */
+export interface TunnelStateMessage {
+  t: "tunnel:state";
+  id: string;
+  open: boolean;
 }
 
 export interface JoinMessage {
@@ -203,6 +223,7 @@ export interface EntityUpdateMessage extends EntityUpdateFields {
 }
 
 export type ServerMessage =
+  | TunnelStateMessage
   | InitMessage
   | JoinMessage
   | ServerMoveMessage

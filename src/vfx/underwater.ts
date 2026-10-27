@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../lighting/dayNight";
+import type { LiquidLook } from "../utils/workers/underground/tunnelSpace";
 
 /**
  * UNDERWATER: while the camera is under a water surface the scene renders into a target and a
@@ -16,7 +17,7 @@ let cameraWaterDepth = 0;
 
 /** What a liquid looks like from under it: the water's blue, or the sewers' green sewage — thicker
  *  (a third of the water's visibility) and blurrier. */
-export type LiquidLook = "water" | "sewage";
+export type { LiquidLook };
 
 interface LookParams {
   /** The liquid's color looking down into the deep and up toward its lit surface. */

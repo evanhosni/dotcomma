@@ -1,13 +1,9 @@
-import type { CaveParams, SewerParams } from "../types";
 /** Tunnel tunables (DECISIONS.md beside this file has the measurements behind them). Leaf module: no
  *  imports, so any pipeline module may read it at its top level. */
 
 /** The roll a biome cell passes to hold a system. */
 export const CAVE_CHANCE = 0.6;
 export const SEWER_CHANCE = 0.75;
-/** What `caves: true` / `sewers: true` resolve to (world/domains/domainConfig.ts). */
-export const CAVE_DEFAULTS: CaveParams = { chance: CAVE_CHANCE };
-export const SEWER_DEFAULTS: SewerParams = { chance: SEWER_CHANCE };
 /** Systems remembered per thread; the oldest half goes when full. */
 export const SYSTEM_CACHE_MAX = 512;
 
@@ -273,7 +269,8 @@ export const ROOM_HALF = 13;
 export const ROOM_HEIGHT = 10;
 export const POOL_DEPTH = 5;
 export const ROOM_WALKWAY = 3.5;
-export const DOOR_CHANCE = 0.45;
+/** <SewerSideRoom>'s default `chance`. */
+export const SIDE_ROOM_CHANCE = 0.45;
 /** The opening in the wall (the frame's jambs and lintel stand inside it, undergroundMeshes.ts buildDoor). */
 export const DOOR_WIDTH = 2.4;
 export const DOOR_HEIGHT = 3.8;

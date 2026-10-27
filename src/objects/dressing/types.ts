@@ -30,6 +30,10 @@ export interface DressingColliderMesh {
  *  `parts` overrides the feature's shared boxes (bridge chords differ per body); `mesh`, when present,
  *  is one more collider of the body — a body may be solid through its mesh alone (a rock). */
 export interface DressingColliderBody {
+  /** Unique among the feature's bodies; default `${x}_${z}`. A feature whose bodies can share a position
+   *  (a tunnel's columns: two neighbouring chunks each own a column centred at the same x, z) must set it,
+   *  or the client builds one of them and drops the other (dressingColliders.tsx reports it). */
+  key?: string;
   x: number;
   y: number;
   z: number;

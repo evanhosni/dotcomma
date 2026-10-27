@@ -2,6 +2,7 @@ import { RootState } from "@react-three/fiber";
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
+import { patchMaterialTunnelLight } from "../../lighting/tunnelLight";
 import { _quantization } from "../../vfx/quantization";
 import { framePhaseFromCoords, getDistance2DSq, stopMatrixUpdatesWhenFrozen } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
@@ -67,6 +68,7 @@ export const prepareActorMaterial = (
   if (!options.skipLampGlow) patchStandardMaterialLampGlow(material);
   _curvature.patchMaterial(material);
   _spawnFade.patchMaterial(material, { perInstance: options.perInstanceSpawnFade });
+  patchMaterialTunnelLight(material);
 };
 
 export interface ActorLifecycleOptions {

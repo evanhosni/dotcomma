@@ -60,13 +60,28 @@ export interface SnowParams {
   depthScale: number;
 }
 
-/** Caves under a biome (`caves: true | {…}`): the chance a cell holds a system. */
+/** Caves under a biome (a <Caves> in its spec's `features`): the chance a cell holds a system, and the
+ *  rooms its <CaveSideRoom> child adds (null: none). */
 export interface CaveParams {
   chance: number;
+  sideRooms: CaveSideRoomParams | null;
 }
 
-/** Sewers under a street-bearing biome (`sewers: true | {…}`): the chance a cell holds a system. */
+/** <CaveSideRoom>: the chance of a room on the trunk (clear of the mouths) and at each branch's tip. */
+export interface CaveSideRoomParams {
+  trunkChance: number;
+  tipChance: number;
+}
+
+/** Sewers under a street-bearing biome, registered by its <Sewers> mount: the chance a cell holds a
+ *  system, and the side rooms its <SewerSideRoom> child adds (null: none). */
 export interface SewerParams {
+  chance: number;
+  sideRooms: SewerSideRoomParams | null;
+}
+
+/** <SewerSideRoom>: the chance a junction gets a door into a side room (kept only where the room fits). */
+export interface SewerSideRoomParams {
   chance: number;
 }
 

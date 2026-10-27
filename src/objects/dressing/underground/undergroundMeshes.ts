@@ -3,6 +3,7 @@ import { smoothstep } from "../../../utils/math/_math";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { instancedTemplate, meshTemplate } from "../../../utils/warmPrograms";
 import { COVER_RADIUS, COVER_THICKNESS, FRAME_INNER_RADIUS, FRAME_OUTER_RADIUS, FRAME_SAMPLES, FRAME_TOP_OVER_GROUND } from "../../../utils/workers/underground/constants";
+import { LADDER_FACE, tunnelColliderBodies } from "../../../utils/workers/underground/colliderBodies";
 import type { DiscPose, ManholeInfo, SewerDoor, TunnelEntrance, TunnelMesh, UndergroundChunk } from "../../../utils/workers/underground/types";
 import { ENTRANCE_FADE_UNIFORM } from "../../../world/shaders/terrainHoles";
 import { createEntranceMaterial } from "../../../world/terrain/material";
@@ -35,12 +36,8 @@ const RUNG_SPACING = 0.4;
 const RUNG_FROM_FLOOR = 0.35;
 const RUNG_TO_STREET = 0.3;
 const RUNG_SIZE = 0.05;
-/** The rungs stand this far from the shaft's center on the exit side; the collider slab's face at LADDER_FACE. */
-const LADDER_FACE = 0.98;
+/** The rungs stand just off the collider slab's face (colliderBodies.ts LADDER_FACE). */
 const LADDER_OFFSET = LADDER_FACE + 0.03;
-const LADDER_SLAB_WIDTH = 0.8;
-const LADDER_SLAB_DEPTH = 0.2;
-const DOOR_SLAB_THICKNESS = 0.15;
 const FRAME_BELOW_GROUND = 0.05;
 export const COVER_SLIDE_SECONDS = 0.8;
 /** A sliding cover rises this much at the middle of its slide. */
@@ -351,26 +348,8 @@ const buildManhole = (chunk: UndergroundChunk, e: TunnelEntrance, assets: Tunnel
   return cover;
 };
 
-/** The chunk's collider bodies: the brick columns, a slab per ladder, a slab per CLOSED door. */
-export const chunkColliderBodies = (obj: TunnelChunkObject): DressingColliderBody[] => {
-  const bodies: DressingColliderBody[] = [];
-  for (const c of obj.chunk.colliders) bodies.push({ x: c.x, y: 0, z: c.z, yaw: 0, parts: [], mesh: { vertices: c.vertices, indices: c.indices } });
-  for (const cover of obj.covers) {
-    const info = cover.info;
-    bodies.push({
-      x: cover.entrance.x + info.faceX * LADDER_FACE,
-      y: (info.floorY + info.streetY) / 2,
-      z: cover.entrance.z + info.faceZ * LADDER_FACE,
-      yaw: yawFromDir(info.faceX, info.faceZ),
-      parts: [{ w: LADDER_SLAB_DEPTH, h: info.streetY - info.floorY, d: LADDER_SLAB_WIDTH, x: LADDER_SLAB_DEPTH / 2, y: 0 }],
-    });
-  }
-  for (const d of obj.doors) {
-    if (isOpen(d.id)) continue;
-    bodies.push({ x: d.door.x, y: d.door.y + d.door.height / 2, z: d.door.z, yaw: d.door.yaw, parts: [{ w: d.door.width, h: d.door.height, d: DOOR_SLAB_THICKNESS, x: 0, y: 0 }] });
-  }
-  return bodies;
-};
+/** The chunk's collider bodies (the server's NPCs get the same: colliderBodies.ts). */
+export const chunkColliderBodies = (obj: TunnelChunkObject): DressingColliderBody[] => tunnelColliderBodies(obj.chunk, isOpen);
 
 /** Builds a chunk's objects; `entranceMaterial` is the terrain's ENTRANCE variant (null until the terrain
  *  material exists: the patch is then not drawn). */

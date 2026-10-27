@@ -18,6 +18,10 @@ Rules that came out of building it:
 - **Windows can't deliver SIGTERM** to a child process — the shutdown flush is unit-tested (`server/test/persistence.test.ts`, on a throwaway SQLite), not by signal.
 - The old gh-pages deploy, `homepage`, and `predeploy` are gone; `CNAME` at the repo root is a leftover to delete once DNS points at Railway.
 
+## Tunnels on the server (Oct 2026)
+
+**An NPC goes where the player goes.** The physics world has a third chunk layer, `tunnels` (physics/tunnels.ts: per 256u dressing chunk, every cave and sewer chunk of the biomes whose spec mounts them, built by the client's chunk builder on the generation worker and kept as pieces, entrances, liquid, doors and colliders), held by every GroundBody like its terrain and dressing, and a `TunnelSpace` the bodies' tunnel rules read (src/physics/tunnelRules.ts, the player's own). Its heightfields are tagged as terrain (`markTerrainCollider`) so `ignoreTerrain` works here at all. A registration whose point stands in tunnel air (a side-room spawn) keeps its y as the floor; the surface backstops skip a body in a tunnel or a manhole's column. Manhole and door state is the World's per domain (`toggleTunnel`; not persisted: a restart closes them), mirrored into the physics world (`setTunnelOpen`: a closed door is a slab, an open manhole drops a body). Cost: a body's chunks wait for their tunnel chunk (a sewer chunk 15–100ms on the worker, a cave chunk with a mouth ~430ms). Measured and pinned: test/npcTunnels.test.ts. → src/utils/workers/underground/DECISIONS.md
+
 ## Entity sync (Phase 6, Sept 2026) — the SERVER runs every actor's state machine
 
 > **Read [`NPC_TRACKING.md`](../NPC_TRACKING.md) first** — the plain-language write-up of how NPCs sync across clients and how to program a new NPC's movement/states (the beeble as the template). This section is the dense reference.

@@ -5,6 +5,7 @@ import { ActorDescriptor, AnyActorDescriptor } from "../../objects/actors/spawni
 import { ActorAttributes } from "../../objects/types";
 import { reportContentError } from "../../utils/contentError";
 import { getActorSpec } from "../domains/configs";
+import { featureSpawnId } from "../features";
 import { BiomeContext, useDomainStore } from "./context";
 
 /** A kind the server simulates must reach the server's catalog, which is derived from DOMAIN_REGIONS. */
@@ -61,11 +62,13 @@ const Actor = (props: AnyActorDescriptor) => {
   return null;
 };
 
-/** A biome spec's `actors` (rendered by <Biome>): each mount's descriptor with its overrides on top. */
-export const ActorMounts = ({ mounts }: { mounts: readonly ActorMount[] }) => (
+/** A biome spec's `actors` (rendered by <Biome>): each mount's descriptor with its overrides on top. A
+ *  feature's <Spawn>s (`feature`: its path) list under their own id, placed by that feature. */
+export const ActorMounts = ({ mounts, feature }: { mounts: readonly ActorMount[]; feature?: string }) => (
   <>
-    {mounts.map((mount) => (
-      <Actor key={mount.actor.id} {...describeActor(mount.actor)} {...(mountOverridesOf(mount) as Partial<AnyActorDescriptor>)} />
-    ))}
+    {mounts.map((mount) => {
+      const placed = feature ? { id: featureSpawnId(mount.actor.id, feature), feature } : {};
+      return <Actor key={mount.actor.id} {...describeActor(mount.actor)} {...(mountOverridesOf(mount) as Partial<AnyActorDescriptor>)} {...placed} />;
+    })}
   </>
 );

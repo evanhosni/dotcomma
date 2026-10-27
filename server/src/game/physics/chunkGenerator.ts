@@ -3,6 +3,7 @@ import type { DomainId } from "../../../../src/net/protocol";
 import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
 import type { ChunkFetch } from "./chunks.js";
 import type { ObstaclePoint } from "./obstaclePoints.js";
+import type { TunnelPart } from "./tunnels.js";
 
 /**
  * Main-thread side of chunkGenerator.worker.ts. Sampling a terrain chunk is 9409 height evaluations
@@ -21,6 +22,7 @@ import type { ObstaclePoint } from "./obstaclePoints.js";
 export interface ChunkLayerData {
   terrain: Float32Array;
   dressing: ObstaclePoint[];
+  tunnels: TunnelPart[];
 }
 
 export type ChunkLayer = keyof ChunkLayerData;

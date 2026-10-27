@@ -53,14 +53,16 @@ export class Walker {
     this.character.state.vy = 0;
   }
 
-  /** vx/vz: a velocity intent (u/s); vy: a driven vertical (an NPC's ascend). Sets the
-   *  body's next translation; the world step applies it. */
-  step(dt: number, vx: number, vz: number, vy: number | null = null): CharacterStepResult {
+  /** vx/vz: a velocity intent (u/s); vy: a driven vertical (an NPC's ascend); ignoreTerrain: the
+   *  heightfields are not ground (a tunnel: physics/tunnelRules.ts). Sets the body's next translation;
+   *  the world step applies it. */
+  step(dt: number, vx: number, vz: number, vy: number | null = null, ignoreTerrain = false): CharacterStepResult {
     const p = this.body.translation();
     this.input.dirX = vx;
     this.input.dirZ = vz;
     this.input.speed = Math.hypot(vx, vz);
     this.input.vyOverride = vy;
+    this.input.ignoreTerrain = ignoreTerrain;
     this.surface.sample(p.x, p.z, p.y - this.halfHeight);
     return stepCharacter(this.pw.world, this.character, this.body, this.collider, p.x, p.y, p.z, this.input, dt, this.lastStep);
   }

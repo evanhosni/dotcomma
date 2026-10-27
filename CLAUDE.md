@@ -58,7 +58,8 @@ Also: [src/world/VERTEX_JOURNEY.md](src/world/VERTEX_JOURNEY.md) (one vertex thr
     <Material/>  //  its BASE material — what a biome's own texture fades into at the biome's edge (presence)
     <Skybox/>  //  its sky (mixed by position across region edges)
     <Biome spec>  // rendered by <Region> in spec.biomes order; spec: joinable, noise|water, blend widths, `actors`,
-                             //  and the FLAGS the world-wide systems read (caves, snow, sewers, rocks, riverBankRelief: true | {…overrides})
+                             //  the FLAGS the world-wide systems read (snow, rocks, riverBankRelief: true | {…overrides}),
+                             //  and its FEATURES (a spec.tsx tree — see below), which <Biome> draws
       <Material/>  //  biome fragment shader (<Material shader textures>)
                              //  ACTOR class: per-object spawns (identity/state/interaction) are
                              //  DATA — spec.actors: [{ actor: ActorSpec, …overrides }], registered by <Biome>
@@ -74,9 +75,16 @@ Also: [src/world/VERTEX_JOURNEY.md](src/world/VERTEX_JOURNEY.md) (one vertex thr
   </Region>
   <Dressing>  // FLAG-DRIVEN dressing, mounted ONCE: each draws every biome whose spec sets its flag
     <SnowDrift/> <Rocks/> <RiverSplashes/> <LakeBubbles/>  (a biome mount is a content error)
-                             // the tunnels (<Caves/> <Sewers/>) are mounted in the biomes that hold them
   </Dressing>
 </Domain>
+
+features: (  // a biome spec's FEATURES (spec.tsx): read as DATA by the server and workers, drawn by <Biome>
+  <Sewers chance>  //  no <Sewers>, no sewers
+    <SewerSideRoom chance>  //  a PART — no child, no side rooms
+      <Spawn actor={BEEBLE_SPEC} />  //  one per side room, server-simulated
+    </SewerSideRoom>
+  </Sewers>
+)
 ```
 
 **The hierarchy is also the FOLDER hierarchy** (`src/world/domains/<domain>/regions/<region>/biomes/<biome>/`): biome-specific code in the biome's folder, region-specific in the region's (`region.tsx`, `spec.ts`, `shaders/base.glsl` = its BASE material), domain-specific in the domain's; only genuinely shared code lives above the domains. A REGION is a group of biomes with its own base noise, base material, sky and `riverProbability`, partitioned by a voronoi grid above the biome grid (`regionGridSize` 3000 → biome `gridSize` 500). No edge, region or biome, is a hard boundary: height, material and sky cross-fade into the neighbor ("Blending"); rivers are the edges of their own grid and cross everything ("Rivers"). The overworld has four: **city** (city + grass on the default base, `riverProbability` 0.35), **desert** (dust + salt on their own simplex base, 0.15), **snow** (tundra + mountain on a slow perlin base, 0.55), **ocean** (lake biomes — bowls under a blended water level — on a near-flat base, 0.6).
@@ -102,7 +110,7 @@ Rule of thumb: unique geometry, interaction or behavior → actor; many + identi
   - under `<Biome>`: the biome frag / a sky override
 
   `Terrain` is domain-only.
-- **Biome flags: never a biome id or name.** Every biome difference a system keys on is a spec FLAG (`water`, `caves`, `snow`, `sewers`, `rocks`, `riverBankRelief`, each `true | {…overrides}` resolved against ONE defaults file per system into the config) or the biome's SHAPE (`isRockBiome`: a domed biome is rock), read through ONE helper, `utils/workers/biomeFlags.ts` (`…BiomeIds()`, `…ParamsOf(id)`, `isWaterRegion`). The bespoke city height branch is the one id the pipeline names, and `roadBearingBiomeIds()` is where it becomes a flag for everything downstream. → workers/DECISIONS.md
+- **Biome flags: never a biome id or name.** Every biome difference a system keys on is a spec FLAG (`water`, `snow`, `rocks`, `riverBankRelief`, each `true | {…overrides}` resolved against ONE defaults file per system into the config) or the biome's SHAPE (`isRockBiome`: a domed biome is rock), read through ONE helper, `utils/workers/biomeFlags.ts` (`…BiomeIds()`, `…ParamsOf(id)`, `isWaterRegion`). The bespoke city height branch is the one id the pipeline names, and `roadBearingBiomeIds()` is where it becomes a flag for everything downstream. → workers/DECISIONS.md
 - **Addresses: the URL is a place.** `/<region words>/<biome words>` is a BIJECTIVE encoding of cell coordinates (never a hash or a registry). FROZEN: the word lists (append-only), the scramble constant, the seed, the region/biome order, the grid sizes; `address.test.ts` pins the vectors. Debug: `window.__dotcomma.travelTo(x, z)` (`travelTo(x, z, y)` lands at `y` with the terrain gate open: into a tunnel). → domains/DECISIONS.md
 - **Blending: no boundary anywhere, ever.** Every zone wall cross-fades: heights on the CPU, the material per PIXEL, the sky by position.
   - The shader gets per-biome-slot SIGNED DISTANCES (`biomeSdf`), never a weight or a biome id; indicators combine by CRISPNESS PRECEDENCE (`combineZoneWeights`), never plain normalization; a biome fades into its region's BASE by `presence`; the material feather uses the SMALLER side's width; only LOD3–4 clamp the blend fields; widths resolve biome → region → domain default.
@@ -121,7 +129,7 @@ Rule of thumb: unique geometry, interaction or behavior → actor; many + identi
   → rivers/DECISIONS.md
 - **Lakes** are a biome with `water: { depth }`. The level is blended by a kernel. Land near water never sits below it (`shoreLift`). The water is a child mesh per terrain chunk, at render order `WATER_RENDER_ORDER` (10), writing no depth. → rivers/DECISIONS.md
 - **Bridges are DRESSING, computed geometrically.** A deck exists only where a road genuinely crosses a river, landed on dry road at both ends, continuous with it; deterministic per window; colliders are a trimesh of exactly the drawn ribbon; the terrain is cut under the DRAWN slab; a vertex fetches its cell's decks FIRST (enumerating them evaluates terrain). Keep `DRESSING_CHUNK_SIZE` consistent between client and server. → bridges/DECISIONS.md
-- **Tunnels (caves, sewers) are dressing and an OVERLAY**: their one height step is the cave MOUTH BULGE (`mouthBulge.ts`, step 10, from caves generated on the un-bulged ground). A cave ENTRANCE is ONE isosurface of ground and tunnel, drawn with the terrain's material fading into rock (`entrance.ts`, `tunnelRock.ts`); the terrain is cut per pixel there and at shafts (`terrainHoles.ts`); the player ignores heightfields overhead in a tunnel (`ignoreTerrain`). Snow is ONE rule for the near sheet, the terrain's whitening and the wading; rocks a density field per biome plus every mouth's spots, plus the bare boulders of every waterfall and the odd rock in calm water (`rivers/waterfallRocks.ts`, ONE list the `rocks` enumerator draws and the splash enumerator bursts on). → underground/DECISIONS.md, rivers/DECISIONS.md
+- **Tunnels (caves, sewers) are spec FEATURES, dressing and an OVERLAY**: their one height step is the cave MOUTH BULGE (`mouthBulge.ts`, step 10, from caves generated on the un-bulged ground). A cave ENTRANCE is ONE isosurface of ground and tunnel, drawn with the terrain's material fading into rock (`entrance.ts`, `tunnelRock.ts`); the terrain is cut per pixel there and at shafts (`terrainHoles.ts`). The player and every server NPC move by ONE rule set (`physics/tunnelRules.ts`) on a `TunnelSpace` each: heightfields are ignored in a tunnel's air and in a mouth's CUT, where the drawn entrance patch is the collider. Manholes and doors are the SERVER's state. Snow is ONE rule for the near sheet, the terrain's whitening and the wading; rocks a density field per biome plus every mouth's spots, plus the bare boulders of every waterfall and the odd rock in calm water (`rivers/waterfallRocks.ts`, ONE list the `rocks` enumerator draws and the splash enumerator bursts on). → underground/DECISIONS.md, rivers/DECISIONS.md
 - **City terrain** (`roads/cityTerrain.ts`):
   - Rotated staggered DISTRICTS, each holding a square block grid (not voronoi), with arterials on the district boundaries.
   - ONE normalized road field drives the shader bands, the curb dip and the spawn filters, and is the global "is a road here" test (mouth fitness, the sewers' on-street nodes). `cityConfig.roadWidth` (7, the half-width) must match the city shader's bands.
@@ -224,7 +232,7 @@ CHANGES.md, SERVER_CHANGES.md  history logs
 - **Biome shaders**: each biome/region fragment shader becomes a named function; `combineBiomeMaterials` mixes them per pixel from the `vBiomeSdf0/1` / `vBiomePresence0/1` varyings (no biome id in the shader); the vertex shader is shared
 - **Geometry pooling**: `acquireGeometry()`/`releaseGeometry()` recycle BufferGeometry per LOD level
 - **Voronoi caching**: grids, triangulations, wall lists and sites are memoized (on grid identity / per cell); never rebuild the wall arrays per vertex. → workers/DECISIONS.md
-- **DomainConfig** (`world/domains/buildDomainConfig.ts`): the serializable config sent to workers — regions and biomes (base noise, riverProbability, water, the resolved caves/snow/sewers/rocks params, blend widths), the `<Terrain>` params, biome noise, flatten descriptors (from the specs' `actors`), city config
+- **DomainConfig** (`world/domains/buildDomainConfig.ts`): the serializable config sent to workers — regions and biomes (base noise, riverProbability, water, the resolved snow/rocks params and the caves/sewers params of the specs' `features`, blend widths), the `<Terrain>` params, biome noise, flatten descriptors (from the specs' `actors`), city config
 
 ## Adding Content
 
@@ -241,7 +249,7 @@ Each flow's checklist lives in the README of the folder it touches; this table s
 | an NPC with scene logic | + 1 component registered in `ACTOR_COMPONENTS` / `ActorComponentName`, named by `component` on the spec; `withModelActorWarmup` | [actors/README.md](src/objects/actors/README.md) |
 | a building variant | 2 edits: a spec in `building/spec.ts` + a biome mount (flatten pads and the server's hull follow) | [building/README.md](src/objects/actors/building/README.md) |
 | a far sprite | `spriteLod` on the spec + a describer + a `SpriteLook` | [sprite-lod/README.md](src/objects/sprite-lod/README.md) |
-| tunnels under a biome | `<Caves />` / `<Sewers />` in its `<Dressing>` + `caves: true` (or `{ chance }`) / `sewers: true` on its spec | [underground/README.md](src/objects/dressing/underground/README.md) |
+| tunnels under a biome | `<Caves>` / `<Sewers>` in its spec's `features` (spec.tsx), parts (`<CaveSideRoom>`, `<SewerSideRoom>`) and `<Spawn>`s inside; nothing else | [underground/README.md](src/objects/dressing/underground/README.md) |
 | snow / rocks on a biome | `snow: true \| SnowParams` / `rocks: true \| RockParams` on its spec — nothing to mount | [snow-drift/README.md](src/objects/dressing/snow-drift/README.md), [rocks/README.md](src/objects/dressing/rocks/README.md) |
 | a per-biome parameter of a flagged system | 1 field on its params type + its default in that system's defaults file | [workers/README.md](src/utils/workers/README.md) |
 | a particle effect | a `ParticleLook` + a Three-free emitter enumerator (+ 1 `DRESSING_ENUMERATORS` line, a test) + 1 `createParticleDressing` member + 1 mount | [particles/README.md](src/particles/README.md) |
@@ -293,6 +301,7 @@ Every overlay follows the stats overlay's green-on-black terminal look from `src
 - **The horizontal plane is x/z, everywhere** — `y` is always height, inside 2D code too (voronoi, city grid, density placement, chunk offsets): `PointXZ` / `RectXZ` (`utils/math/types.ts`) and `ix/iz`, `dx/dz`, `sx/sz` names, never `THREE.Vector2` or `.y` for a horizontal coordinate. The ONLY `(x, y)` pair is the abstract 2D noise samplers (`simplex2`/`perlin2`/`terrainNoise` in `utils/workers/noise.ts`), whose inputs are not world axes
 - **Hierarchy ownership**: DOMAIN → REGION → BIOME is both the content and the folder hierarchy — code lives at the level it belongs to; only genuinely shared code lives outside `world/domains/`
 - **Pattern files per folder**: `types.ts`, `constants.ts`, `defaults.ts`, `utils.ts` at the appropriate level — no grab-bag singleton modules (the old `registry.ts` was split this way)
+- **Presence by mounting (wherever possible)**: a feature exists BECAUSE its component is mounted under its owner, an optional part is a CHILD, its knobs are props (no `<Sewers>`, no sewers; no `<SewerSideRoom>`, no side rooms; a side room's spawns mounted inside it). Never a flag restating a mount. DOMAIN → REGION → BIOME → FEATURE → PART. What the server or a worker must know is a FEATURE in the spec's `features` (world/components/README.md); visual-only children stay in `biome.tsx`.
 - **Extend, don't duplicate**: every game object extends its CLASS BASE (`objects/actors/Actor.tsx`, `objects/dressing/Dressing.tsx`, `objects/foliage/Foliage.tsx`) plus the shared attribute types (`objects/types.ts`); actor variants spread a base descriptor
 - Feature-based directory structure — co-locate assets (shaders, textures) with their biome/feature
 - Prefer editing existing files over creating new ones

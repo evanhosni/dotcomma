@@ -2,13 +2,14 @@
 
 import { seedRand } from "../../math/_math";
 import type { RectXZ } from "../../math/types";
+import { caveParamsOf, sewerParamsOf } from "../biomeFlags";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warpMax } from "../noise";
 import { biomeSiteAt } from "../voronoi";
 import { finishConnectedSpring, finishLoneSpring, finishPairedSpring, generateCave, planSpring, springGap, type SpringPlan } from "./caves";
 import { springSitesInCell, type SpringSite } from "./springs";
-import { CAVE_CHANCE, SEWER_CHANCE, SPRING_SHARE_REACH, SYSTEM_CACHE_MAX } from "./constants";
+import { SPRING_SHARE_REACH, SYSTEM_CACHE_MAX } from "./constants";
 import { clearDrawnGround } from "./drawnGround";
 import { finishSewer, generateSewer, isSewerSystem } from "./sewers";
 import { boundsTouchXZ } from "./tunnelField";
@@ -42,7 +43,10 @@ export const systemAt = (style: TunnelStyle, biomeId: number, ix: number, iz: nu
     systems.set(key, null);
     return null;
   }
-  const chance = style === "cave" ? CAVE_CHANCE : SEWER_CHANCE;
+  // A biome holds tunnels only where its spec's `features` mount them (the config's `caves` / `sewers`).
+  const caves = style === "cave" ? caveParamsOf(biomeId) : null;
+  const sewers = style === "sewer" ? sewerParamsOf(biomeId) : null;
+  const chance = (caves ?? sewers)?.chance ?? 0;
   if (seedRand(`${domainConfig!.seed}|${key}`) >= chance) {
     systems.set(key, null);
     return null;
@@ -51,7 +55,7 @@ export const systemAt = (style: TunnelStyle, biomeId: number, ix: number, iz: nu
   generatingTunnels++;
   let system: TunnelSystem | null;
   try {
-    system = style === "cave" ? generateCave(key, biomeId, ix, iz, world) : generateSewer(key, biomeId, ix, iz, world);
+    system = caves ? generateCave(key, biomeId, ix, iz, world, caves.sideRooms) : generateSewer(key, biomeId, ix, iz, world, sewers!.sideRooms);
   } finally {
     generatingTunnels--;
   }
@@ -150,6 +154,22 @@ export const systemsNear = (style: TunnelStyle, biomeId: number, area: RectXZ, p
       const s = systemAt(style, biomeId, ix, iz);
       if (s && touching(s)) out.push(s);
       if (style === "cave") for (const spring of springSystemsAt(biomeId, ix, iz)) if (touching(spring)) out.push(spring);
+    }
+  }
+  return out;
+};
+
+/** The floor centre of every cave side room (<CaveSideRoom>: a room on the trunk or a branch tip, never a
+ *  spring's pool room) whose centre lies in the area: what a <Spawn> inside it stands one actor on. */
+export const caveSideRoomsIn = (biomeId: number, area: RectXZ): { x: number; z: number; floor: number }[] => {
+  const out: { x: number; z: number; floor: number }[] = [];
+  for (const s of systemsNear("cave", biomeId, area, 0)) {
+    if (!s.key.startsWith("cave|")) continue;
+    for (const p of s.pieces) {
+      if (p.kind !== "room") continue;
+      const x = (p.ax + p.bx) / 2;
+      const z = (p.az + p.bz) / 2;
+      if (x >= area.minX && x < area.maxX && z >= area.minZ && z < area.maxZ) out.push({ x, z, floor: p.ay });
     }
   }
   return out;

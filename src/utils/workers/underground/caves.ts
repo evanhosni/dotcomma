@@ -1,5 +1,5 @@
 /**
- * The cave generator: one system per `caves: true` biome cell that passes its roll (systems.ts). It
+ * The cave generator: one system per cell of a biome whose spec mounts <Caves> that passes its roll (systems.ts). It
  * reads the terrain through computeVertexData only, while the bulge is held off (generatingTunnels),
  * and draws its layout and its decoration from two seeded streams, so decoration never moves a
  * passage. Three-free.
@@ -8,6 +8,7 @@
 import { smoothstep } from "../../math/_math";
 import { seededStream, type SeededStream } from "../../math/seededStream";
 import type { PointXZ } from "../../math/types";
+import type { CaveSideRoomParams } from "../types";
 import { domainConfig } from "../computeConfig";
 import { riverKeepOff } from "../rivers/constants";
 import { riverFlowSpeed } from "../rivers/riverField";
@@ -105,9 +106,7 @@ import {
   ROOM_MOUTH_CLEAR,
   ROOM_RADIUS_MAX,
   ROOM_RADIUS_MIN,
-  ROOM_TIP_CHANCE,
   ROOM_TRIES,
-  ROOM_TRUNK_CHANCE,
   SECTION_GRADE,
   SECTION_MAX,
   SECTION_MIN,
@@ -549,11 +548,11 @@ const tryRoom = (system: string, path: CavePath, i: number, paths: readonly Cave
   return { piece, path: path.index, floor, ax, az, bx, bz };
 };
 
-/** One room on the trunk (ROOM_TRUNK_CHANCE, clear of the mouths) and one at each branch tip (ROOM_TIP_CHANCE). */
-const buildRooms = (system: string, trunk: CavePath, branches: readonly CavePath[], layout: SeededStream): Room[] => {
+/** One room on the trunk (`trunkChance`, clear of the mouths) and one at each branch tip (`tipChance`). */
+const buildRooms = (system: string, trunk: CavePath, branches: readonly CavePath[], layout: SeededStream, chances: CaveSideRoomParams): Room[] => {
   const rooms: Room[] = [];
   const paths = [trunk, ...branches];
-  if (layout.next() < ROOM_TRUNK_CHANCE) {
+  if (layout.next() < chances.trunkChance) {
     const candidates = trunk.samples.map((s, i) => i).filter((i) => trunk.samples[i].mouthDist >= ROOM_MOUTH_CLEAR);
     for (let t = 0; t < ROOM_TRIES && candidates.length > 0; t++) {
       const room = tryRoom(system, trunk, layout.pick(candidates), paths, layout);
@@ -564,7 +563,7 @@ const buildRooms = (system: string, trunk: CavePath, branches: readonly CavePath
     }
   }
   for (const branch of branches) {
-    if (layout.next() >= ROOM_TIP_CHANCE) continue;
+    if (layout.next() >= chances.tipChance) continue;
     const room = tryRoom(system, branch, branch.samples.length - 1, paths, layout);
     if (room) rooms.push(room);
   }
@@ -682,6 +681,9 @@ const tubesOf = (system: string, path: CavePath): TubePiece[] => {
 };
 
 /** Skirt masks: a capsule over each run of up to MASK_RUN of a path, grown to hold the run's air. */
+/** A mask around a round section's axis (a mouth, a room, a hall): its air tops out a radius over the axis. */
+const capsuleMask = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, radius: number): SkirtMask => ({ ax, ay, az, bx, by, bz, radius, ceiling: Math.max(ay, by) + radius });
+
 const masksOf = (path: CavePath): SkirtMask[] => {
   const out: SkirtMask[] = [];
   const s = path.samples;
@@ -691,6 +693,7 @@ const masksOf = (path: CavePath): SkirtMask[] => {
     const a = s[i];
     const b = s[j];
     let r = 0;
+    let ceiling = -Infinity;
     const dx = b.x - a.x;
     const dz = b.z - a.z;
     const dy = b.floor - a.floor;
@@ -700,8 +703,9 @@ const masksOf = (path: CavePath): SkirtMask[] => {
       const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz + (p.floor - a.floor) * dy) / l2));
       const off = Math.hypot(p.x - a.x - dx * t, p.z - a.z - dz * t, p.floor - a.floor - dy * t);
       r = Math.max(r, off + p.r * (1 + p.bulge) + p.bump);
+      ceiling = Math.max(ceiling, p.floor + AXIS_LIFT * p.r + p.r * (1 + p.bulge) + p.bump);
     }
-    out.push({ ax: a.x, ay: a.floor + AXIS_LIFT * a.r, az: a.z, bx: b.x, by: b.floor + AXIS_LIFT * b.r, bz: b.z, radius: r });
+    out.push({ ax: a.x, ay: a.floor + AXIS_LIFT * a.r, az: a.z, bx: b.x, by: b.floor + AXIS_LIFT * b.r, bz: b.z, radius: r, ceiling });
   }
   return out;
 };
@@ -711,15 +715,15 @@ const systemMasks = (mouths: readonly MouthPiece[], paths: readonly CavePath[], 
   const masks: SkirtMask[] = [];
   for (const m of mouths) {
     const end = innerEnd(m);
-    masks.push({ ax: m.ox, ay: m.oy + AXIS_LIFT * m.r0, az: m.oz, bx: end.x, by: end.y + AXIS_LIFT * m.r1, bz: end.z, radius: m.width });
+    masks.push(capsuleMask(m.ox, m.oy + AXIS_LIFT * m.r0, m.oz, end.x, end.y + AXIS_LIFT * m.r1, end.z, m.width));
   }
   for (const path of paths) masks.push(...masksOf(path));
-  for (const room of rooms) masks.push({ ax: room.ax, ay: room.floor + AXIS_LIFT * room.piece.radius, az: room.az, bx: room.bx, by: room.floor + AXIS_LIFT * room.piece.radius, bz: room.bz, radius: room.piece.radius });
+  for (const room of rooms) masks.push(capsuleMask(room.ax, room.floor + AXIS_LIFT * room.piece.radius, room.az, room.bx, room.floor + AXIS_LIFT * room.piece.radius, room.bz, room.piece.radius));
   return masks;
 };
 
 /** One cave system for a biome cell, or null when no mouth can be found. */
-export const generateCave = (key: string, biomeId: number, ix: number, iz: number, site: PointXZ): TunnelSystem | null => {
+export const generateCave = (key: string, biomeId: number, ix: number, iz: number, site: PointXZ, sideRooms: CaveSideRoomParams | null): TunnelSystem | null => {
   const seedBase = `${domainConfig!.seed}|${key}`;
   const layout = seededStream(`${seedBase}|layout`);
   const decor = seededStream(`${seedBase}|decor`);
@@ -745,7 +749,8 @@ export const generateCave = (key: string, biomeId: number, ix: number, iz: numbe
 
   const branches = buildBranches(trunk, layout);
   const paths = [trunk, ...branches];
-  const rooms = buildRooms(key, trunk, branches, layout);
+  // Last in the layout stream: a biome without side rooms keeps the same passages.
+  const rooms = sideRooms ? buildRooms(key, trunk, branches, layout, sideRooms) : [];
 
   const mouths = exit ? [entry, exit] : [entry];
   const pieces: TunnelPiece[] = [...mouths];
@@ -909,7 +914,7 @@ export const planSpring = (key: string, site: SpringSite): SpringPlan | null => 
   const leadEnd = { x: end.x + site.dx * SPRING_LEAD, y: end.y - 0.5, z: end.z + site.dz * SPRING_LEAD };
   const level = site.surface - SPRING_WATER_BELOW_SURFACE;
   const pieces: TunnelPiece[] = [mouth, withBounds({ kind: "tube" as const, system: key, path: 0, ax: end.x, ay: end.y, az: end.z, bx: leadEnd.x, by: leadEnd.y, bz: leadEnd.z, ra: r1, rb: r1, bulgeA: 0, bulgeB: WALL_BULGE, bumpA: 0, bumpB: 0 })];
-  const masks: SkirtMask[] = [{ ax: mouth.ox, ay: mouth.oy + AXIS_LIFT * r0, az: mouth.oz, bx: leadEnd.x, by: leadEnd.y + AXIS_LIFT * r1, bz: leadEnd.z, radius: mouth.width }];
+  const masks: SkirtMask[] = [capsuleMask(mouth.ox, mouth.oy + AXIS_LIFT * r0, mouth.oz, leadEnd.x, leadEnd.y + AXIS_LIFT * r1, leadEnd.z, mouth.width)];
   // The water of the opening, the section and the lead: one strip, as wide as the opening.
   const px = -site.dz;
   const pz = site.dx;
@@ -970,7 +975,7 @@ export const finishLoneSpring = (plan: SpringPlan, biomeId: number, ix: number, 
     const bz = az + site.dz * SPRING_ROOM_LENGTH;
     if (coverCap((ax + bx) / 2, (az + bz) / 2, px, pz, radius) < floor) continue;
     extra.pieces.push(withBounds({ kind: "room" as const, system: plan.key, path: 0, ax, ay: floor, az, bx, by: floor, bz, radius }));
-    extra.masks.push({ ax, ay: floor + AXIS_LIFT * radius, az, bx, by: floor + AXIS_LIFT * radius, bz, radius });
+    extra.masks.push(capsuleMask(ax, floor + AXIS_LIFT * radius, az, bx, floor + AXIS_LIFT * radius, bz, radius));
     const r = radius * (1 + WALL_BULGE);
     const depth = SPRING_POOL_DEPTH + (plan.level - leadEnd.y);
     for (const [cx, cz] of [
@@ -1021,7 +1026,7 @@ export const finishConnectedSpring = (a: SpringPlan, b: SpringPlan, biomeId: num
   extra.pieces.push(withBounds({ kind: "tube" as const, system: a.key, path: 0, ax, ay: a.leadEnd.y, az, bx: ax, by: floorA, bz: az, ra: a.r1, rb: r, bulgeA: WALL_BULGE, bulgeB: WALL_BULGE, bumpA: 0, bumpB: 0 }));
   extra.pieces.push(withBounds({ kind: "tube" as const, system: a.key, path: 0, ax, ay: floorA, az, bx, by: floorB, bz, ra: r, rb: r, bulgeA: WALL_BULGE, bulgeB: WALL_BULGE, bumpA: 0, bumpB: 0 }));
   extra.pieces.push(withBounds({ kind: "tube" as const, system: a.key, path: 0, ax: bx, ay: floorB, az: bz, bx, by: b.leadEnd.y, bz, ra: r, rb: b.r1, bulgeA: WALL_BULGE, bulgeB: WALL_BULGE, bumpA: 0, bumpB: 0 }));
-  extra.masks.push({ ax, ay: floorA + AXIS_LIFT * r, az, bx, by: floorB + AXIS_LIFT * r, bz, radius: r * (1 + WALL_BULGE) });
+  extra.masks.push(capsuleMask(ax, floorA + AXIS_LIFT * r, az, bx, floorB + AXIS_LIFT * r, bz, r * (1 + WALL_BULGE)));
   const dx = bx - ax;
   const dz = bz - az;
   const l = Math.hypot(dx, dz) || 1;

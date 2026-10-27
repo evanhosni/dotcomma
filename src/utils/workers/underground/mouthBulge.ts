@@ -1,6 +1,6 @@
 /**
  * The MOUTH BULGE: the one height step the tunnels make (computeVertexData, step 6). Around every
- * cave mouth of every `caves: true` biome the ground is reshaped so the opening stands proud and is
+ * cave mouth of every biome whose spec mounts <Caves> the ground is reshaped so the opening stands proud and is
  * walkable: a cosine mound, a hood over the section, a ledge in front. Mouths are looked up per
  * MOUTH_TILE tile (a cold tile generates the caves in reach). Also the growth keep-off around a
  * mouth, which foliage and snow read. Three-free.

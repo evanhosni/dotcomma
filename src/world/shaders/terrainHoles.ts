@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { AXIS_LIFT, DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_PAD, MOUTH_RIM_AMP } from "../../utils/workers/underground/constants";
 
 /**
  * TERRAIN OPENINGS: the per-pixel cuts the tunnels make in the ground. A hole is a manhole SHAFT (a
@@ -48,6 +49,8 @@ export interface TunnelMask {
   by: number;
   bz: number;
   radius: number;
+  /** The top of the tunnel air it holds (SkirtMask.ceiling). */
+  ceiling: number;
 }
 
 export const TERRAIN_HOLE_UNIFORMS = {
@@ -106,7 +109,7 @@ export const setTerrainHoles = (nextHoles: readonly TerrainHole[], nextMasks: re
     m[o + 4] = mask.bx;
     m[o + 5] = mask.by;
     m[o + 6] = mask.bz;
-    m[o + 7] = 0;
+    m[o + 7] = mask.ceiling;
   });
   TERRAIN_HOLE_UNIFORMS.uTunnelMaskCount.value = masks.length;
   const key = holes.map((x) => x.id).join("|") + "#" + masks.map((x) => `${x.ax},${x.az},${x.bx},${x.bz}`).join("|");
@@ -126,6 +129,59 @@ export const squareTouchesTerrainHoles = (minX: number, minZ: number, maxX: numb
   }
   return false;
 };
+
+/** VERTEX stage, for a mesh that is not part of the tunnels (an actor): whether a point is in a tunnel's
+ *  AIR — inside a loaded skirt mask (the 32 nearest the camera) and under its ceiling, over a 1u edge —
+ *  and the daylight reaching it from the openings (the 16 nearest: a shaft's street, a mouth's axis),
+ *  falling off as the walls' baked daylight does (underground/chunkMesh.ts daylightAt). Reads the
+ *  terrain's own hole and mask uniforms: a program using it carries TERRAIN_HOLE_UNIFORMS. */
+export const TUNNEL_AIR_VERTEX_GLSL = /* glsl */ `
+  uniform vec4 uTerrainHoles[${MAX_TERRAIN_HOLES * 3}];
+  uniform int uTerrainHoleCount;
+  uniform vec4 uTunnelMasks[${MAX_TUNNEL_MASKS * 2}];
+  uniform int uTunnelMaskCount;
+  float tunnelAirSegment(vec3 p, vec3 a, vec3 b) {
+    vec3 ab = b - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    return distance(p, a + ab * t);
+  }
+  float tunnelAirAt(vec3 p) {
+    float inside = 0.0;
+    for (int i = 0; i < ${MAX_TUNNEL_MASKS}; i++) {
+      if (i >= uTunnelMaskCount) break;
+      vec4 m0 = uTunnelMasks[i * 2];
+      vec4 m1 = uTunnelMasks[i * 2 + 1];
+      float d = tunnelAirSegment(p, m0.xyz, m1.xyz);
+      inside = max(inside, (1.0 - smoothstep(m0.w - 1.0, m0.w, d)) * (1.0 - smoothstep(m1.w - 1.0, m1.w, p.y)));
+    }
+    return inside;
+  }
+  float tunnelDaylightAt(vec3 p) {
+    float light = 0.0;
+    for (int i = 0; i < ${MAX_TERRAIN_HOLES}; i++) {
+      if (i >= uTerrainHoleCount) break;
+      vec4 h0 = uTerrainHoles[i * 3];
+      vec4 h1 = uTerrainHoles[i * 3 + 1];
+      vec4 h2 = uTerrainHoles[i * 3 + 2];
+      vec3 source;
+      float near;
+      float far;
+      if (h2.x > 0.5) {
+        source = vec3(h0.x, h1.y - 1.0, h0.z);
+        near = ${DAYLIGHT_MANHOLE_NEAR.toFixed(1)};
+        far = ${DAYLIGHT_MANHOLE_FAR.toFixed(1)};
+      } else {
+        // The opening's radius r0 from the cut's radius (the widest outline + the pad, less the band).
+        float r0 = (h0.w + h2.z - ${FOOTPRINT_PAD.toFixed(1)}) / ${(1 + MOUTH_RIM_AMP).toFixed(2)};
+        source = h0.xyz + vec3(0.0, ${AXIS_LIFT.toFixed(2)} * r0, 0.0);
+        near = ${DAYLIGHT_MOUTH_NEAR.toFixed(1)};
+        far = ${DAYLIGHT_MOUTH_FAR.toFixed(1)};
+      }
+      light = max(light, 1.0 - smoothstep(near, far, distance(p, source)));
+    }
+    return light;
+  }
+`;
 
 /** Fragment stage; needs SCREEN_DOOR_GLSL declared before it. `worldAbs` is the ABSOLUTE world
  *  position (the holes are absolute), `skirtDrop` how far a skirt pixel hangs under its ground (0 on the grid). */

@@ -11,6 +11,8 @@ One WebSocket to the game server, which is the only authority (presence, player 
 - [entities/](entities/): synced actors — [entityStore.ts](entities/entityStore.ts) (register/update/snapshots), [interpolation.ts](entities/interpolation.ts) (draws each entity `INTERP_DELAY_MS` behind on the server clock), [posePlayback.ts](entities/posePlayback.ts) (per-actor render clock), [useSyncedEntity.ts](entities/useSyncedEntity.ts) (the `SyncHandle` the actor base uses).
 - Two ids: `identity` (persisted, shared by tabs) and `id` (one per session). Broadcasts are scoped to one room per domain.
 
+- **Tunnel toggles** (manhole covers, sewer doors): the SERVER's state per domain. A click sends `tunnel:toggle` (id shape `TUNNEL_TOGGLE_ID`); the server flips it and sends `tunnel:state` to the whole room; `init.tunnelsOpen` carries the open set. objects/dressing/underground/undergroundToggles.ts mirrors it; the server's NPCs fall down the same open manholes (server/src/game/world.ts `toggleTunnel`, physicsWorld `setTunnelOpen`).
+
 ## How to add another
 
 - **Synced NPC**: no networking code — follow "Wiring a NEW NPC" in [NPC_TRACKING.md](../../NPC_TRACKING.md).

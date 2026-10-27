@@ -1,4 +1,6 @@
 import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
+import { resetCharacterMotion } from "../../../../src/physics/characterMovement";
+import { createTunnelState, createTunnelStep, PROBE_OVER_FEET, stepTunnelRules, type TunnelBody, type TunnelStep } from "../../../../src/physics/tunnelRules";
 import { chunkIndicesNear, type ChunkStore } from "./chunks.js";
 import { SPAWN_CLEARANCE, writeResolvedPose, type NpcBody, type Pose } from "./npcBody.js";
 import type { PhysicsWorld } from "./physicsWorld.js";
@@ -6,8 +8,10 @@ import { TERRAIN_CHUNK_SIZE } from "./terrain.js";
 import { Walker, type CapsuleShape } from "./walker.js";
 
 /**
- * A walking NPC: its Walker, the terrain + dressing chunks it HOLDS so the ground
- * around it exists, and the player's two fix-ups (stuck escape, analytic backstop).
+ * A walking NPC: its Walker, the terrain + dressing + tunnel chunks it HOLDS so the ground
+ * around it exists, the player's tunnel rules (physics/tunnelRules.ts: it walks caves and sewers
+ * and falls down an open manhole as the player does; it never climbs out) and the player's two
+ * surface fix-ups (stuck escape, analytic backstop), which a body in a tunnel skips.
  * A body whose held chunks aren't built yet simply doesn't move; nothing stalls the tick.
  * Its analytic height queries (spawn ground, backstop, stuck check) go through
  * `PhysicsWorld.heightAt`: with the generation worker they are answered off the tick and
@@ -58,17 +62,22 @@ export class GroundBody implements NpcBody {
   private ticks = 0;
   private readonly phase = phaseCounter++ % BACKSTOP_INTERVAL_TICKS;
   private readonly lastPublishedPose = { x: 0, y: 0, z: 0 };
+  private readonly tunnel = createTunnelState();
+  private readonly tunnelStep = createTunnelStep();
+  private readonly tunnelBody: TunnelBody;
 
-  /** `hintFeetY` stands in for the ground until it is answered (the registration's y: the client's own ground). */
-  constructor(private readonly pw: PhysicsWorld, x: number, z: number, shape: CapsuleShape, hintFeetY: number) {
+  /** `hintFeetY` stands in for the ground until it is answered (the registration's y: the client's own
+   *  ground, or a tunnel's floor for an actor a tunnel placed: a sewer side room's). */
+  constructor(private readonly pw: PhysicsWorld, x: number, z: number, shape: CapsuleShape, private readonly hintFeetY: number) {
     const spawn = this.askHeight(x, z);
-    const answered = !Number.isNaN(spawn.height);
-    const feet = answered ? spawn.height + SPAWN_CLEARANCE : hintFeetY;
-    this.spawn = answered ? null : spawn;
+    const feet = Number.isNaN(spawn.height) ? hintFeetY : spawn.height + SPAWN_CLEARANCE;
+    this.spawn = spawn;
     this.walker = new Walker(pw, x, feet, z, shape);
+    this.tunnelBody = { x, y: feet + shape.height / 2, z, height: shape.height, radius: shape.radius, jump: false };
     this.holds = [
       { store: pw.terrain, chunkSize: TERRAIN_CHUNK_SIZE, keys: new Set() },
       { store: pw.dressing, chunkSize: DRESSING_CHUNK_SIZE, keys: new Set() },
+      { store: pw.tunnels, chunkSize: DRESSING_CHUNK_SIZE, keys: new Set() },
     ];
     this.lastPublishedPose.x = x;
     this.lastPublishedPose.y = feet;
@@ -90,10 +99,33 @@ export class GroundBody implements NpcBody {
   }
 
   step(dt: number, vx: number, vz: number, vy: number | null): void {
-    this.placeOnSpawnGround();
     this.updateHolds();
+    this.placeOnSpawnGround();
     this.intentSpeedSq = vx * vx + vz * vz;
-    if (this.ready) this.walker.step(dt, vx, vz, vy);
+    if (!this.ready) return;
+    const t = this.stepTunnels(dt);
+    this.walker.step(dt, t.holdWalk ? 0 : vx, t.holdWalk ? 0 : vz, t.vyOverride ?? vy, t.ignoreTerrain);
+  }
+
+  /** The shared tunnel rules on the world's tunnels, applied to this body. */
+  private stepTunnels(dt: number): TunnelStep {
+    const p = this.walker.position();
+    const b = this.tunnelBody;
+    b.x = p.x;
+    b.y = p.y;
+    b.z = p.z;
+    const t = stepTunnelRules(this.pw.tunnelSpace, this.tunnel, this.tunnelStep, b, dt);
+    if (!Number.isNaN(t.teleportX)) {
+      this.walker.body.setTranslation({ x: t.teleportX, y: t.teleportY, z: t.teleportZ }, true);
+      this.pw.markQueriesDirty();
+    }
+    if (t.resetMotion) resetCharacterMotion(this.walker.character.state);
+    return t;
+  }
+
+  /** In a tunnel or a manhole's column: the surface's backstops would lift the body onto the street. */
+  private get underground(): boolean {
+    return this.tunnel.inside || this.tunnel.column !== null;
   }
 
   resolvePose(dt: number, out: Pose): Pose {
@@ -103,11 +135,20 @@ export class GroundBody implements NpcBody {
     return writeResolvedPose(this.lastPublishedPose, p.x, this.walker.feetY(), p.z, dt, out);
   }
 
-  /** A body never moves before this: it stands where it was registered. */
+  /** A body never moves before this: it stands where it was registered. Once the chunks it holds are
+   *  built, a registration standing in a tunnel's air (a side room's floor) stays on that floor; any
+   *  other is set on the answered ground. */
   private placeOnSpawnGround(): void {
     const s = this.spawn;
-    if (s === null || Number.isNaN(s.height)) return;
-    this.walker.placeFeet(s.x, s.height + SPAWN_CLEARANCE, s.z);
+    if (s === null || !this.holdsBuilt) return;
+    if (this.pw.tunnelSpace.probe(s.x, this.hintFeetY + PROBE_OVER_FEET, s.z).field < 0) {
+      this.walker.placeFeet(s.x, this.hintFeetY + SPAWN_CLEARANCE, s.z);
+      this.tunnel.inside = true;
+    } else if (!Number.isNaN(s.height)) {
+      this.walker.placeFeet(s.x, s.height + SPAWN_CLEARANCE, s.z);
+    } else {
+      return;
+    }
     this.pw.markQueriesDirty();
     this.spawn = null;
   }
@@ -124,6 +165,11 @@ export class GroundBody implements NpcBody {
    *  at once; otherwise every BACKSTOP_INTERVAL_TICKS (phase-offset) one fallen through is. Each
    *  asks for the ground and acts on the answer the tick it is there (the same tick in place). */
   private liftOutOfGround(dt: number): void {
+    if (this.underground) {
+      this.stuckTicks = 0;
+      this.heightQuery = null;
+      return;
+    }
     const w = this.walker;
     const p = w.position();
     const movedSq = (p.x - this.lastPublishedPose.x) ** 2 + (p.z - this.lastPublishedPose.z) ** 2;

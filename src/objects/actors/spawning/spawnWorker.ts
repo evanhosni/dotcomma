@@ -40,6 +40,7 @@ export const serializeDescriptors = (
     roadDistanceRange: d.roadDistanceRange,
     spacingOverrides: d.spacingOverrides,
     flattenGround: d.flattenGround,
+    feature: d.feature,
   }));
 
 // Client-side chunk cache: the pool re-requests ALL nearby chunks every batch,

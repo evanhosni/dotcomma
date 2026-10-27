@@ -181,6 +181,10 @@ export interface SkirtMask {
   by: number;
   bz: number;
   radius: number;
+  /** The top of the AIR the capsule holds (a box's top, a tube's highest crown): a capsule grown to hold
+   *  the air reaches past it (a sewer room's reaches the street), and under it is "in the tunnel" for
+   *  the actors' lighting (lighting/tunnelLight.ts). */
+  ceiling: number;
 }
 
 export interface SewerDoor {

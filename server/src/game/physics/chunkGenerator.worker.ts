@@ -5,6 +5,7 @@ import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
 import type { ChunkGeneratorReply, ChunkGeneratorRequest, ChunkLayer, ChunkLayerData } from "./chunkGenerator.js";
 import { enumerateObstacles } from "./obstaclePoints.js";
 import { sampleChunkHeights } from "./terrain.js";
+import { sampleTunnelChunk } from "./tunnels.js";
 
 /**
  * The CPU half of chunk generation (heights, dressing points) off the tick's thread: the same
@@ -23,6 +24,7 @@ const SAMPLERS: { [L in ChunkLayer]: (gx: number, gz: number) => { data: ChunkLa
   },
   // Not transferred: a point's mesh arrays may be views the enumerator keeps cached.
   dressing: (gx, gz) => ({ data: enumerateObstacles(gx, gz), transfer: [] }),
+  tunnels: (gx, gz) => ({ data: sampleTunnelChunk(gx, gz), transfer: [] }),
 };
 
 const port = parentPort!;

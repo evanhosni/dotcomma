@@ -1,6 +1,7 @@
 import React, { useContext, useLayoutEffect, useMemo } from "react";
 import type { BiomeSpec } from "../types";
 import { ActorMounts } from "./Actor";
+import { Features } from "./Features";
 import { BiomeContext, BiomeSlotContext, RegionContext, useDomainStore, useSpecSlot } from "./context";
 
 export interface BiomeProps extends React.PropsWithChildren {
@@ -19,10 +20,10 @@ export const Biome = ({ spec, children }: BiomeProps) => {
 
   useLayoutEffect(() => {
     const key = `${regionId}/${id}`;
-    const { name, joinable, blendWidth, heightBlendWidth, water, noise, caves, snow, sewers, rocks, riverBankRelief } = spec;
+    const { name, joinable, blendWidth, heightBlendWidth, water, noise, snow, rocks, riverBankRelief, features } = spec;
     const prohibitRoads = spec.prohibitRoads ?? false;
     const prohibitRivers = spec.prohibitRivers ?? false;
-    store.biomes.set(key, { regionId, biome: { id, name, joinable, blendWidth, heightBlendWidth, water, prohibitRoads, prohibitRivers, noise, caves, snow, sewers, rocks, riverBankRelief } });
+    store.biomes.set(key, { regionId, biome: { id, name, joinable, blendWidth, heightBlendWidth, water, prohibitRoads, prohibitRivers, noise, snow, rocks, riverBankRelief, features } });
     store.invalidate();
     return () => {
       store.biomes.delete(key);
@@ -35,6 +36,7 @@ export const Biome = ({ spec, children }: BiomeProps) => {
   return (
     <BiomeContext.Provider value={ctx}>
       {spec.actors && <ActorMounts mounts={spec.actors} />}
+      {spec.features && <Features features={spec.features} />}
       {children}
     </BiomeContext.Provider>
   );

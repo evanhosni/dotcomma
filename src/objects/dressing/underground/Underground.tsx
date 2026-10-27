@@ -7,7 +7,7 @@ import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
 import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
 import { COVER_RADIUS } from "../../../utils/workers/underground/constants";
 import type { TunnelStyle } from "../../../utils/workers/underground/types";
-import { BiomeContext, BiomeSlotContext } from "../../../world/components/context";
+import { BiomeContext } from "../../../world/components/context";
 import { LOD1_MAX_DISTANCE, LOD1_SITE_DISTANCE } from "../../../world/terrain/lodConfig";
 import { terrainMaterialReady } from "../../../world/terrain/material";
 import { hoveredDoor, swingDoors } from "../../doors/door";
@@ -19,6 +19,7 @@ import { applyCoverPose, buildChunkObject, chunkColliderBodies, COVER_SLIDE_SECO
 import { driveUnderground, entranceFadeOf, isCellLoaded, registerChunk, unregisterChunk } from "./undergroundRegistry";
 import { isOpen, onToggle, toggleOpen } from "./undergroundToggles";
 import { buildUndergroundChunk } from "./undergroundWorker";
+import type { CavesProps, SewersProps } from "./features";
 import { tickLiquid } from "./tunnelMaterial";
 
 /**
@@ -136,10 +137,7 @@ interface UndergroundProps extends SolidDressingProps {
 
 const UndergroundFeature = ({ style, renderDistance, colliderDistance }: UndergroundProps) => {
   const biome = useContext(BiomeContext);
-  const biomeSpec = useContext(BiomeSlotContext);
-  if (!biome) reportContentError(`<${style === "cave" ? "Caves" : "Sewers"}/> must be mounted inside a <Biome>'s <Dressing>`);
-  // A cave biome declares its caves in its spec: the terrain workers and the server read the flag there, never the mount.
-  if (style === "cave" && biomeSpec && !biomeSpec.caves) reportContentError(`<Caves/> is mounted in biome "${biomeSpec.name}" whose spec lacks \`caves: true\` — the terrain would never bulge its mouths. Set it on the spec.`);
+  if (!biome) reportContentError(`the ${style} view is drawn only by a <Biome>, from its spec's features`);
   const biomeId = biome?.biomeId ?? -1;
   const scene = useThree((s) => s.scene);
   const resolvedRender = useDressingDefault("renderDistance", renderDistance, style === "cave" ? CAVE_RENDER_DISTANCE : SEWER_RENDER_DISTANCE);
@@ -264,8 +262,12 @@ const UndergroundFeature = ({ style, renderDistance, colliderDistance }: Undergr
   );
 };
 
-/** The caves under a `caves: true` biome: mount inside its `<Dressing>`. */
-export const Caves = (props: SolidDressingProps) => <UndergroundFeature style="cave" {...props} />;
+/** The view of a spec's <Caves> feature (features.ts), drawn by <Biome> (world/components/Features.tsx). */
+export const CavesView = ({ renderDistance, colliderDistance }: CavesProps) => (
+  <UndergroundFeature style="cave" renderDistance={renderDistance} colliderDistance={colliderDistance} />
+);
 
-/** The sewers under a city biome's streets: mount inside its `<Dressing>`. */
-export const Sewers = (props: SolidDressingProps) => <UndergroundFeature style="sewer" {...props} />;
+/** The view of a spec's <Sewers> feature (features.ts), drawn by <Biome> (world/components/Features.tsx). */
+export const SewersView = ({ renderDistance, colliderDistance }: SewersProps) => (
+  <UndergroundFeature style="sewer" renderDistance={renderDistance} colliderDistance={colliderDistance} />
+);

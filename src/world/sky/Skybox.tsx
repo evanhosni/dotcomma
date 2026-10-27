@@ -1,5 +1,4 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { getDarkness } from "../../lighting/personalLight";
 import { useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { getNightBlend, NIGHT_SKY_COLORS } from "../../lighting/dayNight";
@@ -72,16 +71,12 @@ const SKY_FRAG = /* glsl */ `
 uniform vec3 topColor;
 uniform vec3 horizonColor;
 uniform vec3 bottomColor;
-uniform float uDark;
 varying vec3 vDir;
 void main() {
   float h = normalize(vDir).y;
   vec3 color = h > 0.0
     ? mix(horizonColor, topColor, h)
     : mix(horizonColor, bottomColor, -h);
-  // Black deep in a tunnel (lighting/personalLight.ts getDarkness): what a seam or an unloaded far
-  // end shows is the dark, not the sky.
-  color *= 1.0 - uDark;
   // Dither: the slow gradient shows 8-bit Mach bands otherwise, worst at night.
   ${ditherGLSL("color")}
   gl_FragColor = vec4(color, 1.0);
@@ -128,7 +123,6 @@ export const SkyboxSystem = () => {
           topColor: { value: new THREE.Color(SKYBOX_DEFAULTS.topColor) },
           horizonColor: { value: new THREE.Color(SKYBOX_DEFAULTS.horizonColor) },
           bottomColor: { value: new THREE.Color(SKYBOX_DEFAULTS.bottomColor) },
-          uDark: { value: 0 },
         },
         side: THREE.BackSide,
         depthWrite: false,
@@ -228,7 +222,6 @@ export const SkyboxSystem = () => {
       t.bottom.lerp(_nightBottom, nightBlend);
     }
 
-    material.uniforms.uDark.value = getDarkness();
     const alpha = 1 - Math.exp(-COLOR_LERP_RATE * delta);
     material.uniforms.topColor.value.lerp(t.top, alpha);
     material.uniforms.horizonColor.value.lerp(t.horizon, alpha);

@@ -4,6 +4,7 @@ import { useRapier, type RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { markFullSpeedSlope } from "../../physics/characterMovement";
+import { reportContentError } from "../../utils/contentError";
 import type { DressingColliderBody, DressingColliderMesh, DressingColliderPart } from "./types";
 
 /**
@@ -13,6 +14,7 @@ import type { DressingColliderBody, DressingColliderMesh, DressingColliderPart }
 
 /** A mounted collider body: a chunk's DressingColliderBody (types.ts) keyed for React. */
 interface DressingColliderPoint {
+  /** The body's own key, or `${x}_${z}` (types.ts DressingColliderBody). */
   key: string;
   x: number;
   y: number;
@@ -90,23 +92,12 @@ export const DressingPartColliders = ({
         bodies.delete(c.key);
         stale.delete(c.key);
       }
-      _colliderQuat.setFromEuler(_colliderEuler.set(0, c.yaw, c.pitch));
-      const body = world.createRigidBody(
-        rapier.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z).setRotation(_colliderQuat),
-      );
-      for (const p of c.parts ?? parts) {
-        _colliderQuat.setFromEuler(_colliderEuler.set(0, p.yaw ?? 0, 0));
-        const part = world.createCollider(
-          rapier.ColliderDesc.cuboid(p.w / 2, p.h / 2, p.d / 2).setTranslation(p.x, p.y, p.z ?? 0).setRotation(_colliderQuat),
-          body,
-        );
-        if (p.fullSpeedSlope) markFullSpeedSlope(part);
+      try {
+        bodies.set(c.key, createBody(world, rapier, c, parts));
+      } catch (err) {
+        // Never silent: a body that failed to build is a hole in the world.
+        reportContentError(`[dressing colliders] the body "${c.key}" at (${c.x}, ${c.y}, ${c.z}) failed to build: ${err instanceof Error ? err.message : String(err)}`);
       }
-      if (c.mesh) {
-        const mesh = world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
-        if (c.mesh.fullSpeedSlope) markFullSpeedSlope(mesh);
-      }
-      bodies.set(c.key, body);
     }
     traceEvent("colliders:bodies", performance.now() - t0);
   });
@@ -123,6 +114,31 @@ export const DressingPartColliders = ({
   return null;
 };
 
+/** One collider point's fixed body: its shared or own boxes, and its mesh. */
+const createBody = (world: ReturnType<typeof useRapier>["world"], rapier: ReturnType<typeof useRapier>["rapier"], c: DressingColliderPoint, parts: DressingColliderPart[]): RapierRigidBody => {
+  _colliderQuat.setFromEuler(_colliderEuler.set(0, c.yaw, c.pitch));
+  const body = world.createRigidBody(
+    rapier.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z).setRotation(_colliderQuat),
+  );
+  for (const p of c.parts ?? parts) {
+    _colliderQuat.setFromEuler(_colliderEuler.set(0, p.yaw ?? 0, 0));
+    const part = world.createCollider(
+      rapier.ColliderDesc.cuboid(p.w / 2, p.h / 2, p.d / 2).setTranslation(p.x, p.y, p.z ?? 0).setRotation(_colliderQuat),
+      body,
+    );
+    if (p.fullSpeedSlope) markFullSpeedSlope(part);
+  }
+  if (c.mesh) {
+    const mesh = world.createCollider(rapier.ColliderDesc.trimesh(c.mesh.vertices, c.mesh.indices), body);
+    if (c.mesh.fullSpeedSlope) markFullSpeedSlope(mesh);
+  }
+  return body;
+};
+
+/** Whether two bodies listed under one key are the same body (a point two chunks both list). */
+const sameBody = (a: DressingColliderBody, b: DressingColliderBody): boolean =>
+  a.y === b.y && a.yaw === b.yaw && (a.pitch ?? 0) === (b.pitch ?? 0) && (a.parts?.length ?? -1) === (b.parts?.length ?? -1) && (a.mesh?.indices.length ?? -1) === (b.mesh?.indices.length ?? -1);
+
 /** Real colliders only within `colliderDistance` (thousands of Rapier shapes would cost more than the
  *  instancing saved). The registry sweep must run every interval even when the scan is skipped:
  *  forEachAlive is what prunes unmounted chunks and fires their onRemove. */
@@ -134,6 +150,7 @@ export const useDressingColliders = <T extends { points: DressingColliderBody[] 
   const [colliders, setColliders] = useState<DressingColliderPoint[]>([]);
   const frameCount = useRef(0);
   const aliveScratch = useRef<T[]>([]);
+  const keyScratch = useRef(new Map<string, DressingColliderBody>());
   const lastScan = useRef({
     x: Infinity,
     z: Infinity,
@@ -166,6 +183,8 @@ export const useDressingColliders = <T extends { points: DressingColliderBody[] 
     last.pointCount = pointCount;
 
     const near: DressingColliderPoint[] = [];
+    const byKey = keyScratch.current;
+    byKey.clear();
     let hash = 0;
     const maxDistSq = colliderDistance * colliderDistance;
     for (const chunk of alive) {
@@ -173,11 +192,21 @@ export const useDressingColliders = <T extends { points: DressingColliderBody[] 
         const dx = p.x - camera.position.x;
         const dz = p.z - camera.position.z;
         if (dx * dx + dz * dz < maxDistSq) {
-          near.push({ key: `${p.x}_${p.z}`, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch ?? 0, parts: p.parts, mesh: p.mesh });
+          const key = p.key ?? `${p.x}_${p.z}`;
+          // One body per key, and the bodies a key drops must be the SAME body (a point two chunks list):
+          // a different one there would never be built — a missing collider, a fall through the world.
+          const same = byKey.get(key);
+          if (same) {
+            if (!sameBody(same, p)) reportContentError(`[dressing colliders] two different bodies share the key "${key}": one would never be built. Give the feature's bodies unique \`key\`s (types.ts DressingColliderBody).`);
+            continue;
+          }
+          byKey.set(key, p);
+          near.push({ key, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch ?? 0, parts: p.parts, mesh: p.mesh });
           hash += p.x * 31 + p.z * 17 + p.y;
         }
       }
     }
+    byKey.clear();
     alive.length = 0;
     // Positions are deterministic, so equal count + hash = the same set.
     if (near.length !== last.colliderCount || hash !== last.colliderHash) {

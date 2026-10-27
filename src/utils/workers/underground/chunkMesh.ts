@@ -10,16 +10,16 @@
 
 import { smoothstep } from "../../math/_math";
 import type { RectXZ } from "../../math/types";
-import { CITY_WIGGLE_AMP, cityDistrictByIndex } from "../roads/cityDistricts";
 import { AXIS_LIFT, BRICK, DAYLIGHT_GROUND_DEPTH, DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FIELD_REACH, GROUND_CUT_SLACK, GROUND_CUT_SPLIT, SEWER_WALL_COLOR, VOXEL } from "./constants";
 import { drawnGroundAt, drawnGroundMinOver, drawnNormalAt, latticeHeightAt, LATTICE } from "./drawnGround";
 import { buildPatch, footprintCells, inAnyFootprint, mouthsReaching, type PatchVertex } from "./entrance";
-import { layoutDoors, layoutMasks, layoutPieces, mergeLayouts, type SewerLayout } from "./sewers";
+import { districtLayoutsNear } from "./districts";
+import { layoutDoors, layoutMasks, layoutPieces, manholeIdOf, type SewerLayout } from "./sewers";
 import { type PlaneAxis, sewerGeometryOf, sewerPlaneSections } from "./sewerMesh";
 import { meshBrick, NetVertices, type NetsOutput } from "./surfaceNets";
 import { systemsNear } from "./systems";
 import { airMayReach, boundsTouchXZ, boxIsRock, compileField, piecesTouching, rockDipOf, type FieldFn } from "./tunnelField";
-import type { Bounds3, ColumnCollider, MouthPiece, SewerDoor, ShaftPiece, SkirtMask, TunnelCap, TunnelEntrance, TunnelPiece, TunnelStyle, TunnelSystem, UndergroundChunk } from "./types";
+import type { Bounds3, ColumnCollider, MouthPiece, SewerDoor, ShaftPiece, SkirtMask, TunnelCap, TunnelEntrance, TunnelPiece, TunnelStyle, UndergroundChunk } from "./types";
 
 /** The sound all-rock brick test (tunnelField.ts boxIsRock); off only to pin that it changes no bit (the test). */
 let rockTestEnabled = true;
@@ -489,9 +489,10 @@ const finishVertices = (nets: NetsOutput, tunnelAll: FieldFn, lights: readonly D
 
 // ── Caves ────────────────────────────────────────────────────────────────
 
-/** Sorts the nets' triangles: inside a mouth's footprint they are the PATCH (solid where they are not
- *  the ground, which the heightfield is already); outside, the ground's own triangles are dropped (the
- *  terrain is there) and the rest are the walls. */
+/** Sorts the nets' triangles: inside a mouth's footprint they are the PATCH, and ALL solid — its ground
+ *  too: in the mouth's cut a body's step leaves the heightfield out (the terrain draws nothing there), so
+ *  what it walks on is exactly what is drawn. Outside, the ground's own triangles are dropped (the terrain
+ *  is there) and the rest are the walls. */
 const sortCaveTriangles = (nets: NetsOutput, vertices: readonly Vertex[], isGround: readonly boolean[], footMouths: readonly MouthPiece[], assembly: ChunkAssembly): { patchVertices: PatchVertex[]; patchIndices: number[] } => {
   const patchVertices: PatchVertex[] = [];
   const patchIndex = new Map<number, number>();
@@ -517,8 +518,7 @@ const sortCaveTriangles = (nets: NetsOutput, vertices: readonly Vertex[], isGrou
     const cz = (a.z + bv.z + c.z) / 3;
     if (footMouths.length > 0 && inAnyFootprint(footMouths, cx, cz)) {
       patchIndices.push(patchOf(ia), patchOf(ib), patchOf(ic));
-      const groundCorners = (isGround[ia] ? 1 : 0) + (isGround[ib] ? 1 : 0) + (isGround[ic] ? 1 : 0);
-      if (groundCorners < 2) assembly.collideShared(vertices, ia, ib, ic);
+      assembly.collideShared(vertices, ia, ib, ic);
       continue;
     }
     if (isGround[ia] && isGround[ib] && isGround[ic]) continue;
@@ -574,16 +574,6 @@ const buildCaveChunk = (b: RectXZ, biomeId: number): UndergroundChunk | null => 
 };
 
 // ── Sewers ───────────────────────────────────────────────────────────────
-
-/** Every system of a district (the whole district's area, so every chunk merges the same set). */
-const districtSystems = (biomeId: number, district: string, sample: TunnelSystem): TunnelSystem[] => {
-  const [r, m] = district.split(",").map(Number);
-  const d = cityDistrictByIndex(r, m);
-  const area = { minX: d.minX - CITY_WIGGLE_AMP, minZ: d.minZ - CITY_WIGGLE_AMP, maxX: d.maxX + CITY_WIGGLE_AMP, maxZ: d.maxZ + CITY_WIGGLE_AMP };
-  const all = systemsNear("sewer", biomeId, area, 0).filter((s) => s.district === district);
-  if (!all.includes(sample)) all.push(sample);
-  return all;
-};
 
 /** One of the chunk's four borders: its plane and run, the chunk on the other side, the normal INTO the chunk. */
 interface ChunkBorder {
@@ -661,7 +651,7 @@ const addDistrictToSewerChunk = (layout: SewerLayout, district: string, b: RectX
   const districtEntrances: TunnelEntrance[] = [];
   for (const n of layout.nodes.values()) {
     if (!n.manhole || !n.manholeInfo) continue;
-    const shaft = layoutAll.find((p): p is ShaftPiece => p.kind === "shaft" && p.id === `manhole|${n.key}`);
+    const shaft = layoutAll.find((p): p is ShaftPiece => p.kind === "shaft" && p.id === manholeIdOf(layout.district, n));
     if (!shaft) continue;
     districtEntrances.push({ kind: "manhole", id: shaft.id, x: shaft.x, y: n.manholeInfo.streetY, z: shaft.z, dirX: n.manholeInfo.faceX, dirZ: n.manholeInfo.faceZ, radius: shaft.radius, manhole: n.manholeInfo });
     lights.push({ x: shaft.x, y: n.manholeInfo.streetY, z: shaft.z, near: DAYLIGHT_MANHOLE_NEAR, far: DAYLIGHT_MANHOLE_FAR });
@@ -698,17 +688,13 @@ const addDistrictToSewerChunk = (layout: SewerLayout, district: string, b: RectX
 };
 
 const buildSewerChunk = (b: RectXZ, biomeId: number): UndergroundChunk | null => {
-  const near = systemsNear("sewer", biomeId, b, FIELD_REACH + BRICK);
-  if (near.length === 0) return null;
-  const districts = new Map<string, TunnelSystem>();
-  for (const s of near) if (s.district && !districts.has(s.district)) districts.set(s.district, s);
+  const layouts = districtLayoutsNear(biomeId, b, FIELD_REACH + BRICK);
+  if (layouts.size === 0) return null;
   const centerX = (b.minX + b.maxX) / 2;
   const centerZ = (b.minZ + b.maxZ) / 2;
   const assembly = new ChunkAssembly(centerX, centerZ, b.minX, b.minZ, true);
   const parts: SewerChunkParts = { pieces: [], entrances: [], systemEntrances: [], masks: [], doors: [], liquid: [], caps: bordersOf(b).map(() => new ChunkAssembly(centerX, centerZ, b.minX, b.minZ, true)) };
-  for (const [district, sample] of districts) {
-    addDistrictToSewerChunk(mergeLayouts(district, districtSystems(biomeId, district, sample)), district, b, assembly, parts);
-  }
+  for (const [district, layout] of layouts) addDistrictToSewerChunk(layout, district, b, assembly, parts);
   if (parts.pieces.length === 0) return null;
   return {
     style: "sewer",

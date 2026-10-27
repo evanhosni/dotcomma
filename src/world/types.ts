@@ -1,7 +1,8 @@
 import type { ActorMount } from "../objects/actors/spec";
 import type { AnyActorDescriptor } from "../objects/actors/spawning/types";
 import type { BiomeDomeConfig, TerrainNoiseParams } from "../utils/workers/vertexCompute";
-import type { CaveParams, RiverBankReliefParams, RockParams, SewerParams, SnowParams } from "../utils/workers/types";
+import type { ReactElement } from "react";
+import type { RiverBankReliefParams, RockParams, SnowParams } from "../utils/workers/types";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
@@ -114,17 +115,16 @@ export interface BiomeSpec extends BlendWidthProps {
   prohibitRoads?: boolean;
   /** No river reaches this biome: one approaching it ends in a pond before its footprint gets there. */
   prohibitRivers?: boolean;
-  /** Cave systems generate under this biome's cells and their mouths reshape the ground (the one
-   *  domain-level <Caves/> draws them). */
-  caves?: BiomeFlag<CaveParams>;
   /** Snow lies on this biome's ground, the terrain whitens under it, capsules wade in it (<SnowDrift/>). */
   snow?: BiomeFlag<SnowParams>;
-  /** Sewers under this street-bearing biome (<Sewers/>). */
-  sewers?: BiomeFlag<SewerParams>;
   /** Rocks strewn over this biome by slope (<Rocks/>). */
   rocks?: BiomeFlag<RockParams>;
   /** A levee river bank here takes this biome's own noise as bumps; unset, the bank is smooth. */
   riverBankRelief?: BiomeFlag<RiverBankReliefParams>;
+  /** The biome's FEATURES as a tree of declaration components (world/features.ts): a feature exists
+   *  because it is here (`<Sewers><SewerSideRoom /></Sewers>`), its knobs are its props, its parts are
+   *  its children. Read by the server and every worker (the config's resolved params) and drawn by <Biome>. */
+  features?: ReactElement;
   /** The actors spawned from this biome, with this biome's overrides — read by <Biome> (the client
    *  registrations) and by the domain's config.ts (the flatten pads the server's terrain needs). */
   actors?: ActorMount[];

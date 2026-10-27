@@ -1,3 +1,6 @@
+import { BEEBLE_SPEC } from "../../../../../../../objects/actors/beeble/spec";
+import { CaveSideRoom, Caves } from "../../../../../../../objects/dressing/underground/features";
+import { Spawn } from "../../../../../../features";
 import type { BiomeSpec } from "../../../../../../types";
 
 /** Mountain massifs: a DOME carries the height — it rises with the square of the depth inside the
@@ -33,7 +36,13 @@ export const MOUNTAIN_BIOME: BiomeSpec = {
       { type: "perlin", octaves: 4, persistence: 1, lacunarity: 2, exponentiation: 1, height: 44, scale: 150 },
     ],
   },
-  caves: true,
+  features: (
+    <Caves>
+      <CaveSideRoom>
+        <Spawn actor={BEEBLE_SPEC} />
+      </CaveSideRoom>
+    </Caves>
+  ),
   snow: true,
   rocks: true,
   riverBankRelief: true,
