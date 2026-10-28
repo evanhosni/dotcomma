@@ -1,6 +1,9 @@
 import { Domain } from "../components/Domain";
 import { domainConfigOf, domainNodeOf } from "./config";
-import { DOMAIN_TREES } from "../domains";
+import { DOMAIN_NODES, DOMAIN_TREES } from "../domains";
+import { childrenOfKind } from "./index";
+import { actorPlacementsOf } from "./config";
+import { featurePlacesIn } from "../../utils/workers/featurePlacement";
 import { nodeOf, readContent } from "./index";
 
 /** The tree is read two ways — by the walker from the root element (the server), and by <Domain>'s
@@ -59,5 +62,20 @@ describe("the content tree", () => {
 
   it("memoizes a walk, so a re-render never re-reads the world", () => {
     expect(readContent(DOMAIN_TREES.overworld)).toBe(readContent(DOMAIN_TREES.overworld));
+  });
+
+  it("every feature-placed <Actor> has a placement the spawn worker can find", () => {
+    // The worker runs on a SERIALIZED config, so an actor inside a feature reaches its placement by
+    // PATH through a table (utils/workers/featurePlacement.ts). Nothing types that link, so pin it.
+    for (const domain of Object.values(DOMAIN_NODES)) {
+      for (const region of childrenOfKind(domain, "region")) {
+        for (const biome of childrenOfKind(region, "biome")) {
+          for (const { feature } of actorPlacementsOf(biome)) {
+            if (!feature) continue;
+            expect(() => featurePlacesIn(feature, 0, { minX: 0, minZ: 0, maxX: 1, maxZ: 1 })).not.toThrow();
+          }
+        }
+      }
+    }
   });
 });

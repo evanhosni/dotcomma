@@ -10,6 +10,7 @@
  * instead of silently shipping a renderer.
  */
 import { build, context } from "esbuild";
+import { spawn } from "node:child_process";
 import { readdirSync, rmSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -98,9 +99,29 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const options = buildOptions({ tests: process.argv.includes("--tests") });
   rmSync(options.outdir, { recursive: true, force: true });
   if (process.argv.includes("--watch")) {
-    const ctx = await context(options);
+    // The server is started HERE, after the first build, rather than beside the watcher in the npm
+    // script: `node --watch` racing a cold build would boot with no dist, and a backgrounded
+    // watcher is one more process for Ctrl+C to miss.
+    let server = null;
+    const started = {
+      name: "run-after-first-build",
+      setup(b) {
+        b.onEnd((result) => {
+          if (result.errors.length || server) return;
+          server = spawn("node", ["--env-file-if-exists=.env", "--watch", "dist/index.js"], { stdio: "inherit" });
+          server.on("exit", (code) => process.exit(code ?? 0));
+        });
+      },
+    };
+    const ctx = await context({ ...options, plugins: [...options.plugins, started] });
     await ctx.watch();
     console.log(`[build] watching → ${options.outdir}/`);
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      process.on(signal, () => {
+        server?.kill(signal);
+        ctx.dispose().finally(() => process.exit(0));
+      });
+    }
   } else {
     await build(options);
   }

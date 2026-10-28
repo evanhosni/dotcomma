@@ -21,7 +21,7 @@ import { buildUndergroundChunk } from "./worker";
 import { childOfKind, declare } from "../content";
 import type { ContentNode } from "../content/types";
 import { featureMounts } from "../../utils/workers/biomeFlags";
-import { CAVES, SEWERS } from "../../utils/workers/underground/params";
+import { CAVES, ROOMS, SEWERS } from "../../utils/workers/underground/params";
 import { CAVE_CHANCE, ROOM_TIP_CHANCE, ROOM_TRUNK_CHANCE, SEWER_CHANCE, SIDE_ROOM_CHANCE } from "../../utils/workers/underground/constants";
 
 import { tickLiquid } from "./material";
@@ -324,10 +324,10 @@ export interface RoomsProps {
 }
 
 /** SIDE ROOMS off the tunnels this is mounted in; an <Actor> inside stands one in each. */
-export const Rooms = declare<RoomsProps>({ kind: "rooms", within: [CAVES, SEWERS] });
+export const Rooms = declare<RoomsProps>({ kind: ROOMS, within: [CAVES, SEWERS] });
 
 /** A tunnel feature's <Rooms> child with its defaults, or null where none is mounted. */
 const roomsOf = <T extends object>(node: ContentNode<any>, defaults: T): T | null => {
-  const rooms = childOfKind<RoomsProps>(node, "rooms");
+  const rooms = childOfKind<RoomsProps>(node, ROOMS);
   return rooms ? { ...defaults, ...rooms.props } : null;
 };
