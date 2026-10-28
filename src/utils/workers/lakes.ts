@@ -9,13 +9,20 @@
  * the kernel's support never changes with the grid window (no step at grid-cell borders).
  */
 
-import { smoothstep } from "../math/_math";
+import { smoothstep } from "../math";
 import type { PointXZ } from "../math/types";
+import { biomeIdsWith } from "./biomeFlags";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { simplex2, terrainNoise, unwarp } from "./noise";
 import type { BiomeContext, RiverParams, VoronoiCell, Zone } from "./types";
 import { ZONE_WEIGHT_EPS, sstep01, zoneFinal, zoneMinDist, zones } from "./zoneBlend";
+
+/** The <Water depth> feature: a biome whose terrain bowls under a filled surface. */
+export const WATER = "water";
+
+/** The biomes with a <Water/> mounted (lakes, seas, basins). */
+export const waterBiomeIds = (): number[] => biomeIdsWith(WATER);
 
 const LAKE_SURFACE_BELOW_BASE = 1.5;
 const LAKE_LEVEL_REACH_CELLS = 1.5;

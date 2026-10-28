@@ -4,7 +4,7 @@ import { markTerrainCollider } from "../../physics/characterMovement";
 import { traceEvent } from "../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { getWaterMaterial } from "../water/waterMaterial";
+import { getWaterMaterial } from "../water/material";
 import { acquireGeometry, releaseGeometry } from "./chunkGeometry";
 import type { LODLevel } from "./lodConfig";
 import type { Chunk } from "./types";

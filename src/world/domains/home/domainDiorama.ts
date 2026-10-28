@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { smoothstep } from "../../../utils/math/_math";
+import { smoothstep } from "../../../utils/math";
 
 /** HAND-BUILT overworld thumbnail for the CRT (grass | city | desert
  *  cross-section), baked once — none of the real generation pipeline. */

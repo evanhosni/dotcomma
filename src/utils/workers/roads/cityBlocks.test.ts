@@ -4,11 +4,13 @@
  *  the belt, two arterials and a run meet, which held all-road rim cells, their leftover islands and a
  *  sliver between the belt and an arterial before. A second area, where a city meets a river mouth,
  *  held plaza and sidewalk on the river's bank. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/poleSpec";
+import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/spec";
 import { computeVertexData, computeVertexDataRaw, initCompute, warp } from "../vertexCompute";
 import { getCityFreewayEdgePoints } from "./freewaySidePoints";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const STEP = 2;
 const X0 = 4950;

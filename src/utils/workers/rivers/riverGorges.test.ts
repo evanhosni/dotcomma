@@ -2,12 +2,14 @@
  *  junction is built as a GORGE when its ridge is low (RIVER_GORGE_MAX_RISE), with a surface that never
  *  runs uphill, and left alone when it is not. Plus the city|lake mouth whose river stood 14u under the
  *  lake beside it. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, initCompute, unwarp, warp } from "../vertexCompute";
 import { riverPieceEndSurface } from "./riverSurface";
 import { riverEdgePiece, riverPiecesNear } from "./riverNetwork";
 import { riverEdgeBlocked } from "./riverPieceRules";
 import type { RiverEdge, RiverGorge } from "./types";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 

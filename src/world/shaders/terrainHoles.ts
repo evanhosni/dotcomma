@@ -247,7 +247,7 @@ export const TERRAIN_HOLES_GLSL = /* glsl */ `
 `;
 
 /** The cave ENTRANCE variant of the terrain program: the patch draws with the entrance fade's complement
- *  screen-door share (world/terrain/material.ts createEntranceMaterial, objects/dressing/underground). */
+ *  screen-door share (world/terrain/material.ts createEntranceMaterial, objects/underground). */
 export const ENTRANCE_PATCH_DEFINE = "ENTRANCE_PATCH";
 /** A patch pixel whose rock share is under this is GROUND: only those give way to the terrain where the
  *  mouth's cut does not reach (combineBiomeMaterials.ts); a wall pixel is never cut. */

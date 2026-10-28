@@ -2,7 +2,7 @@
  *  forever. The fixed vectors below pin the encoding; regenerate them only for a
  *  deliberate, world-breaking change. */
 import { initCompute } from "../../../utils/workers/vertexCompute";
-import { OVERWORLD_CONFIG } from "./config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import {
   ADJECTIVES,
   BIOME_NOUNS,
@@ -15,6 +15,8 @@ import {
   parseAddressPath,
   resolveAddress,
 } from "./address";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const LAKE = BIOME_NOUNS.lake;
 const ALL_THEMES = [...Object.values(REGION_NOUNS), ...Object.values(BIOME_NOUNS), GENERIC_NOUNS];

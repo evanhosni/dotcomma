@@ -10,4 +10,4 @@ Utility poles with sagging wires along one side of every city freeway (arterials
 
 ## How to add another
 
-N/A — one instance covers every freeway. Mount `<PowerLines />` once in the city biome's `<Dressing>` (props: `renderDistance`, `colliderDistance`); tune placement in `UTILITY_POLE_PLACEMENT`.
+Mount `<PowerLines />` in a biome (props: `renderDistance`, `colliderDistance`); tune placement in `UTILITY_POLE_PLACEMENT`. One driver covers every freeway of every biome that mounts it.

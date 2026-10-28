@@ -2,7 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
-import { wrapAngle } from "../../utils/math/_math";
+import { wrapAngle } from "../../utils/math";
 import { onServerMessage, send } from "../connection";
 
 /**

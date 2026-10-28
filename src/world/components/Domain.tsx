@@ -1,178 +1,132 @@
 import { useThree } from "@react-three/fiber";
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
-import { buildDomainConfig } from "../domains/buildDomainConfig";
-import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND, DEFAULT_TERRAIN_PARAMS } from "../defaults";
-import { DOMAIN_CONFIGS } from "../domains/configs";
-import { getCurrentDomain } from "../domains/navigation";
+import { mergeActorListings } from "../../objects/actors/spec";
+import type { AnyActorDescriptor } from "../../objects/actors/spawning/types";
+import { childOfKind, childrenOfKind, declare, driversIn, nodeOf } from "../content";
+import { actorPlacementsOf, domainConfigOf, terrainParamsOf, type BiomeIdentity, type RegionIdentity } from "../content/config";
+import type { ContentNode } from "../content/types";
+import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND } from "../defaults";
 import { setActiveDomain } from "../domains/utils";
-import { TerrainRenderer } from "../terrain/TerrainRenderer";
-import { Biome, Region, TerrainParams } from "../types";
-import type { DomainConfig } from "../../utils/workers/vertexCompute";
-import { createDomainStore, DomainDataContext, DomainStore, DomainStoreContext } from "./context";
-import { reportContentError } from "../../utils/contentError";
-import { SkyboxSystem } from "../sky/Skybox";
+import { SkyboxSystem, skyboxesOf } from "../sky/Skybox";
+import { TerrainRenderer } from "../terrain";
+import type { Biome, Region } from "../types";
+import { materialBuilderOf, type MaterialProps } from "./Material";
+import { descriptorOfMount } from "./Actor";
+import { DomainReadyContext } from "./context";
 
-/** Root of the DOMAIN → REGION → BIOME tree: children register during layout
- *  effects, this commits the Region[]/DomainConfig and mounts the global systems. */
-interface DomainProps extends React.PropsWithChildren {
+export interface DomainProps {
   /** false = the domain mounts its own ground and sets terrainLoaded/progress itself. */
   terrain?: boolean;
   /** Per-domain because the canvas persists across switches. */
   background?: string;
   /** FEET position. Unset = the default sky drop (or whatever the domain's own traveler sets). */
   playerSpawn?: [number, number, number];
+  children?: ReactNode;
 }
 
-export const Domain = ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, playerSpawn, children }: DomainProps) => {
-  const [registrationVersion, setRegistrationVersion] = useState(0);
-  const [ready, setReady] = useState(false);
-  const { scene } = useThree();
-  const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
-
-  // The terrain gate resets on UNMOUNT only: child effects run before this one,
-  // so a mount-time reset would clobber HomeGround's/TerrainRenderer's.
-  useLayoutEffect(() => {
-    scene.background = new THREE.Color(background);
-    return () => {
-      scene.background = new THREE.Color(DEFAULT_SCENE_BACKGROUND);
+/** The LOOK half of the tree: what the one terrain material is assembled from. The generation half
+ *  is the DomainConfig (world/content/config.ts); both come off the same children. */
+const lookOf = (domain: ContentNode<any>): { regions: Region[]; riverTexture: string } => {
+  const biomeLook = (node: ContentNode<BiomeIdentity>): Biome => {
+    const material = childOfKind<MaterialProps>(node, "material");
+    return {
+      id: node.props.id,
+      name: node.props.name,
+      getMaterial: material ? materialBuilderOf(material.props) : undefined,
+      riverbed: material?.props.riverbed,
     };
-  }, [scene, background]);
-  useEffect(() => {
-    if (playerSpawn) setPlayerSpawn(playerSpawn);
-    return () => {
-      setPlayerSpawn(null);
-      setTerrainLoaded(false);
-      setProgress(0);
-    };
-  }, [setPlayerSpawn, setTerrainLoaded, setProgress, playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
+  };
+  return {
+    regions: childrenOfKind<RegionIdentity>(domain, "region").map((node) => {
+      const material = childOfKind<MaterialProps>(node, "material");
+      return {
+        id: node.props.id,
+        name: node.props.name,
+        biomes: childrenOfKind<BiomeIdentity>(node, "biome").map(biomeLook),
+        getMaterial: material ? materialBuilderOf(material.props) : undefined,
+      };
+    }),
+    riverTexture: childOfKind<MaterialProps>(domain, "material")?.props.riverTexture ?? DEFAULT_RIVER_TEXTURE,
+  };
+};
 
-  const storeRef = useRef<DomainStore | null>(null);
-  if (!storeRef.current) {
-    storeRef.current = createDomainStore(() => setRegistrationVersion((v) => v + 1));
-  }
-  const store = storeRef.current;
+/** Every <Actor> every biome mounts, as ONE descriptor per kind spawning in the union of its biomes. */
+const actorsOf = (domain: ContentNode<any>): AnyActorDescriptor[] =>
+  mergeActorListings(
+    childrenOfKind<RegionIdentity>(domain, "region").flatMap((region) =>
+      childrenOfKind<BiomeIdentity>(region, "biome").flatMap((biome) =>
+        actorPlacementsOf(biome).map(({ id, mount, feature }) => descriptorOfMount(mount, id, biome.props.id, feature)),
+      ),
+    ),
+  );
 
-  // Layout effects fire child-first, so every registration has landed.
-  useLayoutEffect(() => {
-    commitDomain(store);
-    setReady(true);
-  }, [store, registrationVersion]);
+/**
+ * THE ROOT of a world. Its children are the whole description of it — regions, their biomes, and
+ * everything mounted in those — read once here as DATA (world/content/) and published for the
+ * workers, the Player and the server-shared config. Nothing is registered, and there is no second
+ * list to keep in step: a thing is in the world because it is in this tree.
+ *
+ * It then mounts exactly the systems the tree asked for: every mounted kind's Driver, once.
+ */
+export const Domain = declare<DomainProps>({
+  kind: "domain",
+  within: null,
+  View: ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, playerSpawn, children }) => {
+    const [ready, setReady] = useState(false);
+    const { scene } = useThree();
+    const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
 
-  const data = useMemo(() => ({ registrationVersion, ready }), [registrationVersion, ready]);
+    const domain = nodeOf(Domain.content, {}, children);
+    const drivers = useMemo(() => driversIn(domain.children), [domain]);
 
-  return (
-    <DomainStoreContext.Provider value={store}>
-      <DomainDataContext.Provider value={data}>
+    useLayoutEffect(() => {
+      const { regions, riverTexture } = lookOf(domain);
+      setActiveDomain({
+        regions,
+        riverTexture,
+        params: terrainParamsOf(domain),
+        config: domainConfigOf(domain),
+        skyboxes: skyboxesOf(domain),
+        actors: actorsOf(domain),
+      });
+      setReady(true);
+    }, [domain]);
+
+    useLayoutEffect(() => {
+      scene.background = new THREE.Color(background);
+      return () => {
+        scene.background = new THREE.Color(DEFAULT_SCENE_BACKGROUND);
+      };
+    }, [scene, background]);
+
+    // The terrain gate resets on UNMOUNT only: child effects run before this one, so a mount-time
+    // reset would clobber HomeGround's / TerrainRenderer's.
+    useEffect(() => {
+      if (playerSpawn) setPlayerSpawn(playerSpawn);
+      return () => {
+        setPlayerSpawn(null);
+        setTerrainLoaded(false);
+        setProgress(0);
+      };
+    }, [setPlayerSpawn, setTerrainLoaded, setProgress, playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
+
+    return (
+      <DomainReadyContext.Provider value={ready}>
         {children}
         {ready && (
           <>
             {terrain && <TerrainRenderer />}
             <ActorPool />
             <SkyboxSystem />
+            {drivers.map(({ kind, Driver }) => (
+              <Driver key={kind} />
+            ))}
           </>
         )}
-      </DomainDataContext.Provider>
-    </DomainStoreContext.Provider>
-  );
-};
-
-/** Every registered biome as ONE object per id (a biome under several regions is one shared object —
- *  getAllBiomes dedupes by identity), with its material, riverbed and actors merged in. */
-const mergeBiomes = (store: DomainStore): Map<number, Biome> => {
-  const biomeById = new Map<number, Biome>();
-  for (const { biome: record } of store.biomes.values()) {
-    const data = biomeById.get(record.id);
-    if (data && data.name !== record.name) {
-      reportContentError(`biome id ${record.id} is used by both "${data.name}" and "${record.name}" — biome ids must be unique (a biome shared by two regions keeps one id AND one spec)`);
-    }
-    if (data) continue;
-    biomeById.set(record.id, {
-      name: record.name,
-      id: record.id,
-      joinable: record.joinable,
-      blendWidth: record.blendWidth,
-      heightBlendWidth: record.heightBlendWidth,
-      water: record.water,
-      prohibitRoads: record.prohibitRoads,
-      prohibitRivers: record.prohibitRivers,
-      noise: record.noise,
-      snow: record.snow,
-      rocks: record.rocks,
-      riverBankRelief: record.riverBankRelief,
-      features: record.features,
-      actors: [],
-    });
-  }
-  for (const { biomeId, getMaterial, riverbed } of store.biomeMaterials.values()) {
-    const data = biomeById.get(biomeId);
-    if (!data) continue;
-    if (getMaterial) data.getMaterial = getMaterial;
-    if (riverbed) data.riverbed = riverbed;
-  }
-  for (const { biomeId, descriptor } of store.actors.values()) {
-    const data = biomeById.get(biomeId);
-    if (!data) continue;
-    if (!data.actors!.some((d) => d.id === descriptor.id)) data.actors!.push(descriptor);
-  }
-  return biomeById;
-};
-
-/** The regions in registration order, each with its biomes in registration order — voronoi
- *  assignment depends on both. */
-const assembleRegions = (store: DomainStore, biomeById: ReadonlyMap<number, Biome>): Region[] => {
-  const regions: Region[] = [];
-  for (const record of store.regions.values()) {
-    const biomes: Biome[] = [];
-    for (const { regionId, biome } of store.biomes.values()) {
-      if (regionId !== record.id) continue;
-      const data = biomeById.get(biome.id)!;
-      if (!biomes.includes(data)) biomes.push(data);
-    }
-    regions.push({
-      name: record.name,
-      id: record.id,
-      biomes,
-      baseNoise: record.baseNoise,
-      blendWidth: record.blendWidth,
-      heightBlendWidth: record.heightBlendWidth,
-      riverProbability: record.riverProbability,
-      getMaterial: store.regionMaterials.get(record.id),
-    });
-  }
-  return regions;
-};
-
-const commitDomain = (store: DomainStore) => {
-  const params: TerrainParams = {
-    ...DEFAULT_TERRAIN_PARAMS,
-    ...(store.domainTerrain ?? {}),
-  };
-  const regions = assembleRegions(store, mergeBiomes(store));
-  const config = buildDomainConfig(regions, params);
-  verifySharedConfig(config);
-  setActiveDomain({
-    regions,
-    params,
-    config,
-    riverTexture: store.domainMaterial?.riverTexture ?? DEFAULT_RIVER_TEXTURE,
-  });
-};
-
-/** DEV GUARD: the SERVER simulates on the domain's shared config.ts, not on this
- *  JSX commit; same assembler ⇒ byte-identical unless a mount is missing there. */
-const verifySharedConfig = (config: DomainConfig): void => {
-  if (process.env.NODE_ENV === "production") return;
-  const shared = DOMAIN_CONFIGS[getCurrentDomain()];
-  if (!shared) return;
-  if (JSON.stringify(config) === JSON.stringify(shared)) return;
-  const keys = (Object.keys(config) as (keyof DomainConfig)[]).filter(
-    (k) => JSON.stringify(config[k]) !== JSON.stringify(shared[k]),
-  );
-  console.error(
-    `[domain] the JSX commit and the shared config (world/domains/${getCurrentDomain()}/config.ts — what the SERVER simulates on) ` +
-      `differ in: ${keys.join(", ")}. Update the domain's config.ts (or the region/biome spec it reads) so the server's terrain matches the client's.`,
-  );
-};
+      </DomainReadyContext.Provider>
+    );
+  },
+});

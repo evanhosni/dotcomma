@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { onServerMessage, send } from "./connection";
 import { PLAYER_DATA_MAX_BYTES, playerDataBytes, type PlayerData } from "./protocol";
+import { debugGlobal } from "../utils/utils";
 
 /**
  * The client side of player persistence: our blob as the server last confirmed it.
@@ -44,9 +45,9 @@ onServerMessage((msg) => {
 });
 
 // Console access: __playerData.data, __playerData.update({...})
-(window as unknown as { __playerData: unknown }).__playerData = {
+debugGlobal("__playerData", {
   get data() {
     return data;
   },
   update: updatePlayerData,
-};
+});

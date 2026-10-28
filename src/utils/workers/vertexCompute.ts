@@ -13,8 +13,7 @@
  * before it is initialized). Values cross modules only inside functions.
  */
 
-import { smoothstep } from "../math/_math";
-import type { PointXZ } from "../math/types";
+import { smoothstep } from "../math";
 import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges";

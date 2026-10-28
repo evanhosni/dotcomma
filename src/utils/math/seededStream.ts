@@ -1,4 +1,4 @@
-import { seedRand } from "./_math";
+import { seedRand } from ".";
 
 /** A sequence of seeded rolls: ONE seedRand roll seeds an integer mulberry32, so every thread and the
  *  server draw the same numbers from the same string. A system draws its layout and its decoration from

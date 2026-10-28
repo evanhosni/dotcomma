@@ -18,8 +18,8 @@ The caller passes a direction, speed and jump flag; `stepCharacter` sets the bod
 
 A FULL-SPEED SLOPE is climbed with no uphill fade. It applies to every capsule, because all of them step through `stepCharacter`: the player, client-local actors (`kinematicMover.tsx`) and every server NPC (`walker.ts`, beebles included). Tag the collider where it is created, by one of three routes:
 
-- **Solid dressing (client AND server):** set `fullSpeedSlope: true` on the `DressingColliderPart` or `DressingColliderMesh` in the feature's Three-free spec. `dressingColliders.tsx` (client) and `server/src/game/physics/obstacles.ts` (server) both tag what they build from it. Use this for anything NPCs must walk.
-- **A declarative (R3F) collider:** pass its ref to `useFullSpeedSlope(ref)` ([useFullSpeedSlope.ts](useFullSpeedSlope.ts)). `RampCuboid` in `building/Building.tsx` is the example.
+- **Solid dressing (client AND server):** set `fullSpeedSlope: true` on the `ColliderPart` or `ColliderMesh` in the feature's Three-free spec. `world/chunks/colliders.tsx` (client) and `server/src/game/physics/obstacles.ts` (server) both tag what they build from it. Use this for anything NPCs must walk.
+- **A declarative (R3F) collider:** pass its ref to `useFullSpeedSlope(ref)` ([useFullSpeedSlope.ts](useFullSpeedSlope.ts)). `RampCuboid` in `building/index.tsx` is the example.
 - **Any other imperative collider:** call `markFullSpeedSlope(collider)` on the collider `createCollider` returned, on each side that builds it.
 
 There is no untagging: the tags are a WeakSet of collider objects, so a removed collider drops out by itself. Keep the slope under `SLOPE_SLIDE_ANGLE` (40°) or capsules still slide. A collider only the client builds (building interiors) is only ever walked by the player and client-local actors; server NPCs never meet it.

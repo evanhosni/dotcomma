@@ -2,7 +2,7 @@
 
 ## How it works
 
-The landing page at `/`: a flat black world with a huge CRT that selects an overworld address. Wired in [domain.tsx](domain.tsx).
+The landing page at `/`: a flat black world with a huge CRT that selects an overworld address. Wired in [index.tsx](index.tsx).
 
 - **No streaming terrain** (`<Domain terrain={false}>`). [HomeGround.tsx](HomeGround.tsx) is a black plane, a lit wireframe grid that follows the camera (snapped to `GRID_SPACING`) and one collider; it sets `terrainLoaded`/`progress` itself.
 - **Flat config still commits** (`<Terrain>` with zero noise, the config-only `home` region and `wire` biome in [regions/](regions/)) so the analytic height pipeline reads zero for the Player. Don't remove it.

@@ -1,7 +1,9 @@
 /** Splash emitters stand at the foot of steep river drops, over the water, chunk-owned and deterministic. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { runDressingEnumerator } from "../../../objects/dressing/enumerators";
 import { computeVertexData, getRiverSplashEmitters, initCompute } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 beforeAll(() => initCompute(config));

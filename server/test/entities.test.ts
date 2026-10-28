@@ -3,7 +3,7 @@ import { afterEach, before, describe, it } from "node:test";
 import type { ServerMessage } from "../../src/net/protocol";
 import { generateBuildingPlan } from "../../src/objects/actors/building/generatePlan";
 import { BUILDING_SPEC } from "../../src/objects/actors/building/spec";
-import { ACTOR_CATALOG } from "../../src/world/domains/configs";
+import { ACTOR_CATALOG } from "../../src/world/domains";
 import type { ActorSpec } from "../../src/objects/actors/spec";
 import type { StateMachineConfig } from "../../src/objects/actors/state/types";
 import { computeVertexData } from "../../src/utils/workers/vertexCompute";

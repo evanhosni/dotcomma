@@ -22,7 +22,11 @@ const stripBase = (pathname: string): string => {
 
 const domainIdFromPath = (path: string): DomainId => (parseAddressPath(stripBase(path)) ? "overworld" : "home");
 
-let currentPath = stripBase(window.location.pathname);
+// Read lazily: the server bundles this module with the content tree (through the home page's
+// components) and has no window — initDomainNavigation() is the browser's entry point.
+const bootPath = (): string => (typeof window === "undefined" ? HOME_PATH : stripBase(window.location.pathname));
+
+let currentPath = bootPath();
 let currentDomain: DomainId = domainIdFromPath(currentPath);
 /** The address the overworld should travel to next (from the boot URL or a navigateToAddress). */
 let pendingAddress: Address | null = parseAddressPath(currentPath);

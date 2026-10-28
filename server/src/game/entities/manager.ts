@@ -1,6 +1,6 @@
 import type { DomainId, EntityRegisterItem, EntityUpdateFields, ServerMessage } from "../../../../src/net/protocol";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/proxyCollider";
-import { getActorSpec } from "../../../../src/world/domains/configs";
+import { getActorSpec } from "../../../../src/world/domains";
 import { DOOR_INTERACT_REACH } from "../../../../src/objects/actors/building/spec";
 import { INTERACT_REACH_SLACK, serverInteractReachSq, type ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/runner";

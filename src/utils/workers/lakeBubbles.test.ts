@@ -1,8 +1,12 @@
 /** Bubble emitters lie on a lake's bed under enough water, chunk-owned and deterministic. */
-import { OVERWORLD_CONFIG } from "../../world/domains/overworld/config";
-import { LAKE_BIOME } from "../../world/domains/overworld/regions/ocean/biomes/lake/spec";
+import { DOMAIN_CONFIGS } from "../../world/domains";
 import { runDressingEnumerator } from "../../objects/dressing/enumerators";
 import { computeVertexData, computeVertexDataRaw, getLakeBubbleEmitters, initCompute, waterBiomeIds } from "./vertexCompute";
+import { biomeIdOf } from "../../world/content/config";
+
+const LAKE_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "lake") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 beforeAll(() => initCompute(config));

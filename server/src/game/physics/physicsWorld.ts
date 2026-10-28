@@ -3,7 +3,7 @@ import type { DomainId } from "../../../../src/net/protocol";
 import { GRAVITY, markTerrainCollider } from "../../../../src/physics/characterMovement";
 import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
 import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
-import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
+import { DOMAIN_CONFIGS } from "../../../../src/world/domains";
 import { TICK_SECONDS } from "../tick.js";
 import { ChunkGenerator } from "./chunkGenerator.js";
 import { ChunkStore, JobQueue, type ChunkBuilder } from "./chunks.js";
@@ -19,7 +19,7 @@ import { TunnelSpace } from "../../../../src/utils/workers/underground/tunnelSpa
  * entity tick: the world, the budgeted JobQueue, and two refcounted ChunkStores —
  * TERRAIN heightfields (the client's LOD1 recipe) and DRESSING obstacles. Whoever needs
  * a chunk holds it; nothing is built world-wide. The height pipeline is initialized from
- * the physics domain's shared DomainConfig (src/world/domains/configs.ts); walkers in
+ * the physics domain's shared DomainConfig (src/world/domains.ts); walkers in
  * other domains run their machine but stay put. With a `chunkGeneratorWorker` (the server
  * boot passes one) heights and dressing points are computed off-thread (chunkGenerator.ts)
  * and the queue only makes their bodies; without one (tests, tools) everything is built in
@@ -115,7 +115,7 @@ export class PhysicsWorld {
 
   static async create(domain: DomainId = PHYSICS_DOMAIN, opts: PhysicsWorldOptions = {}): Promise<PhysicsWorld> {
     const config = DOMAIN_CONFIGS[domain];
-    if (!config) throw new Error(`no shared domain config for "${domain}" (src/world/domains/configs.ts)`);
+    if (!config) throw new Error(`no shared domain config for "${domain}" (src/world/domains.ts)`);
     await initRapier();
     initCompute(config);
     // Kinematic bodies ignore world gravity (the shared resolver applies GRAVITY itself); set for any future dynamic body.

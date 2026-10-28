@@ -2,7 +2,7 @@ import { NIGHT_GROUND_DIM } from "../../lighting/dayNight";
 import { FLASHLIGHT_DIR_UNIFORM, FLASHLIGHT_UNIFORM, PERSONAL_LIGHT_UNIFORM } from "../../lighting/personalLight";
 
 /**
- * THE cave rock formula, shared by the cave wall material (objects/dressing/underground) and the
+ * THE cave rock formula, shared by the cave wall material (objects/underground) and the
  * terrain's ENTRANCE variant: color from position and normal, the terrain's fake sun, dimmed by the
  * daylight to a deep-tunnel ambient, plus the player's PERSONAL LIGHT and the dev FLASHLIGHT
  * (lighting/personalLight.ts).

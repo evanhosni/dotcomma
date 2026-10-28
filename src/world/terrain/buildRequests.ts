@@ -1,7 +1,7 @@
 import { isMachineStruggling } from "../../utils/task-queue/TaskQueue";
 import type { LODLevel } from "./lodConfig";
 import { computeDesiredChunks } from "./lodQuadtree";
-import { type ChunkBuildResult, requestChunkBuild, TERRAIN_WORKER_COUNT } from "./terrainWorker";
+import { type ChunkBuildResult, requestChunkBuild, TERRAIN_WORKER_COUNT } from "./worker";
 import type { Chunk } from "./types";
 
 // The terrain worker request PIPELINE: how many chunk builds are in flight, which are requested ahead of

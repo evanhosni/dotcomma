@@ -26,7 +26,6 @@ import { decksAround } from "../bridges/deckGround";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
-import { warp } from "../noise";
 
 const FRAGMENT_CELL = 8;
 const FRAGMENT_MAX_CELLS = 78; // ≈ 5000u²

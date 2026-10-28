@@ -117,17 +117,14 @@ export interface SerializedBiome extends BlendWidths {
   joinable: boolean;
   /** A water-filled biome: the terrain bowls `depth` below the base; the Water system fills it. */
   water?: { depth: number };
-  /** No inter-city freeway along this biome's walls (see getNetwork's walkable). */
+  /** No inter-city freeway along this biome's walls (see getNetwork's walkable). DERIVED from
+   *  `water`: impassable ground is the only reason, and a second flag could only disagree. */
   prohibitRoads?: boolean;
-  /** No river reaches this biome: a river approaching it ends in a pond first (getRiverSegments). */
-  prohibitRivers?: boolean;
-  /** The flags' RESOLVED params (null where the spec sets none), always present so the client's and
-   *  the server's configs compare byte for byte. */
-  caves: CaveParams | null;
-  snow: SnowParams | null;
-  sewers: SewerParams | null;
-  rocks: RockParams | null;
-  riverBankRelief: RiverBankReliefParams | null;
+  /** EVERY feature mounted in the biome, keyed by its declaration's kind, holding that
+   *  declaration's resolved params. A key is present because a component was mounted
+   *  (world/content/) — nothing here is a flag anyone can set beside the mounting, and nothing
+   *  downstream keys on a biome's id or name. Read through biomeFlags.ts. */
+  features: Readonly<Record<string, unknown>>;
 }
 
 export interface SerializedRegion extends BlendWidths {
@@ -138,15 +135,14 @@ export interface SerializedRegion extends BlendWidths {
   /** This region's base terrain; unset = the domain's baseNoiseParams. */
   baseNoise?: TerrainNoiseParams;
   /** River density: scales the chance a river-grid edge under this region carries a river
-   *  (RIVER_KEEP_PER_PROBABILITY); unset = river.defaultProbability, 0 = none. */
-  riverProbability?: number;
+   *  (RIVER_KEEP_PER_PROBABILITY). 0 = the region mounted no <Rivers/> and has none. */
+  riverProbability: number;
 }
 
 export interface RiverParams {
   halfWidth: number;
   depth: number;
   bank: number;
-  defaultProbability: number;
 }
 
 export interface DomainConfig {

@@ -8,7 +8,7 @@
  * 100–400ms).
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import type { RectXZ } from "../../math/types";
 import { AXIS_LIFT, BRICK, DAYLIGHT_GROUND_DEPTH, DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FIELD_REACH, GROUND_CUT_SLACK, GROUND_CUT_SPLIT, SEWER_WALL_COLOR, VOXEL } from "./constants";
 import { drawnGroundAt, drawnGroundMinOver, drawnNormalAt, latticeHeightAt, LATTICE } from "./drawnGround";

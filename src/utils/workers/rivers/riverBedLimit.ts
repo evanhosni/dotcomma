@@ -4,7 +4,7 @@
  * and direction, so every chunk agrees), and capRiverBed pushes the paint distance out of reach past it.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";

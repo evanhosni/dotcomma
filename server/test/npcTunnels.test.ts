@@ -5,7 +5,8 @@ import { biomeSiteAt } from "../../src/utils/workers/voronoi";
 import { districtLayoutsNear } from "../../src/utils/workers/underground/districts";
 import { systemAt } from "../../src/utils/workers/underground/systems";
 import type { MouthPiece, RoomPiece, TunnelSystem } from "../../src/utils/workers/underground/types";
-import { MOUNTAIN_BIOME } from "../../src/world/domains/overworld/regions/snow/biomes/mountain/spec";
+import { biomeIdOf } from "../../src/world/content/config";
+import { DOMAIN_CONFIGS } from "../../src/world/domains";
 import { layoutDoors, manholeCenter, manholeIdOf, sideRoomOf, type SewerLayout } from "../../src/utils/workers/underground/sewers";
 import { CITY_BIOME_ID } from "../../src/world/constants";
 import { tunnelColliderBodies } from "../../src/utils/workers/underground/colliderBodies";
@@ -14,13 +15,15 @@ import { sampleTunnelChunk } from "../src/game/physics/tunnels.js";
 import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
 import { TICK_SECONDS } from "../src/game/tick.js";
 
+const MOUNTAIN_BIOME_ID = biomeIdOf(DOMAIN_CONFIGS.overworld, "mountain");
+
 /** The first mountain cave around the origin that `has` something. */
 const firstCave = (has: (s: TunnelSystem) => boolean): TunnelSystem => {
   for (let ring = 0; ring <= 30; ring++) {
     for (let ix = -ring; ix <= ring; ix++) {
       for (let iz = -ring; iz <= ring; iz++) {
-        if (Math.max(Math.abs(ix), Math.abs(iz)) !== ring || biomeSiteAt(ix, iz).zone.biome.id !== MOUNTAIN_BIOME.id) continue;
-        const s = systemAt("cave", MOUNTAIN_BIOME.id, ix, iz);
+        if (Math.max(Math.abs(ix), Math.abs(iz)) !== ring || biomeSiteAt(ix, iz).zone.biome.id !== MOUNTAIN_BIOME_ID) continue;
+        const s = systemAt("cave", MOUNTAIN_BIOME_ID, ix, iz);
         if (s && has(s)) return s;
       }
     }

@@ -2,9 +2,8 @@
  *  and at the junctions where three zones meet — heights are continuous, the material
  *  weights partition unity, a crisp biome's feather is exactly as wide as it says, and
  *  rivers/lakes carry a water surface. Run on the real overworld config. */
-import { OVERWORLD_CONFIG } from "../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../world/domains";
 import { CITY_BIOME_ID } from "../../world/constants";
-import { LAKE_BIOME } from "../../world/domains/overworld/regions/ocean/biomes/lake/spec";
 import {
   biomeSlotBlendHalvesOf,
   combineSlotWeights,
@@ -19,6 +18,11 @@ import {
 } from "./vertexCompute";
 import { biomeSiteAt, getBiomeContext, getBiomeGrid, getZoneWalls } from "./voronoi";
 import { biomeSdf, zoneFinal } from "./zoneBlend";
+import { biomeIdOf } from "../../world/content/config";
+
+const LAKE_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "lake") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const HALVES = biomeSlotBlendHalvesOf(OVERWORLD_CONFIG);
 

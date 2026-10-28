@@ -9,7 +9,7 @@ import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
 import { LampGlowDriver } from "../lighting/lampGlow";
 import { GRAVITY } from "../physics/characterMovement";
-import { initCursor } from "../utils/cursor/cursor";
+import { initCursor } from "../utils/cursor";
 import { traceSpan } from "../utils/spikeTrace";
 import { bindProgramCompiler } from "../utils/warmPrograms";
 import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";

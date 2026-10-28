@@ -14,7 +14,7 @@
 import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, getBiomeSlots, setDeckCutSpacing } from "./vertexCompute";
 import { RIVER_BED_FAR } from "../../world/shaders/constants";
 import { snowCoverOf, terrainSnowDepthFrom } from "./snow/snowDrift";
-import { snowBiomeIds } from "./biomeFlags";
+import { snowBiomeIds } from "./snow/params";
 
 let initialized = false;
 

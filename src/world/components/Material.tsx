@@ -1,13 +1,9 @@
-import { useContext, useLayoutEffect, useMemo } from "react";
-import { _material } from "../../utils/material/_material";
-import { MaterialData, RiverbedMaterial } from "../types";
-import { BiomeContext, RegionContext, useDomainStore } from "./context";
+import { _material } from "../../utils/material";
+import { declare } from "../content";
+import type { MaterialData, RiverbedMaterial } from "../types";
 
-/** Scope-aware: under <Domain> = the river texture (every biome's riverbed unless it sets its own),
- *  under <Region> = the region's BASE material (what its biomes fade into at their edges), under
- *  <Biome> = the biome's fragment shader and, optionally, its own `riverbed`. */
-export interface MaterialConfigProps {
-  /** Filename under public/textures/ (domain scope). */
+export interface MaterialProps {
+  /** Domain scope: the bed texture under every river that no biome overrides. */
   riverTexture?: string;
   /** The fragment shader (`void main()` writing gl_FragColor; its uniform/varying lines are stripped). */
   shader?: string;
@@ -20,45 +16,22 @@ export interface MaterialConfigProps {
   riverbed?: RiverbedMaterial;
 }
 
-export const Material = ({ riverTexture, shader, textures, getMaterial: getMaterialProp, riverbed }: MaterialConfigProps) => {
-  const store = useDomainStore("Material");
-  const biome = useContext(BiomeContext);
-  const region = useContext(RegionContext);
-  // Inline object props: registered under their JSON so parent re-renders don't re-commit.
-  const riverbedKey = riverbed ? JSON.stringify(riverbed) : "";
-  const texturesKey = JSON.stringify(textures ?? {});
-  const getMaterial = useMemo(
-    () => getMaterialProp ?? (shader !== undefined ? _material.fromShader(shader, JSON.parse(texturesKey)) : undefined),
-    [getMaterialProp, shader, texturesKey],
-  );
+/** The LOOK of whatever it is mounted in: under <Domain> the default riverbed texture, under a
+ *  <Region> its BASE material (what its biomes fade into at their edges), under a <Biome> that
+ *  biome's own fragment shader. Renders nothing — the terrain is one material, assembled from
+ *  every one of these (world/terrain/material.ts). */
+export const Material = declare<MaterialProps>({ kind: "material", within: ["domain", "region", "biome"] });
 
-  useLayoutEffect(() => {
-    if (biome) {
-      if (!getMaterial && !riverbedKey) return;
-      const key = `${biome.regionId}/${biome.biomeId}`;
-      store.biomeMaterials.set(key, { biomeId: biome.biomeId, getMaterial, riverbed: riverbedKey ? JSON.parse(riverbedKey) : undefined });
-      store.invalidate();
-      return () => {
-        store.biomeMaterials.delete(key);
-        store.invalidate();
-      };
-    }
-    if (region) {
-      if (!getMaterial) return;
-      store.regionMaterials.set(region.regionId, getMaterial);
-      store.invalidate();
-      return () => {
-        store.regionMaterials.delete(region.regionId);
-        store.invalidate();
-      };
-    }
-    store.domainMaterial = { riverTexture };
-    store.invalidate();
-    return () => {
-      store.domainMaterial = null;
-      store.invalidate();
-    };
-  }, [store, biome, region, riverTexture, getMaterial, riverbedKey]);
+const BUILDERS = new WeakMap<object, () => Promise<MaterialData>>();
 
-  return null;
+/** A <Material>'s builder: its own `getMaterial`, else one assembled from its shader + textures
+ *  (memoized per props object, which is stable while its element is). */
+export const materialBuilderOf = (props: MaterialProps): (() => Promise<MaterialData>) | undefined => {
+  if (props.getMaterial) return props.getMaterial;
+  if (props.shader === undefined) return undefined;
+  const cached = BUILDERS.get(props);
+  if (cached) return cached;
+  const builder = _material.fromShader(props.shader, props.textures ?? {});
+  BUILDERS.set(props, builder);
+  return builder;
 };

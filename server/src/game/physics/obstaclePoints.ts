@@ -1,23 +1,23 @@
 import { DRESSING_COLLIDER_SPECS } from "../../../../src/objects/dressing/catalog";
 import { runDressingEnumerator } from "../../../../src/objects/dressing/enumerators";
-import { DRESSING_CHUNK_SIZE, type DressingColliderBody, type DressingColliderPart } from "../../../../src/objects/dressing/types";
+import { WORLD_CHUNK_SIZE, type ColliderBody, type ColliderPart } from "../../../../src/objects/dressing/types";
 
 /**
  * Every collider-bearing dressing feature (objects/dressing/catalog.ts) as plain data: each spec's
  * enumerator run with its spec placement, each point through its spec's bodiesOf. Rapier-free, so
- * the generation worker can run it. Chunk size MUST stay DRESSING_CHUNK_SIZE: belt-freeway pole and
+ * the generation worker can run it. Chunk size MUST stay WORLD_CHUNK_SIZE: belt-freeway pole and
  * bridge coverage depend on the query center's wall set.
  */
 
-export interface ObstaclePoint extends DressingColliderBody {
-  parts: DressingColliderPart[];
+export interface ObstaclePoint extends ColliderBody {
+  parts: ColliderPart[];
 }
 
 export const dressingChunkBounds = (gx: number, gz: number) => ({
-  minX: gx * DRESSING_CHUNK_SIZE,
-  minZ: gz * DRESSING_CHUNK_SIZE,
-  maxX: (gx + 1) * DRESSING_CHUNK_SIZE,
-  maxZ: (gz + 1) * DRESSING_CHUNK_SIZE,
+  minX: gx * WORLD_CHUNK_SIZE,
+  minZ: gz * WORLD_CHUNK_SIZE,
+  maxX: (gx + 1) * WORLD_CHUNK_SIZE,
+  maxZ: (gz + 1) * WORLD_CHUNK_SIZE,
 });
 
 export const enumerateObstacles = (gx: number, gz: number): ObstaclePoint[] => {

@@ -1,7 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import { useGameContext } from "../../../context/GameContext";
-import { getPlaceInfo } from "../../../objects/dressing/dressingWorker";
+import { getPlaceInfo } from "../../../objects/dressing/worker";
 import { prefetchTerrainAround } from "../../terrain/buildRequests";
 import { ensureVertexCompute, getVertexData, getVertexSample } from "../../terrain/vertexData";
 import { ADDRESS_TRAVEL_EVENT } from "../constants";

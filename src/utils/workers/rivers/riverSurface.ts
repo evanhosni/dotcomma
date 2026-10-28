@@ -5,7 +5,7 @@
  * it along each piece, so it is a function of the centerline only.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { lakeSurface, lastShore, lastShoreDistance, riverLakeCloseness } from "../lakes";

@@ -1,85 +1,83 @@
 /**
- * THE flags helper: which biomes carry what, from the LIVE config (empty before the pipeline is
- * initialized). Every system that keys on a biome's nature reads it here — water-based, cave, snow,
- * sewer, rock, road-bearing — never a biome id or name (CLAUDE.md "Adding Content"). The one id the
- * pipeline still branches on is the bespoke city's (CITY_BIOME_ID), and this is where that branch is
- * turned into a flag ("road-bearing") for everything downstream. Three-free.
+ * WHAT A BIOME CARRIES, from the LIVE config (empty before the pipeline is initialized). A biome's
+ * features are whatever components are mounted inside its <Biome> (world/content/), keyed by their
+ * declaration's kind, so this module needs to know NOTHING about any of them: a system asks for its
+ * own kind and gets its own resolved params. Nothing anywhere keys on a biome's id or name — the one
+ * exception is the bespoke city's height branch (CITY_BIOME_ID), turned into the "road-bearing"
+ * question here. Three-free.
+ *
+ * Each system exports its own typed accessors next to its component (`snowBiomeIds()` lives with
+ * <Snow/>), so deleting a system deletes every mention of it.
  */
 
 import { CITY_BIOME_ID } from "../../world/constants";
 import { domainConfig } from "./computeConfig";
 import type { DomainConfig, SerializedBiome } from "./types";
 
-/** A spec flag `true | {…overrides}` resolved against its system's defaults; null where unset. */
-export const resolveFlag = <T extends object>(flag: boolean | Partial<T> | undefined, defaults: T): T | null =>
-  flag === undefined || flag === false ? null : { ...defaults, ...(flag === true ? {} : flag) };
-
 /** ROCK is a domed biome: rivers build through its relief (waterfalls, pools, springs), only its banks
  *  end a riverbed by slope, and caves open in it. */
 export const isRockBiome = (noise: { dome?: unknown } | undefined): boolean => !!noise?.dome;
 
-interface BiomeFlags {
+interface BiomeIndex {
   byId: Map<number, SerializedBiome>;
-  water: number[];
-  caves: number[];
-  snow: number[];
-  sewers: number[];
-  rocks: number[];
+  /** Biome ids per feature kind, in config order. */
+  byFeature: Map<string, number[]>;
   roadBearing: number[];
 }
 
-const EMPTY: BiomeFlags = { byId: new Map(), water: [], caves: [], snow: [], sewers: [], rocks: [], roadBearing: [] };
-let flagsOf: DomainConfig | null = null;
-let flags: BiomeFlags = EMPTY;
+const EMPTY: BiomeIndex = { byId: new Map(), byFeature: new Map(), roadBearing: [] };
+let indexedFrom: DomainConfig | null = null;
+let index: BiomeIndex = EMPTY;
 
-const computeFlags = (config: DomainConfig): BiomeFlags => {
-  const f: BiomeFlags = { byId: new Map(), water: [], caves: [], snow: [], sewers: [], rocks: [], roadBearing: [] };
-  for (const r of config.regions) {
-    for (const b of r.biomes) {
-      if (f.byId.has(b.id)) continue;
-      f.byId.set(b.id, b);
-      if (b.water) f.water.push(b.id);
-      if (b.caves) f.caves.push(b.id);
-      if (b.snow) f.snow.push(b.id);
-      if (b.sewers) f.sewers.push(b.id);
-      if (b.rocks) f.rocks.push(b.id);
+const buildIndex = (config: DomainConfig): BiomeIndex => {
+  const built: BiomeIndex = { byId: new Map(), byFeature: new Map(), roadBearing: [] };
+  for (const region of config.regions) {
+    for (const biome of region.biomes) {
+      if (built.byId.has(biome.id)) continue;
+      built.byId.set(biome.id, biome);
+      for (const kind of Object.keys(biome.features ?? {})) {
+        const ids = built.byFeature.get(kind);
+        if (ids) ids.push(biome.id);
+        else built.byFeature.set(kind, [biome.id]);
+      }
       // The bespoke city is the one biome with a street lattice and arterials (the pipeline's one id branch).
-      if (b.id === CITY_BIOME_ID && config.cityConfig) f.roadBearing.push(b.id);
+      if (biome.id === CITY_BIOME_ID && config.cityConfig) built.roadBearing.push(biome.id);
     }
   }
-  return f;
+  return built;
 };
 
-const current = (): BiomeFlags => {
+const current = (): BiomeIndex => {
   const config = domainConfig;
   if (!config) return EMPTY;
-  if (config !== flagsOf) {
-    flagsOf = config;
-    flags = computeFlags(config);
+  if (config !== indexedFrom) {
+    indexedFrom = config;
+    index = buildIndex(config);
   }
-  return flags;
+  return index;
 };
 
+const NONE: number[] = [];
+
 export const biomeById = (id: number): SerializedBiome | undefined => current().byId.get(id);
-/** Biomes with `water: { depth }` (lakes, seas, basins). */
-export const waterBiomeIds = (): number[] => current().water;
-/** Biomes with `caves`. */
-export const caveBiomeIds = (): number[] => current().caves;
-/** Biomes with `snow`. */
-export const snowBiomeIds = (): number[] => current().snow;
-/** Biomes with sewers (a <Sewers> in their spec's `features`). */
-export const sewerBiomeIds = (): number[] => current().sewers;
-/** Biomes with a `rocks` field. */
-export const rockFieldBiomeIds = (): number[] => current().rocks;
+
+/** The biomes that mounted a feature of this kind. */
+export const biomeIdsWith = (kind: string): number[] => current().byFeature.get(kind) ?? NONE;
+
+/** One biome's resolved params for a feature kind, or null where it did not mount one. */
+export const biomeFeature = <T>(biomeId: number, kind: string): T | null =>
+  (biomeById(biomeId)?.features?.[kind] as T | undefined) ?? null;
+
+/** A biome's relief as the config holds it (null for a biome with bespoke height code). */
+export const biomeNoiseConfigOf = (biomeId: number) => domainConfig?.biomeNoiseConfigs[biomeId];
+
+/** Every biome that mounted a feature of this kind, with its own resolved params — what a
+ *  feature's ONE driver reads to draw every mount of it. */
+export const featureMounts = <T>(kind: string): { biomeId: number; params: T }[] =>
+  biomeIdsWith(kind).map((biomeId) => ({ biomeId, params: biomeFeature<T>(biomeId, kind) as T }));
+
 /** Biomes that bear roads of their own (streets, arterials, a belt): today the bespoke city. */
 export const roadBearingBiomeIds = (): number[] => current().roadBearing;
-
-export const caveParamsOf = (biomeId: number) => biomeById(biomeId)?.caves ?? null;
-export const snowParamsOf = (biomeId: number) => biomeById(biomeId)?.snow ?? null;
-/** What the biome's <Sewers> mount registered (null: no mount). */
-export const sewerParamsOf = (biomeId: number) => biomeById(biomeId)?.sewers ?? null;
-export const rockParamsOf = (biomeId: number) => biomeById(biomeId)?.rocks ?? null;
-export const riverBankReliefOf = (biomeId: number) => biomeById(biomeId)?.riverBankRelief ?? null;
 
 /** Whether a region is an OCEAN: every one of its biomes is water-based. */
 export const isWaterRegion = (region: { biomes: readonly SerializedBiome[] }): boolean =>

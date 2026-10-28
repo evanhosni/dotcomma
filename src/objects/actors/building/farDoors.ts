@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { prepareActorMaterial } from "../Actor";
+import { prepareActorMaterial } from "..";
 
 /**
  * The door leaves of every building beyond its live distance, as ONE InstancedMesh (one draw call

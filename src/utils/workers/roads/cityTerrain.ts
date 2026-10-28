@@ -5,7 +5,7 @@
  * quay roads along rivers (getCityTerrain).
  */
 
-import { seedRand, smoothstep } from "../../math/_math";
+import { seedRand, smoothstep } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import type { DomainConfig, RiverQuaySample, Wall } from "../types";

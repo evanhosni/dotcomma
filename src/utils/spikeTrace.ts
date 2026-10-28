@@ -41,4 +41,5 @@ export const traceEvent = (name: string, ms = 0): void => {
 export const traceWindow = (from: number, to: number): TraceEntry[] =>
   entries.filter((e) => e.t >= from && e.t <= to).sort((a, b) => a.t - b.t);
 
-(window as any).__spikeTrace = { entries, traceWindow };
+// Guarded: the server bundles this module with the content tree, and has no window.
+if (typeof window !== "undefined") (window as any).__spikeTrace = { entries, traceWindow };

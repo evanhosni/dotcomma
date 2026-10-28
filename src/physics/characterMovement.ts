@@ -1,5 +1,5 @@
 import type Rapier from "@dimforge/rapier3d-compat";
-import { smoothstep } from "../utils/math/_math";
+import { smoothstep } from "../utils/math";
 import type { MovementModifiers } from "./movementModifiers";
 
 /**

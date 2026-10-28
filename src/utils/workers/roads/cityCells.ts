@@ -5,7 +5,7 @@
  */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { warp, warpMax } from "../noise";

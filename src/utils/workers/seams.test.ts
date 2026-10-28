@@ -2,11 +2,13 @@
  *  layer above the wall pass switched between two inputs — a river's nearest piece, a freeway's leg at
  *  a bend, the city's curb under a shore lift, a drowned belt, a lake level's support — and the height
  *  stepped. Each measured place is pinned, and every biome wall of a square is crossed. */
-import { OVERWORLD_CONFIG } from "../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../world/domains";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { combineSlotWeights, computeVertexDataRaw, getBiomeSlots, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "./vertexCompute";
 import { biomeSiteAt, getBiomeContext, getBiomeGrid, getZoneWalls } from "./voronoi";
 import { riverbedSdfAt } from "./zoneBlend";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 beforeAll(() => initCompute(OVERWORLD_CONFIG));
 

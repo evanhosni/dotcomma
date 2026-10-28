@@ -1,6 +1,6 @@
 import type { RapierRigidBody } from "@react-three/rapier";
 import { useRef } from "react";
-import { playerTunnels } from "../objects/dressing/underground/undergroundRegistry";
+import { playerTunnels } from "../world/underground/registry";
 import { resetCharacterMotion, type Character } from "../physics/characterMovement";
 import { createTunnelState, createTunnelStep, resetTunnelState, stepTunnelRules, type TunnelBody, type TunnelStep } from "../physics/tunnelRules";
 import { setCameraUnderground } from "../world/shaders/terrainHoles";

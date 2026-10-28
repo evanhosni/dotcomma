@@ -5,7 +5,7 @@
  * passage. Three-free.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { seededStream, type SeededStream } from "../../math/seededStream";
 import type { PointXZ } from "../../math/types";
 import type { CaveSideRoomParams } from "../types";
@@ -150,7 +150,6 @@ import {
   SPRING_ROOM_RADIUS_MIN,
   SPRING_STRIP_DEPTH,
   SPRING_SECTION_GRADE,
-  SPRING_SHARE_REACH,
   SPRING_SINK,
   SPRING_WATER_BELOW_SURFACE,
   TRUNK_LEAD,

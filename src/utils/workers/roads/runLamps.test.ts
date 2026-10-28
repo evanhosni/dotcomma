@@ -1,17 +1,19 @@
 /** The inter-city run lamps (getFreewayRunLamps / the `freewayLamps` enumerator) on the real compute
  *  module with the overworld's shared config: determinism, chunk-order independence, and every
  *  exclusion (city, water, decks, the verge/shoulder placement, the arm over the road). */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_INNER, FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import { computeVertexData, computeVertexDataRaw, freewayPointAt, getNetwork, initCompute, riverKeepOff, unwarp, warp } from "../vertexCompute";
 import { DRESSING_COLLIDER_SPECS } from "../../../objects/dressing/catalog";
 import { runDressingEnumerator } from "../../../objects/dressing/enumerators";
-import { DRESSING_CHUNK_SIZE } from "../../../objects/dressing/types";
-import { FREEWAY_LAMPS_SPEC, FREEWAY_LAMP_PLACEMENT, LAMP_HEAD_OFFSET_X } from "../../../objects/dressing/street-lamps/lampSpec";
+import { WORLD_CHUNK_SIZE } from "../../../objects/dressing/types";
+import { FREEWAY_LAMPS_SPEC, FREEWAY_LAMP_PLACEMENT, LAMP_HEAD_OFFSET_X } from "../../../objects/dressing/street-lamps/spec";
 import { type FreewayLampPoint, getFreewayRunLamps } from "./runLamps";
 
-const C = DRESSING_CHUNK_SIZE;
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
+
+const C = WORLD_CHUNK_SIZE;
 const P = FREEWAY_LAMP_PLACEMENT;
 const key = (p: { x: number; z: number }) => `${p.x.toFixed(4)}|${p.z.toFixed(4)}`;
 

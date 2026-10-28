@@ -11,7 +11,7 @@ Everything below is in execution order. File links are relative to this folder.
 
 ## 1. Entry: who asks, and which variant runs
 
-[`terrain/TerrainRenderer.tsx`](terrain/TerrainRenderer.tsx) builds a chunk by posting `BUILD_CHUNK` (through [`terrain/buildRequests.ts`](terrain/buildRequests.ts))
+[`terrain/index.tsx`](terrain/index.tsx) builds a chunk by posting `BUILD_CHUNK` (through [`terrain/buildRequests.ts`](terrain/buildRequests.ts))
 to [`utils/workers/terrain.worker.ts`](../utils/workers/terrain.worker.ts) with the chunk's LOD flags
 from [`terrain/lodConfig.ts`](terrain/lodConfig.ts). The worker walks the `(segments + 1)²` grid
 (local x/z are `Math.fround`ed so heights match the float32 positions) and calls one of three
@@ -375,8 +375,8 @@ a coarse triangle spanning three zones interpolates every slot below −1, which
 keep the true distances, so a 1u city edge lands exactly. The water goes to the chunk's child water
 mesh (`writeWaterBuffers`: wet vertices at the water height with `waterDepth` and `waterFlow`, dry ones
 dived under the ground by at least the vertex spacing, a negative depth under the lower of the cave's
-water and the ground; [`water/waterMaterial.ts`](water/waterMaterial.ts)). A cave entrance PATCH
-(objects/dressing/underground) carries the same attributes plus `entranceRock`, and draws with the
+water and the ground; [`water/material.ts`](water/material.ts)). A cave entrance PATCH
+(world/underground) carries the same attributes plus `entranceRock`, and draws with the
 terrain's ENTRANCE variant.
 
 ## 4. The GPU material pipeline
@@ -495,7 +495,7 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
   snow's drag and traction) run the pipeline and may generate a cell's caves; the Player, the local
   actors and the server's walkers sample them on a worker and hand the last answer in (physics/README.md).
 - **Depth precision.** Near a deck's ends the ground sits 0.08u under its top, which the depth buffer
-  resolves only within ~200u; the deck material's `polygonOffset` ([`deckMaterial.ts`](../objects/dressing/bridges/deckMaterial.ts))
+  resolves only within ~200u; the deck material's `polygonOffset` ([`deckMaterial.ts`](../objects/dressing/bridges/material.ts))
   wins those ties at any distance. Nothing here changes for it.
 - **Float precision.** Generation is float64 on absolute world coordinates; never rebase it. The
   shader never forms an absolute float32 world position: it uses the wrapped origin plus an offset,

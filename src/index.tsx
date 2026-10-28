@@ -8,7 +8,7 @@ import { startConnection } from "./net/connection";
 import "./net/playerData"; // subscribes to the connection (persisted player data)
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
-import { DOMAIN_COMPONENTS } from "./world/domains/components";
+import { DOMAIN_TREES } from "./world/domains";
 import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
 import { resetDomainSystems } from "./world/domains/reset";
 import { DomainId } from "./world/domains/types";
@@ -23,7 +23,7 @@ startConnection();
  *  mount the new one. See CLAUDE.md for why this is never a real navigation. */
 const Dotcomma = () => {
   const [domain, setDomain] = useState<DomainId | null>(getCurrentDomain());
-  const DomainComponent = domain && DOMAIN_COMPONENTS[domain];
+  const tree = domain && DOMAIN_TREES[domain];
 
   useEffect(() => onDomainChange(() => setDomain(null)), []);
   useEffect(() => {
@@ -38,7 +38,7 @@ const Dotcomma = () => {
       <DevOverlay />
       <LogsOverlay />
       <NetOverlay />
-      <CustomCanvas>{DomainComponent && <DomainComponent />}</CustomCanvas>
+      <CustomCanvas>{tree}</CustomCanvas>
     </DevContextProvider>
   );
 };

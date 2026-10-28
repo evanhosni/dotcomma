@@ -2,7 +2,7 @@
  *  over the whole edge, so every window agrees: pairs facing each other across the river, branches
  *  onto a pair's deck, lone mouths' straight decks. */
 
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";

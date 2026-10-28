@@ -1,5 +1,5 @@
 import Noise from "noise-ts";
-import { seedRand } from "../math/_math";
+import { seedRand } from "../math";
 import type { PointXZ } from "../math/types";
 import { domainConfig } from "./computeConfig";
 import type { BiomeNoiseConfig, TerrainNoiseParams } from "./types";

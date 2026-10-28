@@ -1,5 +1,5 @@
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
-import { useGLTF } from "@react-three/drei/core/useGLTF";
+import { useGLTF } from "@react-three/drei/core/Gltf";
 import { RootState, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
@@ -8,9 +8,9 @@ import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
 import { warmPrograms } from "../../utils/warmPrograms";
 import { ActorAttributes } from "../types";
-import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
+import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from ".";
 import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
-import { createColliders } from "./colliders/collider";
+import { createColliders } from "./colliders/worker";
 import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
 import type { ModelColliders } from "./colliders/types";
 import { useKinematicMover } from "./kinematicMover";

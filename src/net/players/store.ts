@@ -29,7 +29,7 @@ export interface RemotePlayer {
   displayYaw: number;
   needsInitialPlacement: boolean;
   object: THREE.Object3D | null;
-  /** Where its last snow stamp was laid (RemotePlayers.tsx, snow-drift/snowTrail.ts). */
+  /** Where its last snow stamp was laid (RemotePlayers.tsx, snow-drift/trail.ts). */
   lastStamp: PointXZ;
 }
 

@@ -10,7 +10,7 @@
  *   OUT: { type: "UNDERGROUND_RESULT", id, mouths: MouthPiece[] }
  */
 
-import { caveBiomeIds } from "./biomeFlags";
+import { caveBiomeIds } from "./underground/params";
 import { buildUndergroundChunk } from "./underground/chunkMesh";
 import { caveMouthsNear } from "./underground/systems";
 import type { MouthPiece, UndergroundChunk } from "./underground/types";

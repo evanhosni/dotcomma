@@ -12,7 +12,7 @@
  */
 
 import { seededStream } from "../../math/seededStream";
-import { waterBiomeIds } from "../biomeFlags";
+import { waterBiomeIds } from "../lakes";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
 import { type RockPoint, rockFootprint, rockLookAt, rockPointOf, rockRestingY } from "../rocks/rockPlacement";

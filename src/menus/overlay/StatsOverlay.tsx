@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import type * as THREE from "three";
 import { useDevContext } from "../../context/DevContext";
 import { useGameContext } from "../../context/GameContext";
-import { getPlaceInfo } from "../../objects/dressing/dressingWorker";
+import { getPlaceInfo } from "../../objects/dressing/worker";
 import { getAllBiomes } from "../../utils/utils";
 import { getActiveRegions } from "../../world/domains/utils";
 import { getOrCreateLeftColumn } from "./overlayContainer";

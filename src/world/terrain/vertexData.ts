@@ -30,4 +30,4 @@ export const getVertexData = async (x: number, z: number): Promise<VertexResult>
 /** A height sample computed in the dressing worker, padded or raw: what any FREQUENT caller uses (a
  *  flatten-tile miss is 30–70ms and a cell's first river list and road network ~70ms on this thread).
  *  null until the worker is up. */
-export { getVertexSample } from "../../objects/dressing/dressingWorker";
+export { getVertexSample } from "../../objects/dressing/worker";

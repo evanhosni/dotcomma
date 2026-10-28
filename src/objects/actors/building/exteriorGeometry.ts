@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { cross, madd, normalize, sub, TriangleSink, type Vec3 } from "./buildingGeometry";
+import { cross, madd, normalize, sub, TriangleSink, type Vec3 } from "./geometry";
 import { edgeLength, edgePoint, interpRing, ringPoints } from "./rings";
 import { BuildingPlan, DoorPlan, ExteriorLoft, WindowSpec } from "./types";
 

@@ -1,7 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import type { DomainId } from "../../../../src/net/protocol";
 import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
-import { DOMAIN_CONFIGS } from "../../../../src/world/domains/configs";
+import { DOMAIN_CONFIGS } from "../../../../src/world/domains";
 import type { ChunkGeneratorReply, ChunkGeneratorRequest, ChunkLayer, ChunkLayerData } from "./chunkGenerator.js";
 import { enumerateObstacles } from "./obstaclePoints.js";
 import { sampleChunkHeights } from "./terrain.js";

@@ -1,8 +1,8 @@
 /** Tunnel systems per biome cell: generated once per thread, remembered, and found by area. Three-free. */
 
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import type { RectXZ } from "../../math/types";
-import { caveParamsOf, sewerParamsOf } from "../biomeFlags";
+import { caveParamsOf, sewerParamsOf } from "./params";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warpMax } from "../noise";

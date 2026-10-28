@@ -7,7 +7,7 @@
  */
 
 import Noise from "noise-ts";
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import type { RectXZ } from "../../math/types";
 import {
   AXIS_LIFT,

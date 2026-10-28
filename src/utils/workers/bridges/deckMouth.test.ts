@@ -2,11 +2,13 @@
  *  between a landed cut end and the road it lands on the terrain paints ASPHALT, flush against the deck
  *  — no curb, sidewalk or sand between them — and the mouth changes the road's paint nowhere else; a
  *  deck's lane dashes keep the road's own period; its profile has no kinks and the road into it no bumps. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
 import { bridgeMouthFieldAt } from "./deckMouth";
 import { bridgeDrawn, bridgeDrawnAt } from "./drawnSlab";
 import { type FreewayBridge, bridgeLaneAlong, bridgePaintAt, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute, setDeckCutSpacing } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 const LOD1 = 420 / 96;

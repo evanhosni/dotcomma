@@ -33,7 +33,6 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
     halfWidth: 40,
     depth: 9,
     bank: 36,
-    defaultProbability: 0.45,
   },
   cityConfig: {
     seed: "city1",

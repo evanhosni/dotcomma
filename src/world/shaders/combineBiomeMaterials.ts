@@ -3,7 +3,7 @@ import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
 import { LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../lighting/lampGlow";
 import { PERSONAL_LIGHT_UNIFORMS } from "../../lighting/personalLight";
 import { reportContentError } from "../../utils/contentError";
-import { textureFileOf } from "../../utils/material/_material";
+import { textureFileOf } from "../../utils/material";
 import { ditherGLSL } from "../../vfx/dither";
 import { CITY_BIOME_ID } from "../constants";
 import { Biome, MaterialData, Region, RiverbedMaterial } from "../types";
@@ -25,6 +25,7 @@ import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "./skirtTint";
 import { ENTRANCE_FADE_UNIFORM, ENTRANCE_PATCH_DEFINE, ENTRANCE_PATCH_GLSL, PATCH_GROUND_SHARE, TERRAIN_HOLES_DEFINE, TERRAIN_HOLES_GLSL, TERRAIN_HOLE_UNIFORMS } from "./terrainHoles";
 import { TUNNEL_ROCK_GLSL } from "./tunnelRock";
+import { biomeNoiseConfigOf } from "../../utils/workers/biomeFlags";
 
 // THE TERRAIN FRAGMENT SHADER GENERATOR: every region's base shader and every biome's shader become
 // named functions of ONE program, mixed per pixel (shaders/README.md walks through the result).
@@ -483,7 +484,7 @@ export const combineBiomeMaterials = async (
       // LODs' clamped fields keep the sum from vanishing (LODLevel.clampBlendFields) — the max is a guard.
       gl_FragColor = blended / max(weightSum, 1e-4);
 
-      ${riverBedGLSL(bedKeys, bedGroupOf, bedSlotHalves, cityIdx, biomes.map((b) => bedYieldsToSteepGround(b.noise)))}
+      ${riverBedGLSL(bedKeys, bedGroupOf, bedSlotHalves, cityIdx, biomes.map((b) => bedYieldsToSteepGround(biomeNoiseConfigOf(b.id))))}
 
       ${cityCorridor}
 

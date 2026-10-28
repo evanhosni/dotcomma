@@ -1,4 +1,6 @@
 import { DomainConfig } from "../../utils/workers/vertexCompute";
+import type { AnyActorDescriptor } from "../../objects/actors/spawning/types";
+import type { SkyboxRecord } from "../sky/Skybox";
 import { Region, TerrainParams } from "../types";
 
 /** "home" is the landing page; "overworld" is THE game — one infinite map of regions,
@@ -12,4 +14,8 @@ export interface ActiveDomain {
   params: TerrainParams;
   config: DomainConfig;
   riverTexture: string;
+  /** Domain / region / biome skies, as the tree mounts them (world/sky/). */
+  skyboxes: SkyboxRecord[];
+  /** One per kind, spawning in the union of the biomes that mount it. */
+  actors: AnyActorDescriptor[];
 }

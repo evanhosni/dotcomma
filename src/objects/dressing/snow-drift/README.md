@@ -13,5 +13,5 @@ The snow PILES over every biome whose spec says `snow: true` (the tundra and the
 
 ## How to use
 
-- **Snow over another biome:** set `snow: true` on its spec. It reaches every worker and the server through the domain config; the one `<SnowDrift />` mount (the mountain's `<Dressing>`) draws it.
+- **Snow over another biome:** mount `<Snow />` in it (props override `SNOW_DEFAULTS`). It reaches every worker and the server through the domain config, and the one driver draws every biome that mounts it.
 - **Tune:** the constants at the top of `snowDrift.ts`.

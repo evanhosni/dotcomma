@@ -50,7 +50,7 @@ plus a spec; the actor class does the rest, on both sides.
 Spawn points are deterministic (seeded from world coordinates), so every
 client computes the same beeble at the same spot with the same id (something
 like `123_456_beeble`). When a client mounts a beeble, the actor base
-(`src/objects/actors/Actor.tsx` → `useSyncedEntity`) sends
+(`src/objects/actors/index.tsx` → `useSyncedEntity`) sends
 `entity:register {id, kind, x, y, z}`. The first registration creates the
 server record and starts the machine; later registrations from other clients
 just add themselves as listeners and receive the full current record. When the
@@ -64,7 +64,7 @@ terrain (the same height function the client uses, bit-identical).
 
 The ACTOR CATALOG is every actor kind the domains' biomes place that the server
 has something to simulate for (a state machine, a moving body, a hull), by spec
-id. It is derived, not written: `ACTOR_CATALOG` in `src/world/domains/configs.ts`
+id. It is derived, not written: `ACTOR_CATALOG` in `src/world/domains/index.ts`
 (`actorCatalogOf` in `src/objects/actors/catalog.ts`) collects it from every
 domain's region list, so the city biome listing `{ actor: BEEBLE_SPEC }` is what
 puts the beeble in it.
@@ -340,7 +340,7 @@ the two output channels.
 | beeble behavior (THE file to edit) | `src/objects/actors/beeble/stateMachine.ts` |
 | beeble spec (behavior + body + model + spawn knobs) | `src/objects/actors/beeble/spec.ts` |
 | where the beeble is placed | `actors` of `src/world/domains/overworld/regions/city/biomes/city/spec.ts` |
-| the actor catalog (kinds the server simulates, derived from the biome specs) | `ACTOR_CATALOG` in `src/world/domains/configs.ts` (`actorCatalogOf`: `src/objects/actors/catalog.ts`) |
+| the actor catalog (kinds the server simulates, derived from the biome specs) | `ACTOR_CATALOG` in `src/world/domains/index.ts` (`actorCatalogOf`: `src/objects/actors/catalog.ts`) |
 | spec type, body/movement kinds | `src/objects/actors/spec.ts` |
 | state machine core (runs on both sides) | `src/objects/actors/state/runner.ts`, `triggers.ts`, `types.ts` |
 | motion + animation output channels, input reads | `src/objects/actors/state/motion.ts`, `animation.ts`, `input.ts` |
@@ -349,10 +349,10 @@ the two output channels.
 | server: what gets sent | `server/src/game/entities/publish.ts` |
 | server: an NPC's body (ground / free) | `server/src/game/physics/npcBody.ts`, `groundBody.ts`, `freeBody.ts` |
 | server: the physics world, terrain, obstacles, hulls | `server/src/game/physics/physicsWorld.ts`, `chunks.ts`, `terrain.ts`, `obstacles.ts`, `buildings.ts` |
-| server: the world it simulates on | `src/world/domains/overworld/config.ts` (via `world/domains/configs.ts`) |
+| server: the world it simulates on | `src/world/domains/overworld/config.ts` (via `world/domains/index.ts`) |
 | client: snapshot buffer | `src/net/entities/entityStore.ts` |
 | client: interpolation (unit-tested) + per-actor playback | `src/net/entities/interpolation.ts`, `posePlayback.ts` |
-| client: draws the pose / registers | `src/objects/actors/Actor.tsx` (`useSyncedEntity`) |
+| client: draws the pose / registers | `src/objects/actors/index.tsx` (`useSyncedEntity`) |
 | client: behavior wiring, animation, collision capsule | `src/objects/actors/ModelActor.tsx`, `animationPlayer.ts`, `kinematicMover.tsx` |
 | wire format (ONE copy, the server imports it) | `src/net/protocol.ts` |
 

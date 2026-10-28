@@ -3,7 +3,7 @@
  * freeway is carried along the water's straight edge instead, one road with the belt.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { domainConfig } from "../computeConfig";
 import { riverListKey, riverListNearSegment, riverStraight, riverStraightNear } from "../rivers/riverField";
 import type { RiverQuaySample, Wall } from "../types";

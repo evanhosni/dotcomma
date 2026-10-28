@@ -1,3 +1,5 @@
+import type { AnyActorDescriptor } from "../../objects/actors/spawning/types";
+import type { SkyboxRecord } from "../sky/Skybox";
 import { DomainConfig } from "../../utils/workers/vertexCompute";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import { Region, TerrainParams } from "../types";
@@ -35,6 +37,13 @@ export const getActiveRegions = (): Region[] => active?.regions ?? [];
 export const getTerrainParams = (): TerrainParams => active?.params ?? DEFAULT_TERRAIN_PARAMS;
 
 export const getRiverTexture = (): string => active?.riverTexture ?? DEFAULT_RIVER_TEXTURE;
+
+const NO_SKYBOXES: SkyboxRecord[] = [];
+export const getActiveSkyboxes = (): SkyboxRecord[] => active?.skyboxes ?? NO_SKYBOXES;
+
+const NO_ACTORS: AnyActorDescriptor[] = [];
+/** One descriptor per kind, spawning in the union of the biomes that mount it. */
+export const getActiveActors = (): AnyActorDescriptor[] => active?.actors ?? NO_ACTORS;
 
 /** Only valid after commit — await whenDomainReady() first. */
 export const getActiveDomainConfig = (): DomainConfig => {

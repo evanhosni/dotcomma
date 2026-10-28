@@ -4,7 +4,9 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": [
-      "ES2022"
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
     ],
     "types": [
       "node"
@@ -21,7 +23,7 @@
   },
   "include": [
     "src",
-    "../src/**/spec.tsx"
+    "../src/types.d.ts"
   ],
   "exclude": [
     "test",

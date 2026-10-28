@@ -7,7 +7,7 @@
  * like the mouths (mouthBulge.ts).
  */
 import type { RectXZ } from "../../math/types";
-import { caveBiomeIds } from "../biomeFlags";
+import { caveBiomeIds } from "./params";
 import { dropOldestHalf } from "../cellCache";
 import { MOUTH_TILE, MOUTH_TILE_CACHE_MAX, SPRING_WATER_MARGIN } from "./constants";
 import { systemsNear } from "./systems";

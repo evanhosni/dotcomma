@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
+import { hideCursor, showCursor } from "../../../utils/cursor";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
 import { mouseActionOf, type MouseFlag } from "./runner";
 import type { StateMachineHandle } from "./useStateMachine";

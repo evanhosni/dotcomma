@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { _material } from "../../utils/material/_material";
+import { _material } from "../../utils/material";
 import { getAllBiomes } from "../../utils/utils";
 import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";

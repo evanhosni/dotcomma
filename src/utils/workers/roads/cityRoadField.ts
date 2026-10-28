@@ -5,7 +5,7 @@
  * any top-level value may read it.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { domainConfig } from "../computeConfig";
 
 /** The road field and the lane-paint distance (VertexResult.distanceToRoadCenter /

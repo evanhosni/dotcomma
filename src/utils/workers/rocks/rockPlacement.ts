@@ -2,14 +2,18 @@
  * ROCK placement: density fields per biome kept by slope (steeper ground keeps more), clear of roads
  * and cave openings, plus every rim and strewn spot of every cave mouth; each rock's whole look seeded
  * from its position and buried into the DRAWN ground. Three-free: the client draws from these, the
- * server builds the same colliders (objects/dressing/rocks/rockSpec.ts). The boulders in every
+ * server builds the same colliders (objects/dressing/rocks/spec.ts). The boulders in every
  * waterfall are the river's rule (rivers/waterfallRocks.ts), built on the same look.
  */
 
-import { seedRand, smoothstep } from "../../math/_math";
+import { seedRand, smoothstep } from "../../math";
 import { seededStream } from "../../math/seededStream";
 import type { RectXZ } from "../../math/types";
-import { caveBiomeIds, snowParamsOf } from "../biomeFlags";
+import { biomeById } from "../biomeFlags";
+import { caveBiomeIds } from "../underground/params";
+import { rockFieldBiomeIds, rockParamsOf } from "./params";
+import { snowParamsOf } from "../snow/params";
+import type { RockParams } from "../types";
 import { domainConfig } from "../computeConfig";
 import { generateDensityPoints, slopeDegreesAt } from "../densityPoints";
 import { mouthSpots } from "../underground/caves";
@@ -20,26 +24,32 @@ import { insideMouthOpening, mouthSectionDistanceToRect } from "../underground/t
 import type { MouthPiece } from "../underground/types";
 import { computeVertexData } from "../vertexCompute";
 
-export interface RockField {
-  /** Seed namespace of the density grid. */
+export interface RockField extends RockParams {
+  /** Seed namespace of the density grid: `rocks-<biome name>`, so a field's rocks never move. */
   seedTag: string;
   biomeIds: number[];
-  /** Rocks per 1,000,000 sq units before the slope keep. */
-  density: number;
-  footprint: number;
-  sizeMin: number;
-  sizeMax: number;
-  /** The share of flat points kept, rising to all between startDeg and fullDeg of slope. */
-  flatKeep: number;
-  startDeg: number;
-  fullDeg: number;
 }
 
 export interface RockPlacementParams {
-  fields: RockField[];
   /** Past a road's or freeway's paved half width. */
   roadClear: number;
 }
+
+/** ONE FIELD PER BIOME THAT MOUNTS <Rocks/>, with that mount's own params — there is no list of
+ *  rocky biomes anywhere, and no biome id in this file. Rebuilt when the config changes. */
+let fieldsOf: unknown = null;
+let fields: RockField[] = [];
+export const rockFields = (): RockField[] => {
+  if (domainConfig !== fieldsOf) {
+    fieldsOf = domainConfig;
+    fields = rockFieldBiomeIds().map((id) => ({
+      ...(rockParamsOf(id) as RockParams),
+      seedTag: `rocks-${biomeById(id)!.name}`,
+      biomeIds: [id],
+    }));
+  }
+  return fields;
+};
 
 export const ROCK_SHAPE_COUNT = 8;
 
@@ -184,7 +194,7 @@ export const getRocks = (minX: number, minZ: number, maxX: number, maxZ: number,
   const mouths = mouthsAround(b);
   const city = domainConfig!.cityConfig;
   const out: RockPoint[] = [];
-  for (const f of params.fields) {
+  for (const f of rockFields()) {
     const points = generateDensityPoints(minX, minZ, maxX, maxZ, { seedTag: f.seedTag, density: f.density, footprint: f.footprint, biomeIds: f.biomeIds });
     for (const p of points) {
       const slope = slopeDegreesAt(p.x, p.z);

@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { BIOME_SDF_FAR } from "../../utils/workers/vertexCompute";
 import { LODLevel } from "./lodConfig";
 import { MAX_BIOME_SLOTS } from "./material";
-import type { ChunkBuildResult } from "./terrainWorker";
+import type { ChunkBuildResult } from "./worker";
 
 // A chunk's mesh buffers: a (segments + 1)² grid in PlaneGeometry's layout (rotated to y-up by the
 // plane) plus a SKIRT ring hanging below the perimeter, pooled per LOD and refilled from each worker

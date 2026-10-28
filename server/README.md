@@ -3,7 +3,8 @@
 ## How it works
 
 - One Node process (Express + `ws`) serves the built client from `build/`, runs the game over WebSockets on the same port, stores player data in SQLite (`node:sqlite`), and simulates every synced NPC on a headless Rapier world.
-- It is bundled with esbuild and imports the client's Three-free modules from `src/` (protocol, actor specs and state machines, height pipeline, domain configs, movement resolver), so behavior is written once. The client never imports `server/`.
+- It is bundled by [build.mjs](build.mjs) — THE build, shared by `npm run build`, `npm run dev` (watch) and `npm test` (which bundles `test/` to `dist-test/` and runs `node --test`). It imports the client's modules from `src/` — protocol, actor specs and state machines, the height pipeline, the movement resolver, and the CONTENT TREES each world is written as — so behavior is written once. The client never imports `server/`.
+- The build replaces three.js and R3F with a stub, because the trees' views import them and the server only ever READS the tree, never renders it. `three` stays external, so a real leak fails the boot. → [DECISIONS.md](DECISIONS.md)
 - [src/index.ts](src/index.ts): boot order — database check, physics world (with its generation worker), HTTP, WebSocket transport, the world tick (`TICK_HZ`/`TICK_MS`/`TICK_SECONDS` in [game/tick.ts](src/game/tick.ts)) and the save sweep, flush on shutdown.
 - [src/http.ts](src/http.ts): static client plus a catch-all for the fake URL paths.
 - [src/transport/ws.ts](src/transport/ws.ts): sockets, frame validation (`parseClientMessage`), ping/pong reaper, `routeToWorld` (every validated message becomes one `World` call); implements `Outbox`, permessage-deflate on every frame (`PER_MESSAGE_DEFLATE`, context kept across frames; `WS_DEFLATE=off` disables it), and with it off, corking each socket so a tick's frames leave as one write.

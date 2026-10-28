@@ -1,4 +1,4 @@
-import { caveBiomeIds, sewerBiomeIds } from "../../../../src/utils/workers/biomeFlags";
+import { caveBiomeIds, sewerBiomeIds } from "../../../../src/utils/workers/underground/params";
 import { buildUndergroundChunk } from "../../../../src/utils/workers/underground/chunkMesh";
 import type { TunnelSpaceChunk } from "../../../../src/utils/workers/underground/tunnelSpace";
 import type { UndergroundChunk } from "../../../../src/utils/workers/underground/types";

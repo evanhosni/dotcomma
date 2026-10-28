@@ -39,18 +39,20 @@ import {
   getSnowDrift,
   waterBiomeIds,
 } from "../../utils/workers/vertexCompute";
-import { rockFieldBiomeIds, snowBiomeIds } from "../../utils/workers/biomeFlags";
+import { biomeIdsWith } from "../../utils/workers/biomeFlags";
+import { rockFieldBiomeIds } from "../../utils/workers/rocks/params";
+import { snowBiomeIds } from "../../utils/workers/snow/params";
 import { biomesWeighWithin } from "../../utils/workers/zoneBlend";
 import { type DensityPointParams, generateDensityPoints } from "../../utils/workers/densityPoints";
 import { CITY_BIOME_ID } from "../../world/constants";
-import type { DressingBounds } from "./types";
+import type { ChunkBounds } from "./types";
 
 /** False when no point of the chunk can carry any weight of `biomeIds` (zoneBlend.ts
  *  `biomesWeighWithin`, from the center's slot sdfs over the chunk's half diagonal). Unset/empty
  *  `biomeIds` = every biome. One padded height per call. Biome walls are never far (500u cells), so
  *  a probe by the distance to the nearest wall skipped almost nothing; the slot sdfs say which biome
  *  is across it. */
-const chunkMayHoldBiomes = (b: DressingBounds, biomeIds: readonly number[] | undefined): boolean => {
+const chunkMayHoldBiomes = (b: ChunkBounds, biomeIds: readonly number[] | undefined): boolean => {
   if (!biomeIds || biomeIds.length === 0) return true;
   const vd = computeVertexData((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2);
   return biomeIds.includes(vd.biomeId) || biomesWeighWithin(vd.biomeSdf, biomeIds, (b.maxX - b.minX) * Math.SQRT1_2);
@@ -86,13 +88,15 @@ export interface FreewayEdgeArgs {
   withNext?: boolean;
 }
 
-type Enumerator<A, P> = (b: DressingBounds, args: A) => P[];
+type Enumerator<A, P> = (b: ChunkBounds, args: A) => P[];
 const defineEnumerators = <T extends Record<string, Enumerator<any, any>>>(table: T): T => table;
 
 export const DRESSING_ENUMERATORS = defineEnumerators({
   /** Spawn-style density placement (densityPoints.ts), skipped where none of `biomeIds` can be. */
   densityPoints: (b, params: DensityPointParams): DensityPoint[] =>
-    chunkMayHoldBiomes(b, params.biomeIds) ? generateDensityPoints(b.minX, b.minZ, b.maxX, b.maxZ, params) : [],
+    chunkMayHoldBiomes(b, params.biomeIds ?? (params.feature ? biomeIdsWith(params.feature) : undefined))
+      ? generateDensityPoints(b.minX, b.minZ, b.maxX, b.maxZ, params)
+      : [],
 
   /** City street/arterial/belt centerlines, plus the inter-city runs, which cross open country. */
   roadMarkers: (b, a: RoadMarkerArgs): RoadMarkerPoint[] => {
@@ -146,6 +150,6 @@ export const isDressingEnumerator = (name: string): name is DressingEnumeratorNa
 
 export const runDressingEnumerator = <K extends DressingEnumeratorName>(
   name: K,
-  bounds: DressingBounds,
+  bounds: ChunkBounds,
   args: EnumeratorArgs<K>
 ): EnumeratorPoint<K>[] => (DRESSING_ENUMERATORS[name] as Enumerator<EnumeratorArgs<K>, EnumeratorPoint<K>>)(bounds, args);

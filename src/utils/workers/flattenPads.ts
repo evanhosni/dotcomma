@@ -7,7 +7,7 @@
  * tile, and spawn.worker sources flattenGround points FROM getFlattenPoints.
  */
 
-import { smoothstep } from "../math/_math";
+import { smoothstep } from "../math";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";

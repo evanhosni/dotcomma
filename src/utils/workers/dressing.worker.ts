@@ -3,7 +3,7 @@
  * objects/dressing/enumerators.ts), plus two point queries that share its thread and config.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: DressingBounds, args }
+ *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: ChunkBounds, args }
  *   IN:  { type: "VERTEX_SAMPLE", id, x, z, raw? } (single height sample, padded or raw — the Player's backstop and water probe)
  *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell)
  *   IN:  { type: "SURFACE",       id, x, z, feetY } (the movement modifiers under a capsule — the Player's snow wading and traction)

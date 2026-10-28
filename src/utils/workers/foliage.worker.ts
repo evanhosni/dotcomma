@@ -9,8 +9,8 @@
  *        (`count` = the band's prefix of the `total` placed blades)
  */
 
-import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
-import { seedRand, smoothstep } from "../math/_math";
+import type { FoliageChunkParams } from "../../objects/foliage/worker";
+import { seedRand, smoothstep } from "../math";
 import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { DomainConfig, initCompute, computeVertexData, biomeWeightOf, riverKeepOff } from "./vertexCompute";
 import { footprintsNear, insideFootprint, type Footprint } from "./buildingFootprints";

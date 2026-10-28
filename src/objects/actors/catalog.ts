@@ -1,26 +1,22 @@
 import { reportContentError } from "../../utils/contentError";
-import type { RegionSpec } from "../../world/types";
-import { featureSpawnId, featureSpawnsOf, featureTreeOf } from "../../world/features";
+import { childrenOfKind } from "../../world/content";
+import { actorPlacementsOf } from "../../world/content/config";
+import type { ContentNode } from "../../world/content/types";
 import { specNeedsServer, type ActorSpec } from "./spec";
 
 /**
  * The actor kinds the SERVER simulates (a state machine, a moving body, a sealed hull), by id,
- * DERIVED from the biome specs' `actors` lists: placing a kind in a biome is what catalogs it, so
- * there is no list to keep in step. THE catalog is built from every domain's region list in
- * world/domains/configs.ts (`ACTOR_CATALOG`), which the server's entity manager reads.
- * Three-free, React-free.
+ * DERIVED from the <Actor> components mounted in the worlds' biomes: mounting a kind is what
+ * catalogs it, so there is no list to keep in step. Three-free, React-free.
  */
-export const actorCatalogOf = (regionLists: Iterable<readonly RegionSpec[]>): Readonly<Record<string, ActorSpec>> => {
+export const actorCatalogOf = (domains: Iterable<ContentNode<any>>): Readonly<Record<string, ActorSpec>> => {
   const specById = new Map<string, ActorSpec>();
   const catalog: Record<string, ActorSpec> = {};
-  for (const regions of regionLists) {
-    for (const region of regions) {
-      for (const biome of region.biomes) {
-        const placed = [
-          ...(biome.actors ?? []).map(({ actor }) => ({ actor, id: actor.id })),
-          ...featureSpawnsOf(featureTreeOf(biome.features)).map(({ path, mount }) => ({ actor: mount.actor, id: featureSpawnId(mount.actor.id, path) })),
-        ];
-        for (const { actor, id } of placed) {
+  for (const domain of domains) {
+    for (const region of childrenOfKind(domain, "region")) {
+      for (const biome of childrenOfKind(region, "biome")) {
+        for (const { id, mount } of actorPlacementsOf(biome)) {
+          const { actor } = mount;
           const listed = specById.get(actor.id);
           if (listed && listed !== actor) {
             reportContentError(
@@ -29,6 +25,7 @@ export const actorCatalogOf = (regionLists: Iterable<readonly RegionSpec[]>): Re
             );
           }
           specById.set(actor.id, actor);
+          // Under its placement id AND its own: a feature-placed kind is still that kind on the wire.
           if (specNeedsServer(actor)) catalog[id] = catalog[actor.id] = actor;
         }
       }

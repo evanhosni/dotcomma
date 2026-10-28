@@ -6,12 +6,12 @@
  * mouth, which foliage and snow read. Three-free.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import type { RectXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { riverKeepOff } from "../rivers/constants";
-import { caveBiomeIds } from "../biomeFlags";
+import { caveBiomeIds } from "./params";
 import {
   AXIS_LIFT,
   BULGE_FLOOR_STRIP_FADE,

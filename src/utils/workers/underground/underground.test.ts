@@ -2,8 +2,7 @@
  *  openings, formations, rocks, determinism, the bulge, a chunk), the surface nets, and sewers (manholes,
  *  liquid, faces, plates, chunks, the floor's air). */
 import { CITY_BIOME_ID, QUANTIZATION_GRID } from "../../../world/constants";
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { MOUNTAIN_BIOME } from "../../../world/domains/overworld/regions/snow/biomes/mountain/spec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, computeVertexDataRaw, initCompute } from "../vertexCompute";
 import { biomeSiteAt } from "../voronoi";
 import { mouthSpots } from "./caves";
@@ -16,6 +15,11 @@ import { meshBrick, NetVertices, type NetsOutput } from "./surfaceNets";
 import { clearTunnelCaches, systemAt, systemsNear } from "./systems";
 import { compileField, mouthFloorAt, mouthRadiusAt } from "./tunnelField";
 import type { ConePiece, TubePiece, TunnelSystem, UndergroundChunk } from "./types";
+import { biomeIdOf } from "../../../world/content/config";
+
+const MOUNTAIN_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "mountain") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 jest.setTimeout(300000);
 

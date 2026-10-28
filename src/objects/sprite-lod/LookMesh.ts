@@ -10,7 +10,7 @@ import {
   INSTANCE_SIZE,
   SPRITE_DATA_FLOATS,
 } from "./layout";
-import { createSpriteMaterial } from "./spriteMaterial";
+import { createSpriteMaterial } from "./material";
 import type { SpriteChunkLook, SpriteLook } from "./types";
 
 const MIN_CAPACITY = 256;

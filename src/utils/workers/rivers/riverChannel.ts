@@ -1,8 +1,8 @@
 /** A river's CHANNEL as step 4 carves it (computeVertexData), also what the bed-limit marches and the
  *  belt's outer half beside a river carve. */
 
-import { smoothstep } from "../../math/_math";
-import { riverBankReliefOf } from "../biomeFlags";
+import { smoothstep } from "../../math";
+import { riverBankReliefOf } from "./bankParams";
 import { ZONE_WEIGHT_EPS, zoneFinal, zones } from "../zoneBlend";
 import { domainConfig } from "../computeConfig";
 import { SHORE_RISE } from "../lakes";

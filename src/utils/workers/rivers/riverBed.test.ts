@@ -2,14 +2,16 @@
  *  too steep the bed ends and never resumes further out (riverField.ts, capRiverBed). The shader's
  *  per-pixel slope fade alone left a patch of bed wherever the bank flattened again within reach. Any
  *  other ground never yields: steep grass cut into the band in wedges reaching the water. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { RIVER_BED_FADE_INSET, RIVER_BED_FULL_INSET, RIVER_BED_SLOPE_END_DEG, RIVER_BED_SLOPE_START_DEG, bedYieldsToSteepGround } from "../../../world/shaders/constants";
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { biomeSlotsOf, combineSlotWeights, computeVertexData, computeVertexDataFar, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "../vertexCompute";
 import { capRiverBed } from "./riverBedLimit";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 import { lastShoreDistance } from "../lakes";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 /** No river merges into a lake farther than this from its wall (riverLakeMerge: the widest gap). */
 const LAKE_MERGE_REACH = 300;

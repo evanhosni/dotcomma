@@ -28,7 +28,6 @@ export const RIVER_SURFACE_BELOW = 2.5;
 
 /** A piece's verdict (riverPieceRules.ts): 0 = built, else why not. */
 export const RIVER_BLOCK_WATER = 1;
-export const RIVER_BLOCK_PROHIBITED = 2;
 export const RIVER_BLOCK_HIGH = 3;
 /** High ground that is genuinely mountainous (the biome relief past RIVER_MAX_RELIEF) and not the
  *  mountain's rock: never filled, cut through only as a gorge. */

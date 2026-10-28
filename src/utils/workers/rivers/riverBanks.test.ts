@@ -3,13 +3,17 @@
  *  and the terrain share one grid per chunk and interpolate linearly on the same triangles, so a
  *  vertex-level guarantee holds across every triangle. (A bank blended down from the rim puts the
  *  ground under the surface, and a second strip of water shows on the sand.) */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { LAKE_BIOME } from "../../../world/domains/overworld/regions/ocean/biomes/lake/spec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp, warp } from "../vertexCompute";
 import { RIVER_BLOCK_WATER } from "./constants";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 import { riverEdgeBlocked } from "./riverPieceRules";
 import { lastShoreDistance } from "../lakes";
+import { biomeIdOf } from "../../../world/content/config";
+
+const LAKE_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "lake") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 

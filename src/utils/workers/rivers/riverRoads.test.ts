@@ -1,12 +1,14 @@
 /** Where roads meet rivers (CHANGES.md §2.20): nothing is placed on a deck, a freeway reaching a
  *  city river is carried on a deck or ends short of it, and no tiny piece of road is left standing
  *  where a river cut it off. On the real compute module with the overworld's shared config. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
-import { LAMP_PLACEMENT } from "../../../objects/dressing/street-lamps/lampSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
+import { LAMP_PLACEMENT } from "../../../objects/dressing/street-lamps/spec";
 import { generateDensityPoints } from "../densityPoints";
 import { BRIDGE_CUT_FEATHER } from "../bridges/constants";
 import { type FreewayBridge, computeVertexData, getFreewayBridges, getFreewayMouths, initCompute } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 

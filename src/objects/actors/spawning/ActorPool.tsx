@@ -1,16 +1,15 @@
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
-import { useGLTF } from "@react-three/drei/core/useGLTF";
+import { useGLTF } from "@react-three/drei/core/Gltf";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../../context/GameContext";
 import { traceEvent } from "../../../utils/spikeTrace";
-import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/utils";
-import { DEFAULT_FRUSTUM_PADDING, driveActorFrames } from "../Actor";
+import { getActiveActors, getActiveDomainConfig } from "../../../world/domains/utils";
+import { DEFAULT_FRUSTUM_PADDING, driveActorFrames } from "..";
 import type { ModelActorAttributes } from "../ModelActor";
-import { collectDescriptors } from "./collectDescriptors";
 import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
-import { SpriteLods, spriteKindsOf } from "../../sprite-lod/SpriteLods";
+import { SpriteLods, spriteKindsOf } from "../../sprite-lod";
 import { despawnRadiusOf, spawnRadiusOf } from "./radii";
 import {
   cleanupSpawnCache,
@@ -20,7 +19,7 @@ import {
   initSpawnWorker,
   serializeDescriptors,
   updateSpawnFootprint,
-} from "./spawnWorker";
+} from "./worker";
 import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SPAWN_ONLY_KEYS, SpawnPoint, spawnPointId } from "./types";
 
 // Spawn lifecycle radii and the despawn ledger are described in CLAUDE.md → Actor Spawn Lifecycle.
@@ -164,7 +163,7 @@ export const ActorPool = () => {
   const { camera } = useThree();
   const { terrainLoaded, progress } = useGameContext();
 
-  const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
+  const descriptors = useMemo(() => getActiveActors(), []);
 
   const descriptorMap = useMemo(() => {
     const map = new Map<string, AnyActorDescriptor>();

@@ -4,11 +4,13 @@
  *  road (a 9u bow at (-258, 3115), pits and mounds in front of the cut, a trench under a ramp). And a
  *  river under a crossing freeway eases down to it along its length instead of dropping within one
  *  piece (36u at (-1548, 1090), a gorge under the deck). */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
 import { riverPieceEndSurface, riverPieceEndTerrainSurface } from "../rivers/riverSurface";
 import { riverPiecesIn } from "../rivers/riverNetwork";
 import { type FreewayBridge, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 const decksNear = (cx: number, cz: number, r: number): FreewayBridge[] => {

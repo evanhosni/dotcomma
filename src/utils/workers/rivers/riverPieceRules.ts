@@ -1,13 +1,13 @@
 /**
  * Which pieces of a river edge are BUILT (CLAUDE.md "Rivers", the network's rules (1)–(5)): a piece is
- * not built deep in water (the mouth runs RIVER_MOUTH_REACH into the basin), near a prohibitRivers
- * biome, or on high/steep ground judged on a terrain proxy; steep gaps between river and water are
+ * not built deep in water (the mouth runs RIVER_MOUTH_REACH into the basin) or on high/steep
+ * ground judged on a terrain proxy; steep gaps between river and water are
  * filled, short blobs dropped, and gaps of low enough ridges are cut through as GORGES (junctionGorgesAt
  * and the in-edge gaps of riverEdgeBlocked). A new rule is one more verdict in classifyRiverPieces or one
  * more pass in riverEdgeOwnBlocked.
  */
 
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { lakeSurface, restoreShore, saveShore } from "../lakes";
@@ -19,11 +19,9 @@ import { accumulateWallFields, combineZoneWeights, restoreWallPass, saveWallPass
 import {
   RIVER_BLOCK_HIGH,
   RIVER_BLOCK_MOUNTAIN,
-  RIVER_BLOCK_PROHIBITED,
   RIVER_BLOCK_SPRING,
   RIVER_BLOCK_WATER,
   RIVER_GAP_FILL,
-  RIVER_POND_FACTOR,
   RIVER_SURFACE_BELOW,
   riverKeepOff,
 } from "./constants";
@@ -60,11 +58,8 @@ const RIVER_GORGE_MAX_RISE = 25;
 const RIVER_GORGE_RISE_STEP = 10;
 
 const junctionGorges = new Map<string, Map<string, RiverGorge>>();
-let riversProhibitedSomewhere = false;
-
-export const initRiverPieceRules = (config: DomainConfig): void => {
+export const initRiverPieceRules = (_config: DomainConfig): void => {
   junctionGorges.clear();
-  riversProhibitedSomewhere = config.regions.some((r) => r.biomes.some((b) => b.prohibitRivers));
 };
 
 // A cheap stand-in for the terrain the river would sit on, to judge "high ground" while building
@@ -103,20 +98,8 @@ const riverTerrainProxy = (wx: number, wz: number): number => {
 
 const isWaterAt = (x: number, z: number): boolean => !!zoneAtWarped(x, z).biome.water;
 
-const RIVER_PROHIBIT_PROBES = [
-  [0, 0],
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-  [0.71, 0.71],
-  [-0.71, 0.71],
-  [0.71, -0.71],
-  [-0.71, -0.71],
-];
-
-/** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, near a prohibitRivers
- *  biome, mountainous, or high/steep ground. */
+/** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, mountainous, or
+ *  high/steep ground. */
 const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
   const n = e.count;
   const step = e.len / n;
@@ -142,15 +125,6 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
       isWaterAt(mx + e.ux * RIVER_MOUTH_REACH, mz + e.uz * RIVER_MOUTH_REACH)
     ) {
       blocked[i] = RIVER_BLOCK_WATER;
-    } else if (
-      riversProhibitedSomewhere &&
-      // The whole footprint of a pond end must stay clear of the biome.
-      RIVER_PROHIBIT_PROBES.some(
-        ([px, pz]) =>
-          zoneAtWarped(mx + px * r * RIVER_POND_FACTOR, mz + pz * r * RIVER_POND_FACTOR).biome.prohibitRivers,
-      )
-    ) {
-      blocked[i] = RIVER_BLOCK_PROHIBITED;
     } else {
       // The grade over the piece and its neighbors: one steep hummock is not a slope.
       const k0 = Math.max(0, i - 1);

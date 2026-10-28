@@ -1,10 +1,12 @@
 /** Waterfall boulders stand out of the sheet of every steep river piece, bare, chunk-owned and deterministic;
  *  the rocks enumerator draws them and the splash enumerator stands a burst on each wet face. */
-import { ROCK_PLACEMENT } from "../../../objects/dressing/rocks/rockSpec";
+import { ROCK_PLACEMENT } from "../../../objects/dressing/rocks/spec";
 import { runDressingEnumerator } from "../../../objects/dressing/enumerators";
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { drawnGroundAt } from "../underground/drawnGround";
 import { computeVertexData, getRiverSplashEmitters, getWaterfallBoulders, getWaterfallRocks, initCompute, WATERFALL_GRADE } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 jest.setTimeout(300000);
 

@@ -4,10 +4,10 @@
  *  no stray stub of wall left between openings), and a landed end meets the
  *  road flush wherever its edge lies over pavement. On the real compute module with the overworld's
  *  shared config. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { crotchFlares } from "./deckGeometry";
 import { drawnCovers } from "./drawnSlab";
-import { BRIDGE_PLACEMENT, BRIDGE_PARAPET_HEIGHT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { BRIDGE_PLACEMENT, BRIDGE_PARAPET_HEIGHT } from "../../../objects/dressing/bridges/spec";
 import {
   BRIDGE_PARAPET_WIDTH,
   type FreewayBridge,
@@ -20,6 +20,8 @@ import {
   getFreewayBridges,
   initCompute,
 } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 const MIN_CROSSING = (40 * Math.PI) / 180;

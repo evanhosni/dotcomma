@@ -1,7 +1,7 @@
 /** Where a world point lies against a deck's DRAWN slab — the ribbon's own triangles — for the ground
  *  cut under it (computeVertexData step 7, bridges/deckGround.ts). */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_CUT_FEATHER } from "./constants";
 import { bridgeRampAt, bridgeSections, bridgeTrimRange } from "./deckGeometry";

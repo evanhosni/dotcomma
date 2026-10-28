@@ -1,27 +1,34 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { before, after, describe, it } from "node:test";
 import { build } from "esbuild";
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import { computeVertexData, computeVertexDataRaw, freewayPointAt, getFlattenPoints, getNetwork, unwarp, warp } from "../../src/utils/workers/vertexCompute";
 import { BUILDING_ATTRS } from "../../src/objects/actors/building/spec";
-import { FREEWAY_LAMPS_SPEC, LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/lampSpec";
+import { FREEWAY_LAMPS_SPEC, LAMP_COLLIDER_PARTS } from "../../src/objects/dressing/street-lamps/spec";
 import { DRESSING_COLLIDER_SPECS } from "../../src/objects/dressing/catalog";
 import { runDressingEnumerator } from "../../src/objects/dressing/enumerators";
-import { DRESSING_CHUNK_SIZE } from "../../src/objects/dressing/types";
+import { WORLD_CHUNK_SIZE } from "../../src/objects/dressing/types";
 import { createBuildingCollider } from "../src/game/physics/buildings.js";
 import { createObstacleBodies } from "../src/game/physics/obstacles.js";
 import { dressingChunkBounds, enumerateObstacles } from "../src/game/physics/obstaclePoints.js";
 import { CITY_BIOME_ID } from "../../src/world/constants";
-import { GRASS_BIOME } from "../../src/world/domains/overworld/regions/city/biomes/grass/spec";
+import { biomeIdOf } from "../../src/world/content/config";
+import { DOMAIN_CONFIGS } from "../../src/world/domains";
 import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
 import { TICK_SECONDS } from "../src/game/tick.js";
 import { Walker } from "../src/game/physics/walker.js";
 import { GroundBody } from "../src/game/physics/groundBody.js";
 import { findBiomePatch, findSlopeSpot, type SlopeSample } from "../src/cli/terrainScan.js";
 import { chunkIndex, sampleChunkHeights, TERRAIN_SEGMENTS, vertexWorld } from "../src/game/physics/terrain.js";
+
+/** The tests run from the BUNDLE (build.mjs --tests), so the worker is the built one beside it. */
+const CHUNK_WORKER = new URL("../dist/game/physics/chunkGenerator.worker.js", import.meta.url);
+
+const GRASS_BIOME_ID = biomeIdOf(DOMAIN_CONFIGS.overworld, "grass");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CAPSULE = { radius: 0.5, height: 2 };
@@ -59,7 +66,7 @@ const place = (spot: { x: number; z: number; height: number }) => {
 describe("server physics", () => {
   before(async () => {
     pw = await PhysicsWorld.create();
-    const p = findBiomePatch(GRASS_BIOME.id);
+    const p = findBiomePatch(GRASS_BIOME_ID);
     assert.ok(p, "a grassland patch exists");
     patch = p;
   });
@@ -128,13 +135,13 @@ describe("server physics", () => {
   });
 
   it("the generation worker builds the in-place chunks bit for bit", async () => {
-    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: new URL("../src/game/physics/chunkGenerator.worker.ts", import.meta.url) });
+    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: CHUNK_WORKER });
     try {
       const gx = chunkIndex(patch.x);
       const gz = chunkIndex(patch.z);
       const city = findBiomePatch(CITY_BIOME_ID)!;
-      const dx = Math.floor(city.x / DRESSING_CHUNK_SIZE);
-      const dz = Math.floor(city.z / DRESSING_CHUNK_SIZE);
+      const dx = Math.floor(city.x / WORLD_CHUNK_SIZE);
+      const dz = Math.floor(city.z / WORLD_CHUNK_SIZE);
       const kt = worker.terrain.request(gx, gz);
       const kd = worker.dressing.request(dx, dz);
       worker.terrain.release(worker.terrain.request(gx + 7, gz)); // cancelled while pending
@@ -159,7 +166,7 @@ describe("server physics", () => {
   });
 
   it("height queries are answered off the tick, bit for bit, and a body stands at its hint until then", async () => {
-    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: new URL("../src/game/physics/chunkGenerator.worker.ts", import.meta.url) });
+    const worker = await PhysicsWorld.create(undefined, { chunkGeneratorWorker: CHUNK_WORKER });
     const until = async (done: () => boolean) => {
       const deadline = Date.now() + 60_000;
       while (!done() && Date.now() < deadline) {
@@ -290,8 +297,8 @@ describe("server physics", () => {
     // chunks around the nearest city patch rather than the world origin.
     const city = findBiomePatch(CITY_BIOME_ID);
     assert.ok(city, "a city patch exists");
-    const cx = Math.floor(city.x / DRESSING_CHUNK_SIZE);
-    const cz = Math.floor(city.z / DRESSING_CHUNK_SIZE);
+    const cx = Math.floor(city.x / WORLD_CHUNK_SIZE);
+    const cz = Math.floor(city.z / WORLD_CHUNK_SIZE);
     let gx = cx;
     let gz = cz;
     let pts = enumerateObstacles(gx, gz);
@@ -326,8 +333,8 @@ describe("server physics", () => {
         const w = freewayPointAt(run, s);
         const q = unwarp(w.x, w.z);
         if (computeVertexDataRaw(q.x, q.z).biomeId === CITY_BIOME_ID) continue;
-        const gx = Math.floor(q.x / DRESSING_CHUNK_SIZE);
-        const gz = Math.floor(q.z / DRESSING_CHUNK_SIZE);
+        const gx = Math.floor(q.x / WORLD_CHUNK_SIZE);
+        const gz = Math.floor(q.z / WORLD_CHUNK_SIZE);
         const bounds = dressingChunkBounds(gx, gz);
         if (runDressingEnumerator(FREEWAY_LAMPS_SPEC.enumerator, bounds, FREEWAY_LAMPS_SPEC.placement).length > 0) found = { gx, gz };
       }
@@ -347,28 +354,23 @@ describe("server physics", () => {
   });
 
   it("the server bundle imports no runtime three", async () => {
+    // THE build (build.mjs), so this cannot drift from what ships: three stays external, so a
+    // leak shows up as an import statement instead of silently bundling a renderer.
+    const { buildOptions } = await import(pathToFileURL(resolve(here, "../build.mjs")).href);
     const out = await build({
-      entryPoints: [resolve(here, "../src/index.ts"), resolve(here, "../src/cli/physicsDemo.ts")],
-      bundle: true,
-      platform: "node",
-      target: "node24",
-      format: "esm",
-      // Same externals as the build script. delaunator/noise-ts/seedrandom must stay
-      // BUNDLED: as externals, Node's CJS interop handed `import Noise from "noise-ts"`
-      // the exports object and the built server died at boot. three/react are external
-      // so a leak shows up as an import statement instead of bundling a renderer.
-      external: ["express", "ws", "three", "react"],
+      ...buildOptions(),
+      absWorkingDir: resolve(here, ".."),
       write: false,
-      outdir: resolve(here, "../dist-test-never-written"),
       logLevel: "silent",
     });
-    for (const file of out.outputFiles) {
+    // The .map files name every source path, three's included — the CODE is what must be clean.
+    const code = out.outputFiles.filter((f) => f.path.endsWith(".js"));
+    for (const file of code) {
       assert.ok(!/from\s*["']three["']|require\(\s*["']three["']\s*\)|["']three\//.test(file.text), `${file.path} imports three`);
-      assert.ok(!/from\s*["']react["']/.test(file.text), `${file.path} imports react`);
     }
-    assert.ok(out.outputFiles.some((f) => /vertexCompute|computeVertexData/.test(f.text)), "the height pipeline is bundled in");
-    assert.ok(out.outputFiles.some((f) => /RigidBodyDesc/.test(f.text)), "Rapier is bundled in, not external");
-    for (const file of out.outputFiles) assert.ok(!/from\s*["']@dimforge\/rapier3d-compat["']/.test(file.text), `${file.path} leaves Rapier external`);
+    assert.ok(code.some((f) => /computeVertexData/.test(f.text)), "the height pipeline is bundled in");
+    assert.ok(code.some((f) => /RigidBodyDesc/.test(f.text)), "Rapier is bundled in, not external");
+    for (const file of code) assert.ok(!/from\s*["']@dimforge\/rapier3d-compat["']/.test(file.text), `${file.path} leaves Rapier external`);
   });
 });
 
@@ -414,7 +416,7 @@ describe("movement modifiers", () => {
   const walk = async (speedFactor: number, slopeBonus: number) => {
     const world = await PhysicsWorld.create();
     try {
-      const spot = findBiomePatch(GRASS_BIOME.id)!;
+      const spot = findBiomePatch(GRASS_BIOME_ID)!;
       const height = computeVertexData(spot.x, spot.z).height;
       world.holdTerrainAround(spot.x, spot.z);
       world.workFor(Infinity);

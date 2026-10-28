@@ -6,7 +6,7 @@
  */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import { runRiverYield } from "../bridges/constants";
 import { edgeRoadPathsUnbuilt } from "../bridges/roadPaths";
 import { deckPathTurn } from "../bridges/rules";

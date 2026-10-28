@@ -3,7 +3,7 @@ import { markFullSpeedSlope } from "../../../../src/physics/characterMovement";
 import type { ObstaclePoint } from "./obstaclePoints.js";
 import type { PhysicsWorld } from "./physicsWorld.js";
 
-/** The dressing obstacles (obstaclePoints.ts) as the client's exact colliders (Dressing.tsx DressingPartColliders):
+/** The dressing obstacles (obstaclePoints.ts) as the client's exact colliders (Dressing.tsx ChunkColliders):
  *  the client's <RigidBody rotation={[0, yaw, pitch]}><CuboidCollider args={[w/2,h/2,d/2]} position={[x, y, z]}/> (+ a mesh).
  *  Euler XYZ = qY(yaw) · qZ(pitch), composed here by hand. */
 export const createObstacleBodies = (pw: PhysicsWorld, points: ObstaclePoint[]): RAPIER.RigidBody[] => {

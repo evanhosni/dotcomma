@@ -1,9 +1,9 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
+import { hideCursor, showCursor } from "../../../utils/cursor";
 import { navigateToAddress } from "../navigation";
-import { OVERWORLD_REGIONS } from "../overworld/regions";
+import { DOMAIN_CONFIGS } from "..";
 import { createCrtScreen, type CrtPage } from "./crtScreen";
 import { getDomainDioramaTexture } from "./domainDiorama";
 
@@ -15,13 +15,17 @@ const MIN_PAGE_COUNT = 7;
 const EXTRA_PAGES: CrtPage[] = [];
 
 /** Pages are ADDRESSES into the overworld: one per region type ("/<region>" = that type's instance
- *  nearest the origin — the same place for everyone), then EXTRA_PAGES, then locked "???" pages. */
-const ADDRESS_PAGES: CrtPage[] = [
-  ...OVERWORLD_REGIONS.map(({ name }) => ({ label: `/${name}`, href: `/${name}` })),
-  ...EXTRA_PAGES,
-];
-while (ADDRESS_PAGES.length < MIN_PAGE_COUNT) ADDRESS_PAGES.push({ label: "???" });
-const PAGE_COUNT = ADDRESS_PAGES.length;
+ *  nearest the origin — the same place for everyone), then EXTRA_PAGES, then locked "???" pages.
+ *  Built on first use, not at import: this module is part of the home domain's tree, which
+ *  world/domains assembles the configs FROM (world/content/). */
+let pages: CrtPage[] | null = null;
+const addressPages = (): CrtPage[] => {
+  if (!pages) {
+    pages = [...DOMAIN_CONFIGS.overworld.regions.map(({ name }) => ({ label: `/${name}`, href: `/${name}` })), ...EXTRA_PAGES];
+    while (pages.length < MIN_PAGE_COUNT) pages.push({ label: "???" });
+  }
+  return pages;
+};
 
 const SCREEN_W = 4.8; // 4:3
 const SCREEN_H = 3.6;
@@ -64,7 +68,7 @@ export const CrtMonitor = ({
   const frameRef = useRef(0);
 
   const { atlasTexture, screenMaterial, shellMaterial } = useMemo(
-    () => ({ ...createCrtScreen(ADDRESS_PAGES), shellMaterial: new THREE.MeshStandardMaterial({ color: "#262626", roughness: 0.85 }) }),
+    () => ({ ...createCrtScreen(addressPages()), shellMaterial: new THREE.MeshStandardMaterial({ color: "#262626", roughness: 0.85 }) }),
     [],
   );
 
@@ -106,7 +110,7 @@ export const CrtMonitor = ({
       if (dir === 0) return;
       const now = performance.now();
       if (now - lastScrollAtRef.current < SCROLL_COOLDOWN_MS) return;
-      const next = Math.min(PAGE_COUNT - 1, Math.max(0, targetPageRef.current + dir));
+      const next = Math.min(addressPages().length - 1, Math.max(0, targetPageRef.current + dir));
       if (next === targetPageRef.current) return;
       targetPageRef.current = next;
       lastScrollAtRef.current = now;
@@ -118,7 +122,7 @@ export const CrtMonitor = ({
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (e.button !== 0 || !hoverRef.current) return;
-      const href = ADDRESS_PAGES[targetPageRef.current].href;
+      const href = addressPages()[targetPageRef.current].href;
       // Never a real navigation: that would reopen the back button as an exit (navigation.ts).
       if (href) navigateToAddress(href);
     };
@@ -151,7 +155,7 @@ export const CrtMonitor = ({
     const screen = screenRef.current;
     if (!screen) return;
     let hover = false;
-    const unlocked = !!ADDRESS_PAGES[target].href && Math.abs(scroll - target) < 0.1;
+    const unlocked = !!addressPages()[target].href && Math.abs(scroll - target) < 0.1;
     if (unlocked && powerOnTriggeredRef.current && camera.position.distanceTo(screen.getWorldPosition(_worldPos)) < HOVER_CHECK_DISTANCE) {
       _raycaster.setFromCamera(_center, camera);
       _raycaster.far = INTERACT_DISTANCE;

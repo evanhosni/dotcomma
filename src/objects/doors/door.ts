@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { QUANTIZATION_GRID } from "../../world/constants";
-import { bakeVertexColor, mergeOrThrow } from "../geometry";
+import { bakeVertexColor, mergeOrThrow } from "../../utils/geometry";
 import type { DoorHandle, DoorLeafBox } from "./types";
 
 /**

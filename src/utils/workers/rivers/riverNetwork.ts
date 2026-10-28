@@ -6,8 +6,8 @@
  * position, so every chunk, worker and window agrees by construction. Three layers:
  *  1. getRiverSegments (this file) — the network: each edge rolls whether it carries a river (its
  *     region's riverProbability) and is cut into RIVER_SEGMENT_LENGTH pieces; riverPieceRules.ts
- *     decides which pieces are built (not deep in water, near a prohibitRivers biome or on high/steep
- *     ground, gaps filled and cut through as gorges). A river ends in a pond where a piece is not
+ *     decides which pieces are built (not deep in water, not on high/steep
+ *     ground; gaps filled and cut through as gorges). A river ends in a pond where a piece is not
  *     built, and in a pond or a fizzle at a natural end (a junction no other built river leaves).
  *     Widths are per junction, growing toward the ocean.
  *  2. The road layer (riverRoadLayer.ts) — where a freeway meets a river no deck may carry, the road
@@ -22,7 +22,7 @@
  */
 
 import Delaunator from "delaunator";
-import { seedRand, smoothstep } from "../../math/_math";
+import { seedRand, smoothstep } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { CellCache, dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
@@ -86,7 +86,7 @@ export const initRivers = (config: DomainConfig): void => {
   riverKeepByRegion = new Map(
     config.regions.map((r) => [
       r.id,
-      Math.min(1, RIVER_KEEP_PER_PROBABILITY * (r.riverProbability ?? config.river.defaultProbability)),
+      Math.min(1, RIVER_KEEP_PER_PROBABILITY * r.riverProbability),
     ]),
   );
   riversEnabled = [...riverKeepByRegion.values()].some((p) => p > 0);

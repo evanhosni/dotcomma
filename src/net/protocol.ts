@@ -126,7 +126,7 @@ export interface EntityInteractMessage {
   action: string;
 }
 
-/** A click on a tunnel's manhole cover or door (objects/dressing/underground): the server owns every
+/** A click on a tunnel's manhole cover or door (objects/underground): the server owns every
  *  one's open state, per domain, so its NPCs fall into the same open manholes the players see. */
 export interface TunnelToggleMessage {
   t: "tunnel:toggle";

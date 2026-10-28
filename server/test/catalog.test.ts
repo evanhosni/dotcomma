@@ -1,38 +1,29 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { specNeedsServer, type ActorSpec } from "../../src/objects/actors/spec";
-import { ACTOR_CATALOG, DOMAIN_REGIONS } from "../../src/world/domains/configs";
-import { featureSpawnId, featureSpawnsOf, featureTreeOf } from "../../src/world/features";
+import { ACTOR_CATALOG, DOMAIN_NODES } from "../../src/world/domains";
+import { childrenOfKind } from "../../src/world/content";
+import { actorPlacementsOf } from "../../src/world/content/config";
 
 /**
- * THE ACTOR CATALOG is derived from the domains' biome specs (src/world/domains/configs.ts): every
- * kind a biome places that the server simulates (a state machine, a moving body, a hull). These
+ * THE ACTOR CATALOG is derived from the <Actor> components the worlds' biomes mount
+ * (src/world/domains/): every kind a biome places that the server simulates (a state machine, a moving body, a hull). These
  * tests check the derivation headlessly and that every such kind is data the server can run.
  */
 
-const actorsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/objects/actors");
 
-const isActorSpec = (v: unknown): v is ActorSpec => typeof v === "object" && v !== null && typeof (v as ActorSpec).id === "string";
 
 describe("actor catalog", () => {
-  it("is every server-simulated kind the domains place, keyed by its id (and a feature's <Spawn> by its feature id too)", () => {
+  it("is every server-simulated kind the worlds mount, keyed by its id (and a feature-placed one by its own id too)", () => {
     const placed = new Set<ActorSpec>();
     const ids = new Map<string, ActorSpec>();
-    for (const regions of Object.values(DOMAIN_REGIONS)) {
-      for (const r of regions) {
-        for (const b of r.biomes) {
-          for (const m of b.actors ?? []) {
-            if (!specNeedsServer(m.actor)) continue;
-            placed.add(m.actor);
-            ids.set(m.actor.id, m.actor);
-          }
-          for (const { path, mount } of featureSpawnsOf(featureTreeOf(b.features))) {
+    for (const domain of Object.values(DOMAIN_NODES)) {
+      for (const region of childrenOfKind(domain, "region")) {
+        for (const biome of childrenOfKind(region, "biome")) {
+          for (const { id, mount } of actorPlacementsOf(biome)) {
             if (!specNeedsServer(mount.actor)) continue;
             placed.add(mount.actor);
-            ids.set(mount.actor.id, mount.actor).set(featureSpawnId(mount.actor.id, path), mount.actor);
+            ids.set(mount.actor.id, mount.actor).set(id, mount.actor);
           }
         }
       }
@@ -40,23 +31,6 @@ describe("actor catalog", () => {
     assert.ok(placed.size >= 2, `found ${placed.size} placed server-simulated kinds`);
     assert.deepEqual(new Set(Object.values(ACTOR_CATALOG)), placed);
     assert.deepEqual(new Map(Object.entries(ACTOR_CATALOG)), ids);
-  });
-
-  it("no two exported actor specs share an id (a spread variant must set its own)", async () => {
-    const byId = new Map<string, ActorSpec>();
-    for (const dir of readdirSync(actorsDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      const specPath = resolve(actorsDir, dir.name, "spec.ts");
-      if (!existsSync(specPath)) continue;
-      const mod = (await import(pathToFileURL(specPath).href)) as Record<string, unknown>;
-      for (const v of Object.values(mod)) {
-        if (!isActorSpec(v)) continue;
-        const other = byId.get(v.id);
-        assert.ok(!other || other === v, `two specs under src/objects/actors/*/spec.ts share the id "${v.id}"`);
-        byId.set(v.id, v);
-      }
-    }
-    assert.ok(byId.size >= 2, `found ${byId.size} actor specs under src/objects/actors/*/spec.ts`);
   });
 
   it("every catalog spec is Three-free data the server can run", () => {

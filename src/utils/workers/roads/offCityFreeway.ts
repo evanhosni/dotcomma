@@ -5,7 +5,7 @@
  * surface with the city's rim.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { runRiverYield } from "../bridges/constants";
 import { domainConfig } from "../computeConfig";
 import { riverMouthShare } from "../lakes";

@@ -11,7 +11,7 @@
  */
 
 import Delaunator from "delaunator";
-import { seedRand } from "../math/_math";
+import { seedRand } from "../math";
 import type { PointXZ } from "../math/types";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { CellCache } from "./cellCache";

@@ -21,7 +21,7 @@ import { chainMaterialPatch } from "./materialPatch";
  * batch or a ring of dressing chunks draws with one twin per material — at most
  * 2 × DURATION / TRACK_QUANTUM twins per material ever exist, and a burst still batches.
  *
- * Applied from the class bases only: prepareActorMaterial, prepareDressingMaterial, the
+ * Applied from the class bases only: prepareActorMaterial, prepareChunkMaterial, the
  * foliage shader. Visual only — colliders, raycasts and placement never see it.
  */
 export namespace _spawnFade {

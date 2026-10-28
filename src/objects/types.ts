@@ -17,7 +17,7 @@ import type { SpriteLodAttributes } from "./sprite-lod/types";
 export interface GameObjectAttributes {
   renderDistance?: number;
   /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (ModelActor.tsx), a
-   *  building to 120u (Building.tsx); dressing to DRESSING_COLLIDER_DISTANCE (bridges 140u); foliage has
+   *  building to 120u (Building.tsx); dressing to CHUNK_COLLIDER_DISTANCE (bridges 140u); foliage has
    *  no colliders. */
   colliderDistance?: number;
   /** Unset = the global grid from <PostProcessing quantization>. Dressing is never quantized (instances are rebased). */

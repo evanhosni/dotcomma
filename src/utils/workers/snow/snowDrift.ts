@@ -4,10 +4,11 @@
  * speed factor every capsule pays. Three-free (the server's NPCs wade too).
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { combineMovementModifiers, type MovementModifiers } from "../../../physics/movementModifiers";
 import type { RectXZ } from "../../math/types";
-import { caveBiomeIds, snowBiomeIds } from "../biomeFlags";
+import { caveBiomeIds } from "../underground/params";
+import { snowBiomeIds } from "./params";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { simplex2 } from "../noise";

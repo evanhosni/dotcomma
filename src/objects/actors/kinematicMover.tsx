@@ -10,8 +10,8 @@ import {
   type CharacterInput,
 } from "../../physics/characterMovement";
 import { createSurfaceSampler } from "../../physics/movementModifiers";
-import { fetchSurfaceModifiers } from "../dressing/dressingWorker";
-import type { ActorFrameContext } from "./Actor";
+import { fetchSurfaceModifiers } from "../dressing/worker";
+import type { ActorFrameContext } from ".";
 import { DEFAULT_COLLIDER, type ColliderSpec, type MovementKind } from "./spec";
 import type { MotionOutput } from "./state/motion";
 

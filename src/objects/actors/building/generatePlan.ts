@@ -1,5 +1,5 @@
 import seedrandom from "seedrandom";
-import { clamp } from "../../../utils/math/_math";
+import { clamp } from "../../../utils/math";
 import {
   edgeLength,
   edgeNormal,

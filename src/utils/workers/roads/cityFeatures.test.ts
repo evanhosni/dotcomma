@@ -1,8 +1,7 @@
 /** Smoke tests for the city feature enumerators — determinism, chunk-split dedupe,
  *  placement validity — on the REAL compute module with the overworld's shared config. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { GRASS_BIOME } from "../../../world/domains/overworld/regions/city/biomes/grass/spec";
 import {
   computeVertexData,
   computeVertexDataRaw,
@@ -16,13 +15,18 @@ import {
   initCompute,
   unwarp,
 } from "../vertexCompute";
-import { BRIDGE_PLACEMENT, bridgeColliderPoints, bridgePierColumns } from "../../../objects/dressing/bridges/bridgeSpec";
+import { BRIDGE_PLACEMENT, bridgeColliderPoints, bridgePierColumns } from "../../../objects/dressing/bridges/spec";
 import { DRESSING_COLLIDER_SPECS } from "../../../objects/dressing/catalog";
 import { DRESSING_ENUMERATORS, runDressingEnumerator } from "../../../objects/dressing/enumerators";
-import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/poleSpec";
+import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/spec";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_DECK_LIFT } from "../bridges/constants";
 import type { FreewayBridge } from "../bridges/types";
 import { riverQuay } from "../rivers/riverField";
+import { biomeIdOf } from "../../../world/content/config";
+
+const GRASS_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "grass") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 const CITY = config.cityConfig;

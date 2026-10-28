@@ -1,10 +1,10 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { prepareActorMaterial } from "../../objects/actors/Actor";
+import { prepareActorMaterial } from "../../objects/actors";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
-import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/snowTrail";
-import { wrapAngle } from "../../utils/math/_math";
+import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/trail";
+import { wrapAngle } from "../../utils/math";
 import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
 /**

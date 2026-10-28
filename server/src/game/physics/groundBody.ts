@@ -1,4 +1,4 @@
-import { DRESSING_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
+import { WORLD_CHUNK_SIZE } from "../../../../src/objects/dressing/types";
 import { resetCharacterMotion } from "../../../../src/physics/characterMovement";
 import { createTunnelState, createTunnelStep, PROBE_OVER_FEET, stepTunnelRules, type TunnelBody, type TunnelStep } from "../../../../src/physics/tunnelRules";
 import { chunkIndicesNear, type ChunkStore } from "./chunks.js";
@@ -76,8 +76,8 @@ export class GroundBody implements NpcBody {
     this.tunnelBody = { x, y: feet + shape.height / 2, z, height: shape.height, radius: shape.radius, jump: false };
     this.holds = [
       { store: pw.terrain, chunkSize: TERRAIN_CHUNK_SIZE, keys: new Set() },
-      { store: pw.dressing, chunkSize: DRESSING_CHUNK_SIZE, keys: new Set() },
-      { store: pw.tunnels, chunkSize: DRESSING_CHUNK_SIZE, keys: new Set() },
+      { store: pw.dressing, chunkSize: WORLD_CHUNK_SIZE, keys: new Set() },
+      { store: pw.tunnels, chunkSize: WORLD_CHUNK_SIZE, keys: new Set() },
     ];
     this.lastPublishedPose.x = x;
     this.lastPublishedPose.y = feet;

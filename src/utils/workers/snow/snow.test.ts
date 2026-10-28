@@ -1,11 +1,15 @@
 /** The movement modifiers (physics/movementModifiers.ts) as the snow fills them: depth → speed factor
  *  and slope bonus, no snow for a capsule off the drawn ground, and the sheet's own rule. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { MOUNTAIN_BIOME } from "../../../world/domains/overworld/regions/snow/biomes/mountain/spec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { combineMovementModifiers, createMovementModifiers, SLOPE_BONUS_LIMIT } from "../../../physics/movementModifiers";
 import { findBiomeCell, getBiomeCellSite, getSnowDrift, initCompute, surfaceModifiersAt } from "../vertexCompute";
 import { drawnGroundAt } from "../underground/drawnGround";
 import { DRESSING_ENUMERATORS } from "../../../objects/dressing/enumerators";
+import { biomeIdOf } from "../../../world/content/config";
+
+const MOUNTAIN_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "mountain") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 jest.setTimeout(300_000);
 beforeAll(() => initCompute(OVERWORLD_CONFIG));

@@ -6,9 +6,9 @@
  * per-vertex fields plus its rock share and daylight. Three-free.
  */
 
-import { DRESSING_CHUNK_SIZE } from "../../../objects/dressing/types";
+import { WORLD_CHUNK_SIZE } from "../../../objects/dressing/types";
 import { RIVER_BED_FAR } from "../../../world/shaders/constants";
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { terrainSnowDepth } from "../snow/snowDrift";
 import { computeVertexData, getBiomeSlots } from "../vertexCompute";
 import { PATCH_ROCK_FADE } from "./constants";
@@ -30,9 +30,9 @@ export const mouthsReaching = (mouths: readonly MouthPiece[], minX: number, minZ
 export const footprintCells = (m: MouthPiece): string[] => {
   const b = mouthFootprintBounds(m);
   const cells: string[] = [];
-  for (let cx = Math.floor(b.minX / DRESSING_CHUNK_SIZE); cx <= Math.floor(b.maxX / DRESSING_CHUNK_SIZE); cx++) {
-    for (let cz = Math.floor(b.minZ / DRESSING_CHUNK_SIZE); cz <= Math.floor(b.maxZ / DRESSING_CHUNK_SIZE); cz++) {
-      cells.push(`${cx * DRESSING_CHUNK_SIZE},${cz * DRESSING_CHUNK_SIZE}`);
+  for (let cx = Math.floor(b.minX / WORLD_CHUNK_SIZE); cx <= Math.floor(b.maxX / WORLD_CHUNK_SIZE); cx++) {
+    for (let cz = Math.floor(b.minZ / WORLD_CHUNK_SIZE); cz <= Math.floor(b.maxZ / WORLD_CHUNK_SIZE); cz++) {
+      cells.push(`${cx * WORLD_CHUNK_SIZE},${cz * WORLD_CHUNK_SIZE}`);
     }
   }
   return cells;

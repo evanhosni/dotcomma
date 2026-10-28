@@ -1,15 +1,19 @@
 /** Rocks on the REAL pipeline with the overworld's config: chunk ownership, the mouths' rocks, and the
  *  lumps the client draws and the server collides. */
-import { ROCK_SHAPES, rockLumpVertices } from "../../../objects/dressing/rocks/rockShapes";
-import { ROCK_PLACEMENT, ROCKS_SPEC } from "../../../objects/dressing/rocks/rockSpec";
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { MOUNTAIN_BIOME } from "../../../world/domains/overworld/regions/snow/biomes/mountain/spec";
+import { ROCK_SHAPES, rockLumpVertices } from "../../../objects/dressing/rocks/shapes";
+import { ROCK_PLACEMENT, ROCKS_SPEC } from "../../../objects/dressing/rocks/spec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { mouthSpots } from "../underground/caves";
 import { systemAt } from "../underground/systems";
 import type { TunnelSystem } from "../underground/types";
 import { initCompute } from "../vertexCompute";
 import { biomeSiteAt } from "../voronoi";
 import { getRocks } from "./rockPlacement";
+import { biomeIdOf } from "../../../world/content/config";
+
+const MOUNTAIN_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "mountain") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 jest.setTimeout(300000);
 
