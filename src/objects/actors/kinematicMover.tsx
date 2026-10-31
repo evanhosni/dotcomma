@@ -9,7 +9,9 @@ import {
   type Character,
   type CharacterInput,
 } from "../../physics/characterMovement";
-import type { ActorFrameContext } from "./Actor";
+import { createSurfaceSampler } from "../../physics/movementModifiers";
+import { fetchSurfaceModifiers } from "../dressing/worker";
+import type { ActorFrameContext } from ".";
 import { DEFAULT_COLLIDER, type ColliderSpec, type MovementKind } from "./spec";
 import type { MotionOutput } from "./state/motion";
 
@@ -23,7 +25,9 @@ import type { MotionOutput } from "./state/motion";
  */
 
 const _next = { x: 0, y: 0, z: 0 };
-const _input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null };
+const _input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null, surface: null };
+/** Frames between a local ground actor's surface samples on the dressing worker (the Player's cadence). */
+const SURFACE_SAMPLE_INTERVAL = 6;
 
 export interface KinematicMoverOptions {
   enabled: boolean;
@@ -70,6 +74,8 @@ export const useKinematicMover = ({
   }, [world, rapier, enabled, halfHeight, collider.radius, spawnX, spawnY, spawnZ]);
   const characterRef = useRef<Character | null>(null);
   const result = useRef(createStepResult()).current;
+  // Its ground's modifiers (snow), sampled off-thread like the Player's and every server NPC's.
+  const surface = useRef(createSurfaceSampler(SURFACE_SAMPLE_INTERVAL, fetchSurfaceModifiers)).current;
 
   useEffect(() => {
     if (!enabled || movement !== "ground") return;
@@ -111,6 +117,8 @@ export const useKinematicMover = ({
       _input.dirZ = motion.vz;
       _input.speed = Math.hypot(motion.vx, motion.vz);
       _input.vyOverride = motion.vy;
+      surface.sample(pos.x, pos.z, pos.y - halfHeight);
+      _input.surface = surface.modifiers;
       stepCharacter(world, character, rb, shape, pos.x, pos.y, pos.z, _input, dt, result);
     }
     // The body moves at the physics step, so `pos` is still current.

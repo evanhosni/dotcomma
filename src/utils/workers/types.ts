@@ -15,18 +15,22 @@ export interface TerrainNoiseParams {
 }
 
 /** A biome's declarative height (its <Terrain noise>), before its presence: the noise, the dome,
- *  then the offset (noise.ts biomeNoiseHeight). */
+ *  the detail layers, then the offset (noise.ts biomeNoiseHeight). */
 export interface BiomeNoiseConfig {
   params: TerrainNoiseParams;
   absNeg?: boolean;
   scale?: number;
   offset?: number;
   dome?: BiomeDomeConfig;
+  /** Layers added LINEARLY to the shaped height at every depth — never squared by the exponentiation,
+   *  never faded by a dome's noise floor — so a domed biome's foot carries small bumps too. */
+  detail?: TerrainNoiseParams[];
 }
 
 /** A MASSIF under a biome's noise: the ground rises with the square of the point's depth inside the
  *  biome, by `height` at `reach`. Depth is measured to the nearest FOREIGN wall, so a group of joined
- *  cells is one mass whose summit is where the group is deepest (zoneBlend.ts domeDepthAt). */
+ *  cells is one mass whose summit is where the group is deepest (zoneBlend.ts domeDepthAt). A domed
+ *  biome is ROCK to every system that asks (biomeFlags.ts isRockBiome). */
 export interface BiomeDomeConfig {
   height: number;
   /** Depth (warped units) at which the dome reaches `height`; deeper ground stays there. */
@@ -43,16 +47,84 @@ export interface BlendWidths {
   heightBlendWidth?: number;
 }
 
+/** Snow on a biome (`snow: true | {…}` on its spec): the snow line and the altitude band in GROUND HEIGHT
+ *  (real units) and the pile depth's scale. Defaults: snow/snowParams.ts. */
+export interface SnowParams {
+  /** Below `lineLow` nothing lies; whole from `lineHigh` up. */
+  lineLow: number;
+  lineHigh: number;
+  /** The altitude term (deeper, flatter-shouldered snow) is 0 at `altitudeLow`, 1 from `altitudeHigh`. */
+  altitudeLow: number;
+  altitudeHigh: number;
+  /** Multiplies every pile depth (the 1.85u cap stays). */
+  depthScale: number;
+}
+
+/** Caves under a biome (a <Caves> in its spec's `features`): the chance a cell holds a system, and the
+ *  rooms its <CaveSideRoom> child adds (null: none). */
+export interface CaveParams {
+  chance: number;
+  sideRooms: CaveSideRoomParams | null;
+}
+
+/** <CaveSideRoom>: the chance of a room on the trunk (clear of the mouths) and at each branch's tip. */
+export interface CaveSideRoomParams {
+  trunkChance: number;
+  tipChance: number;
+}
+
+/** Sewers under a street-bearing biome, registered by its <Sewers> mount: the chance a cell holds a
+ *  system, and the side rooms its <SewerSideRoom> child adds (null: none). */
+export interface SewerParams {
+  chance: number;
+  sideRooms: SewerSideRoomParams | null;
+}
+
+/** <SewerSideRoom>: the chance a junction gets a door into a side room (kept only where the room fits). */
+export interface SewerSideRoomParams {
+  chance: number;
+}
+
+/** Rocks on a biome (`rocks: true | {…}`): a density field kept by slope, and the rock's texture. */
+export interface RockParams {
+  /** Rocks per km². */
+  density: number;
+  footprint: number;
+  sizeMin: number;
+  sizeMax: number;
+  /** The share of flat points kept; every point is kept between `startDeg` and `fullDeg` of slope. */
+  flatKeep: number;
+  startDeg: number;
+  fullDeg: number;
+  /** Filename under public/textures/. */
+  texture: string;
+}
+
+/** Bumpy river banks on a biome (`riverBankRelief: true | {…}`): a bank held up over low ground (a levee)
+ *  takes the biome's OWN noise as relief (rivers/riverChannel.ts riverBankBump). Unset = a smooth bank. */
+export interface RiverBankReliefParams {
+  /** The share of the biome's noise the bank takes. */
+  share: number;
+  /** The same noise read this many times finer… */
+  fineScale: number;
+  /** …at this share of it. */
+  fineShare: number;
+}
+
 export interface SerializedBiome extends BlendWidths {
   id: number;
   name: string;
   joinable: boolean;
   /** A water-filled biome: the terrain bowls `depth` below the base; the Water system fills it. */
   water?: { depth: number };
-  /** No inter-city freeway along this biome's walls (see getNetwork's walkable). */
+  /** No inter-city freeway along this biome's walls (see getNetwork's walkable). DERIVED from
+   *  `water`: impassable ground is the only reason, and a second flag could only disagree. */
   prohibitRoads?: boolean;
-  /** No river reaches this biome: a river approaching it ends in a pond first (getRiverSegments). */
-  prohibitRivers?: boolean;
+  /** EVERY feature mounted in the biome, keyed by its declaration's kind, holding that
+   *  declaration's resolved params. A key is present because a component was mounted
+   *  (world/content/) — nothing here is a flag anyone can set beside the mounting, and nothing
+   *  downstream keys on a biome's id or name. Read through biomeFlags.ts. */
+  features: Readonly<Record<string, unknown>>;
 }
 
 export interface SerializedRegion extends BlendWidths {
@@ -63,15 +135,14 @@ export interface SerializedRegion extends BlendWidths {
   /** This region's base terrain; unset = the domain's baseNoiseParams. */
   baseNoise?: TerrainNoiseParams;
   /** River density: scales the chance a river-grid edge under this region carries a river
-   *  (RIVER_KEEP_PER_PROBABILITY); unset = river.defaultProbability, 0 = none. */
-  riverProbability?: number;
+   *  (RIVER_KEEP_PER_PROBABILITY). 0 = the region mounted no <Rivers/> and has none. */
+  riverProbability: number;
 }
 
 export interface RiverParams {
   halfWidth: number;
   depth: number;
   bank: number;
-  defaultProbability: number;
 }
 
 export interface DomainConfig {
@@ -116,7 +187,7 @@ export interface FlattenDescriptor {
 
 export interface VertexResult {
   height: number;
-  /** The height before step 7 had the road not given way to a river: a deck landing's approach lays
+  /** The height before step 9 had the road not given way to a river: a deck landing's approach lays
    *  the road there (bridges/deckGround.ts), and its landed ends sit on it (bridges/landings.ts). */
   approachHeight: number;
   /** The biome of the vertex's own voronoi cell (spawn/foliage filters key on it). */
@@ -140,8 +211,17 @@ export interface VertexResult {
   distanceToFreewayCenter: number;
   /** Lane-paint dash phase along that freeway; 0 outside. */
   freewayAlong: number;
-  /** Water SURFACE height at this point (lake level or river surface), or NaN where there is no water in reach. */
+  /** Water SURFACE height at this point (lake level, river surface, a spring cave's water), or NaN where
+   *  there is no water in reach. */
   waterHeight: number;
+  /** How deep the water stands over the ground (0 where dry). NEGATIVE within the cave-water margin of
+   *  a spring cave's water: a DIVE toward that water's level, clamped under the ground — the water sheet
+   *  dives there, and every "water over the ground" test reads it as dry. */
+  waterDepth: number;
+  /** The water's flow (downhill along a river, scaled by its grade; 0 on a lake and over a mouth; a
+   *  spring cave's own under the mountain), carried to the water shader. */
+  waterFlowX: number;
+  waterFlowZ: number;
   /** Per BIOME SLOT (getBiomeSlots order): signed distance to that biome's material,
    *  scaled by the wall's half feather — the shader's weight is smoothstep(-1, 1, sdf).
    *  ±BIOME_SDF_FAR when no wall is in reach. Shared scratch buffer: copy, don't keep. */

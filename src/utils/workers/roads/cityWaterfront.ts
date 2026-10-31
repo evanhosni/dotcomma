@@ -3,12 +3,12 @@
  * freeway is carried along the water's straight edge instead, one road with the belt.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { domainConfig } from "../computeConfig";
 import { riverListKey, riverListNearSegment, riverStraight, riverStraightNear } from "../rivers/riverField";
 import type { RiverQuaySample, Wall } from "../types";
 import { isCanonicalWall } from "../voronoi";
-import { smoothMin } from "./freewayNetwork";
+import { smoothMin } from "../../math";
 
 /** A belt wall counts as DROWNED (the river's footprint reaches over it) across this window centered
  *  where its river-side curb is just dry (bank + freewayWidth), fading in over it (real units). Over 30u

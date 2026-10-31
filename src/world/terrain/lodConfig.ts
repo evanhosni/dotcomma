@@ -23,6 +23,11 @@ export const LOD3_MAX_DISTANCE = CHUNK_SIZE * 8;
 // render distance moves it with no retuning.
 export const LOD4_MAX_DISTANCE = CAMERA_FAR;
 
+/** A cave entrance stands on LOD1's drawn ground: the LOD1-size chunks within LOD1_SITE_REACH of a loaded
+ *  mouth draw at LOD1 out to this far (past the LOD1 ring), so an entrance never stands on coarser ground. */
+export const LOD1_SITE_DISTANCE = CHUNK_SIZE * 2;
+export const LOD1_SITE_REACH = 24;
+
 export const MAX_RENDER_DISTANCE = LOD4_MAX_DISTANCE;
 
 /** Whether a chunk's farthest corner reaches the far fade (world/shaders/farFade.ts), seen from (px, pz) with
@@ -59,11 +64,12 @@ export interface LODLevel {
    *  true water as isolated specks while building the per-cell river lists cost ~90% of their build
    *  time. LOD3 (210u) keeps it: it still draws a wide river near the ocean. */
   carvesRivers: boolean;
-  /** Whether a collider LOD cuts the ground under bridge decks (computeVertexData step 7: the cut, the
-   *  landing approaches, the mouths); the visual-only LODs never do (their path has no decks). LOD2
-   *  KEEPS it: off, its cold build was 28–45% faster at bridge areas (enumerating a cell's decks), but
-   *  the bowed approach road rose up to 7.5u through a deck's landed end (2 of 15 decks, ≤ 0.8u on the
-   *  rest), a mound of several pixels at 420–600u that popped flat when LOD1 took over. */
+  /** Whether a collider LOD cuts the ground under bridge decks (computeVertexData step 11: the cut, the
+   *  landing approaches, the mouths) and bulges the ground at cave mouths; the visual-only LODs never do
+   *  (their path has no decks). LOD2 KEEPS it: off, its cold build was 28–45% faster at bridge areas
+   *  (enumerating a cell's decks), but the bowed approach road rose up to 7.5u through a deck's landed
+   *  end (2 of 15 decks, ≤ 0.8u on the rest), a mound of several pixels at 420–600u that popped flat
+   *  when LOD1 took over. */
   cutsDecks: boolean;
   /** Clamp the biome blend fields to where the shader saturates (sdf ±1, presence 0..1) before
    *  upload — exact at every vertex, and it makes them interpolate as a plain cross-fade. Unclamped,

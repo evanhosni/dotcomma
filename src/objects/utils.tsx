@@ -1,23 +1,3 @@
-import React, { createContext, useContext, useMemo } from "react";
-
-/** Group-defaults factory behind <Dressing>/<Foliage>: props on the group are
- *  defaults for the children, a child's own props win. (Actors have no group: a
- *  biome places them by data, its spec's `actors` list.) */
-export const createDefaultsGroup = <T extends object>(className: string) => {
-  const Context = createContext<T>({} as T);
-
-  const Group = ({ children, ...defaults }: React.PropsWithChildren<T>) => {
-    const dataKey = JSON.stringify(defaults);
-    const value = useMemo(() => defaults as T, [dataKey]);
-    warnUnsupportedSync(className, (defaults as { serverSynced?: boolean }).serverSynced);
-    return <Context.Provider value={value}>{children}</Context.Provider>;
-  };
-
-  const useDefaults = (): T => useContext(Context);
-
-  return { Group, useDefaults };
-};
-
 /** The entries of `props` that are set — so an unset prop never shadows a default it is spread over. */
 export const definedOnly = <T extends object>(props: T): Partial<T> =>
   Object.fromEntries(Object.entries(props).filter(([, v]) => v !== undefined)) as Partial<T>;

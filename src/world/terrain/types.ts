@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { PointXZ } from "../../utils/math/types";
 import type { LODLevel } from "./lodConfig";
 import type { SwapChunk } from "./lodSwaps";
-import type { ChunkBuildResult } from "./terrainWorker";
+import type { ChunkBuildResult } from "./worker";
 
 /** TerrainRenderer's module state: every chunk it holds, under one scene group. */
 export interface TerrainState {

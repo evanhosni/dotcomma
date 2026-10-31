@@ -1,7 +1,7 @@
 /** The rules a deck keeps: it crosses a river bank to bank at a steep enough angle, follows no shore
  *  for long, turns no sharper than BRIDGE_MAX_TURN. */
 
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import { warp } from "../noise";

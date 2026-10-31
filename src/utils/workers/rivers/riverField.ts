@@ -10,14 +10,15 @@ import { lakeSurface, riverMouthShare, riverSurfaceBesideCrispShore } from "../l
 import { simplex2, unwarp } from "../noise";
 import type { RiverQuaySample } from "../types";
 import { blendedTerrainAt } from "../vertexCompute";
-import { carveRiverChannel } from "./riverChannel";
+import { blendedRiverBankBump, carveRiverChannel } from "./riverChannel";
 import { RIVER_BED_FULL_INSET } from "../../../world/shaders/constants";
 import { getBiomeContext } from "../voronoi";
 import { accumulateWallFields, combineZoneWeights, zoneFinal, zoneWeights } from "../zoneBlend";
-import { RIVER_FILLET, RIVER_MEANDER_AMP, RIVER_MEANDER_SCALE, riverMaxReach } from "./constants";
+import { RIVER_FILLET, RIVER_MEANDER_AMP, RIVER_MEANDER_SCALE, riverKeepOff, riverMaxReach } from "./constants";
 import { RIVER_BED_CAP_FADE, RIVER_BED_LIMIT_PAST, bedLimitOfPiece, clearRiverBedLimits } from "./riverBedLimit";
 import { riverPiecesIn, riversEnabled } from "./riverNetwork";
-import { clearRiverSurfaces, riverPieceEndLevel, riverPieceEndShore, riverPieceEndSurface, setShoreAt } from "./riverSurface";
+import { clearRiverSurfaces, riverEdgePools, riverPieceEndLevel, riverPieceEndShore, riverPieceEndSurface, setShoreAt } from "./riverSurface";
+import { RIVER_POOL_FACTOR } from "./constants";
 import type { RiverPiece } from "./types";
 
 // ── Per-cell piece lists ───────────────────────────────────────────────
@@ -89,8 +90,10 @@ const buildRiverCellList = (cx: number, cz: number): RiverCellList => {
     list.sz[j] = p.sz;
     list.ex[j] = p.ex;
     list.ez[j] = p.ez;
-    list.w0[j] = p.w0;
-    list.w1[j] = p.w1;
+    // A peak pool's piece ends are wider (its neighbours' far ends keep theirs: a linear taper).
+    const pools = riverEdgePools(p.edge);
+    list.w0[j] = p.w0 * (pools.has(p.index) ? RIVER_POOL_FACTOR : 1);
+    list.w1[j] = p.w1 * (pools.has(p.index + 1) ? RIVER_POOL_FACTOR : 1);
     list.h0[j] = riverPieceEndSurface(p, 0);
     list.h1[j] = riverPieceEndSurface(p, 1);
     list.d0[j] = riverPieceEndShore(p, 0);
@@ -130,7 +133,7 @@ const riverCellList = (px: number, pz: number): RiverCellList => {
  *  Infinity where no river is in reach — capRiverBed), `shore` the centerline's signed distance to the
  *  nearest water wall (riverPieceEndShore; Infinity where no river is in reach — riverLakeMerge) and
  *  `level` the lake level there (riverPieceEndLevel). */
-export const riverSample = { distance: Infinity, factor: 1, surface: NaN, bedLimit: Infinity, shore: Infinity, level: NaN };
+export const riverSample = { distance: Infinity, factor: 1, surface: NaN, bedLimit: Infinity, shore: Infinity, level: NaN, flowX: 0, flowZ: 0 };
 /** What the last riverQuayAt found (see RiverQuaySample). */
 export const riverQuay: RiverQuaySample = { distance: Infinity, factor: 1, dirX: 1, dirZ: 0 };
 
@@ -140,6 +143,9 @@ let edgeDist = new Float64Array(16);
 let edgeWeight = new Float64Array(16);
 /** The smooth minimum edgeSmoothMin computed. */
 let smoothMinDist = Infinity;
+/** What the quay scan found: the real distance past the nearest piece FOOTPRINT, the min over pieces
+ *  of real − riverKeepOff()·factor (scanPieces forQuay). */
+let quayGap = Infinity;
 /** Per RUN (RiverCellList): its nearest distance (factor-1), its smooth-minimum weight, and what its
  *  PLAINLY nearest piece reads — list index, t, width factor, surface, the foot of the perpendicular,
  *  and the sine / past-end cosine of the vertex's angle off it (bedLimitOfPiece). */
@@ -156,6 +162,21 @@ let runSideCos = new Float64Array(16);
 let runOutCos = new Float64Array(16);
 let runFootX = new Float64Array(16);
 let runFootZ = new Float64Array(16);
+/** …and its FLOW: every piece's direction turned downhill (from its higher surface to its lower),
+ *  scaled by how steep it runs (riverFlowSpeed), BLENDED over the run's pieces by nearness (runFlowW):
+ *  the direction read off the nearest piece alone turned by up to a joint's angle within one terrain
+ *  quad, and the water shader's advection sheared its noise into lines there (screenshot). */
+let runFlowX = new Float64Array(16);
+let runFlowZ = new Float64Array(16);
+let runFlowW = new Float64Array(16);
+/** A piece's weight in the run's flow is 1 / (distance² + this): pieces within ~20u share the direction. */
+const FLOW_BLEND_SQ = 400;
+
+/** The flow's strength (0–1) from a piece's grade: a trickle on the flat, growing with the root of the
+ *  grade (steep runs fast, a 5% grade is already half way) and whole from RIVER_FLOW_FULL_GRADE. */
+const RIVER_FLOW_MIN = 0.3;
+const RIVER_FLOW_FULL_GRADE = 0.2;
+export const riverFlowSpeed = (grade: number): number => RIVER_FLOW_MIN + (1 - RIVER_FLOW_MIN) * Math.sqrt(Math.min(1, grade / RIVER_FLOW_FULL_GRADE));
 
 /** Compact smooth minimum over the per-edge distances in `d`: each edge within RIVER_FILLET of the
  *  nearest weighs h² (h = 1 − gap/FILLET), the distance drops by up to FILLET/4 where two meet —
@@ -208,6 +229,9 @@ const ensureFieldScratch = (groups: number, runs: number): void => {
     runOutCos = new Float64Array(size);
     runFootX = new Float64Array(size);
     runFootZ = new Float64Array(size);
+    runFlowX = new Float64Array(size);
+    runFlowZ = new Float64Array(size);
+    runFlowW = new Float64Array(size);
   }
 };
 
@@ -219,6 +243,8 @@ export const noRiverSample = (): void => {
   riverSample.bedLimit = Infinity;
   riverSample.shore = Infinity;
   riverSample.level = NaN;
+  riverSample.flowX = 0;
+  riverSample.flowZ = 0;
 };
 
 /** What the last fieldFromList found (riverSample's fields). */
@@ -227,6 +253,8 @@ let fieldFactor = 1;
 let fieldSurface = NaN;
 let fieldShore = Infinity;
 let fieldLevel = NaN;
+let fieldFlowX = 0;
+let fieldFlowZ = 0;
 
 /** One pass over a piece list at a warped point (qx, qz): per edge its nearest distance in factor-1
  *  units (edgeDist, the field's distance), per run its own, and what the run's PLAINLY nearest piece
@@ -240,6 +268,13 @@ const scanPieces = (list: RiverCellList, qx: number, qz: number, forQuay: boolea
   edgeDist.fill(Infinity, 0, list.groups);
   runDist.fill(Infinity, 0, list.runs);
   runPlain.fill(Infinity, 0, list.runs);
+  quayGap = Infinity;
+  const keepOff = riverKeepOff();
+  if (!forQuay) {
+    runFlowX.fill(0, 0, list.runs);
+    runFlowZ.fill(0, 0, list.runs);
+    runFlowW.fill(0, 0, list.runs);
+  }
   for (let j = 0; j < list.n; j++) {
     const g = list.group[j];
     const r = list.run[j];
@@ -258,6 +293,17 @@ const scanPieces = (list: RiverCellList, qx: number, qz: number, forQuay: boolea
     const d = real / f;
     if (d < edgeDist[g]) edgeDist[g] = d;
     if (d < runDist[r]) runDist[r] = d;
+    if (forQuay) {
+      if (real - keepOff * f < quayGap) quayGap = real - keepOff * f;
+    } else {
+      const l = Math.sqrt(l2);
+      const drop = list.h0[j] - list.h1[j];
+      const flow = (drop < 0 ? -1 : 1) * riverFlowSpeed(Math.abs(drop) / l);
+      const wj = 1 / (real * real + FLOW_BLEND_SQ);
+      runFlowX[r] += (wj * dx * flow) / l;
+      runFlowZ[r] += (wj * dz * flow) / l;
+      runFlowW[r] += wj;
+    }
     if (real < runPlain[r]) {
       runPlain[r] = real;
       runFactor[r] = f;
@@ -286,6 +332,8 @@ const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
   fieldSurface = NaN;
   fieldShore = Infinity;
   fieldLevel = NaN;
+  fieldFlowX = 0;
+  fieldFlowZ = 0;
   if (list.n === 0) return;
   const qx = px + RIVER_MEANDER_AMP * simplex2(px / RIVER_MEANDER_SCALE, pz / RIVER_MEANDER_SCALE);
   const qz = pz + RIVER_MEANDER_AMP * simplex2(pz / RIVER_MEANDER_SCALE + 7.31, px / RIVER_MEANDER_SCALE - 3.17);
@@ -296,18 +344,24 @@ const fieldFromList = (list: RiverCellList, px: number, pz: number): void => {
   let ws = 0;
   let wd = 0;
   let wl = 0;
+  let wfx = 0;
+  let wfz = 0;
   for (let r = 0; r < list.runs; r++) {
     if (runWeight[r] === 0) continue;
     wf += runWeight[r] * runFactor[r];
     ws += runWeight[r] * runSurface[r];
     wd += runWeight[r] * runShore[r];
     wl += runWeight[r] * runLevel[r];
+    wfx += (runWeight[r] * runFlowX[r]) / runFlowW[r];
+    wfz += (runWeight[r] * runFlowZ[r]) / runFlowW[r];
   }
   fieldDist = smoothMinDist;
   fieldFactor = wf / sum;
   fieldSurface = ws / sum;
   fieldShore = wd / sum;
   fieldLevel = wl / sum;
+  fieldFlowX = wfx / sum;
+  fieldFlowZ = wfz / sum;
 };
 
 /** The bank at warped point (px, pz) as step 4 carves it: the terrain there (its own wall pass and
@@ -327,10 +381,11 @@ export const bankAt = (px: number, pz: number): void => {
   const ctx = getBiomeContext(warped);
   accumulateWallFields(px, pz, ctx.zoneWalls, ctx.zone);
   combineZoneWeights(zoneWeights, zoneFinal);
-  const lake = lakeSurface(warped, ctx, ctx.zone);
   const world = unwarp(px, pz);
+  const bump = blendedRiverBankBump(world.x, world.z);
+  const lake = lakeSurface(warped, ctx, ctx.zone);
   const ground = blendedTerrainAt(world.x, world.z, ctx.zone, ctx);
-  const carved = carveRiverChannel(ground, fieldDist, fieldSurface, fieldFactor);
+  const carved = carveRiverChannel(ground, fieldDist, fieldSurface, fieldFactor, bump);
   const h = carved + (Math.min(carved, ground) - carved) * riverMouthShare(ground, lake);
   if (!(h < fieldSurface && fieldDist < rv.halfWidth + rv.bank * 0.5)) bankSample.height = h;
 };
@@ -357,6 +412,8 @@ export const riverFieldAt = (px: number, pz: number, besideCity = false, bedLimi
   riverSample.surface = fieldSurface;
   riverSample.shore = fieldShore;
   riverSample.level = fieldLevel;
+  riverSample.flowX = fieldFlowX;
+  riverSample.flowZ = fieldFlowZ;
   if (!bedLimit) return;
   // The bed limit only matters on the bank (capRiverBed leaves anything RIVER_BED_CAP_FADE inside a limit
   // alone, and no limit lies inside the channel's half-width), and beside a city a little past it. The
@@ -399,7 +456,7 @@ export const riverDistanceAt = (px: number, pz: number): number => {
   if (d !== undefined) return d;
   const s = riverSample;
   const saved = lastRiverCellList;
-  const distance = s.distance, factor = s.factor, surface = s.surface, bedLimit = s.bedLimit, shore = s.shore, level = s.level;
+  const distance = s.distance, factor = s.factor, surface = s.surface, bedLimit = s.bedLimit, shore = s.shore, level = s.level, flowX = s.flowX, flowZ = s.flowZ;
   riverFieldAt(px, pz, false, false);
   d = s.distance;
   s.distance = distance;
@@ -408,6 +465,8 @@ export const riverDistanceAt = (px: number, pz: number): number => {
   s.bedLimit = bedLimit;
   s.shore = shore;
   s.level = level;
+  s.flowX = flowX;
+  s.flowZ = flowZ;
   lastRiverCellList = saved;
   riverDistanceCache.set(px, pz, d);
   return d;
@@ -453,7 +512,14 @@ export const riverQuayAt = (px: number, pz: number): void => {
     }
   }
   riverQuay.factor = qf / sum;
-  riverQuay.distance = smoothMinDist * riverQuay.factor;
+  // Measured from the footprint, so every reader's `distance − keepOff·factor` is the real gap to it.
+  // smoothMinDist·factor scaled the factor-1 winner by the NEAREST piece's width: beside a river's
+  // narrow tip a wide piece far downstream won, 84u reported at 531u (-14551, -534), and a phantom
+  // quay emptied a few hundred units of city blocks. Where the winner is the nearest piece the two
+  // are equal; the junction fillet's drop is kept.
+  let dmin = Infinity;
+  for (let g = 0; g < list.groups; g++) if (edgeDist[g] < dmin) dmin = edgeDist[g];
+  riverQuay.distance = Math.max(0, quayGap + (riverKeepOff() - (dmin - smoothMinDist)) * riverQuay.factor);
   const ul = Math.hypot(ux, uz);
   if (ul > 1e-9) {
     riverQuay.dirX = ux / ul;

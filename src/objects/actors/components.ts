@@ -1,5 +1,5 @@
 import type React from "react";
-import { Building } from "./building/Building";
+import { Building } from "./building";
 import { ModelActor } from "./ModelActor";
 import type { ActorWarmupHooks } from "./spawning/types";
 import type { ActorComponentName } from "./spec";

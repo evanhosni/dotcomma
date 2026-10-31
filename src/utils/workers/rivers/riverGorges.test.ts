@@ -2,12 +2,14 @@
  *  junction is built as a GORGE when its ridge is low (RIVER_GORGE_MAX_RISE), with a surface that never
  *  runs uphill, and left alone when it is not. Plus the city|lake mouth whose river stood 14u under the
  *  lake beside it. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, initCompute, unwarp, warp } from "../vertexCompute";
 import { riverPieceEndSurface } from "./riverSurface";
 import { riverEdgePiece, riverPiecesNear } from "./riverNetwork";
 import { riverEdgeBlocked } from "./riverPieceRules";
 import type { RiverEdge, RiverGorge } from "./types";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 
@@ -77,7 +79,15 @@ describe("river gorges", () => {
     expect(near(-14439, 18755)).toBeGreaterThan(0);
     // Image 88: a desert river cut in two by a 23u rise over dunes the relief rule read as rock.
     expect(near(-5800, 3790)).toBeGreaterThan(0);
-    expect(near(-38021, -11251)).toBe(0);
+    // Image 87's high snow ridge is the mountain's ROCK: since Oct 2026 the river climbs it (waterfalls,
+    // peak pools) instead of stopping in two ponds — its rock pieces are built, not gorged.
+    const w = warp(-38021, -11251);
+    const rockBuilt = edgesNear(w.x - 300, w.z - 300, w.x + 300, w.z + 300).reduce((n, e) => {
+      const blocked = riverEdgeBlocked(e);
+      for (let i = 0; i < e.count; i++) if (e.rock![i] === 1 && blocked[i] === 0) n++;
+      return n;
+    }, 0);
+    expect(rockBuilt).toBeGreaterThan(0);
   });
 
   it("are decided the same whatever order the river windows are built in", () => {

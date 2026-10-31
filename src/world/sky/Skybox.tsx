@@ -1,19 +1,19 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { getNightBlend, NIGHT_SKY_COLORS } from "../../lighting/dayNight";
 import { ditherGLSL } from "../../vfx/dither";
-import { getPlaceInfo, PlaceInfo } from "../../objects/dressing/dressingWorker";
-import { getActiveRegions } from "../domains/utils";
-import {
-  BiomeContext,
-  RegionContext,
-  SkyboxRecord,
-  SkyboxSettings,
-  useDomainStore,
-  DomainDataContext,
-  DomainStoreContext,
-} from "../components/context";
+import { childrenOfKind, declare } from "../content";
+import type { ContentNode } from "../content/types";
+import { getActiveRegions, getActiveSkyboxes } from "../domains/utils";
+import { onPlaceChange, type PlayerPlace } from "../place";
+
+export interface SkyboxSettings {
+  topColor: string;
+  horizonColor: string;
+  bottomColor: string;
+  radius: number;
+}
 
 export const SKYBOX_DEFAULTS: SkyboxSettings = {
   topColor: "#4a90d9",
@@ -23,6 +23,8 @@ export const SKYBOX_DEFAULTS: SkyboxSettings = {
 };
 
 export interface SkyboxProps {
+  /** One color for the whole sky: the default of the three below. */
+  color?: string;
   topColor?: string;
   horizonColor?: string;
   bottomColor?: string;
@@ -30,32 +32,34 @@ export interface SkyboxProps {
   radius?: number;
 }
 
-/** Scope-aware registration: under <Domain> = default sky; under <Region> = that
- *  region's sky, MIXED by position across region edges; under <Biome> = active while
- *  the player is in it (wins over the region mix). SkyboxSystem cross-fades. */
-export const Skybox = ({
-  topColor = SKYBOX_DEFAULTS.topColor,
-  horizonColor = SKYBOX_DEFAULTS.horizonColor,
-  bottomColor = SKYBOX_DEFAULTS.bottomColor,
-  radius = SKYBOX_DEFAULTS.radius,
-}: SkyboxProps) => {
-  const store = useDomainStore("Skybox");
-  const biome = useContext(BiomeContext);
-  const region = useContext(RegionContext);
+export interface SkyboxRecord extends SkyboxSettings {
+  scope: "domain" | "region" | "biome";
+  scopeId?: number;
+}
 
-  useLayoutEffect(() => {
-    const scope: SkyboxRecord["scope"] = biome ? "biome" : region ? "region" : "domain";
-    const scopeId = biome ? biome.biomeId : region ? region.regionId : undefined;
-    const key = `${scope}/${scopeId ?? "domain"}`;
-    store.skyboxes.set(key, { scope, scopeId, topColor, horizonColor, bottomColor, radius });
-    store.invalidate();
-    return () => {
-      store.skyboxes.delete(key);
-      store.invalidate();
-    };
-  }, [store, biome, region, topColor, horizonColor, bottomColor, radius]);
+/** The SKY of whatever it is mounted in: under <Domain> the default, under a <Region> that
+ *  region's — MIXED by position across region edges, so the sky never snaps at one — and under a
+ *  <Biome> one that wins while the player stands in it. SkyboxSystem cross-fades between them. */
+export const Skybox = declare<SkyboxProps>({ kind: "skybox", within: ["domain", "region", "biome"] });
 
-  return null;
+const settingsOf = (node: ContentNode<SkyboxProps>): SkyboxSettings => ({
+  topColor: node.props.topColor ?? node.props.color ?? SKYBOX_DEFAULTS.topColor,
+  horizonColor: node.props.horizonColor ?? node.props.color ?? SKYBOX_DEFAULTS.horizonColor,
+  bottomColor: node.props.bottomColor ?? node.props.color ?? SKYBOX_DEFAULTS.bottomColor,
+  radius: node.props.radius ?? SKYBOX_DEFAULTS.radius,
+});
+
+/** Every <Skybox> in a domain's tree, with the scope its place in the tree gives it. */
+export const skyboxesOf = (domain: ContentNode<any>): SkyboxRecord[] => {
+  const out: SkyboxRecord[] = [];
+  for (const sky of childrenOfKind<SkyboxProps>(domain, "skybox")) out.push({ scope: "domain", ...settingsOf(sky) });
+  for (const region of childrenOfKind<{ id: number }>(domain, "region")) {
+    for (const sky of childrenOfKind<SkyboxProps>(region, "skybox")) out.push({ scope: "region", scopeId: region.props.id, ...settingsOf(sky) });
+    for (const biome of childrenOfKind<{ id: number }>(region, "biome")) {
+      for (const sky of childrenOfKind<SkyboxProps>(biome, "skybox")) out.push({ scope: "biome", scopeId: biome.props.id, ...settingsOf(sky) });
+    }
+  }
+  return out;
 };
 
 const SKY_VERT = /* glsl */ `
@@ -83,7 +87,6 @@ void main() {
 }
 `;
 
-const PLACE_POLL_INTERVAL_S = 0.5;
 const COLOR_LERP_RATE = 2; // higher = faster sky cross-fade
 
 const _nightTop = new THREE.Color(NIGHT_SKY_COLORS.top);
@@ -95,19 +98,12 @@ const _mix = new THREE.Color();
  *  (domain default for regions without one); the place is polled off-thread only when
  *  scoped skyboxes exist. */
 export const SkyboxSystem = () => {
-  const store = useContext(DomainStoreContext);
-  const { registrationVersion } = useContext(DomainDataContext);
   const { camera } = useThree();
 
   const meshRef = useRef<THREE.Mesh>(null);
-  const placeRef = useRef<PlaceInfo | null>(null);
-  const pollTimerRef = useRef(0);
-  const pollInFlightRef = useRef(false);
+  const placeRef = useRef<PlayerPlace | null>(null);
 
-  const skyboxes = useMemo<SkyboxRecord[]>(
-    () => (store ? Array.from(store.skyboxes.values()) : []),
-    [store, registrationVersion]
-  );
+  const skyboxes = getActiveSkyboxes();
   const domainSky = useMemo(
     () => skyboxes.find((s) => s.scope === "domain") ?? SKYBOX_DEFAULTS,
     [skyboxes]
@@ -181,6 +177,14 @@ export const SkyboxSystem = () => {
   }, [skyboxes, hasScopedSkyboxes, domainSky]);
 
   useLayoutEffect(() => resolveTarget(), [resolveTarget]);
+  useEffect(
+    () =>
+      onPlaceChange((place) => {
+        placeRef.current = place;
+        resolveTarget();
+      }),
+    [resolveTarget],
+  );
 
   const targetColors = useRef({
     top: new THREE.Color(),
@@ -190,24 +194,6 @@ export const SkyboxSystem = () => {
 
   useFrame((_, delta) => {
     if (meshRef.current) meshRef.current.position.copy(camera.position);
-
-    if (hasScopedSkyboxes && !pollInFlightRef.current) {
-      pollTimerRef.current += delta;
-      if (pollTimerRef.current >= PLACE_POLL_INTERVAL_S) {
-        pollTimerRef.current = 0;
-        pollInFlightRef.current = true;
-        getPlaceInfo(camera.position.x, camera.position.z)
-          .then((place) => {
-            if (!place) return;
-            placeRef.current = place;
-            resolveTarget();
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            pollInFlightRef.current = false;
-          });
-      }
-    }
 
     const resolved = resolvedColors.current;
     const t = targetColors.current;

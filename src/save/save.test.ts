@@ -30,13 +30,13 @@ beforeEach(() => {
 
 describe("save", () => {
   it("loads the device save at boot and writes one JSON object back", () => {
-    window.localStorage.setItem(KEY, JSON.stringify({ devmode: { noclip: true } }));
+    window.localStorage.setItem(KEY, JSON.stringify({ devToggles: { noclip: true } }));
     const save = loadFresh();
-    expect(save.getSave()).toEqual({ devmode: { noclip: true } });
+    expect(save.getSave()).toEqual({ devToggles: { noclip: true } });
 
-    save.saveToDevice({ devmode: { noclip: true, physicsDebug: true } });
-    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({ devmode: { noclip: true, physicsDebug: true } });
-    expect(save.getSave().devmode).toEqual({ noclip: true, physicsDebug: true });
+    save.saveToDevice({ devToggles: { noclip: true, physicsDebug: true } });
+    expect(JSON.parse(window.localStorage.getItem(KEY)!)).toEqual({ devToggles: { noclip: true, physicsDebug: true } });
+    expect(save.getSave().devToggles).toEqual({ noclip: true, physicsDebug: true });
   });
 
   it("starts empty from a corrupt or non-object blob instead of throwing", () => {
@@ -47,12 +47,12 @@ describe("save", () => {
   });
 
   it("merges the account save in when it arrives, the device winning shared fields", () => {
-    window.localStorage.setItem(KEY, JSON.stringify({ devmode: { noclip: true } }));
+    window.localStorage.setItem(KEY, JSON.stringify({ devToggles: { noclip: true } }));
     const save = loadFresh();
-    expect(save.getSave()).toEqual({ devmode: { noclip: true } }); // the account has not arrived yet
-    mockAccountData = { devmode: { noclip: false, tintSkirts: true }, coins: 3 };
+    expect(save.getSave()).toEqual({ devToggles: { noclip: true } }); // the account has not arrived yet
+    mockAccountData = { devToggles: { noclip: false, tintSkirts: true }, coins: 3 };
     mockNotifyAccount();
-    // Shallow: the device's devmode object replaces the account's whole; other account fields join.
-    expect(save.getSave()).toEqual({ devmode: { noclip: true }, coins: 3 });
+    // Shallow: the device's devToggles object replaces the account's whole; other account fields join.
+    expect(save.getSave()).toEqual({ devToggles: { noclip: true }, coins: 3 });
   });
 });

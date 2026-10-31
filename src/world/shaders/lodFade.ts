@@ -1,5 +1,5 @@
 /** LOD cross-fade (world/terrain/lodSwaps.ts): the per-mesh dither range uniform, and the define that
- *  compiles the terrain's fade twin (world/terrain/material.ts createLodFadeMaterial). */
+ *  compiles it into the terrain's discard variant (world/terrain/material.ts createDiscardMaterial). */
 export const LOD_FADE_UNIFORM = "uLodFade";
 export const LOD_FADE_DEFINE = "TERRAIN_LOD_FADE";
 

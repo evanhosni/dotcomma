@@ -7,9 +7,11 @@ One WebSocket to the game server, which is the only authority (presence, player 
 - [protocol.ts](protocol.ts): the wire protocol, the only copy (the server bundles it) — `ClientMessage`, `ServerMessage`, `PlayerSnapshot`, `PlayerData`, `PLAYER_DATA_MAX_BYTES`, `playerDataBytes`. Keep it Three-free.
 - [connection.ts](connection.ts): the singleton socket — `getWebSocketUrl()`, the persistent identity, reconnect, ping watchdog, `getServerTime()`, domain relay, close on `pagehide`. API: `send(msg)`, `onServerMessage(fn)`.
 - [playerData.ts](playerData.ts): your persisted blob — `getPlayerData()`, `usePlayerData()`, `updatePlayerData(patch)`; optimistic, the server's echo wins.
-- [players/](players/): remote roster ([store.ts](players/store.ts), `useRosterVersion()`), capsules ([RemotePlayers.tsx](players/RemotePlayers.tsx)), and [LocalPlayerSync.tsx](players/LocalPlayerSync.tsx), which sends intent changes, never per-frame positions.
+- [players/](players/): remote roster ([store.ts](players/store.ts), `useRosterVersion()`), capsules ([RemotePlayers.tsx](players/RemotePlayers.tsx): each player a server-stamped snapshot track played back by the entities' `PosePlayback`, [entities/interpolation.ts](entities/interpolation.ts)), and [LocalPlayerSync.tsx](players/LocalPlayerSync.tsx), which sends every `PUBLISH_INTERVAL_MS` while moving and at once on a start/stop/turn/relocation, nothing while standing still.
 - [entities/](entities/): synced actors — [entityStore.ts](entities/entityStore.ts) (register/update/snapshots), [interpolation.ts](entities/interpolation.ts) (draws each entity `INTERP_DELAY_MS` behind on the server clock), [posePlayback.ts](entities/posePlayback.ts) (per-actor render clock), [useSyncedEntity.ts](entities/useSyncedEntity.ts) (the `SyncHandle` the actor base uses).
 - Two ids: `identity` (persisted, shared by tabs) and `id` (one per session). Broadcasts are scoped to one room per domain.
+
+- **Tunnel toggles** (manhole covers, sewer doors): the SERVER's state per domain. A click sends `tunnel:toggle` (id shape `TUNNEL_TOGGLE_ID`); the server flips it and sends `tunnel:state` to the whole room; `init.tunnelsOpen` carries the open set. world/underground/toggles.ts mirrors it; the server's NPCs fall down the same open manholes (server/src/game/world.ts `toggleTunnel`, physicsWorld `setTunnelOpen`).
 
 ## How to add another
 

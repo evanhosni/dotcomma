@@ -1,10 +1,14 @@
 /** Foliage bands: a band is a strict prefix of the full fade-key order, so a chunk widened on
  *  approach adds exactly the blades fading in and never changes one it already holds. */
-import { OVERWORLD_CONFIG } from "../../world/domains/overworld/config";
-import { GRASS_BIOME } from "../../world/domains/overworld/regions/city/biomes/grass/spec";
+import { DOMAIN_CONFIGS } from "../../world/domains";
 import { generateChunk } from "./foliage.worker";
 import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { computeVertexData, initCompute, riverKeepOff } from "./vertexCompute";
+import { biomeIdOf } from "../../world/content/config";
+
+const GRASS_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "grass") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const GRASS = {
   seed: "grass",

@@ -23,6 +23,7 @@ import { SPAWN_CHUNK_SIZE } from "./constants";
 // Type-only: keeps the React-dependent module out of the worker bundle.
 import type { SerializedActorDescriptor as SerializedDescriptor, SpawnPoint } from "../../objects/actors/spawning/types";
 import { describeChunkSprites } from "../../objects/sprite-lod/describers";
+import { featurePlacesIn } from "./featurePlacement";
 import { chunkGap } from "../../objects/sprite-lod/utils";
 import type { SpriteChunkResult, SpriteKindSource } from "../../objects/sprite-lod/types";
 
@@ -203,6 +204,15 @@ const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunk
   }
 };
 
+/** A <Spawn> inside a feature: one instance on each place the feature holds in the chunk (underground,
+ *  so kept out of the surface spacing hash). */
+const placeFeaturePoints = (desc: SerializedDescriptor, chunkMinX: number, chunkMinZ: number, out: SpawnPoint[]): void => {
+  const area = { minX: chunkMinX, minZ: chunkMinZ, maxX: chunkMinX + SPAWN_CHUNK_SIZE, maxZ: chunkMinZ + SPAWN_CHUNK_SIZE };
+  for (const biomeId of desc.biomeIds ?? []) {
+    for (const p of featurePlacesIn(desc.feature!, biomeId, area)) out.push({ x: p.x, z: p.z, height: p.floor, biomeId, descriptorId: desc.id });
+  }
+};
+
 /** A chunk key, `${cx}_${cz}`, to its min corner. */
 const chunkMinOf = (chunkKey: string): [number, number] => {
   const sep = chunkKey.indexOf("_");
@@ -229,7 +239,9 @@ const generateForChunk = (
   // the hash's insertion order identical to asking the engine per descriptor.
   let flattenByDesc: Map<string, FlattenPoint[]> | null = null;
   for (const desc of descriptorsByPriority) {
-    if (desc.flattenGround) {
+    if (desc.feature) {
+      placeFeaturePoints(desc, chunkMinX, chunkMinZ, chunkPoints);
+    } else if (desc.flattenGround) {
       if (flattenByDesc === null) flattenByDesc = flattenPointsByDescriptor(chunkMinX, chunkMinZ);
       placeFlattenPoints(desc, flattenByDesc.get(desc.id), chunkPoints);
     } else if (desc.density > 0) {

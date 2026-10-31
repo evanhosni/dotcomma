@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * npm run dev — server (tsx watch :8080) + client (craco :3000) in one terminal;
+ * npm run dev — server (esbuild watch + node --watch, :8080) + client (craco :3000) in one terminal;
  * either exiting, or Ctrl+C, kills both. First run installs server/ deps and
  * creates + migrates the local SQLite.
  *
@@ -21,7 +21,7 @@ const withClient = !args.has("--server-only");
 const isWin = process.platform === "win32";
 
 // Own process group per child (detached): killing just `npm` leaves the webpack dev
-// server listening on :3000. Shutdown signals the direct child FIRST so npm → tsx →
+// server listening on :3000. Shutdown signals the direct child FIRST so npm → node →
 // server forward SIGTERM in order and the server finishes its flush (signalling the
 // whole group at once force-kills it mid-flush), then the rest of the group after a
 // grace period. Windows has no groups — taskkill /T.

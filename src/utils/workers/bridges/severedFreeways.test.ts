@@ -2,10 +2,12 @@
  *  a river, a deck carries it across or the river gives way — and where a deck lands on its road by a
  *  cut, the road and the deck are one surface. On the real compute module with the overworld's
  *  shared config, over the round's example spots and the round-15 open items. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
 import { getSeveredFreeways } from "./severed";
 import { type FreewayBridge, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 

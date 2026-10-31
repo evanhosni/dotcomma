@@ -1,7 +1,7 @@
 /** Step 4: a chain's deck, built lazily — the rules, the T trims, clearance over the water, the arch
  *  and the piers — and the verdicts that decide which crossings of their own stand. */
 
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";

@@ -33,7 +33,6 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
     halfWidth: 40,
     depth: 9,
     bank: 36,
-    defaultProbability: 0.45,
   },
   cityConfig: {
     seed: "city1",
@@ -47,6 +46,7 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
     triangleChance: 0.12,
     roundaboutChance: 0.1,
   },
+  wireframe: false,
 };
 
 export const DEFAULT_SCENE_BACKGROUND = "#555555";

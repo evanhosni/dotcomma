@@ -3,8 +3,8 @@
  *  nor a parapet, over road pavement; every T/Y crotch is filleted; and an inter-city freeway's
  *  cross-section is flat — one grade per centerline point — where it runs along or across a biome or
  *  region wall. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PARAPET_HEIGHT, BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PARAPET_HEIGHT, BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
 import { crotchFlares } from "./deckGeometry";
 import { bridgeDrawn, bridgeDrawnAt } from "./drawnSlab";
 import { pavedAt } from "./landings";
@@ -22,6 +22,8 @@ import {
   unwarp,
   warp,
 } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 const LOD1 = 420 / 96;

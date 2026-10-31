@@ -1,15 +1,20 @@
 import type Rapier from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
+import { markTerrainCollider } from "../../physics/characterMovement";
 import { traceEvent } from "../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { getWaterMaterial } from "../water/waterMaterial";
+import { getWaterMaterial } from "../water/material";
 import { acquireGeometry, releaseGeometry } from "./chunkGeometry";
 import type { LODLevel } from "./lodConfig";
 import type { Chunk } from "./types";
 
 // What a terrain chunk owns in the scene and the physics world: its plane, its water child and its
 // heightfield body.
+
+/** The water sheet draws here and writes no depth: a transparent thing above it (spray) must draw
+ *  later, one under it (bubbles) earlier. */
+export const WATER_RENDER_ORDER = 10;
 
 /** A chunk's dither range into whichever material draws it (the fade variant, or the water): three
  *  uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
@@ -28,7 +33,7 @@ export const syncLodFade =
 /** A new chunk's plane, hidden until its swap draws it and static once placed (the build re-composes it). */
 export const createChunkPlane = (lod: LODLevel, material: THREE.Material): THREE.Mesh => {
   const plane = new THREE.Mesh(acquireGeometry(lod), material);
-  plane.visible = false; //TODO problemA: maybe somewhere around here, not sure. plane flashes briefly at 0,0,0 before moving to its correct spot. one solution is add 50 to the height or smth, but thats too hacky. try to prevent this flashing
+  plane.visible = false;
   plane.castShadow = false;
   // receiveShadow left on would recompile every terrain program the day a light casts a shadow.
   plane.receiveShadow = false;
@@ -53,7 +58,7 @@ export const ensureWaterMesh = (chunk: Chunk): THREE.Mesh => {
   const water = new THREE.Mesh(acquireGeometry(chunk.lod), getWaterMaterial());
   water.castShadow = false;
   water.receiveShadow = false;
-  water.renderOrder = 10;
+  water.renderOrder = WATER_RENDER_ORDER;
   water.matrixAutoUpdate = false; // identity under its plane
   // Warmed with its plane like every streamed mesh: the first water in view otherwise compiled the
   // water program and uploaded its buffers at the frame the player turned to it.
@@ -66,14 +71,15 @@ export const ensureWaterMesh = (chunk: Chunk): THREE.Mesh => {
 
 /** Heightfield (column-major heights from the worker) straight into the Rapier world — never a React
  *  <RigidBody>, see CLAUDE.md. The desc is created before the body so a failure can't leave an empty body
- *  behind; the body lands on `chunk.colliderBody`. */
+ *  behind; the body lands on `chunk.colliderBody`. Tagged as TERRAIN at creation: a player in a tunnel
+ *  ignores it through the step's `ignoreTerrain` (physics/characterMovement.ts). */
 export const generateColliders = (world: Rapier.World, rapier: typeof Rapier, chunk: Chunk, heights: Float32Array): void => {
   const { segments, chunkSize } = chunk.lod;
   const t0 = performance.now();
   const desc = rapier.ColliderDesc.heightfield(segments, segments, heights, { x: chunkSize, y: 1, z: chunkSize });
   const body = world.createRigidBody(rapier.RigidBodyDesc.fixed().setTranslation(chunk.offset.x, 0, chunk.offset.z));
   try {
-    world.createCollider(desc, body);
+    markTerrainCollider(world.createCollider(desc, body));
   } catch (e) {
     world.removeRigidBody(body);
     console.error("terrain heightfield collider failed:", e);

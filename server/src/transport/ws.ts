@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer, type PerMessageDeflateOptions } from "ws";
 import {
   isDomainId,
   PLAYER_DATA_MAX_BYTES,
+  TUNNEL_TOGGLE_ID,
   type ClientMessage,
   type EntityRegisterItem,
   type MoveIntent,
@@ -103,6 +104,8 @@ const parseClientMessage = (data: unknown): ClientMessage | null => {
     }
     case "entity:interact":
       return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
+    case "tunnel:toggle":
+      return typeof raw.id === "string" && TUNNEL_TOGGLE_ID.test(raw.id) ? { t: "tunnel:toggle", id: raw.id } : null;
     default:
       return null;
   }
@@ -130,6 +133,9 @@ const routeToWorld = (world: World, sessionId: string, msg: Exclude<ClientMessag
       return;
     case "entity:interact":
       world.interactWithEntity(sessionId, msg.id, msg.action);
+      return;
+    case "tunnel:toggle":
+      world.toggleTunnel(sessionId, msg.id);
       return;
   }
 };

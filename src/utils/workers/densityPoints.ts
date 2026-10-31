@@ -2,6 +2,7 @@ import { BRIDGE_CUT_FEATHER } from "./bridges/constants";
 import { decksAround } from "./bridges/deckGround";
 import { computeVertexData, outsideBiomes, riverKeepOff } from "./vertexCompute";
 import type { GameObjectAttributes } from "../../objects/types";
+import { biomeIdsWith } from "./biomeFlags";
 import {
   densityCellRange,
   densityCellSize,
@@ -19,6 +20,9 @@ export interface DensityPointParams
   density: number;
   /** Min spacing between accepted points. */
   footprint: number;
+  /** A dressing feature's kind: where `biomeIds` is unset, the points stand in the biomes that
+   *  MOUNTED that feature — so no placement anywhere names a biome. */
+  feature?: string;
 }
 
 /** Whether a point stands beside a deck: within its half width + BRIDGE_CUT_FEATHER of its path,
@@ -74,6 +78,7 @@ export const generateDensityPoints = (
   const [gz0, gz1] = densityCellRange(minZ - pad, maxZ + pad, cellSize);
   const probability = densityProbability(params.density, cellSize);
   const footprintSq = params.footprint * params.footprint;
+  const biomeIds = params.biomeIds ?? (params.feature ? biomeIdsWith(params.feature) : undefined);
   const slopeRange = params.slopeRange;
 
   const accepted: { x: number; z: number; y: number }[] = [];
@@ -82,7 +87,7 @@ export const generateDensityPoints = (
       const roll = rollDensityCell(params.seedTag, gx, gz, cellSize, probability);
       if (!roll) continue;
       const { x, z } = roll;
-      if (outsideBiomes(params.biomeIds, x, z)) continue;
+      if (outsideBiomes(biomeIds, x, z)) continue;
 
       const vd = computeVertexData(x, z);
       if (!passesPlacementFilters(vd, params, riverKeepOff()) || besideDeck(x, z)) continue;

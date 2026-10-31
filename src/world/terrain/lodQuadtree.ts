@@ -1,4 +1,5 @@
-import { CHUNK_SIZE, LOD3_CHUNK_SIZE, LOD4_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
+import type { PointXZ } from "../../utils/math/types";
+import { CHUNK_SIZE, LOD1_SITE_DISTANCE, LOD1_SITE_REACH, LOD3_CHUNK_SIZE, LOD4_CHUNK_SIZE, LOD_LEVELS, LODLevel, MAX_RENDER_DISTANCE } from "./lodConfig";
 
 export type DesiredChunks = { [key: string]: { position: number[]; lod: LODLevel } };
 
@@ -16,6 +17,28 @@ const distanceToSquare = (ox: number, oz: number, size: number, px: number, pz: 
   const clampedZ = Math.max(oz, Math.min(pz, oz + size));
   return Math.sqrt((clampedX - px) ** 2 + (clampedZ - pz) ** 2);
 };
+
+// LOD1 SITES: the cave mouths whose footprint chunks are all loaded (the underground registry sets them).
+// A 420u chunk within LOD1_SITE_REACH of one draws at LOD1 out to LOD1_SITE_DISTANCE, past the LOD1 ring,
+// so the entrance's patch stands on the ground LOD1 draws.
+let lod1Sites: PointXZ[] = [];
+let lod1SitesVersion = 0;
+
+export const setLod1Sites = (sites: PointXZ[]): void => {
+  lod1Sites = sites;
+  lod1SitesVersion++;
+};
+export const getLod1SitesVersion = (): number => lod1SitesVersion;
+
+const nearLod1Site = (ox: number, oz: number, size: number, playerX: number, playerZ: number): boolean => {
+  if (lod1Sites.length === 0) return false;
+  if (distanceToSquare(ox, oz, size, playerX, playerZ) >= LOD1_SITE_DISTANCE) return false;
+  for (const s of lod1Sites) if (distanceToSquare(ox, oz, size, s.x, s.z) <= LOD1_SITE_REACH) return true;
+  return false;
+};
+
+/** The key of the LOD1 chunk holding a world point. */
+export const lod1KeyAt = (x: number, z: number): string => `1/${Math.round((Math.floor(x / CHUNK_SIZE) * CHUNK_SIZE + CHUNK_SIZE / 2) / CHUNK_SIZE)}/${Math.round((Math.floor(z / CHUNK_SIZE) * CHUNK_SIZE + CHUNK_SIZE / 2) / CHUNK_SIZE)}`;
 
 /** The quadtree's leaves around the player: a PARTITION of every LOD4 root within the render disc,
  *  keyed `${level}/${gx}/${gz}`. */
@@ -39,7 +62,7 @@ export const computeDesiredChunks = (playerX: number, playerZ: number): DesiredC
 
     let lod = lodBySize[size];
     if (!lod) lod = LOD_LEVELS[0];
-    if (size === CHUNK_SIZE) lod = dist < LOD_LEVELS[0].maxDistance ? LOD_LEVELS[0] : LOD_LEVELS[1];
+    if (size === CHUNK_SIZE) lod = dist < LOD_LEVELS[0].maxDistance || nearLod1Site(ox, oz, size, playerX, playerZ) ? LOD_LEVELS[0] : LOD_LEVELS[1];
 
     const cx = ox + lod.chunkSize / 2;
     const cz = oz + lod.chunkSize / 2;

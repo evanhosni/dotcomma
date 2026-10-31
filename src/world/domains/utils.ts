@@ -1,3 +1,5 @@
+import type { AnyActorDescriptor } from "../../objects/actors/spawning/types";
+import type { SkyboxRecord } from "../sky/Skybox";
 import { DomainConfig } from "../../utils/workers/vertexCompute";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import { Region, TerrainParams } from "../types";
@@ -30,11 +32,22 @@ export const resetActiveDomain = () => {
 
 export const whenDomainReady = (): Promise<void> => readyPromise;
 
+/** False between a domain switch's reset and the next commit — when the outgoing domain's frame loops
+ *  can still run: the canvas's reconciler unmounts its tree a beat after the page's commit resets. */
+export const isDomainCommitted = (): boolean => active !== null;
+
 export const getActiveRegions = (): Region[] => active?.regions ?? [];
 
 export const getTerrainParams = (): TerrainParams => active?.params ?? DEFAULT_TERRAIN_PARAMS;
 
 export const getRiverTexture = (): string => active?.riverTexture ?? DEFAULT_RIVER_TEXTURE;
+
+const NO_SKYBOXES: SkyboxRecord[] = [];
+export const getActiveSkyboxes = (): SkyboxRecord[] => active?.skyboxes ?? NO_SKYBOXES;
+
+const NO_ACTORS: AnyActorDescriptor[] = [];
+/** One descriptor per kind, spawning in the union of the biomes that mount it. */
+export const getActiveActors = (): AnyActorDescriptor[] => active?.actors ?? NO_ACTORS;
 
 /** Only valid after commit — await whenDomainReady() first. */
 export const getActiveDomainConfig = (): DomainConfig => {

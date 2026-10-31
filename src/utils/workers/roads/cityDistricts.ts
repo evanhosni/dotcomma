@@ -5,7 +5,7 @@
  * imports nothing from the pipeline but the live config.
  */
 
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";

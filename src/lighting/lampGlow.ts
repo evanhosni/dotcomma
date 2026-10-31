@@ -109,8 +109,11 @@ const updateLampGrid = (entries: ReadonlyMap<string, HeadEntry>, cameraX: number
   lastHeadCount = entries.size;
 };
 
+/** Devmode's live mix over the dusk ramp (vfx/tuning.ts); 1 = as designed. */
+export const LAMP_GLOW_MIX = { value: 1 };
+
 const setLampGlowIntensity = (value: number): void => {
-  LAMP_GRID_UNIFORMS.uLampGlowIntensity.value = value;
+  LAMP_GRID_UNIFORMS.uLampGlowIntensity.value = value * LAMP_GLOW_MIX.value;
 };
 
 /** Every mounted glow source. */

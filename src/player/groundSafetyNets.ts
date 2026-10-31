@@ -1,12 +1,13 @@
 import type { RapierRigidBody } from "@react-three/rapier";
 import { type MutableRefObject, useRef } from "react";
 import { resetCharacterMotion, type Character, type CharacterMotionState, type CharacterStepResult } from "../physics/characterMovement";
-import { getVertexData, getVertexDataRaw, getVertexSample } from "../world/terrain/vertexData";
+import { getVertexData, getVertexSample } from "../world/terrain/vertexData";
 import { PLAYER_HEIGHT } from "./spec";
 
 // The player's safety nets against the ANALYTIC terrain height (the source the heightfields are built
 // from): the physics ground is per-chunk heightfields swapped during LOD changes, so sweep hardening alone
-// can never close every timing hole (CLAUDE.md "Player movement").
+// can never close every timing hole (CLAUDE.md "Player movement"). Both nets are SUSPENDED while the
+// player is in a tunnel (under the ground on purpose), including a check that resolves after entering.
 
 const FALL_RESET_Y = -500;
 /** Above the ground after a fall reset. */
@@ -24,19 +25,19 @@ const STUCK_MOVE_FRACTION_SQ = 0.0025;
 
 /** An async height check whose body has since moved this far (either axis) is stale and ignored. */
 const STALE_CHECK_DISTANCE = 3;
+/** A worker sample older than this is given up on (lost to a worker reset). */
+export const SAMPLE_GIVE_UP_MS = 1000;
 /** Clearance above the surface when a safety net lifts the capsule onto it. */
 const LIFT_CLEARANCE = 0.1;
 
-/** Surface height at (x, z) if the capsule bottom is more than `tolerance`
- *  below it, else null. The raw height is only a PRE-FILTER: flatten pads
- *  EXCAVATE (up to ~8u), so trusting it alone would teleport a player standing
- *  in a building's excavation. The padded confirm runs in the dressing worker —
- *  a flatten-tile miss is 30–70ms. */
+/** Surface height at (x, z) if the capsule bottom is more than `tolerance` below it, else null (also
+ *  until the worker is up). The PADDED height (flatten pads EXCAVATE up to ~8u: the raw one would teleport
+ *  a player standing in a building's excavation), sampled on the dressing worker: on the main thread a
+ *  flatten-tile miss is 30–70ms, and the raw pre-filter that ran there built each new cell's river list
+ *  and road network (~70ms frames while moving fast). */
 const resolveEmbeddedSurface = async (x: number, z: number, bottom: number, tolerance: number): Promise<number | null> => {
-  const raw = await getVertexDataRaw(x, z);
-  if (bottom >= raw.height - tolerance) return null;
-  const padded = (await getVertexSample(x, z)) ?? (await getVertexData(x, z));
-  if (bottom >= padded.height - tolerance) return null;
+  const padded = await getVertexSample(x, z);
+  if (!padded || bottom >= padded.height - tolerance) return null;
   return padded.height;
 };
 
@@ -61,11 +62,18 @@ export interface GroundSafetyNets {
   respawnIfFallen(at: { x: number; y: number; z: number }, character: Character): void;
 }
 
-export const useGroundSafetyNets = (bodyRef: MutableRefObject<RapierRigidBody | null>, terrainLoaded: boolean): GroundSafetyNets => {
+/** `suspended` is read when a net would act (and again when an async check resolves): true while the
+ *  player is in a tunnel. */
+export const useGroundSafetyNets = (bodyRef: MutableRefObject<RapierRigidBody | null>, terrainLoaded: boolean, suspended: () => boolean): GroundSafetyNets => {
   const respawning = useRef(false);
   const groundCheckFrame = useRef(0);
   const stuckFrames = useRef(0);
-  const unsticking = useRef(false);
+  /** When the stuck check in flight started (-Infinity: none); see backstopSince. */
+  const unstickingSince = useRef(-Infinity);
+  /** When the backstop check in flight started (-Infinity: none). One at a time — they queue on the dressing
+   *  worker behind its chunks — but a request lost to a worker reset (a domain switch) never resolves, so
+   *  one older than SAMPLE_GIVE_UP_MS no longer blocks the next. */
+  const backstopSince = useRef(-Infinity);
 
   const escapeIfStuck = (r: CharacterStepResult, from: { x: number; z: number }, character: Character): void => {
     const wantSq = r.desiredX * r.desiredX + r.desiredZ * r.desiredZ;
@@ -77,14 +85,14 @@ export const useGroundSafetyNets = (bodyRef: MutableRefObject<RapierRigidBody | 
     } else {
       stuckFrames.current = 0;
     }
-    if (stuckFrames.current < STUCK_FRAMES_TRIGGER || unsticking.current || !terrainLoaded || respawning.current) return;
-    unsticking.current = true;
+    if (stuckFrames.current < STUCK_FRAMES_TRIGGER || performance.now() - unstickingSince.current < SAMPLE_GIVE_UP_MS || !terrainLoaded || respawning.current || suspended()) return;
+    unstickingSince.current = performance.now();
     const sx = r.x;
     const sz = r.z;
     resolveEmbeddedSurface(sx, sz, r.y - PLAYER_HEIGHT / 2, STUCK_EMBED_MIN).then((surface) => {
-      unsticking.current = false;
+      unstickingSince.current = -Infinity;
       const body = bodyRef.current;
-      if (!body) return;
+      if (!body || suspended()) return;
       const cur = body.translation();
       if (isStale(cur, sx, sz)) return;
       if (surface !== null && cur.y - PLAYER_HEIGHT / 2 < surface - STUCK_EMBED_MIN) {
@@ -97,13 +105,17 @@ export const useGroundSafetyNets = (bodyRef: MutableRefObject<RapierRigidBody | 
   };
 
   const runBackstop = (at: { x: number; y: number; z: number }, character: Character): void => {
-    if (respawning.current) return;
+    if (respawning.current || suspended()) return;
     groundCheckFrame.current++;
     if (groundCheckFrame.current % GROUND_CHECK_INTERVAL !== 0) return;
+    const now = performance.now();
+    if (now - backstopSince.current < SAMPLE_GIVE_UP_MS) return;
+    backstopSince.current = now;
     const cx = at.x;
     const cz = at.z;
     resolveEmbeddedSurface(cx, cz, at.y - PLAYER_HEIGHT / 2, BACKSTOP_EMBED_TOLERANCE).then((surface) => {
-      if (surface === null) return;
+      backstopSince.current = -Infinity;
+      if (surface === null || suspended()) return;
       const body = bodyRef.current;
       if (!body) return;
       const cur = body.translation();

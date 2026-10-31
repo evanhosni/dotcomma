@@ -1,19 +1,19 @@
 import * as THREE from "three";
-import { _curvature } from "../../vfx/curvature";
-import { _material } from "../../utils/material/_material";
-import { _quantization } from "../../vfx/quantization";
+import { _material } from "../../utils/material";
 import { getAllBiomes } from "../../utils/utils";
 import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../utils/workers/vertexCompute";
 import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
 import { combineBiomeMaterials } from "../shaders/combineBiomeMaterials";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, CHUNK_PROJECTION_VARYINGS } from "../shaders/chunkProjection";
 import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { FAR_DISTANCE_GLSL, FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS } from "../shaders/farFade";
+import { FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, WIREFRAME_DEFINE } from "../shaders/farFade";
+import { ENTRANCE_PATCH_DEFINE, TERRAIN_HOLES_DEFINE } from "../shaders/terrainHoles";
 import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
 
-// The raw .glsl asset can't import the shared chunks, so they are prepended here.
-const vertexShader = `${_quantization.QUANTIZE_GLSL}\n${_curvature.CURVE_GLSL}\n${FAR_DISTANCE_GLSL}\n${terrainVertexBody}`;
+// The raw .glsl asset can't import the shared chunks, so the chunk projection is prepended here.
+const vertexShader = `${CHUNK_PROJECTION_GLSL}\n${terrainVertexBody}`;
 
 /** Two vec4 attributes carry the per-biome signed distances (two more the presences, two the riverbed's). */
 export const MAX_BIOME_SLOTS = 8;
@@ -51,6 +51,7 @@ export const getMaterial = async () => {
     FREEWAY_HALF_WIDTH: glslFloat(params.cityConfig.freewayWidth),
     RIVER_HALF_WIDTH: glslFloat(params.river.halfWidth),
     RIVER_BED_REACH: glslFloat(params.river.halfWidth + params.river.bank),
+    ...(params.wireframe ? { [WIREFRAME_DEFINE]: "" } : {}),
   };
 
   const material = await combineBiomeMaterials(biomes, regions, vertexShader, {
@@ -73,23 +74,20 @@ export const getMaterial = async () => {
       "varying float vDistanceToFreewayCenter;",
       "varying float vFreewayAlong;",
       "varying float vUnderwaterDepth;",
+      "varying float vFarSnow;",
       "varying vec2 vUv;",
       "varying vec2 vWorldUv;",
       "varying float vSlopeAngle;",
       "varying float vHeight;",
-      "varying vec3 vWorldNormal;",
-      "varying vec3 vWorldPosWrapped;",
-      "varying vec3 vWorldPosAbs;",
-      "varying float vFarDistance;",
       "varying float vSkirt;",
+      ...CHUNK_PROJECTION_VARYINGS,
     ],
   });
 
-  material.uniforms.uGridSize = _quantization.uniforms.uGridSize;
-  // Shared uniform OBJECTS so the terrain bends in lockstep with everything on
-  // it; assigned here (vertex-only) to stay out of the generated fragment block.
-  material.uniforms.uCurveStart = _curvature.uniforms.uCurveStart;
-  material.uniforms.uCurveK = _curvature.uniforms.uCurveK;
+  // Shared uniform OBJECTS so the terrain bends and snaps in lockstep with everything on it; assigned
+  // here (vertex-only) to stay out of the generated fragment block.
+  Object.assign(material.uniforms, CHUNK_PROJECTION_UNIFORMS);
+  material.wireframe = params.wireframe;
   // Read only by the variants compiled with FAR_FADE_DEFINE.
   material.uniforms[FAR_FADE_UNIFORM] = FAR_FADE_UNIFORMS[FAR_FADE_UNIFORM];
 
@@ -104,14 +102,45 @@ const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, stri
     vertexShader: base.vertexShader,
     fragmentShader: base.fragmentShader,
     lights: base.lights,
+    wireframe: base.wireframe,
   });
 
-/** The opaque material of chunks reaching the far fade (lodConfig.ts chunkReachesFarFade): the far-fade `discard` compiled in. Its own
- *  program, so the near terrain keeps its early depth test. */
-export const createFarFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial => terrainVariant(base, { [FAR_FADE_DEFINE]: "" });
+/** The terrain's ONE `discard` program: the LOD cross-fade's dither (lodSwaps.ts), the far fade and the
+ *  tunnel openings. Drawn by every chunk mid-fade, and by the settled chunks that reach the far fade
+ *  (lodConfig.ts chunkReachesFarFade), touch an opening (terrainHoles.ts) or draw while the player is
+ *  underground (no skirts: a uniform) — a settled chunk's dither range is [0, FADE_OPAQUE_HI), which keeps
+ *  every pixel. One program, not one per combination: Firefox links each on the main thread (~0.6s per
+ *  terrain program, PERFORMANCE.md). The near terrain keeps the base program and its early depth test.
+ *  Every uniform object is SHARED with the base except the per-mesh dither range (chunkObjects.ts syncLodFade). */
+export const createDiscardMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
+  terrainVariant(base, { [LOD_FADE_DEFINE]: "", [FAR_FADE_DEFINE]: "", [TERRAIN_HOLES_DEFINE]: "" }, { [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } });
 
-/** The terrain material's LOD cross-fade twin (lodSwaps.ts): the dither `discard` compiled in, drawn only by
- *  chunks mid-fade. It carries the far fade too, so a far chunk mid-swap still dissolves at the horizon. Every
- *  uniform object is SHARED with the opaque material except the per-mesh dither range. */
-export const createLodFadeMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
-  terrainVariant(base, { [LOD_FADE_DEFINE]: "", [FAR_FADE_DEFINE]: "" }, { [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } });
+/** The entrance PATCH's program: the terrain's own, with the rock share and daylight attribute and its mouth's fade. */
+export const createEntranceMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial => terrainVariant(base, { [ENTRANCE_PATCH_DEFINE]: "" });
+
+// ── Publication: the entrance patches wait on the base material (linked at load with the other programs).
+
+let published: { base: THREE.ShaderMaterial; entrance: THREE.ShaderMaterial } | null = null;
+let resolveReady: ((m: { base: THREE.ShaderMaterial; entrance: THREE.ShaderMaterial }) => void) | null = null;
+let ready = new Promise<{ base: THREE.ShaderMaterial; entrance: THREE.ShaderMaterial }>((resolve) => {
+  resolveReady = resolve;
+});
+
+export const publishTerrainMaterial = (base: THREE.ShaderMaterial, entrance: THREE.ShaderMaterial): void => {
+  published = { base, entrance };
+  if (resolveReady) {
+    resolveReady(published);
+    resolveReady = null;
+  }
+};
+
+/** Resolves once the terrain material (and its entrance variant) exists; re-armed by a reset. */
+export const terrainMaterialReady = (): Promise<{ base: THREE.ShaderMaterial; entrance: THREE.ShaderMaterial }> => ready;
+
+export const resetTerrainMaterial = (): void => {
+  published = null;
+  ready = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+};
+

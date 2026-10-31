@@ -37,3 +37,14 @@ export const freezeStaticSubtree = (object: THREE.Object3D): void => {
     o.matrixAutoUpdate = false;
   });
 };
+
+/** A console-only handle on a live system (`window.__terrainLod`, `__entities`, `__dotcomma`).
+ *  A no-op where there is no window — the SERVER bundles the client's content tree, and with it
+ *  whatever these modules sit in. Returns its own remover. */
+export const debugGlobal = (name: string, value: unknown): (() => void) => {
+  if (typeof window === "undefined") return () => {};
+  (window as unknown as Record<string, unknown>)[name] = value;
+  return () => {
+    delete (window as unknown as Record<string, unknown>)[name];
+  };
+};

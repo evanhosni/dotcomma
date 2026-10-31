@@ -2,7 +2,7 @@
  *  and a ramped end's fit under the road. */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { PointCache } from "../cellCache";
 import { domainConfig } from "../computeConfig";

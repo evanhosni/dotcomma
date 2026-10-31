@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
-import { prepareActorMaterial } from "./Actor";
+import { prepareActorMaterial } from ".";
 
 // Pool of prepared GLTF clones keyed by (model | quantization override).
 // Pools survive domain switches (clones are domain-agnostic); the override is

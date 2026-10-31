@@ -5,7 +5,7 @@
  * each caller keeps only its own spacing rule. Worker-safe: no THREE, no DOM.
  */
 
-import { seedRand } from "../math/_math";
+import { seedRand } from "../math";
 import type { GameObjectAttributes } from "../../objects/types";
 import type { VertexResult } from "./types";
 

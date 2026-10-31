@@ -11,7 +11,7 @@
  * and between the belt and a run leaving it. Steep grades and cuts stay: they are the terrain's.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";

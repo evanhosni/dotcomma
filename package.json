@@ -33,8 +33,12 @@
   },
   "jest": {
     "transformIgnorePatterns": [
-      "node_modules/(?!(delaunator|robust-predicates|noise-ts)/)"
-    ]
+      "node_modules/(?!(delaunator|robust-predicates|noise-ts|three/examples)/)"
+    ],
+    "moduleNameMapper": {
+      "/worker$": "<rootDir>/config/jest/rendererStub.js",
+      "^@react-three/drei/core/useGLTF$": "<rootDir>/config/jest/rendererStub.js"
+    }
   },
   "browserslist": {
     "production": [

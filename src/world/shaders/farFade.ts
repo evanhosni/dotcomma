@@ -13,6 +13,12 @@ import { FAR_FADE_FRACTION } from "./constants";
 export const FAR_FADE_DEFINE = "TERRAIN_FAR_FADE";
 export const FAR_FADE_UNIFORM = "uFarFade";
 
+/** A WIREFRAME terrain (<Terrain wireframe>, world/terrain/material.ts) draws no skirts, and its lines
+ *  dither out over WIREFRAME_FADE (horizontal units, by this same far fade): the far LOD rings' lines
+ *  otherwise pile into a solid band at the horizon. */
+export const WIREFRAME_DEFINE = "TERRAIN_WIREFRAME";
+export const WIREFRAME_FADE: readonly [number, number] = [200, 400];
+
 /** [start, end] of the fade, shared by every terrain and water material. */
 export const FAR_FADE_UNIFORMS = { [FAR_FADE_UNIFORM]: { value: new THREE.Vector2() } };
 

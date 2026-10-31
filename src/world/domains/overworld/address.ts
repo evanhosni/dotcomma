@@ -207,6 +207,20 @@ export const parseAddressPath = (path: string): Address | null => {
   return { region, biome };
 };
 
+/** Whether every part names something: words that decode, or a region / biome TYPE of `regions`. A path
+ *  that parses but names nothing is a 404 (navigation.ts). */
+export const isKnownAddress = (
+  address: Address,
+  regions: readonly { name: string; biomes: readonly { name: string }[] }[],
+): boolean => {
+  const names = (part: Address["region"], known: readonly string[]): boolean =>
+    part.words ? decodeWords(part.words) !== null : known.includes(part.type!);
+  return (
+    names(address.region, regions.map((r) => r.name)) &&
+    (!address.biome || names(address.biome, regions.flatMap((r) => r.biomes.map((b) => b.name))))
+  );
+};
+
 export interface ResolvedAddress {
   regionCell: GridCell;
   region: SerializedRegion;

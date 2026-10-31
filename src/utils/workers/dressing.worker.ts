@@ -3,15 +3,17 @@
  * objects/dressing/enumerators.ts), plus two point queries that share its thread and config.
  *
  *   IN:  { type: "INIT", config: DomainConfig }
- *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: DressingBounds, args }
- *   IN:  { type: "VERTEX_SAMPLE", id, x, z } (single padded height sample — Player backstop)
- *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell)
+ *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: ChunkBounds, args }
+ *   IN:  { type: "VERTEX_SAMPLE", id, x, z, raw? } (single height sample, padded or raw — the Player's backstop and water probe)
+ *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell + the ground there)
+ *   IN:  { type: "SURFACE",       id, x, z, feetY } (the movement modifiers under a capsule — the Player's snow wading and traction)
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "DRESSING_RESULT", id, points }
  */
 
-import { computeVertexData, getPlaceInfo, initCompute, DomainConfig } from "./vertexCompute";
+import { computeVertexData, computeVertexDataRaw, getPlaceInfo, initCompute, surfaceModifiersAt, DomainConfig } from "./vertexCompute";
 import { isDressingEnumerator, runDressingEnumerator } from "../../objects/dressing/enumerators";
+import { groundAt } from "./ground";
 
 let initialized = false;
 
@@ -45,15 +47,25 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  // A flatten-tile miss costs 30-70ms — the Player confirms its backstop here instead of on the main thread.
+  // The Player's height and water samples land here, never on the main thread: a flatten-tile miss
+  // costs 30–70ms, and even the raw path's first touch of a cell builds its river list and road network
+  // (58ms + 12ms measured mid-flight, PERFORMANCE.md).
   if (type === "VERTEX_SAMPLE") {
+    const vd = e.data.raw ? computeVertexDataRaw(e.data.x, e.data.z) : computeVertexData(e.data.x, e.data.z);
     // biomeSdf is a shared scratch buffer and not what a sample consumer needs.
-    reply(id, [{ ...computeVertexData(e.data.x, e.data.z), biomeSdf: undefined }]);
+    reply(id, [{ ...vd, biomeSdf: undefined }]);
     return;
   }
 
   if (type === "PLACE_INFO") {
-    reply(id, [getPlaceInfo(e.data.x, e.data.z)]);
+    reply(id, [{ ...getPlaceInfo(e.data.x, e.data.z), ground: groundAt(e.data.x, e.data.z) }]);
+    return;
+  }
+
+  // The snow reads its lattice through the full pipeline; its first touch of a mountain cell
+  // generates the cell's caves (~250ms), which no stepping thread can afford (physics/DECISIONS.md).
+  if (type === "SURFACE") {
+    reply(id, [surfaceModifiersAt(e.data.x, e.data.z, e.data.feetY)]);
     return;
   }
 

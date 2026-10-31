@@ -54,6 +54,7 @@ const zoneByKey = new Map<string, Zone>();
 export const zonesByRegion = new Map<SerializedRegion, Zone[]>();
 let biomeSlotIds: number[] = [];
 let biomeSlotBlendHalves: number[] = [];
+let smallestBlendHalf = Infinity;
 /** Zones grouped by ascending heightHalf: the crispest tier claims its share of the
  *  height first, softer tiers split only what is left. */
 let zoneTiers: Zone[][] = [];
@@ -191,6 +192,7 @@ export const initZones = (config: DomainConfig): void => {
   riverbedSdf = new Float64Array(biomeSlotIds.length);
   riverbedSdfResult = new Float64Array(biomeSlotIds.length);
   biomeSlotBlendHalves = biomeSlotBlendHalvesOf(config);
+  smallestBlendHalf = Math.min(...biomeSlotBlendHalves);
   const byHalf = new Map<number, Zone[]>();
   for (const z of zones) {
     const tier = byHalf.get(z.heightHalf);
@@ -259,6 +261,17 @@ export const combineSlotWeights = (sdf: ArrayLike<number>, slotHalves: readonly 
 const biomeWeightScratch: number[] = [];
 /** The terrain shader's weight of `biomeIds` at a vertex (from its biomeSdf) —
  *  what foliage thins by, so blades fade with the texture instead of stopping on the cell line. */
+/** Whether any of `biomeIds` can carry material weight within `radius` (u) of the point whose slot
+ *  sdfs these are. A slot's sdf is its nearest wall's distance in that wall's material half (the
+ *  smaller side's blend half, so never under the smallest half of all), weight is zero from −1 down,
+ *  and a point `radius` away is at most radius / smallestHalf further in; a slot with no wall in the
+ *  window sits at −BIOME_SDF_FAR. Sound: it never says no where a weight exists. */
+export const biomesWeighWithin = (sdf: ArrayLike<number>, biomeIds: readonly number[], radius: number): boolean => {
+  const slack = radius / smallestBlendHalf;
+  for (let s = 0; s < biomeSlotIds.length; s++) if (biomeIds.includes(biomeSlotIds[s]) && sdf[s] > -1 - slack) return true;
+  return false;
+};
+
 export const biomeWeightOf = (sdf: ArrayLike<number>, biomeIds: readonly number[]): number => {
   const w = combineSlotWeights(sdf, biomeSlotBlendHalves, biomeWeightScratch);
   let want = 0;

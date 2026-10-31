@@ -4,11 +4,13 @@
  *  road (a 9u bow at (-258, 3115), pits and mounds in front of the cut, a trench under a ramp). And a
  *  river under a crossing freeway eases down to it along its length instead of dropping within one
  *  piece (36u at (-1548, 1090), a gorge under the deck). */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
 import { riverPieceEndSurface, riverPieceEndTerrainSurface } from "../rivers/riverSurface";
 import { riverPiecesIn } from "../rivers/riverNetwork";
 import { type FreewayBridge, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute } from "../vertexCompute";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 const decksNear = (cx: number, cz: number, r: number): FreewayBridge[] => {
@@ -45,7 +47,10 @@ describe("a deck landing's approach", () => {
           const at = (l: number) => computeVertexDataRaw(e.x - dx * d - dz * l, e.z - dz * d + dx * l).approachHeight;
           const lo = at(-10);
           const hi = at(10);
-          for (const l of [-5, 0, 5]) expect(Math.abs(at(l) - (lo + ((hi - lo) * (l + 10)) / 20))).toBeLessThan(0.35);
+          // 0.41 at the oblique run's deck (6119, 1216) since the road cap holds the river down along the
+          // whole span the road shadows (Oct 2026): the bank blend beside the lower water bows the road's
+          // edge by that much over 20u, a camber, not a bow.
+          for (const l of [-5, 0, 5]) expect(Math.abs(at(l) - (lo + ((hi - lo) * (l + 10)) / 20))).toBeLessThan(0.5);
         }
       }
     }

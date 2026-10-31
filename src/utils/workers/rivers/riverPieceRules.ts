@@ -1,12 +1,13 @@
 /**
  * Which pieces of a river edge are BUILT (CLAUDE.md "Rivers", the network's rules (1)–(5)): a piece is
- * not built deep in water (the mouth runs RIVER_MOUTH_REACH into the basin), near a prohibitRivers
- * biome, or on high/steep ground judged on a terrain proxy; steep gaps between river and water are
+ * not built deep in water (the mouth runs RIVER_MOUTH_REACH into the basin) or on high/steep
+ * ground judged on a terrain proxy; steep gaps between river and water are
  * filled, short blobs dropped, and gaps of low enough ridges are cut through as GORGES (junctionGorgesAt
  * and the in-edge gaps of riverEdgeBlocked). A new rule is one more verdict in classifyRiverPieces or one
  * more pass in riverEdgeOwnBlocked.
  */
 
+import { seedRand } from "../../math";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { lakeSurface, restoreShore, saveShore } from "../lakes";
@@ -18,10 +19,9 @@ import { accumulateWallFields, combineZoneWeights, restoreWallPass, saveWallPass
 import {
   RIVER_BLOCK_HIGH,
   RIVER_BLOCK_MOUNTAIN,
-  RIVER_BLOCK_PROHIBITED,
+  RIVER_BLOCK_SPRING,
   RIVER_BLOCK_WATER,
   RIVER_GAP_FILL,
-  RIVER_POND_FACTOR,
   RIVER_SURFACE_BELOW,
   riverKeepOff,
 } from "./constants";
@@ -31,17 +31,22 @@ import type { RiverEdge, RiverGorge } from "./types";
 /** A piece is water-blocked only this deep into water cells in BOTH directions along its edge —
  *  symmetric, so the mouth never depends on which way the edge is walked. */
 const RIVER_MOUTH_REACH = 160;
-/** High ground: a piece is not built where its biome relief exceeds MAX_RELIEF (the mountain's
- *  rock), where the ground climbs faster than MAX_GRADE along it (the surface follows the terrain:
- *  water would visibly run up the slope), or where it would sit on a ridge or across a hillside — its
- *  centerline MAX_RIDGE above both banks' outer edges, or the banks differing by more than
- *  MAX_CROSS_GRADE across the footprint (a perched channel every road crossing it must climb to). */
+/** High ground: a piece is not built where its biome relief exceeds MAX_RELIEF and is NOT the
+ *  mountain's rock (the rock is built whatever its slope: waterfalls, peak pools and springs), where
+ *  the ground climbs faster than MAX_GRADE along it (the surface follows the terrain: water would
+ *  visibly run up the slope), or where it would sit on a ridge or across a hillside — its centerline
+ *  MAX_RIDGE above both banks' outer edges, or the banks differing by more than MAX_CROSS_GRADE across
+ *  the footprint (a perched channel every road crossing it must climb to). */
 const RIVER_MAX_RELIEF = 40;
 const RIVER_MAX_GRADE = 0.2;
 const RIVER_MAX_RIDGE = 6;
 const RIVER_MAX_CROSS_GRADE = 0.15;
 /** A built stretch shorter than this between two unbuilt pieces is not built (a pond blob). */
 const RIVER_MIN_STRETCH = 300;
+/** A river climbing into the rock ends in a spring cave with this chance per edge, RIVER_SPRING_DEPTH
+ *  pieces into the rock (placeSprings); otherwise it crosses the rock over its peaks. */
+const RIVER_SPRING_CHANCE = 0.5;
+const RIVER_SPRING_DEPTH = 2;
 /** A GORGE is built through a gap of high ground or tall relief that is not the mountain's rock —
  *  inside an edge where the gap fill left it, or at a JUNCTION (an edge's run into a junction where
  *  another river goes on, or where another edge's run comes out of its river), up to RIVER_GAP_FILL in
@@ -53,11 +58,8 @@ const RIVER_GORGE_MAX_RISE = 25;
 const RIVER_GORGE_RISE_STEP = 10;
 
 const junctionGorges = new Map<string, Map<string, RiverGorge>>();
-let riversProhibitedSomewhere = false;
-
-export const initRiverPieceRules = (config: DomainConfig): void => {
+export const initRiverPieceRules = (_config: DomainConfig): void => {
   junctionGorges.clear();
-  riversProhibitedSomewhere = config.regions.some((r) => r.biomes.some((b) => b.prohibitRivers));
 };
 
 // A cheap stand-in for the terrain the river would sit on, to judge "high ground" while building
@@ -96,20 +98,8 @@ const riverTerrainProxy = (wx: number, wz: number): number => {
 
 const isWaterAt = (x: number, z: number): boolean => !!zoneAtWarped(x, z).biome.water;
 
-const RIVER_PROHIBIT_PROBES = [
-  [0, 0],
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-  [0.71, 0.71],
-  [-0.71, 0.71],
-  [0.71, -0.71],
-  [-0.71, -0.71],
-];
-
-/** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, near a prohibitRivers
- *  biome, mountainous, or high/steep ground. */
+/** Each piece's RIVER_BLOCK_* verdict on its own (0 = built): deep in water, mountainous, or
+ *  high/steep ground. */
 const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
   const n = e.count;
   const step = e.len / n;
@@ -135,15 +125,6 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
       isWaterAt(mx + e.ux * RIVER_MOUTH_REACH, mz + e.uz * RIVER_MOUTH_REACH)
     ) {
       blocked[i] = RIVER_BLOCK_WATER;
-    } else if (
-      riversProhibitedSomewhere &&
-      // The whole footprint of a pond end must stay clear of the biome.
-      RIVER_PROHIBIT_PROBES.some(
-        ([px, pz]) =>
-          zoneAtWarped(mx + px * r * RIVER_POND_FACTOR, mz + pz * r * RIVER_POND_FACTOR).biome.prohibitRivers,
-      )
-    ) {
-      blocked[i] = RIVER_BLOCK_PROHIBITED;
     } else {
       // The grade over the piece and its neighbors: one steep hummock is not a slope.
       const k0 = Math.max(0, i - 1);
@@ -152,10 +133,13 @@ const classifyRiverPieces = (e: RiverEdge): Uint8Array => {
       const center = riverTerrainProxy(mx, mz);
       const left = riverTerrainProxy(mx - e.uz * r, mz + e.ux * r);
       const right = riverTerrainProxy(mx + e.uz * r, mz - e.ux * r);
-      if (Math.max(reliefs[i], reliefs[i + 1]) > RIVER_MAX_RELIEF) {
+      const rock = (reliefs[i] > RIVER_MAX_RELIEF && rockAt[i]) || (reliefs[i + 1] > RIVER_MAX_RELIEF && rockAt[i + 1]);
+      if (rock) {
+        // The mountain's ROCK: built whatever its slope — the river climbs it (a waterfall) to a
+        // peak pool (riverSurface.ts riverEdgePools) or into a spring cave (placeSprings).
+        e.rock[i] = 1;
+      } else if (Math.max(reliefs[i], reliefs[i + 1]) > RIVER_MAX_RELIEF) {
         blocked[i] = RIVER_BLOCK_MOUNTAIN;
-        e.rock[i] =
-          (reliefs[i] > RIVER_MAX_RELIEF && rockAt[i]) || (reliefs[i + 1] > RIVER_MAX_RELIEF && rockAt[i + 1]) ? 1 : 0;
       } else if (
         grade > RIVER_MAX_GRADE ||
         center - Math.max(left, right) > RIVER_MAX_RIDGE ||
@@ -211,11 +195,62 @@ const dropRiverBlobs = (e: RiverEdge, blocked: Uint8Array): void => {
   }
 };
 
-/** The edge on its own: its pieces classified, its gaps filled, its blobs dropped. Cached on the edge. */
+/** SPRINGS: a river climbing into the rock either crosses it (over its peaks, each a pool) or, with
+ *  RIVER_SPRING_CHANCE per edge, runs RIVER_SPRING_DEPTH pieces in and disappears into a cave (its
+ *  source: a flooded passage to a pool room, underground/springs.ts). The pieces past the mouth are
+ *  RIVER_BLOCK_SPRING, which no gap fill or gorge joins. A rock run the river reaches from both
+ *  junctions gets a spring from each side when it is long enough to hold two, else it crosses. */
+const placeSprings = (e: RiverEdge, blocked: Uint8Array): void => {
+  const rock = e.rock!;
+  const n = e.count;
+  if (!rock.some((r) => r === 1)) return;
+  if (seedRand(`${domainConfig!.seed} - river spring ${e.key}`) >= RIVER_SPRING_CHANCE) return;
+  for (let i0 = 0; i0 < n; ) {
+    if (rock[i0] !== 1 || blocked[i0] !== 0) {
+      i0++;
+      continue;
+    }
+    let i1 = i0;
+    while (i1 + 1 < n && rock[i1 + 1] === 1 && blocked[i1 + 1] === 0) i1++;
+    const fromA = i0 > 0 && blocked[i0 - 1] === 0;
+    const fromB = i1 < n - 1 && blocked[i1 + 1] === 0;
+    const length = i1 - i0 + 1;
+    // Entered from neither side (a junction inside the rock decides) or too short for two springs: it crosses.
+    if ((fromA && fromB && length < 2 * RIVER_SPRING_DEPTH + 1) || (!fromA && !fromB)) {
+      i0 = i1 + 1;
+      continue;
+    }
+    const a = fromA ? i0 + RIVER_SPRING_DEPTH : i0;
+    const b = fromB ? i1 - RIVER_SPRING_DEPTH : i1;
+    for (let k = a; k <= b; k++) blocked[k] = RIVER_BLOCK_SPRING;
+    i0 = i1 + 1;
+  }
+};
+
+/** A spring's mouth: the river's last piece end before a RIVER_BLOCK_SPRING piece. `forward`: the
+ *  river flows along the edge (A → B) into it. From the edge's FINAL blocked array. */
+export interface RiverSpring {
+  /** The piece-end index of the mouth. */
+  end: number;
+  forward: boolean;
+}
+export const riverEdgeSprings = (e: RiverEdge): RiverSpring[] => {
+  const blocked = riverEdgeBlocked(e);
+  const out: RiverSpring[] = [];
+  for (let k = 1; k < e.count; k++) {
+    if (blocked[k - 1] === 0 && blocked[k] === RIVER_BLOCK_SPRING) out.push({ end: k, forward: true });
+    else if (blocked[k] === 0 && blocked[k - 1] === RIVER_BLOCK_SPRING) out.push({ end: k, forward: false });
+  }
+  return out;
+};
+
+/** The edge on its own: its pieces classified, its gaps filled, its springs placed, its blobs dropped.
+ *  Cached on the edge. */
 const riverEdgeOwnBlocked = (e: RiverEdge): Uint8Array => {
   if (e.ownBlocked) return e.ownBlocked;
   const blocked = classifyRiverPieces(e);
   fillRiverGaps(e, blocked);
+  placeSprings(e, blocked);
   dropRiverBlobs(e, blocked);
   e.ownBlocked = blocked;
   return blocked;

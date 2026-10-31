@@ -3,7 +3,7 @@
  *  chunk samples a road identically. */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { CITY_WIGGLE_AMP, cityDistrictPitch, cityRowBoundary, cityRowEdgeZ, citySegBoundary, citySegEdgeX, findCityRow, findCitySeg } from "../roads/cityDistricts";
 import { wallDrownedAt } from "../roads/cityWaterfront";

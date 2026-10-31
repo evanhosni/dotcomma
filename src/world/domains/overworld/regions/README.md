@@ -2,26 +2,55 @@
 
 ## How it works
 
-- Two nested voronoi grids split the overworld: each **region** cell (`regionGridSize`) rolls a region from `OVERWORLD_REGIONS` ([index.ts](index.ts)), and each **biome** cell (`gridSize`) rolls one of that region's `biomes`. Rolls are `floor(u × count)` over the list **in order**, so list order decides the map and every address.
-- A **region** owns a `baseNoise` (relief under all its biomes), a BASE material (`shaders/base.glsl`) and a `<Skybox>`. A **biome** owns its `noise` (or `water` for a lake), a fragment shader (`shaders/fragment.glsl`), its `actors`, and optional `<Dressing>`, `<Foliage>`, `<Skybox>`.
-- **No hard edges:** height, material and sky cross-fade at every wall (`accumulateWallFields` in `utils/workers/zoneBlend.ts`). Near its edge a biome fades into its region's base by its "presence". Widths (`blendWidth` / `heightBlendWidth`) resolve biome → region → `defaultBlendWidth`.
-- **Data vs JSX:** everything the server needs is in Three-free `spec.ts` files; [../config.ts](../config.ts) builds the server's config from `OVERWORLD_REGIONS`. `region.tsx` is `<Region spec biomes={{ name: Component }}>`; `biome.tsx` is `<Biome spec>` plus client-only children. Ids/names are checked in `../../domainConfig.ts` (unique; name = lowercase letters, used as the address word and `<name>_frag`).
-- **Materials:** every region/biome shader is merged into ONE terrain shader (`combineBiomeMaterials`, `world/shaders/combineBiomeMaterials.ts`). Uniform and helper names are global across shaders; at most `MAX_BIOME_SLOTS` biomes per domain. See [../../../shaders/README.md](../../../shaders/README.md).
-- City heights are bespoke code (`utils/workers/roads/cityTerrain.ts`); the snow region shares [snow/riverbed.ts](snow/riverbed.ts).
+One folder per region, one per biome inside it, each with an `index.tsx` holding its tree and a
+`shaders/` folder holding its GLSL. The folder hierarchy IS the content hierarchy.
 
-## How to add another
+```
+regions/
+  city/
+    index.tsx            <Region id={1} name="city"> … its biomes
+    shaders/base.glsl    its BASE material — what its biomes fade into at their edges
+    biomes/
+      city/
+        index.tsx        <Biome id={1} name="city"> … everything true of it
+        shaders/fragment.glsl
+        lights.tsx       code only this biome uses lives here
+      grass/…
+```
 
-Adding a biome re-rolls its region's cells; adding a region re-rolls every region cell. Existing addresses move.
+The four regions and what makes each: **city** (city + grass on the default base, rivers 0.35),
+**desert** (dust + salt on their own simplex base, 0.15), **snow** (tundra + mountain on a slow
+perlin base, 0.55), **ocean** (lake biomes on a near-flat base, 0.6).
 
-**Biome**
-1. Create `<region>/biomes/<name>/spec.ts` exporting a `BiomeSpec` (`id`, `name`, `joinable`, `noise` or `water`, optional `blendWidth`, `prohibitRoads`, `actors`).
-2. Create `shaders/fragment.glsl` (copy [desert/biomes/dust/shaders/fragment.glsl](desert/biomes/dust/shaders/fragment.glsl)).
-3. Create `biome.tsx` (copy [desert/biomes/dust/biome.tsx](desert/biomes/dust/biome.tsx)): `<Biome spec>` + `<Material shader textures>`.
-4. Append the spec to the region's `spec.ts` `biomes`, and add `<name>: Component` to the `biomes` map in its `region.tsx`.
+**JSX order is VORONOI order.** The region roll is `floor(u × count)` over the `<Region>` children
+of the domain, and the biome roll over the `<Biome>` children of each region.
 
-**Region**
-1. Create `<name>/spec.ts` exporting a `RegionSpec` (`id`, `name`, `biomes`, `baseNoise`, `riverProbability`).
-2. Create `shaders/base.glsl` (copy [desert/shaders/base.glsl](desert/shaders/base.glsl)) and `region.tsx` (copy [ocean/region.tsx](ocean/region.tsx)): `<Region spec biomes>` + `<Material>` + `<Skybox>`.
-3. Add its biomes (above).
-4. Append the spec to `OVERWORLD_REGIONS` in [index.ts](index.ts) and add `<name>: Component` to the `<Regions components>` map in [../domain.tsx](../domain.tsx).
-5. Optional: themed nouns ([../README.md](../README.md)). The CRT page, sky mix, rivers and server config follow automatically.
+## How to add a biome
+
+1. `biomes/<name>/shaders/fragment.glsl` — a `void main()` writing `gl_FragColor`. Its uniform and
+   varying lines are stripped; sampler uniform names are GLOBAL across every biome shader (the
+   terrain is one material), so reuse a name only for the same file.
+2. `biomes/<name>/index.tsx`:
+   ```tsx
+   export const MyBiome = content(
+     <Biome id={9} name="myname" joinable blendWidth={150}>
+       <Material shader={fragmentShader} textures={{ mytexture: "my.png" }} />
+       <Noise params={{ … }} />
+       {/* whatever is true of it: <Snow/>, <Rocks/>, <Caves>, <StreetLamps/>, <Actor/>, … */}
+     </Biome>,
+   );
+   ```
+3. One line in its region's `index.tsx`: `<MyBiome />`.
+
+The id and the name must be unique in the domain; the name is lowercase letters only (it is an
+address word and a shader function name).
+
+## How to add a region
+
+The same, one level up: `<Region id name>` with a `<Material>` (its base), a `<Noise>`, a
+`<Skybox>`, a `<Rivers chance>` if it has any, and its biomes. Then one line in the domain's tree.
+
+## Hazard
+
+**Adding or reordering either MOVES THE MAP** — every cell of that grid re-rolls and every address
+anyone has linked to points somewhere else.

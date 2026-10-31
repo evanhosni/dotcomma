@@ -1,6 +1,6 @@
 /** Polyline and segment geometry the bridge enumerator shares (world or warped xz). */
 
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { BRIDGE_WET_SAMPLE, MOUTH_SAMPLE } from "./constants";
 

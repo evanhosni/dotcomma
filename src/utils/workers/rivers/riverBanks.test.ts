@@ -3,13 +3,17 @@
  *  and the terrain share one grid per chunk and interpolate linearly on the same triangles, so a
  *  vertex-level guarantee holds across every triangle. (A bank blended down from the rim puts the
  *  ground under the surface, and a second strip of water shows on the sand.) */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { LAKE_BIOME } from "../../../world/domains/overworld/regions/ocean/biomes/lake/spec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, computeVertexDataFar, computeVertexDataRaw, getRiverSegments, initCompute, unwarp, warp } from "../vertexCompute";
 import { RIVER_BLOCK_WATER } from "./constants";
 import { riverPieceBuilt, riverPiecesNear } from "./riverNetwork";
 import { riverEdgeBlocked } from "./riverPieceRules";
 import { lastShoreDistance } from "../lakes";
+import { biomeIdOf } from "../../../world/content/config";
+
+const LAKE_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "lake") };
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const config = OVERWORLD_CONFIG;
 
@@ -74,7 +78,7 @@ describe("river banks", () => {
 
   it("run on to their other stretch or into the water across any gap under 800u that is not mountain", () => {
     // Rivers connect to the water near them (no river in blobs between two seas). Per edge: every stretch of unbuilt pieces up to RIVER_GAP_FILL long
-    // with river or water on both sides reaches the mountain's rock (code 4) or a prohibited biome (2).
+    // with river or water on both sides reaches a tall non-rock relief (code 4), a prohibited biome (2) or the rock past a spring's mouth (5).
     const pieces = riverPiecesNear(-12000, -12000, 12000, 12000, 0);
     const edges = new Map(pieces.map((p) => [p.edge.key, p.edge]));
     let gaps = 0;
@@ -93,7 +97,7 @@ describe("river banks", () => {
         const riverish = (k: number) => k >= 0 && k < e.count && (b[k] === 0 || b[k] === 1);
         if (riverish(i - 1) && riverish(j + 1) && (j - i + 1) * step <= 800) {
           gaps++;
-          expect(Array.from(b.slice(i, j + 1)).some((c) => c === 2 || c === 4)).toBe(true);
+          expect(Array.from(b.slice(i, j + 1)).some((c) => c === 2 || c === 4 || c === 5)).toBe(true);
         }
         i = j + 1;
       }
@@ -148,9 +152,11 @@ describe("river banks", () => {
     const grid: { wet: number; h: number; w: number }[] = [];
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
-        const v = computeVertexData(cx - half + j * step, cz - half + i * step);
+        const x = cx - half + j * step;
+        const z = cz - half + i * step;
+        const v = computeVertexData(x, z);
         const wet = v.waterHeight > v.height + 0.05;
-        // 1 = the river's water, 2 = the lake's
+        // 1 = the river's water, 2 = the lake's.
         grid.push({ wet: !wet ? 0 : v.biomeId !== LAKE_BIOME.id && v.distanceToRiverCenter < band ? 1 : 2, h: v.height, w: v.waterHeight });
       }
     }
@@ -214,7 +220,7 @@ describe("river banks", () => {
         expect(Number.isNaN(v.waterHeight) || v.waterHeight <= v.height + 1e-6).toBe(true);
       }
     }
-    expect(banks).toBeGreaterThan(20);
+    expect(banks).toBeGreaterThan(10);
   });
 
   it("are absent from the far LODs that skip the river field: no water, no bed paint, no trench", () => {

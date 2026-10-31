@@ -2,7 +2,7 @@
  *  near a river that no deck carries across. */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { distanceToSegment } from "../../math/_math";
+import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import { warp, warpMax } from "../noise";

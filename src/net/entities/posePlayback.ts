@@ -1,5 +1,4 @@
 import { getServerTime } from "../connection";
-import type { ClientEntity } from "./entityStore";
 import {
   advanceRenderClock,
   INTERP_DELAY_MS,
@@ -17,7 +16,7 @@ const playedOutSnapshot = (snaps: Snapshot[], renderTime: number): Snapshot | nu
   snaps.length === 1 && renderTime - snaps[0].st > MAX_EXTRAPOLATION_MS ? snaps[0] : null;
 
 /**
- * One synced actor's playback of the server's track: a per-actor render clock that
+ * One synced actor's (or remote player's) playback of the server's track: a per-actor render clock that
  * slews (±10%) toward server time − INTERP_DELAY_MS, so a re-estimated clock offset
  * never steps the picture, plus the snapshot sampler (interpolation.ts).
  */
@@ -37,10 +36,10 @@ export class PosePlayback {
   }
 
   /** `target` is left untouched while the track has no samples. */
-  sample(entity: ClientEntity, deltaS: number, target: PuppetTarget): SampleStatus {
+  sample(track: { snapshots: Snapshot[] }, deltaS: number, target: PuppetTarget): SampleStatus {
     const dtMs = Math.min(deltaS, 0.25) * 1000;
     this.renderClock = advanceRenderClock(this.renderClock, dtMs, getServerTime() - INTERP_DELAY_MS);
-    const snaps = entity.snapshots;
+    const snaps = track.snapshots;
     const held = this.heldOn;
     if (held !== null && target === this.heldTarget && playedOutSnapshot(snaps, this.renderClock) === held) return "hold";
     pruneSnapshots(snaps, this.renderClock);

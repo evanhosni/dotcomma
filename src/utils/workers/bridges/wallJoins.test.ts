@@ -2,12 +2,14 @@
  *  where two merged decks' walls end at one corner, each runs on until it meets the other's wall, so no
  *  notch is left between them; the run-on stands only over the merged slabs, never over pavement; its
  *  colliders are what the ribbon draws; and it is the same whatever order the chunks are asked in. */
-import { OVERWORLD_CONFIG } from "../../../world/domains/overworld/config";
-import { BRIDGE_PARAPET_HEIGHT, BRIDGE_PLACEMENT, bridgeColliderPoints } from "../../../objects/dressing/bridges/bridgeSpec";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
+import { BRIDGE_PARAPET_HEIGHT, BRIDGE_PLACEMENT, bridgeColliderPoints } from "../../../objects/dressing/bridges/spec";
 import { drawnOn } from "./drawnSlab";
 import { pavedAt } from "./landings";
 import { type FreewayBridge, bridgeSections, getFreewayBridges, initCompute } from "../vertexCompute";
 import { BRIDGE_WALL_PARTNER_REACH, type BridgeWallEnd, bridgeWallEnds, bridgeWallFootprints } from "./wallJoins";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const CHUNK = 256;
 /** A corner whose partner's wall is open over road pavement there (nothing to meet) leaves a gap of

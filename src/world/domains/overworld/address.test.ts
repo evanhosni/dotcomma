@@ -2,7 +2,7 @@
  *  forever. The fixed vectors below pin the encoding; regenerate them only for a
  *  deliberate, world-breaking change. */
 import { initCompute } from "../../../utils/workers/vertexCompute";
-import { OVERWORLD_CONFIG } from "./config";
+import { DOMAIN_CONFIGS } from "../../../world/domains";
 import {
   ADJECTIVES,
   BIOME_NOUNS,
@@ -12,9 +12,12 @@ import {
   describeBiomeCell,
   encodeCell,
   formatAddressPath,
+  isKnownAddress,
   parseAddressPath,
   resolveAddress,
 } from "./address";
+
+const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
 const LAKE = BIOME_NOUNS.lake;
 const ALL_THEMES = [...Object.values(REGION_NOUNS), ...Object.values(BIOME_NOUNS), GENERIC_NOUNS];
@@ -88,6 +91,16 @@ describe("address paths", () => {
     expect(parseAddressPath("/city/not-words-1")).toBeNull();
     expect(parseAddressPath("/index.html")).toBeNull();
     expect(formatAddressPath(["famous", "sprawl"], ["amber", "lagoon"])).toBe("/famous-sprawl/amber-lagoon");
+  });
+
+  it("knows a path only when every part names something (the rest is the 404 domain)", () => {
+    const known = (path: string) => isKnownAddress(parseAddressPath(path)!, OVERWORLD_CONFIG.regions);
+    expect(known("/desert")).toBe(true);
+    expect(known("/snow/mountain")).toBe(true);
+    expect(known("/famous-sprawl/velvet-town")).toBe(true);
+    expect(known("/nowhere")).toBe(false);
+    expect(known("/snow/nowhere")).toBe(false);
+    expect(known("/notaword-sprawl")).toBe(false);
   });
 });
 

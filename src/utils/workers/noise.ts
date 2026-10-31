@@ -1,5 +1,5 @@
 import Noise from "noise-ts";
-import { seedRand } from "../math/_math";
+import { seedRand } from "../math";
 import type { PointXZ } from "../math/types";
 import { domainConfig } from "./computeConfig";
 import type { BiomeNoiseConfig, TerrainNoiseParams } from "./types";
@@ -7,7 +7,7 @@ import type { BiomeNoiseConfig, TerrainNoiseParams } from "./types";
 const noiseInstance = new Noise(seedRand("bierce"));
 
 export const simplex2 = (x: number, y: number) => noiseInstance.simplex2(x, y);
-const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
+export const perlin2 = (x: number, y: number) => noiseInstance.perlin2(x, y);
 
 // Memoized per params object: recomputing 2**-persistence per call added a pow per noise call.
 const noiseParamsCache = new WeakMap<TerrainNoiseParams, { G: number; norm: number }>();
@@ -79,6 +79,8 @@ export const biomeNoiseHeight = (config: BiomeNoiseConfig, x: number, z: number,
     const floor = dome.noiseFloor ?? 1;
     h = h * (floor + (1 - floor) * rise) + dome.height * rise;
   }
+  // Linear, after the shaping and the dome: small bumps at every depth, the foot included.
+  if (config.detail) for (const layer of config.detail) h += terrainNoise(layer, x, z);
   if (config.offset !== undefined) h += config.offset;
   return h;
 };

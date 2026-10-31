@@ -1,5 +1,6 @@
 import { computeVertexData } from "../../../src/utils/workers/vertexCompute";
-import { GRASS_BIOME } from "../../../src/world/domains/overworld/regions/city/biomes/grass/spec";
+import { biomeIdOf } from "../../../src/world/content/config";
+import { DOMAIN_CONFIGS } from "../../../src/world/domains";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../../src/player/spec";
 import { PhysicsWorld } from "../game/physics/physicsWorld.js";
 import { TICK_SECONDS } from "../game/tick.js";
@@ -49,7 +50,7 @@ const main = async () => {
   console.log(`Rapier ready. dt = ${TICK_SECONDS}s (entity tick)`);
 
   let t0 = performance.now();
-  const patch = findBiomePatch(GRASS_BIOME.id);
+  const patch = findBiomePatch(biomeIdOf(DOMAIN_CONFIGS.overworld, "grass"));
   if (!patch) throw new Error("no grassland patch found");
   console.log(`grassland patch at (${patch.x}, ${patch.z}) — found in ${(performance.now() - t0).toFixed(0)}ms`);
 

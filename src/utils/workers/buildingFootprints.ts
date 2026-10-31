@@ -1,7 +1,7 @@
 import { generateBuildingPlan } from "../../objects/actors/building/generatePlan";
 import { ringPoints } from "../../objects/actors/building/rings";
 import { buildingSeedAt } from "../../objects/actors/building/spec";
-import { getActorSpec } from "../../world/domains/configs";
+import { getActorSpec } from "../../world/domains";
 import { dropOldestHalf } from "./cellCache";
 import { getFlattenPoints } from "./flattenPads";
 

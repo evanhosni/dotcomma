@@ -2,7 +2,7 @@
  *  its own grade, and a cut end's MOUTH — the asphalt between the cut and the road it lands on, at the
  *  slab's height and painted as road. Read against the drawn slab (drawnSlab.ts). */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { bridgeSideIn, drawnOf } from "./drawnSlab";
 import type { BridgeSection, FreewayBridge } from "./types";

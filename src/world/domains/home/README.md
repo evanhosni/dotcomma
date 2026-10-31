@@ -2,17 +2,9 @@
 
 ## How it works
 
-The landing page at `/`: a flat black world with a huge CRT that selects an overworld address. Wired in [domain.tsx](domain.tsx).
+The landing page at `/`: a flat black world with a floating title and a huge CRT showing static. Clicking the CRT enters the overworld. Wired in [index.tsx](index.tsx).
 
-- **No streaming terrain** (`<Domain terrain={false}>`). [HomeGround.tsx](HomeGround.tsx) is a black plane, a lit wireframe grid that follows the camera (snapped to `GRID_SPACING`) and one collider; it sets `terrainLoaded`/`progress` itself.
-- **Flat config still commits** (`<Terrain>` with zero noise, the config-only `home` region and `wire` biome in [regions/](regions/)) so the analytic height pipeline reads zero for the Player. Don't remove it.
-- **No ambient light**: the grid stays black until the CRT's glow light (parked at zero intensity from mount) turns on.
-- [CrtMonitor.tsx](CrtMonitor.tsx): powers on after the first pointer lock; the wheel scrolls pages (`ADDRESS_PAGES` = one `/<region>` page per `OVERWORLD_REGIONS` entry, then `EXTRA_PAGES`, padded with locked pages to `MIN_PAGE_COUNT`). Clicking an unlocked page within `INTERACT_DISTANCE` calls `navigateToAddress(href)`. [crtScreen.ts](crtScreen.ts) draws the page atlas and screen shader; [domainDiorama.ts](domainDiorama.ts) bakes the hand-built thumbnail.
-- [ClickToEnter.tsx](ClickToEnter.tsx): HTML gate that swallows clicks until "click to enter", then triggers drei's pointer lock.
+- **The ground is the streaming terrain**, flat (`FLAT_NOISE`) and drawn as a wire grid (`<Terrain wireframe>`). Its biome's material is [shaders/fragment.glsl](shaders/fragment.glsl) (built by `crtLitGridMaterial`): the lines are black until the CRT powers on, then lit by its glow. The terrain's own point lighting only runs at night, so the grid computes the glow itself from `CRT_GLOW` and the shared `CRT_POWER` uniform.
+- [HomeScreen.tsx](HomeScreen.tsx): the page's HTML, built like the other overlays (menus/overlay) and removed with the domain. A full-page backdrop swallows every click until the pointer first locks (drei's PointerLockControls listens on the DOCUMENT). "- click to enter -" dispatches a synthetic document click: drei locks the element its controls are connected to, while locking one we pick would leave mouse-look dead.
+- [crt/](crt/index.tsx): the TV. It powers on into static ([crt/material.ts](crt/material.ts)) a second after the first pointer lock. Its glow light is PARKED at intensity 0 from mount, because a light appearing later recompiles every lit shader. It is solid: one fixed Rapier box around the bezel and the housing, made imperatively. While hovered within `INTERACT_DISTANCE` it claims the crosshair (utils/cursor), and its click calls `enterOverworld()` ([../navigation.ts](../navigation.ts)): the overworld at the biome cell the world origin sits in, dropped from `ENTRY_DROP_HEIGHT` ([../overworld/FastTravel.tsx](../overworld/FastTravel.tsx)) to fall while the map loads. Its placement and glow are [crt/constants.ts](crt/constants.ts).
 - [HomeTitle.tsx](HomeTitle.tsx): the floating title (a canvas-text material).
-
-## How to add another
-
-Region pages are automatic. To add another page:
-
-1. Append `{ label, href }` to `EXTRA_PAGES` in [CrtMonitor.tsx](CrtMonitor.tsx); `href` is any overworld address ([../overworld/README.md](../overworld/README.md)). Omit `href` for a locked page.

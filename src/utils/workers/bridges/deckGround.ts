@@ -8,7 +8,7 @@
  * road in front of the cut — is asphalt meeting the slab flush.
  */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import { CHUNK_SIZE, LOD1_SEGMENTS } from "../../../world/terrain/lodConfig";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";

@@ -11,4 +11,4 @@ Signals at some city street intersections: a pole on a sidewalk corner, a mast a
 
 ## How to add another
 
-N/A — one instance covers every intersection. Mount `<TrafficLights />` once in the city biome's `<Dressing>` (props: `renderDistance`, `colliderDistance`); tune `chance` in `SIGNAL_PLACEMENT`.
+Mount `<TrafficLights />` in a biome (props: `renderDistance`, `colliderDistance`); tune `chance` in `SIGNAL_PLACEMENT`. One driver covers every intersection of every biome that mounts it.

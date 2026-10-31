@@ -1,8 +1,11 @@
-import { resetDressingWorker } from "../../objects/dressing/dressingWorker";
-import { resetFoliageWorker } from "../../objects/foliage/foliageWorker";
-import { resetSpawnWorker } from "../../objects/actors/spawning/spawnWorker";
-import { resetSpriteWorkers } from "../../objects/sprite-lod/spriteWorker";
-import { resetTerrainSystem } from "../terrain/TerrainRenderer";
+import { resetDressingWorker } from "../../objects/dressing/worker";
+import { resetFarMouths } from "../underground/farMouths";
+import { resetUndergroundWorker } from "../underground/worker";
+import { resetFoliageWorker } from "../../objects/foliage/worker";
+import { resetSpawnWorker } from "../../objects/actors/spawning/worker";
+import { resetSpriteWorkers } from "../../objects/sprite-lod/worker";
+import { resetTerrainSystem } from "../terrain";
+import { resetPlace } from "../place";
 import { resetActiveDomain } from "./utils";
 
 /** Domain-switch teardown; runs while NO domain is mounted. Deliberately NOT
@@ -15,5 +18,8 @@ export const resetDomainSystems = () => {
   resetSpriteWorkers();
   resetFoliageWorker();
   resetDressingWorker();
+  resetUndergroundWorker();
+  resetFarMouths();
   resetActiveDomain();
+  resetPlace();
 };

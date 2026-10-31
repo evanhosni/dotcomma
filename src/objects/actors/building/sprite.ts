@@ -1,5 +1,5 @@
 import { reportContentError } from "../../../utils/contentError";
-import { seedRand } from "../../../utils/math/_math";
+import { seedRand } from "../../../utils/math";
 import { packColor, packUnitPair, SPRITE_DATA_FLOATS } from "../../sprite-lod/layout";
 import type { SpriteDescription } from "../../sprite-lod/types";
 import { generateBuildingPlan } from "./generatePlan";

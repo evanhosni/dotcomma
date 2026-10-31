@@ -3,14 +3,15 @@ import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { RootState, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { reportContentError } from "../../utils/contentError";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
 import { warmPrograms } from "../../utils/warmPrograms";
 import { ActorAttributes } from "../types";
-import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from "./Actor";
+import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from ".";
 import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
-import { createColliders } from "./colliders/collider";
-import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import { createColliders } from "./colliders/worker";
+import { useModelColliders } from "./colliders/useModelColliders";
 import type { ModelColliders } from "./colliders/types";
 import { useKinematicMover } from "./kinematicMover";
 import {
@@ -48,8 +49,6 @@ const ensureManualAnimationListener = (): void => {
     manualAnimationSubscribers.forEach((apply) => apply());
   });
 };
-
-useGLTF.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
 
 /**
  * THE GLTF ACTOR: a pooled model clone, its colliders, the animation mixer + LOD,
@@ -93,7 +92,6 @@ export const ModelActor = ({
   despawnDistance,
   frustumPadding,
   onDestroy,
-  collidersNeverMove = true,
   wholeTrimesh = false,
   excludeColliderNames,
   quantization,
@@ -103,7 +101,8 @@ export const ModelActor = ({
   const ownPositionRef = useRef(new THREE.Vector3(...coordinates));
   const positionRef = ownerPositionRef ?? ownPositionRef;
   const groupRef = useRef<THREE.Group | null>(null);
-  const gltf = useGLTF(model);
+  // Models are plain GLB: Draco kept a pool of 4 decoder workers × 16 MB wasm resident for the session (objects/DECISIONS.md).
+  const gltf = useGLTFPlain(model);
 
   // Pool HIT is synchronous; a MISS renders null and builds through the shared queue
   // (same peek-then-queue pattern as <Building>) — otherwise a batch of 20 fresh clones
@@ -209,6 +208,8 @@ export const ModelActor = ({
     },
   });
 
+  useModelColliders(body !== "kinematic" && body !== "none" ? colliders : null, coordinates, lifecycle.collidersActive);
+
   const mover = useKinematicMover({
     // The capsule appears with the model (a pool miss renders nothing until its clone lands).
     enabled: isKinematic && pooled !== null,
@@ -283,24 +284,19 @@ export const ModelActor = ({
       <group ref={setGroup} visible={false} position={coordinates}>
         <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
-      {body !== "kinematic" && body !== "none" && lifecycle.collidersActive && colliders && (
-        <>
-          {colliders.capsuleColliders.map((collider, index) => (
-            <CapsuleCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.sphereColliders.map((collider, index) => (
-            <SphereCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.boxColliders.map((collider, index) => (
-            <BoxCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.trimeshColliders.map((collider, index) => (
-            <TrimeshCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-        </>
-      )}
     </Suspense>
   );
+};
+
+/** `useGLTF` with Draco OFF (every model is plain GLB, objects/DECISIONS.md); a model that needs the
+ *  decoder fails to load, and that failure is a LOUD content error naming the model, not a silent hole. */
+const useGLTFPlain = (model: string): ReturnType<typeof useGLTF> => {
+  try {
+    return useGLTF(model, false);
+  } catch (e) {
+    if (e instanceof Error && /draco/i.test(e.message)) reportContentError(`${model} is Draco-compressed: models are plain GLB with separate vertex buffers — re-export it without Draco`);
+    throw e;
+  }
 };
 
 /** Load-time program warm-up (utils/warmPrograms.ts): one real clone per (model, quantization) is
@@ -308,7 +304,7 @@ export const ModelActor = ({
  *  parked in the clone pool, so the first spawn also skips the clone pipeline. */
 const ModelActorWarmup = ({ descriptor }: { descriptor: Pick<ModelActorAttributes, "model" | "quantization"> }) => {
   const { model, quantization } = descriptor;
-  const gltf = useGLTF(model);
+  const gltf = useGLTFPlain(model);
   const scene = useThree((state) => state.scene);
   useEffect(() => {
     const clone = acquireModelClone(model, gltf, quantization);

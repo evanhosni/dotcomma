@@ -1,4 +1,6 @@
-import { OVERWORLD_REGIONS } from "../../world/domains/overworld/regions";
+import { childrenOfKind } from "../../world/content";
+import { actorPlacementsOf } from "../../world/content/config";
+import { DOMAIN_NODES } from "../../world/domains";
 import { mergeActorListings } from "./spec";
 
 describe("biome listings are an actor's biomes", () => {
@@ -15,16 +17,21 @@ describe("biome listings are an actor's biomes", () => {
     ]);
   });
 
-  it("every overworld kind spawns only in the biomes that list it (the beeble is city-only)", () => {
+  it("every overworld kind spawns only in the biomes that mount it (the beeble is city-only)", () => {
     const listed = new Map<string, number[]>();
-    for (const r of OVERWORLD_REGIONS) {
-      for (const b of r.biomes) for (const m of b.actors ?? []) listed.set(m.actor.id, [...(listed.get(m.actor.id) ?? []), b.id]);
+    for (const region of childrenOfKind(DOMAIN_NODES.overworld, "region")) {
+      for (const biome of childrenOfKind<{ id: number }>(region, "biome")) {
+        for (const { id } of actorPlacementsOf(biome)) listed.set(id, [...(listed.get(id) ?? []), biome.props.id]);
+      }
     }
     expect(Object.fromEntries(listed)).toEqual({
+      "beeble@sewers.rooms": [1],
       beeble: [1],
       building: [1],
       skyscraper: [1],
       house: [3],
+      "beeble@caves.rooms": [7],
     });
   });
 });
+

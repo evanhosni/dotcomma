@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { BIOME_SDF_FAR } from "../../utils/workers/vertexCompute";
 import { LODLevel } from "./lodConfig";
 import { MAX_BIOME_SLOTS } from "./material";
-import type { ChunkBuildResult } from "./terrainWorker";
+import type { ChunkBuildResult } from "./worker";
 
 // A chunk's mesh buffers: a (segments + 1)² grid in PlaneGeometry's layout (rotated to y-up by the
 // plane) plus a SKIRT ring hanging below the perimeter, pooled per LOD and refilled from each worker
@@ -206,7 +206,7 @@ const writeBiomeSlots = (geom: THREE.BufferGeometry, lod: LODLevel, result: Chun
 };
 
 /** Fills a terrain chunk's geometry from its worker result: heights (the skirt hangs `skirtDepth`
- *  below its edge), the biome blend slots, the road/river fields and the normals. */
+ *  below its edge), the biome blend slots, the road/river fields, the water-or-snow depth and the normals. */
 export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, result: ChunkBuildResult): void => {
   const n = lod.segments + 1;
   const mainVertCount = n * n;
@@ -233,12 +233,13 @@ export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, r
     copyEdgeToSkirt(arr, 1, perimeterIndices, mainVertCount);
   }
 
-  // How deep the ground lies under drawn water (0 where dry): biome frags shade a lakebed by it.
+  // How deep the ground lies under drawn water (biome frags shade a lakebed by it), else MINUS the
+  // terrain's own snow depth: the program has no attribute slot left, and snow never lies under water.
   const underwater = ensureAttribute(geom, "underwaterDepth");
-  const waterHeights = result.waterHeights;
+  const { waterDepths, snowDepths } = result;
   for (let i = 0; i < mainVertCount; i++) {
-    const depth = waterHeights ? waterHeights[i] - result.heights[i] : 0;
-    underwater[i] = depth > 0 ? depth : 0;
+    const depth = waterDepths ? waterDepths[i] : 0;
+    underwater[i] = depth > 0 ? depth : snowDepths ? -snowDepths[i] : 0;
   }
   copyEdgeToSkirt(underwater, 1, perimeterIndices, mainVertCount);
 
@@ -254,16 +255,47 @@ export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, r
   geom.attributes.normal.needsUpdate = true;
 };
 
+/** The water level a DRY vertex dives under: the lowest of its own reported surface (a lake's level, a
+ *  spring cave's water; NaN past a river's water band) and the surfaces of its wet grid neighbours, all
+ *  EIGHT — a triangle's wet corner can be the diagonal one, and with four a few walls stood (in-page
+ *  scan). Every triangle the vertex belongs to then descends from its wet corners. +∞ with none, which
+ *  leaves the ground. */
+const dryWaterLevel = (i: number, n: number, waterHeights: Float32Array, waterDepths: Float32Array): number => {
+  const own = waterHeights[i];
+  const ix = i % n;
+  const iz = (i - ix) / n;
+  let level = Number.isFinite(own) ? own : Infinity;
+  for (let dz = -1; dz <= 1; dz++) {
+    const z = iz + dz;
+    if (z < 0 || z >= n) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = ix + dx;
+      if (x < 0 || x >= n || (dx === 0 && dz === 0)) continue;
+      const j = z * n + x;
+      if (waterDepths[j] > 0 && waterHeights[j] < level) level = waterHeights[j];
+    }
+  }
+  return level;
+};
+
 /** Fills a chunk's WATER geometry over the same grid: wet vertices at the water height with their
- *  `waterDepth`, dry ones dived under the ground by at least the vertex spacing — a river is narrower
- *  than a coarse LOD's quads, and a shallower dive let one wet vertex's surface cover the triangles
- *  around it (a sheet over the banks). Along an edge the sheet ends within ~depth of the wet vertex. */
+ *  `waterDepth` and `waterFlow`, dry ones dived by at least the vertex spacing under the LOWER of their
+ *  ground and the water level beside them (dryWaterLevel) — a river is narrower than a coarse LOD's quads,
+ *  and a shallower dive let one wet vertex's surface cover the triangles around it (a sheet over the
+ *  banks). Dived under the ground alone, a dry vertex on a high bank stood far ABOVE the water, and the
+ *  triangle from the last wet vertex rose toward it: a wall of water in front of every steep shore, drawn
+ *  as a fall (Evan's screenshot; the shader only hides it where the interpolated depth reaches 0, at the
+ *  dry vertex itself). Under the water level the sheet always slopes DOWN into the bank. The same rule
+ *  dives a spring cave's NEGATIVE depth (dived to the water alone, the sheet stood up in walls along a fall
+ *  into a mouth). Skirt vertices copy the edge's position and flow with depth 0. */
 export const writeWaterBuffers = (
   water: THREE.BufferGeometry,
   terrain: THREE.BufferGeometry,
   lod: LODLevel,
   heights: Float32Array,
   waterHeights: Float32Array,
+  waterDepths: Float32Array,
+  waterFlow: Float32Array,
 ): void => {
   const n = lod.segments + 1;
   const mainVertCount = n * n;
@@ -272,18 +304,23 @@ export const writeWaterBuffers = (
   const terrainPositions = terrain.attributes.position.array as Float32Array;
   const positions = water.attributes.position.array as Float32Array;
   const depths = ensureAttribute(water, "waterDepth");
+  const flow = ensureAttribute(water, "waterFlow", 2);
   for (let i = 0; i < mainVertCount; i++) {
-    const wh = waterHeights[i];
-    const dry = Number.isNaN(wh) || wh <= heights[i];
+    const depth = waterDepths[i];
     positions[i * 3] = terrainPositions[i * 3];
     positions[i * 3 + 1] = terrainPositions[i * 3 + 1];
-    positions[i * 3 + 2] = dry ? heights[i] - dryDive : wh;
-    depths[i] = dry ? 0 : wh - heights[i];
+    if (depth > 0) positions[i * 3 + 2] = waterHeights[i];
+    else positions[i * 3 + 2] = Math.min(dryWaterLevel(i, n, waterHeights, waterDepths), heights[i]) - dryDive;
+    depths[i] = depth > 0 ? depth : 0;
+    flow[i * 2] = waterFlow[i * 2];
+    flow[i * 2 + 1] = waterFlow[i * 2 + 1];
   }
   copyEdgeToSkirt(positions, 3, perimeterIndices, mainVertCount);
+  copyEdgeToSkirt(flow, 2, perimeterIndices, mainVertCount);
   const perimCount = perimeterIndices.length;
   for (let i = 0; i < perimCount * 2; i++) depths[mainVertCount + i] = 0;
   water.attributes.position.needsUpdate = true;
   (water.getAttribute("waterDepth") as THREE.BufferAttribute).needsUpdate = true;
+  (water.getAttribute("waterFlow") as THREE.BufferAttribute).needsUpdate = true;
   water.computeBoundingSphere();
 };

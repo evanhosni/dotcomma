@@ -1,5 +1,6 @@
 import type Rapier from "@dimforge/rapier3d-compat";
-import { smoothstep } from "../utils/math/_math";
+import { smoothstep } from "../utils/math";
+import type { MovementModifiers } from "./movementModifiers";
 
 /**
  * THE movement resolver for every kinematic capsule (local player + server
@@ -50,6 +51,13 @@ export const MAX_SUBSTEPS = 16;
 // ~55°, so the slide never engaged and jumping stayed possible exactly there.
 export const GROUND_RAY_LENGTH = 5;
 export const GROUND_RAY_SLACK = SNAP_TO_GROUND + 0.4;
+// A capsule EMBEDDED in its ground (the ground ray meets a surface above where the capsule would rest
+// on it) rises out of it this much a step: the controller never pushes a shape out of a one-sided
+// trimesh it already intersects (a sewer floor held a capsule 0.25u under it indefinitely), and a
+// frame without a collider is how it gets in. Over TOLERANCE only: a standing capsule reads the
+// contact offset's -0.08.
+export const GROUND_EMBED_TOLERANCE = 0.03;
+export const GROUND_EMBED_RECOVERY = 0.1;
 
 // SWIMMING (input.swim): under water the capsule sinks slowly, a held jump swims up and floats the
 // head just above the surface, and a fresh press with the head near the surface breaches out of it.
@@ -92,6 +100,9 @@ export interface SwimInput {
   surfaceY: number;
   /** The jump key went down this step (not merely held). */
   jumpPressed: boolean;
+  /** The liquid's viscosity relative to water (unset = 1): divides every swim speed and acceleration
+   *  and multiplies the drag — the sewers' liquid is thick. */
+  viscosity?: number;
 }
 
 export interface CharacterInput {
@@ -99,10 +110,18 @@ export interface CharacterInput {
   dirZ: number;
   speed: number;
   jump: boolean;
-  /** Caller drives vy this step (NPC ascend); gravity, fall clamp and jump are skipped. */
+  /** Caller drives vy this step (NPC ascend, a manhole climb); gravity, fall clamp and jump are skipped. */
   vyOverride?: number | null;
   /** Water over the capsule (unset = none): it swims once SWIM_SUBMERGED_FRACTION of it is under. */
   swim?: SwimInput | null;
+  /** The terrain heightfields (markTerrainCollider) are neither ground nor obstacle this step: a
+   *  player in a tunnel under them (player/undergroundMode.ts). */
+  ignoreTerrain?: boolean;
+  /** What the ground under the capsule does to its walk and its grip (movementModifiers.ts: the snow's
+   *  drag and traction; unset = neutral). Sampled by the CALLER on a worker (`surfaceModifiersAt`) and
+   *  handed in: evaluating it on the stepping thread runs the height pipeline at the capsule, and a cold
+   *  cell there costs 250–385ms (physics/DECISIONS.md). */
+  surface?: MovementModifiers | null;
 }
 
 /** Positions are the body CENTER after the solve. */
@@ -133,6 +152,8 @@ export interface Character {
   ray: Rapier.Ray;
   shape: CharacterShape;
   state: CharacterMotionState;
+  /** The slide angle the controller was last set to (the surface's traction moves it; applySlopeLimits). */
+  slideAngle: number;
 }
 
 export const createCharacterMotionState = (): CharacterMotionState => ({
@@ -169,7 +190,24 @@ export const createCharacter = (rapier: RapierRuntime, world: Rapier.World, shap
   ray: new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }),
   shape,
   state: createCharacterMotionState(),
+  slideAngle: SLOPE_SLIDE_ANGLE,
 });
+
+/** The step's slope limits: the constants plus the surface's traction (movementModifiers.ts). */
+const _slopes = { softStart: SLOPE_SOFT_START, softEnd: SLOPE_SOFT_END, slide: SLOPE_SLIDE_ANGLE };
+const applySlopeLimits = (c: Character, surface: MovementModifiers | null | undefined): typeof _slopes => {
+  const bonus = surface ? surface.slopeBonus : 0;
+  _slopes.softStart = SLOPE_SOFT_START + bonus;
+  _slopes.softEnd = SLOPE_SOFT_END + bonus;
+  _slopes.slide = SLOPE_SLIDE_ANGLE + bonus;
+  // The controller's own climb wall follows the slide angle; two wasm calls, only when it moved.
+  if (Math.abs(_slopes.slide - c.slideAngle) > 1e-4) {
+    c.slideAngle = _slopes.slide;
+    c.controller.setMaxSlopeClimbAngle(_slopes.slide + 0.01);
+    c.controller.setMinSlopeSlideAngle(_slopes.slide);
+  }
+  return _slopes;
+};
 
 export const disposeCharacter = (world: Rapier.World, c: Character): void => {
   world.removeCharacterController(c.controller);
@@ -180,6 +218,7 @@ const _desired = { x: 0, y: 0, z: 0 };
 const _step = { x: 0, y: 0, z: 0 };
 const _trans = { x: 0, y: 0, z: 0 };
 const _notSensor = (c: Rapier.Collider) => !c.isSensor();
+const _notSensorNotTerrain = (c: Rapier.Collider) => !c.isSensor() && !terrainColliders.has(c);
 
 /** Colliders every capsule (the player, every server NPC) walks at FULL speed whatever their slope: the
  *  uphill fade is tuned on terrain and slows a building ramp (≈38°) to a crawl. A WeakSet of the collider
@@ -189,6 +228,13 @@ const _notSensor = (c: Rapier.Collider) => !c.isSensor();
 const fullSpeedSlopes = new WeakSet<Rapier.Collider>();
 export const markFullSpeedSlope = (c: Rapier.Collider): void => {
   fullSpeedSlopes.add(c);
+};
+
+/** The TERRAIN heightfields, tagged at creation (world/terrain/chunkObjects.ts): a step with
+ *  `ignoreTerrain` leaves them out of the ground probe and the sweep. Same WeakSet scheme. */
+const terrainColliders = new WeakSet<Rapier.Collider>();
+export const markTerrainCollider = (c: Rapier.Collider): void => {
+  terrainColliders.add(c);
 };
 
 /** Fills while active, decays faster when not, saturates at 2× the delay (hysteresis on the way out). */
@@ -209,19 +255,24 @@ interface GroundProbe {
   nX: number;
   nY: number;
   nZ: number;
+  /** How far the ground's surface stands ABOVE where the capsule would rest on it (a plane's tilt
+   *  allowed for): over GROUND_EMBED_TOLERANCE the capsule is inside its ground. */
+  embed: number;
 }
-const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, fullSpeed: false, nX: 0, nY: 1, nZ: 0 };
+const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, fullSpeed: false, nX: 0, nY: 1, nZ: 0, embed: 0 };
 
 /** Probe EVERY step: computedGrounded() flickers false on steep surfaces, where this matters most. */
 const probeGround = (
   world: Rapier.World,
   ray: Rapier.Ray,
   halfHeight: number,
+  radius: number,
   collider: Rapier.Collider,
   body: Rapier.RigidBody,
   px: number,
   py: number,
   pz: number,
+  filter: (c: Rapier.Collider) => boolean,
 ): GroundProbe => {
   const p = _probe;
   p.nearGround = false;
@@ -231,10 +282,11 @@ const probeGround = (
   p.nX = 0;
   p.nY = 1;
   p.nZ = 0;
+  p.embed = 0;
   ray.origin.x = px;
   ray.origin.y = py;
   ray.origin.z = pz;
-  const hit = world.castRayAndGetNormal(ray, GROUND_RAY_LENGTH, false, undefined, undefined, collider, body, _notSensor);
+  const hit = world.castRayAndGetNormal(ray, GROUND_RAY_LENGTH, false, undefined, undefined, collider, body, filter);
   if (!hit) return p;
   // Trimesh normals can face either way — orient upward.
   const flip = hit.normal.y < 0 ? -1 : 1;
@@ -252,14 +304,17 @@ const probeGround = (
     p.fullSpeed = fullSpeedSlopes.has(hit.collider);
   }
   p.supported = hit.timeOfImpact <= halfHeight / Math.max(hnY, 0.25) + SNAP_TO_GROUND + 0.1;
+  // Resting on a plane of normal nY, the bottom sphere's centre stands radius / nY over it along the
+  // column: the ray's rest distance is the cylinder's half plus that.
+  p.embed = halfHeight - radius + radius / Math.max(hnY, 0.25) - hit.timeOfImpact;
   return p;
 };
 
 const _walk = { x: 0, z: 0 };
 
-/** The input direction at `input.speed`, with only the UPHILL component slowed on a soft slope
+/** The input direction at `speed`, with only the UPHILL component slowed on a soft slope
  *  (contour and downhill stay full speed). */
-const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionState): { x: number; z: number } => {
+const steerWalk = (input: CharacterInput, speed: number, g: GroundProbe, s: CharacterMotionState, softStart: number, softEnd: number): { x: number; z: number } => {
   let mx = 0;
   let mz = 0;
   const inLenSq = input.dirX * input.dirX + input.dirZ * input.dirZ;
@@ -267,17 +322,17 @@ const steerWalk = (input: CharacterInput, g: GroundProbe, s: CharacterMotionStat
     const inv = 1 / Math.sqrt(inLenSq);
     mx = input.dirX * inv;
     mz = input.dirZ * inv;
-    let scale = input.speed;
+    let scale = speed;
     const hLen = Math.hypot(g.nX, g.nZ);
     if (g.nearGround && hLen > 1e-5) {
       const uphillFactor = Math.max(0, (mx * -g.nX + mz * -g.nZ) / hLen);
       if (g.fullSpeed) {
         // The solve slides the walk up the slope plane, keeping cos² of its horizontal (62% at 38°):
         // 1/cos up front makes the speed ALONG the surface the walk speed.
-        scale = input.speed * (1 + uphillFactor * (1 / Math.max(Math.cos(g.angle), 0.5) - 1));
-      } else if (g.angle > SLOPE_SOFT_START && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
-        const climb = 1 - smoothstep(SLOPE_SOFT_START, SLOPE_SOFT_END, g.angle);
-        scale = input.speed * (1 - uphillFactor * (1 - climb));
+        scale = speed * (1 + uphillFactor * (1 / Math.max(Math.cos(g.angle), 0.5) - 1));
+      } else if (g.angle > softStart && s.softSlopeTime >= SLOPE_ENGAGE_DELAY) {
+        const climb = 1 - smoothstep(softStart, softEnd, g.angle);
+        scale = speed * (1 - uphillFactor * (1 - climb));
       }
     }
     mx *= scale;
@@ -337,19 +392,21 @@ const updateSwimVertical = (s: CharacterMotionState, input: CharacterInput, swim
     s.breaching = false;
   }
   const head = py + height / 2;
+  const thick = swim.viscosity ?? 1;
   if (swim.jumpPressed && head > swim.surfaceY - SWIM_BREACH_REACH) {
-    s.vy = SWIM_BREACH_IMPULSE;
+    s.vy = SWIM_BREACH_IMPULSE / thick;
     s.breaching = true;
     return true;
   }
+  const sinkSpeed = SWIM_SINK_SPEED / thick;
   // The drag only approaches the sink speed, so it must not gate the strokes below.
-  if (s.vy < SWIM_SINK_SPEED) s.vy += (SWIM_SINK_SPEED - s.vy) * (1 - Math.exp(-WATER_DRAG * dt));
+  if (s.vy < sinkSpeed) s.vy += (sinkSpeed - s.vy) * (1 - Math.exp(-WATER_DRAG * thick * dt));
   if (input.jump) {
-    s.vy = Math.min(SWIM_UP_SPEED, s.vy + SWIM_UP_ACCEL * dt);
+    s.vy = Math.min(SWIM_UP_SPEED / thick, s.vy + (SWIM_UP_ACCEL / thick) * dt);
     // Floats at the surface instead of shooting out of it: only a fresh press breaches.
     s.vy = Math.min(s.vy, (swim.surfaceY + SWIM_HEAD_ABOVE_SURFACE - head) / dt);
-  } else if (s.vy > SWIM_SINK_SPEED) {
-    s.vy = Math.max(SWIM_SINK_SPEED, s.vy - SWIM_SINK_ACCEL * dt);
+  } else if (s.vy > sinkSpeed) {
+    s.vy = Math.max(sinkSpeed, s.vy - (SWIM_SINK_ACCEL / thick) * dt);
   }
   return true;
 };
@@ -366,6 +423,7 @@ const sweepSubstepped = (
   px: number,
   py: number,
   pz: number,
+  filter: (c: Rapier.Collider) => boolean,
 ): void => {
   const dist = Math.sqrt(_desired.x * _desired.x + _desired.y * _desired.y + _desired.z * _desired.z);
   const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dist / MAX_SUBSTEP_DISTANCE)));
@@ -376,7 +434,7 @@ const sweepSubstepped = (
   let fy = py;
   let fz = pz;
   for (let i = 0; i < steps; i++) {
-    controller.computeColliderMovement(collider, _step, undefined, undefined, _notSensor);
+    controller.computeColliderMovement(collider, _step, undefined, undefined, filter);
     const corrected = controller.computedMovement();
     fx += corrected.x;
     fy += corrected.y;
@@ -405,7 +463,9 @@ const sweepSubstepped = (
 };
 
 /** One step for a capsule at body center (px, py, pz): sets the body's NEXT
- *  kinematic translation and fills `out`. `dt` is the caller's already-clamped delta. */
+ *  kinematic translation and fills `out`. `dt` is the caller's already-clamped delta. Every capsule
+ *  feels its ground: `input.surface` scales its walk and moves its slope limits (the snow's wading and
+ *  traction, movementModifiers.ts). */
 export const stepCharacter = (
   world: Rapier.World,
   c: Character,
@@ -419,23 +479,26 @@ export const stepCharacter = (
   out: CharacterStepResult,
 ): CharacterStepResult => {
   const { controller, ray, state: s } = c;
+  const filter = input.ignoreTerrain ? _notSensorNotTerrain : _notSensor;
   const grounded = controller.computedGrounded();
-  const ground = probeGround(world, ray, c.shape.height / 2, collider, body, px, py, pz);
+  const ground = probeGround(world, ray, c.shape.height / 2, c.shape.radius, collider, body, px, py, pz, filter);
+  const slopes = applySlopeLimits(c, input.surface);
 
-  s.softSlopeTime = bumpSlopeTimer(s.softSlopeTime, ground.nearGround && ground.angle > SLOPE_SOFT_START, dt, SLOPE_ENGAGE_DELAY);
-  s.steepSlopeTime = bumpSlopeTimer(s.steepSlopeTime, ground.nearGround && ground.angle > SLOPE_SLIDE_ANGLE, dt, SLIDE_ENGAGE_DELAY);
+  s.softSlopeTime = bumpSlopeTimer(s.softSlopeTime, ground.nearGround && ground.angle > slopes.softStart, dt, SLOPE_ENGAGE_DELAY);
+  s.steepSlopeTime = bumpSlopeTimer(s.steepSlopeTime, ground.nearGround && ground.angle > slopes.slide, dt, SLIDE_ENGAGE_DELAY);
   const onSlideSlope = s.steepSlopeTime >= SLIDE_ENGAGE_DELAY;
   // Do NOT gate support on computedGrounded() alone: it flickers false on
   // heightfields (gravity wound up and deflected into permanent drift on 2–3°
   // slopes) AND holds true on steep faces (a pushed capsule crept UP 44°).
-  const walkableSupport = ground.supported && ground.angle <= SLOPE_SLIDE_ANGLE;
+  const walkableSupport = ground.supported && ground.angle <= slopes.slide;
 
-  const walk = steerWalk(input, ground, s);
+  const walk = steerWalk(input, input.speed * (input.surface ? input.surface.speedFactor : 1), ground, s, slopes.softStart, slopes.softEnd);
   updateSlide(s, ground, onSlideSlope, dt);
   const swimming = input.vyOverride == null && isSwimming(input.swim, py, c.shape.height);
   if (swimming) {
-    walk.x *= SWIM_SPEED_FACTOR;
-    walk.z *= SWIM_SPEED_FACTOR;
+    const factor = SWIM_SPEED_FACTOR / (input.swim!.viscosity ?? 1);
+    walk.x *= factor;
+    walk.z *= factor;
   } else {
     s.breaching = false;
   }
@@ -446,6 +509,7 @@ export const stepCharacter = (
   _desired.x = (walk.x + s.slideDirX * s.slideSpeed) * dt;
   _desired.y = s.vy * dt + s.slideDirY * s.slideSpeed * dt;
   _desired.z = (walk.z + s.slideDirZ * s.slideSpeed) * dt;
+  if (ground.embed > GROUND_EMBED_TOLERANCE) _desired.y += Math.min(ground.embed, GROUND_EMBED_RECOVERY);
   const movementDistSq = _desired.x * _desired.x + _desired.y * _desired.y + _desired.z * _desired.z;
   if (movementDistSq > MAX_MOVEMENT_PER_FRAME * MAX_MOVEMENT_PER_FRAME) {
     const k = MAX_MOVEMENT_PER_FRAME / Math.sqrt(movementDistSq);
@@ -453,7 +517,7 @@ export const stepCharacter = (
     _desired.y *= k;
     _desired.z *= k;
   }
-  sweepSubstepped(world, controller, body, collider, px, py, pz);
+  sweepSubstepped(world, controller, body, collider, px, py, pz, filter);
 
   out.x = _trans.x;
   out.y = _trans.y;

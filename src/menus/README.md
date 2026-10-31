@@ -4,10 +4,11 @@
 
 HUD panels in [overlay/](overlay/), plain DOM over the canvas:
 
-- [StatsOverlay.tsx](overlay/StatsOverlay.tsx): devmode stats (FPS, frame time, memory, position, place, draw calls, terrain); mounted inside the canvas ([world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) because it reads `gl.info` in `useFrame`.
+- [StatsOverlay.tsx](overlay/StatsOverlay.tsx): devmode stats (FPS, frame time, memory, position — with a ⧉ that copies it as "x, y, z" (✓ for 0.8s, or ✗ where no clipboard API is available) — place, draw calls, terrain); mounted inside the canvas ([world/CustomCanvas.tsx](../world/CustomCanvas.tsx)) because it reads `gl.info` in `useFrame`.
 - [DevOverlay.tsx](overlay/DevOverlay.tsx): one checkbox per `DEV_TOGGLES` entry ([context/constants.ts](../context/constants.ts)).
 - [LogsOverlay.tsx](overlay/LogsOverlay.tsx): captured console output (devmode only).
-- [NetOverlay.tsx](overlay/NetOverlay.tsx): connection status and players here.
+- [NetOverlay.tsx](overlay/NetOverlay.tsx): connection status and players here (devmode only).
+- The devmode panel ([DevOverlay.tsx](overlay/DevOverlay.tsx)): the `DEV_TOGGLES` checkboxes, an × that turns devmode off, and "vfx ▸", which expands one live slider per `VFX_KNOBS` entry (vfx/tuning.ts). Its controls are `createHudCheckbox` / `createHudSlider` ([styles.ts](overlay/styles.ts)).
 
 The last three mount in [index.tsx](../index.tsx). Bottom-left panels share one column from `getOrCreateLeftColumn()` ([overlayContainer.ts](overlay/overlayContainer.ts)). Imperative panels update text nodes directly so per-frame numbers never re-render React. Shared style lives in [overlay/styles.ts](overlay/styles.ts): `PANEL_STYLE`, `PANEL_CSS`, `FONT_CSS`, `FONT`, `HUD_COLOR`, `PANEL_BACKGROUND`, `HUD_Z_INDEX`, and `fontOfSize(px)` for canvas text — use them instead of retyping values.
 

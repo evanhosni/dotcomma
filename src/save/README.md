@@ -16,7 +16,8 @@ What lives where today:
 
 | field | store | written by |
 |---|---|---|
-| `devmode` — `{ <flag>: boolean }` for every `DEV_TOGGLES` entry | device | [context/DevContext.tsx](../context/DevContext.tsx), on every checkbox change |
+| `settings` — `{ devmode?: boolean }` | device | the `?devmode` URL sync ([context/DevContext.tsx](../context/DevContext.tsx)) |
+| `devToggles` — `{ <flag>: boolean }` for every `DEV_TOGGLES` entry | device | [context/DevContext.tsx](../context/DevContext.tsx), on every checkbox change |
 
 ## How to add a saved field
 

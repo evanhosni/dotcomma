@@ -1,6 +1,7 @@
 import { onServerMessage, send } from "../connection";
 import type { EntityRegisterItem, EntityUpdateFields, ServerMessage } from "../protocol";
 import { pushSnapshot, type Snapshot } from "./interpolation";
+import { debugGlobal } from "../../utils/utils";
 
 /**
  * Every synced actor this client renders + the server's last published fields
@@ -138,7 +139,7 @@ const onMessage = (msg: ServerMessage) => {
 
 onServerMessage(onMessage);
 
-(window as unknown as { __entities: unknown }).__entities = {
+debugGlobal("__entities", {
   get size() {
     return entities.size;
   },
@@ -152,4 +153,4 @@ onServerMessage(onMessage);
       z: e.remote?.z,
     })),
   get: (id: string) => entities.get(id),
-};
+});

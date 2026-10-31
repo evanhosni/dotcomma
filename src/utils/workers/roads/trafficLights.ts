@@ -3,7 +3,7 @@
  */
 
 import { CITY_BIOME_ID } from "../../../world/constants";
-import { seedRand } from "../../math/_math";
+import { seedRand } from "../../math";
 import { domainConfig } from "../computeConfig";
 import { riverKeepOff } from "../rivers/constants";
 import { computeVertexData } from "../vertexCompute";

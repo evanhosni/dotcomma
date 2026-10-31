@@ -1,27 +1,39 @@
-# Declarative world components
+# The declarations
 
 ## How it works
 
-- World content is JSX, but these components render nothing. Each **registers** data into the `DomainStore` ([context.ts](context.ts)) of the nearest `<Domain>` in a layout effect, removes it on unmount, and calls `store.invalidate()`.
-- `<Domain>` ([Domain.tsx](Domain.tsx)) then **commits** (`commitDomain`): merges the records into `Region[]` → `Biome[]` (biomes merged by `id`), serializes a `DomainConfig` (`../domains/buildDomainConfig.ts` → `../domains/domainConfig.ts`), publishes it with `setActiveDomain` ([../domains/utils.ts](../domains/utils.ts)), and only then mounts `TerrainRenderer` (unless `terrain={false}`), `ActorPool` and `SkyboxSystem`. In dev the result is compared with the server's copy in [../domains/configs.ts](../domains/configs.ts).
-- **Specs are the data.** A region/biome `spec.ts` (Three-free) holds id, name, noise, flags, blend widths, biome order and the biome's `actors`. JSX adds only client-only parts (materials, sky, dressing, foliage).
-- `<Regions specs components>` and `<Region spec biomes>` ([Region.tsx](Region.tsx)) render a component map keyed by spec `name` **in spec order** (`null` = config-only). `<Biome spec>` ([Biome.tsx](Biome.tsx)) registers the spec and its `actors` via `describeActor` ([Actor.tsx](Actor.tsx)). Mismatches throw in dev.
-- **Scope-aware:** `Material` and `Skybox` register differently under `<Domain>`, `<Region>` or `<Biome>` (via `RegionContext` / `BiomeContext`):
+The components a world is written with. Each is a `declare(...)` from [content/](../content/): it
+carries what the walker reads and what React draws, so mounting one is the whole fact.
 
-| component | domain | region | biome |
-|---|---|---|---|
-| [Terrain.tsx](Terrain.tsx) | global `TerrainParams` | — | — |
-| [Material.tsx](Material.tsx) | `riverTexture` | BASE material | fragment shader (+ optional `riverbed`) |
-| [Skybox](../sky/Skybox.tsx) | default sky | region sky | biome override |
+| component | where | what it means |
+|---|---|---|
+| `<Domain playerSpawn>` | the root | ONE world. Walks its children, publishes the config, mounts the systems and every `Driver` the tree asked for. |
+| `<Region id name blendWidth>` | in a domain | a group of biomes on one base terrain, look and sky. Its order among its siblings is VORONOI order. |
+| `<Biome id name joinable blendWidth>` | in a region | one voronoi zone. Everything true of it is a child. |
+| `<Terrain seed gridSize …>` | in a domain | its global terrain knobs over [defaults.ts](../defaults.ts). |
+| `<Noise params absNeg scale offset>` | in a region or biome | its relief. `<Dome>` and `<Detail>` go inside it. |
+| `<Dome height reach noiseFloor>` | in a noise | the ground rises with the square of the depth inside the biome: a joined group is ONE massif. A domed biome is ROCK. |
+| `<Detail …>` | in a noise | a layer added at every depth, so a dome's foot keeps it. |
+| `<Water depth>` | in a biome | a lake: the terrain bowls under a filled surface, and no freeway runs along its walls. |
+| `<Rivers chance>` | in a region | rivers under it. No `<Rivers/>`, no rivers — they run on their own grid, so no biome can own one. |
+| `<Material shader textures getMaterial riverbed riverTexture>` | domain, region or biome | its LOOK. Under a domain the default riverbed texture, under a region the BASE material, under a biome its fragment shader. |
+| `<Skybox topColor horizonColor bottomColor radius>` | domain, region or biome | its sky. Region skies MIX by position across region edges; a biome's wins while the player is in it. |
+| `<Actor actor={SPEC} …overrides>` | in a biome, or inside a feature | what spawns. In a biome the density field places it; inside a feature, that feature does, one per part. Mounting it is also what CATALOGS the kind for the server. |
 
-- `<Material shader textures>` takes the `.glsl` source and `{ uniform: "file" }` (loaded by `_material.fromShader`); `getMaterial` is the escape hatch for non-texture uniforms.
-- Inline object props are keyed by `JSON.stringify` so parent re-renders don't re-commit. Always import from [index.ts](index.ts).
+Everything else a biome can hold — `<Snow/>`, `<Rocks/>`, `<Sewers>`, `<Caves>`, `<StreetLamps/>`,
+`<GrassField/>`, `<LakeBubbles/>` … — is declared in its own system's folder under
+[objects/](../../objects/), because that is where its code lives.
 
-## How to add another
+### Hazards
 
-These components are the API; content uses them (recipes: [../domains/overworld/regions/README.md](../domains/overworld/regions/README.md)). To add a new scope-aware setting:
+- `<Region>` and `<Biome>` children are in VORONOI order. Appending or reordering one re-rolls every
+  cell of that grid and MOVES EVERY ADDRESS.
+- A content file exports a static element through `content(...)`, never a function. See
+  [content/README.md](../content/README.md).
+- Ids and names must be unique within a domain; names are lowercase letters only (they are address
+  words and shader function names). Asserted at the commit.
 
-1. Add a field to `DomainStore` in [context.ts](context.ts).
-2. Register it from the component in a layout effect.
-3. Read it in `commitDomain` ([Domain.tsx](Domain.tsx)).
-4. If the server needs it, put it in the spec and serialize it in [../domains/domainConfig.ts](../domains/domainConfig.ts).
+## How to add one
+
+A new declaration belongs in the folder of the system it turns on, not here — here is only what
+every world is built from. See [content/README.md](../content/README.md) → "How to add a declaration".

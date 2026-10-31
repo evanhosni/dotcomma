@@ -9,12 +9,14 @@
  *        (`count` = the band's prefix of the `total` placed blades)
  */
 
-import type { FoliageChunkParams } from "../../objects/foliage/foliageWorker";
-import { seedRand, smoothstep } from "../math/_math";
+import type { FoliageChunkParams } from "../../objects/foliage/worker";
+import { seedRand, smoothstep } from "../math";
 import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { DomainConfig, initCompute, computeVertexData, biomeWeightOf, riverKeepOff } from "./vertexCompute";
 import { footprintsNear, insideFootprint, type Footprint } from "./buildingFootprints";
 import { padsApplyIn } from "./flattenPads";
+import { insideCaveKeepOff, keepOffMouthsNear } from "./underground/mouthBulge";
+import type { MouthPiece } from "./underground/types";
 
 const GRID_STEP = 2; // world units between terrain samples
 // Same visibility floor as the terrain shader's per-biome branch.
@@ -293,6 +295,8 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
   const bedCovered = riverKeepOff() - RIVER_BED_FULL_INSET;
   const underwater = params.underwater;
   const footprints: Footprint[] = padBiome && !underwater ? footprintsNear(minX, minZ, minX + size, minZ + size) : [];
+  // Nothing grows in a cave mouth's keep-off (underground/mouthBulge.ts): the mouths whose keep-off reaches the chunk.
+  const caveMouths: MouthPiece[] = keepOffMouthsNear({ minX, minZ, maxX: minX + size, maxZ: minZ + size });
 
   // One bilinear cell per blade, shared by every field it samples (the arithmetic is
   // term-for-term the per-field version's, so the samples are bit-identical).
@@ -385,6 +389,7 @@ export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChu
     }
     // After every rand() draw, like the river's: it only ever removes blades.
     if (footprints.length > 0 && footprints.some((f) => insideFootprint(f, x, z, FOOTPRINT_MARGIN))) continue;
+    if (caveMouths.length > 0 && insideCaveKeepOff(caveMouths, x, z)) continue;
 
     const y = height - INSTANCE_SINK;
     offsets[placed * 3] = x;

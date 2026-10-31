@@ -2,7 +2,7 @@
  *  cut): its height line with the ramps and the arch, its stations and cross-sections, the crotch
  *  fillets at T ends, and the parapet and paint queries. */
 
-import { smoothstep } from "../../math/_math";
+import { smoothstep } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { BRIDGE_PARAPET_WIDTH, BRIDGE_RAMP_LENGTH, BRIDGE_RAMP_SHARE } from "./constants";
 import { projectOnPolyline } from "./polyline";
