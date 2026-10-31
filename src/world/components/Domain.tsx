@@ -10,6 +10,7 @@ import { actorPlacementsOf, domainConfigOf, terrainParamsOf, type BiomeIdentity,
 import type { ContentNode } from "../content/types";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND } from "../defaults";
 import { setActiveDomain } from "../domains/utils";
+import { PlaceTracker } from "../place";
 import { SkyboxSystem, skyboxesOf } from "../sky/Skybox";
 import { TerrainRenderer } from "../terrain";
 import type { Biome, Region } from "../types";
@@ -18,11 +19,8 @@ import { descriptorOfMount } from "./Actor";
 import { DomainReadyContext } from "./context";
 
 export interface DomainProps {
-  /** false = the domain mounts its own ground and sets terrainLoaded/progress itself. */
-  terrain?: boolean;
-  /** Per-domain because the canvas persists across switches. */
-  background?: string;
-  /** FEET position. Unset = the default sky drop (or whatever the domain's own traveler sets). */
+  /** FEET position, stood on exactly (no drop, no multiplayer spread: it was placed by hand). Unset = the default sky drop (or
+   *  whatever the domain's own traveler sets). */
   playerSpawn?: [number, number, number];
   children?: ReactNode;
 }
@@ -74,7 +72,7 @@ const actorsOf = (domain: ContentNode<any>): AnyActorDescriptor[] =>
 export const Domain = declare<DomainProps>({
   kind: "domain",
   within: null,
-  View: ({ terrain = true, background = DEFAULT_SCENE_BACKGROUND, playerSpawn, children }) => {
+  View: ({ playerSpawn, children }) => {
     const [ready, setReady] = useState(false);
     const { scene } = useThree();
     const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
@@ -95,6 +93,9 @@ export const Domain = declare<DomainProps>({
       setReady(true);
     }, [domain]);
 
+    // The domain sky's horizon: what shows before the sky sphere is up. Set per domain because the
+    // canvas persists across switches.
+    const background = skyboxesOf(domain).find((sky) => sky.scope === "domain")?.horizonColor ?? DEFAULT_SCENE_BACKGROUND;
     useLayoutEffect(() => {
       scene.background = new THREE.Color(background);
       return () => {
@@ -103,9 +104,9 @@ export const Domain = declare<DomainProps>({
     }, [scene, background]);
 
     // The terrain gate resets on UNMOUNT only: child effects run before this one, so a mount-time
-    // reset would clobber HomeGround's / TerrainRenderer's.
+    // reset would clobber TerrainRenderer's.
     useEffect(() => {
-      if (playerSpawn) setPlayerSpawn(playerSpawn);
+      if (playerSpawn) setPlayerSpawn(playerSpawn, 0);
       return () => {
         setPlayerSpawn(null);
         setTerrainLoaded(false);
@@ -118,8 +119,9 @@ export const Domain = declare<DomainProps>({
         {children}
         {ready && (
           <>
-            {terrain && <TerrainRenderer />}
+            <TerrainRenderer />
             <ActorPool />
+            <PlaceTracker />
             <SkyboxSystem />
             {drivers.map(({ kind, Driver }) => (
               <Driver key={kind} />

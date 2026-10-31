@@ -3,13 +3,10 @@ import { useEffect, useRef } from "react";
 import type * as THREE from "three";
 import { useDevContext } from "../../context/DevContext";
 import { useGameContext } from "../../context/GameContext";
-import { getPlaceInfo } from "../../objects/dressing/worker";
-import { getAllBiomes } from "../../utils/utils";
-import { getActiveRegions } from "../../world/domains/utils";
+import { getPlace } from "../../world/place";
 import { getOrCreateLeftColumn } from "./overlayContainer";
 import { PANEL_CSS } from "./styles";
 
-const BIOME_POLL_INTERVAL_S = 1;
 /** FPS is counted over windows this long. */
 const FPS_WINDOW_S = 0.5;
 
@@ -34,15 +31,16 @@ const W_TRIS = 7;
 
 const pad = (value: string | number, width: number) => String(value).padStart(width);
 
-const LABELS = ["FPS:     ", "MS:      ", "Mem:     ", "Pos:     ", "Biome:   ", "Render:  ", "Terrain: "];
+const LABELS = ["FPS:     ", "MS:      ", "Mem:     ", "Pos:     ", "Place:   ", "Ground:  ", "Render:  ", "Terrain: "];
 
 const I_FPS = 0;
 const I_MS = 1;
 const I_MEM = 2;
 const I_POS = 3;
-const I_BIOME = 4;
-const I_RENDER = 5;
-const I_TERRAIN = 6;
+const I_PLACE = 4;
+const I_GROUND = 5;
+const I_RENDER = 6;
+const I_TERRAIN = 7;
 
 // Mem graphs the live geometry count: pooled terrain chunks hold steady, so an upward drift is a leak.
 const GRAPH_COLORS = ["#0f0", "#0ff", "#f0f"];
@@ -170,9 +168,6 @@ interface FrameStats {
   peakGeometries: number;
   peakTextures: number;
   memGraphMax: number;
-  placePollElapsed: number;
-  /** "region/biome" under the camera. */
-  place: string;
   uiFrame: number;
 }
 
@@ -189,8 +184,6 @@ const createFrameStats = (): FrameStats => ({
   peakGeometries: 0,
   peakTextures: 0,
   memGraphMax: GRAPH_MAX_DEFAULTS[I_MEM],
-  placePollElapsed: 0,
-  place: "...",
   uiFrame: 0,
 });
 
@@ -210,23 +203,6 @@ const sampleFrameTiming = (stats: FrameStats, delta: number, ms: number, samplin
     stats.windowClean = true;
   }
   if (sampling && ms > stats.maxMs) stats.maxMs = ms;
-};
-
-/** Asks the dressing worker, once per BIOME_POLL_INTERVAL_S, which region and biome the camera is in. */
-const pollPlace = (stats: FrameStats, delta: number, position: THREE.Vector3): void => {
-  stats.placePollElapsed += delta;
-  if (stats.placePollElapsed < BIOME_POLL_INTERVAL_S) return;
-  stats.placePollElapsed = 0;
-  if (getActiveRegions().length === 0) return;
-  getPlaceInfo(position.x, position.z)
-    .then((place) => {
-      if (!place) return;
-      const active = getActiveRegions();
-      const biome = getAllBiomes(active).find((b) => b.id === place.biomeId);
-      const region = active.find((r) => r.id === place.regionId);
-      stats.place = `${region?.name ?? "?"}/${biome?.name ?? "???"}`;
-    })
-    .catch(() => undefined);
 };
 
 interface FrameReadings {
@@ -263,7 +239,9 @@ const writeStatsPanel = (panel: StatsPanel, stats: FrameStats, r: FrameReadings)
   s[I_MEM].textContent = `${pad(r.geometries, W_GEO)} geo,${pad(r.textures, W_TEX)} tex,${pad(r.programs, W_PROG)} prog`;
   const p = r.position;
   s[I_POS].textContent = `${pad(p.x.toFixed(1), W_POS)},${pad(p.y.toFixed(1), W_POS)},${pad(p.z.toFixed(1), W_POS)}`;
-  s[I_BIOME].textContent = stats.place;
+  const place = getPlace();
+  s[I_PLACE].textContent = place ? `${place.regionName}/${place.biomeName}` : "...";
+  s[I_GROUND].textContent = place?.ground ?? "...";
   s[I_RENDER].textContent = `${pad(r.renderCalls, W_DRAWS)} draws,${pad(r.renderTris, W_TRIS)} tris`;
   s[I_TERRAIN].textContent = r.terrain;
 
@@ -331,8 +309,6 @@ const StatsHud = () => {
     if (geometries > stats.peakGeometries) stats.peakGeometries = geometries;
     if (textures > stats.peakTextures) stats.peakTextures = textures;
     if (geometries > stats.memGraphMax) stats.memGraphMax = geometries;
-
-    pollPlace(stats, delta, camera.position);
 
     if (sampling) {
       stats.avgFrames++;

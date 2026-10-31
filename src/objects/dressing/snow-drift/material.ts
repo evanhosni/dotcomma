@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/dayNight";
-import { _spawnFade } from "../../../vfx/spawnFade";
 import { ditherGLSL } from "../../../vfx/dither";
 import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/chunkProjection";
 import commonShader from "../../../world/shaders/common.glsl";
@@ -61,6 +60,5 @@ export const createSnowMaterial = (): THREE.ShaderMaterial => {
       }
     `,
   });
-  _spawnFade.patchMaterial(material);
   return material;
 };

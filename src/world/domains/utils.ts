@@ -32,6 +32,10 @@ export const resetActiveDomain = () => {
 
 export const whenDomainReady = (): Promise<void> => readyPromise;
 
+/** False between a domain switch's reset and the next commit — when the outgoing domain's frame loops
+ *  can still run: the canvas's reconciler unmounts its tree a beat after the page's commit resets. */
+export const isDomainCommitted = (): boolean => active !== null;
+
 export const getActiveRegions = (): Region[] => active?.regions ?? [];
 
 export const getTerrainParams = (): TerrainParams => active?.params ?? DEFAULT_TERRAIN_PARAMS;

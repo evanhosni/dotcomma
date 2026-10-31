@@ -7,7 +7,7 @@
  */
 
 import Noise from "noise-ts";
-import { seedRand } from "../../math";
+import { seedRand, smoothMin } from "../../math";
 import type { RectXZ } from "../../math/types";
 import {
   AXIS_LIFT,
@@ -33,8 +33,6 @@ import {
 import type { Bounds3, BoxPiece, ConePiece, MouthPiece, PipePiece, RoomPiece, ShaftPiece, TubePiece, TunnelPiece } from "./types";
 
 export type FieldFn = (x: number, y: number, z: number) => number;
-
-const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t);
 
 const noise = new Noise(seedRand("tunnel walls"));
 
@@ -75,12 +73,6 @@ const mouthRimNoise = (theta: number, along: number, phase: number): number =>
     Math.sin(5 * theta - 2 * phase + 0.4 * along) +
     Math.sin(2 * theta + 0.7 * along + 1.7 * phase) +
     Math.sin(7 * theta - 0.3 * along + 0.6 * phase));
-
-/** Polynomial smooth minimum: never lower than min(a, b) − k/4. */
-export const smoothMin = (a: number, b: number, k: number): number => {
-  const h = clamp01(0.5 + (0.5 * (b - a)) / k);
-  return b + (a - b) * h - k * h * (1 - h);
-};
 
 // ── Mouth geometry ─────────────────────────────────────────────────────────
 

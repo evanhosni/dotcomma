@@ -20,7 +20,7 @@ import {
   glslFloat,
 } from "./constants";
 import { LOD_FADE_DEFINE, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "./lodFade";
-import { FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM } from "./farFade";
+import { FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM, WIREFRAME_DEFINE, WIREFRAME_FADE } from "./farFade";
 import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "./skirtTint";
 import { ENTRANCE_FADE_UNIFORM, ENTRANCE_PATCH_DEFINE, ENTRANCE_PATCH_GLSL, PATCH_GROUND_SHARE, TERRAIN_HOLES_DEFINE, TERRAIN_HOLES_GLSL, TERRAIN_HOLE_UNIFORMS } from "./terrainHoles";
@@ -223,7 +223,7 @@ const crispnessTiers = (slots: number[], halfOf: (k: number) => number): number[
 
 /** Everything that is not a biome frag: the LOD and far fades, the terrain holes, the entrance patch,
  *  the scene's point lights. */
-const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || defined(${FAR_FADE_DEFINE}) || defined(${TERRAIN_HOLES_DEFINE}) || defined(${ENTRANCE_PATCH_DEFINE})
+const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || defined(${FAR_FADE_DEFINE}) || defined(${TERRAIN_HOLES_DEFINE}) || defined(${ENTRANCE_PATCH_DEFINE}) || defined(${WIREFRAME_DEFINE})
       ${SCREEN_DOOR_GLSL}
     #endif
     #ifdef ${LOD_FADE_DEFINE}
@@ -232,6 +232,8 @@ const TERRAIN_FRAGMENT_DECLARATIONS_GLSL = `#if defined(${LOD_FADE_DEFINE}) || d
     #endif
     #ifdef ${FAR_FADE_DEFINE}
       uniform vec2 ${FAR_FADE_UNIFORM};
+    #endif
+    #if defined(${FAR_FADE_DEFINE}) || defined(${WIREFRAME_DEFINE})
       ${FAR_FADE_GLSL}
     #endif
     #if defined(${TERRAIN_HOLES_DEFINE}) || defined(${ENTRANCE_PATCH_DEFINE})
@@ -462,6 +464,9 @@ export const combineBiomeMaterials = async (
       // The far chunks dissolve into the sky before the far plane (world/shaders/farFade.ts).
       #ifdef ${FAR_FADE_DEFINE}
       if (farFadeDiscards(vFarDistance, ${FAR_FADE_UNIFORM})) discard;
+      #endif
+      #ifdef ${WIREFRAME_DEFINE}
+      if (vSkirt > 0.0 || farFadeDiscards(vFarDistance, vec2(${glslFloat(WIREFRAME_FADE[0])}, ${glslFloat(WIREFRAME_FADE[1])}))) discard;
       #endif
       // The tunnels' openings and skirt masks, by ABSOLUTE position (world/shaders/terrainHoles.ts).
       #ifdef ${TERRAIN_HOLES_DEFINE}

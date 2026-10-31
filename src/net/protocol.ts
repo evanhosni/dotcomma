@@ -13,8 +13,9 @@ import type { AnimationState } from "../objects/actors/state/animation";
  *   server → init    {id, color, spawn, domain, players[], serverTime, data}
  *                                                 also re-sent after a `domain` switch
  *   server → join    {player}                     to the rest of the domain
- *   both   → move    {id?, x,y,z, vx,vy,vz, ry}   an INTENT CHANGE (velocity/facing/stop/
- *                                                 drift), never per-frame; client omits `id`
+ *   both   → move    {id?, st?, x,y,z, vx,vy,vz, ry}   ~10Hz while moving, plus every start/stop/
+ *                                                 turn/relocation; the client omits `id` and `st`,
+ *                                                 the server stamps `st` (its clock) on the relay
  *   client → domain  {domain}                     leave old room + join new + fresh init
  *   server → leave   {id}
  *   client → ping    {t0} / server → pong {t0, serverTime}   liveness + clock sync
@@ -34,7 +35,7 @@ import type { AnimationState } from "../objects/actors/state/animation";
  */
 
 /** THE domain id list (world/domains/types.ts re-exports the type). */
-export const DOMAIN_IDS = ["home", "overworld"] as const;
+export const DOMAIN_IDS = ["home", "overworld", "404"] as const;
 export type DomainId = (typeof DOMAIN_IDS)[number];
 export const isDomainId = (v: unknown): v is DomainId =>
   typeof v === "string" && (DOMAIN_IDS as readonly string[]).includes(v);
@@ -43,6 +44,8 @@ export const isDomainId = (v: unknown): v is DomainId =>
 export interface PlayerSnapshot {
   id: string;
   color: string;
+  /** Server time (ms) of this pose: its last move's stamp. */
+  st: number;
   x: number;
   y: number;
   z: number;
@@ -178,6 +181,9 @@ export interface JoinMessage {
 export interface ServerMoveMessage extends MoveIntent {
   t: "move";
   id: string;
+  /** Server time (ms) the move was received: receivers play players back on the server clock, as
+   *  entities (net/entities/interpolation.ts). Strictly increasing per player. */
+  st: number;
 }
 
 export interface LeaveMessage {

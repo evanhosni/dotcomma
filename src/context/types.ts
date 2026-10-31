@@ -9,7 +9,10 @@ export interface GameContextType {
   setTerrainLoaded: (terrainLoaded: boolean) => void;
   /** FEET position from <Domain playerSpawn>; null = the default sky drop. */
   playerSpawn: [number, number, number] | null;
-  setPlayerSpawn: (spawn: [number, number, number] | null) => void;
+  /** How far above the spawn the player starts falling while the ground loads; null = the Player's
+   *  default hold height. */
+  spawnDropHeight: number | null;
+  setPlayerSpawn: (spawn: [number, number, number] | null, dropHeight?: number | null) => void;
 }
 
 export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
@@ -17,7 +20,9 @@ export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
 export type DevToggleFlags = Record<DevToggleFlag, boolean>;
 
 export type DevContextType = DevToggleFlags & {
-  /** On exactly while the URL carries `?devmode`; there is no in-game switch. */
+  /** The saved setting (save/: settings.devmode), synced with the URL's `?devmode=true` (DevContext.tsx). */
   devMode: boolean;
+  /** Saves devmode on/off; the URL follows. */
+  setDevMode: (on: boolean) => void;
   setToggle: (flag: DevToggleFlag, on: boolean) => void;
 };

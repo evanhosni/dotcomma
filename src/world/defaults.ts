@@ -46,6 +46,7 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
     triangleChance: 0.12,
     roundaboutChance: 0.1,
   },
+  wireframe: false,
 };
 
 export const DEFAULT_SCENE_BACKGROUND = "#555555";

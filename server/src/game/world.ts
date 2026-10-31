@@ -9,10 +9,11 @@ import { PHYSICS_DOMAIN, type PhysicsWorld } from "./physics/physicsWorld.js";
  * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
 
-export interface Session extends PlayerSnapshot {
+export interface Session extends Omit<PlayerSnapshot, "st"> {
   /** Persistence key — NOT broadcast. */
   identity: string;
   domain: DomainId;
+  /** Server time of the last move: the `st` its snapshots and relayed moves carry. */
   lastMoveAt: number;
 }
 
@@ -43,6 +44,7 @@ const hslToHex = (h: number, s: number, l: number): string => {
 const snapshotOf = (s: Session): PlayerSnapshot => ({
   id: s.id,
   color: s.color,
+  st: s.lastMoveAt,
   x: s.x,
   y: s.y,
   z: s.z,
@@ -114,7 +116,8 @@ export class World {
   }
 
   /** NOT authoritative yet: the intent is relayed as claimed. Validation against
-   *  lastMoveAt/speed would slot in here. */
+   *  lastMoveAt/speed would slot in here. Stamped with the server clock (strictly increasing: two moves
+   *  in one millisecond must not share a stamp, which receivers treat as one snapshot replacing another). */
   move(id: string, m: MoveIntent): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -125,8 +128,8 @@ export class World {
     s.vy = m.vy;
     s.vz = m.vz;
     s.ry = m.ry;
-    s.lastMoveAt = Date.now();
-    this.out.sendMany(this.room(s.domain), { t: "move", id, ...m }, id);
+    s.lastMoveAt = Math.max(Date.now(), s.lastMoveAt + 1);
+    this.out.sendMany(this.room(s.domain), { t: "move", id, st: s.lastMoveAt, ...m }, id);
   }
 
   changeDomain(id: string, domain: DomainId): void {

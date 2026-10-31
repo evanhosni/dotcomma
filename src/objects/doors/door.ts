@@ -96,7 +96,7 @@ const _sphere = new THREE.Sphere();
 const _hits: THREE.Intersection[] = [];
 
 /** The nearest visible leaf hit by the screen-center ray within `reach`, or −1. */
-export const hoveredDoor = (camera: THREE.Camera, leaves: readonly (THREE.Mesh | null)[], reach: number): number => {
+export const hoveredDoor = (camera: THREE.Camera, leaves: readonly (THREE.Mesh | null)[], reach: number, hit?: { distance: number }): number => {
   let hover = -1;
   let nearest = Infinity;
   _raycaster.setFromCamera(_center, camera);
@@ -116,5 +116,6 @@ export const hoveredDoor = (camera: THREE.Camera, leaves: readonly (THREE.Mesh |
     }
   }
   _raycaster.far = Infinity;
+  if (hit) hit.distance = nearest;
   return hover;
 };

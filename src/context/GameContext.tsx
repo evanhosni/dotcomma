@@ -1,4 +1,4 @@
-import React, { createContext, ReactNode, useContext, useRef, useState } from "react";
+import React, { createContext, ReactNode, useCallback, useContext, useRef, useState } from "react";
 import * as THREE from "three";
 import { GameContextType } from "./types";
 
@@ -12,7 +12,12 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
   const playerPositionRef = useRef(new THREE.Vector3(0, 0, 0));
   const [progress, setProgress] = useState(0);
   const [terrainLoaded, setTerrainLoaded] = useState(false);
-  const [playerSpawn, setPlayerSpawn] = useState<[number, number, number] | null>(null);
+  const [playerSpawn, setSpawn] = useState<[number, number, number] | null>(null);
+  const [spawnDropHeight, setSpawnDropHeight] = useState<number | null>(null);
+  const setPlayerSpawn = useCallback((spawn: [number, number, number] | null, dropHeight: number | null = null) => {
+    setSpawn(spawn);
+    setSpawnDropHeight(dropHeight);
+  }, []);
 
   const value: GameContextType = {
     playerPosition: playerPositionRef.current,
@@ -21,6 +26,7 @@ export const GameContextProvider: React.FC<GameContextProviderProps> = ({ childr
     terrainLoaded,
     setTerrainLoaded,
     playerSpawn,
+    spawnDropHeight,
     setPlayerSpawn,
   };
 

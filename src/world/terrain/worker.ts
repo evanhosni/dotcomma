@@ -1,5 +1,5 @@
 import { createWorkerClient } from "../../utils/workers/workerClient";
-import { getActiveDomainConfig } from "../domains/utils";
+import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
 import type { LODLevel } from "./lodConfig";
 
 // Worker clients for terrain.worker.ts (heights, blend fields, normals, water, snow and collider heights per chunk).
@@ -46,7 +46,10 @@ export const TERRAIN_WORKER_COUNT = Math.max(
 const createTerrainClient = () =>
   createWorkerClient({
     create: () => new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" }),
-    init: () => ({ config: getActiveDomainConfig() }),
+    init: async () => {
+      await whenDomainReady();
+      return { config: getActiveDomainConfig() };
+    },
     resultType: "CHUNK_BUILT",
   });
 

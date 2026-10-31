@@ -54,7 +54,7 @@ There is no spec list beside the JSX, no `has_x` flag, no name→component regis
 sewers, delete `<Sewers>` from the biome.
 
 ```
-<Domain>                       // one switchable world (home, overworld)
+<Domain>                       // one switchable world (home, overworld, 404)
   <Terrain seed .../>          //   its global terrain knobs over world/defaults.ts
   <Material riverTexture/>     //   the default riverbed texture
   <Skybox/>                    //   the default sky
@@ -126,7 +126,7 @@ Rule of thumb: unique geometry, interaction or behavior → actor; many + identi
 
 ### Systems: the invariants (details and history in the decisions docs)
 
-- **Domains share ONE page and ONE canvas.** No router: URL paths are fake (`pushState` only, `src/world/domains/navigation.ts`). `OverworldDomain` is THE game, one infinite map; every path except `/` is an ADDRESS inside it; `HomeDomain` (`/`) is the landing page. A domain switch happens inside ONE persistent `<CustomCanvas>` in two phases (render no domain, `resetDomainSystems()`, mount the new one); the canvas, GL, programs, `<Physics>`, Player, contexts and overlays are never torn down. Per-domain scene state is a `<Domain>` prop (`background`, `playerSpawn`). Travel within the overworld is a TELEPORT (`ADDRESS_TRAVEL_EVENT` → `FastTravel.tsx`); the browser BACK button fires the escape pod (`ESCAPE_POD_EVENT`) and can never unload the game. Home keeps its `<Terrain>` (`terrain={false}` still commits the flat config; home/README.md). → domains/DECISIONS.md
+- **Domains share ONE page and ONE canvas.** No router: URL paths are fake (`pushState` only, `src/world/domains/navigation.ts`). `OverworldDomain` is THE game, one infinite map; every path that is an ADDRESS (`isKnownAddress`) boots it there; `HomeDomain` (`/`) is the landing page, where clicking its CRT drops the player into the overworld from high above the origin's biome cell; every other path is replaced by `/404`, `NotFoundDomain` (a flat white void). A domain switch happens inside ONE persistent `<CustomCanvas>` in two phases (render no domain, `resetDomainSystems()`, mount the new one); the canvas, GL, programs, `<Physics>`, Player, contexts and overlays are never torn down. Per-domain scene state is a `<Domain>` prop (`playerSpawn`); the scene background is the domain `<Skybox>`'s horizon. Entering the overworld (`FastTravel.tsx`) sets a spawn with a drop height: the Player falls toward it while the ground loads; the browser BACK button fires the escape pod (`ESCAPE_POD_EVENT`) and can never unload the game. Home and 404 are flat streaming terrain drawn as a wire grid (`<Terrain wireframe>` + a biome material: 404's `<Material color>`, home's lit by its CRT). → domains/DECISIONS.md
 - **The commit.** `<Domain>` walks its own children ONCE (`world/content/`) and publishes the `DomainConfig`, the client LOOK model, the skies and the actor descriptors to the active-domain accessors (`src/world/domains/utils.ts`: `getActiveDomainConfig()`, `getActiveRegions()`, `getActiveSkyboxes()`, `getActiveActors()`, `getTerrainParams()`, `await whenDomainReady()`), then mounts `TerrainRenderer`, `ActorPool`, `SkyboxSystem` and every `Driver` the tree asked for. `world/content/config.ts` is the ONE assembler — the SERVER imports it and runs on the same object, so there is nothing to keep in step and no drift check. `ACTOR_CATALOG` derives from the same trees; ids and names are asserted unique there. `Material`/`Skybox` take their meaning from where they are mounted:
   - under `<Domain>`: the river-bed texture / the default sky
   - under `<Region>`: the BASE material / a sky mixed by region weights
@@ -181,7 +181,7 @@ src/
       modelClonePool.ts, animationPlayer.ts, kinematicMover.tsx
       spawning/  ActorPool, worker.ts (the spawn worker's client), radii, types  spawning/README.md
       state/  the Three-free state machine core + motion/animation/input channels  state/README.md
-      colliders/  worker.ts (client) + collider.worker.ts (thread) + Colliders.tsx  colliders/README.md
+      colliders/  worker.ts (client) + collider.worker.ts (thread) + useModelColliders (one fixed body)  colliders/README.md
       beeble/  the template NPC: spec.ts + stateMachine.ts (+ inflate.ts, its ascend morph)
       building/  procedural buildings: generatePlan → assets.ts (cache, phased builds) → index.tsx  building/README.md
     dressing/  DRESSING class: index.tsx = THE BASE (instanced assembly + useSolidDressing, on the
@@ -197,6 +197,7 @@ src/
                          material.ts (the shader), worker.ts  foliage/README.md
       grass/ seaweed/  the plants
   world/
+    place.tsx  WHERE THE PLAYER IS (region, biome, cells, sky weights, ground): one poll, getPlace()/onPlaceChange
     CustomCanvas.tsx  THE canvas (GL context, <Physics>, Player, contexts — never torn down)
     types.ts (the client LOOK model), defaults.ts, constants.ts (CITY_BIOME_ID only)
     VERTEX_JOURNEY.md  one vertex from chunk request to pixel, every step in order
@@ -209,7 +210,8 @@ src/
       navigation.ts, reset.ts, utils.ts (active-domain accessors)
       overworld/  THE game: index.tsx, address.ts, FastTravel.tsx  overworld/README.md
         regions/<r>/index.tsx + shaders/base.glsl + biomes/<b>/{index.tsx, shaders/fragment.glsl}  regions/README.md
-      home/  the landing page: index.tsx, HomeGround, CrtMonitor + crtScreen, ClickToEnter  home/README.md
+      home/  the landing page: index.tsx, HomeScreen (the click-to-enter gate), HomeTitle, crt/ (the TV: static, solid, its click enters the overworld)  home/README.md
+      404/  where unknown paths land: a white void, rare beebles
     terrain/  index.tsx = TerrainRenderer (chunk lifecycle), buildRequests, chunkObjects (plane, water,
                          colliders), chunkGeometry, worker.ts (pool of ≤2), lodConfig, lodQuadtree,
                          lodSwaps + chunkIndex, material.ts, vertexData.ts  terrain/README.md
@@ -300,10 +302,9 @@ Each flow's checklist lives in the README of the folder it touches; this table s
 | an overlay | 1 new file (styles from `menus/overlay/styles.ts`) + 1 mount | [menus/README.md](src/menus/README.md) |
 | a dev toggle | 1 `DEV_TOGGLES` entry | [context/README.md](src/context/README.md) |
 | a saved field | 1 `SaveData` field + `saveToDevice`/`saveToAccount` | [save/README.md](src/save/README.md) |
-| a CRT page | 1 `EXTRA_PAGES` line (a region's page is automatic) | [home/README.md](src/world/domains/home/README.md) |
-| a world-wide VFX | a patcher in `vfx/` + a `<PostProcessing>` prop + the six class-base call sites | [vfx/README.md](src/vfx/README.md) |
+| a world-wide VFX | a patcher in `vfx/` + a `<PostProcessing>` prop + a `VFX_KNOBS` entry (devmode's live slider) + the six class-base call sites | [vfx/README.md](src/vfx/README.md) |
 | a network message | `protocol.ts` + server validation/handler + a client sender/listener | [net/README.md](src/net/README.md) |
-| a domain (a separate page; today only `home`) | 1 new `index.tsx` (its tree) + `DOMAIN_IDS` and `DOMAIN_TREES` entries + its path in `navigation.ts` | [domains/README.md](src/world/domains/README.md) |
+| a domain (a separate page; today `home` and `404`) | 1 new `index.tsx` (its tree) + `DOMAIN_IDS` and `DOMAIN_TREES` entries + its path in `navigation.ts` | [domains/README.md](src/world/domains/README.md) |
 
 Rules no checklist can enforce:
 - **Adding a region or a biome MOVES THE MAP.** The region roll is `floor(u × count)` over the `<Region>` children and the biome roll over each region's `<Biome>` children: appending one re-rolls every cell of that grid and every address. Do it before anyone has linked to an address, or accept it knowingly.

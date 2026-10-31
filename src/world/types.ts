@@ -53,6 +53,8 @@ export interface TerrainParams {
   baseNoise: TerrainNoiseParams;
   river: RiverConfig;
   cityConfig: CityConfig;
+  /** Draw the terrain as its triangles' edges only, in each biome's <Material> (a flat world's grid). */
+  wireframe: boolean;
 }
 
 export interface MaterialData {

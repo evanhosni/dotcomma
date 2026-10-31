@@ -41,14 +41,50 @@ export const initCursor = (): void => {
   }
 };
 
-export const showCursor = (): void => {
-  const el = getOrCreateCursor();
-  el.style.width = "6px";
-  el.style.height = "6px";
+/** Something interactive under the crosshair (an actor, a door, a manhole). Held by claimHover while it is
+ *  hovered; the object itself is the claim's key, so keep one per owner and update `distance` in place. */
+export interface HoverTarget {
+  /** Eye → hit: the NEAREST claim gets the mouse. */
+  distance: number;
+  /** Grows the crosshair while held. */
+  growsCursor: boolean;
+  /** Every mouse event while it is the nearest claim: click, contextmenu, pointerdown/up, dblclick, wheel. */
+  onMouse: (e: MouseEvent) => void;
+}
+
+const MOUSE_EVENTS = ["click", "contextmenu", "pointerdown", "pointerup", "dblclick", "wheel"] as const;
+
+const claims = new Set<HoverTarget>();
+let mouseBound = false;
+
+const nearestClaim = (): HoverTarget | null => {
+  let best: HoverTarget | null = null;
+  for (const claim of claims) if (!best || claim.distance < best.distance) best = claim;
+  return best;
 };
 
-export const hideCursor = (): void => {
+const syncCursorSize = (): void => {
+  let grown = false;
+  for (const claim of claims) grown ||= claim.growsCursor;
   const el = getOrCreateCursor();
-  el.style.width = "2px";
-  el.style.height = "2px";
+  el.style.width = el.style.height = grown ? "6px" : "2px";
+};
+
+/** ONE set of window listeners for every hover target (an actor used to add six of its own). */
+const bindMouse = (): void => {
+  if (mouseBound) return;
+  mouseBound = true;
+  for (const type of MOUSE_EVENTS) window.addEventListener(type, (e) => nearestClaim()?.onMouse(e as MouseEvent));
+};
+
+export const claimHover = (target: HoverTarget): void => {
+  if (claims.has(target)) return;
+  claims.add(target);
+  bindMouse();
+  syncCursorSize();
+};
+
+/** Safe to call when not held (an unmount cleanup). */
+export const releaseHover = (target: HoverTarget): void => {
+  if (claims.delete(target)) syncCursorSize();
 };

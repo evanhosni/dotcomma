@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { DevContextProvider } from "./context/DevContext";
+import { DevContextProvider, initDevmodeFromUrl } from "./context/DevContext";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { NetOverlay } from "./menus/overlay/NetOverlay";
@@ -8,14 +8,15 @@ import { startConnection } from "./net/connection";
 import "./net/playerData"; // subscribes to the connection (persisted player data)
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
-import { DOMAIN_TREES } from "./world/domains";
+import { DOMAIN_CONFIGS, DOMAIN_TREES } from "./world/domains";
 import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
 import { resetDomainSystems } from "./world/domains/reset";
 import { DomainId } from "./world/domains/types";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
-initDomainNavigation();
+initDevmodeFromUrl();
+initDomainNavigation(DOMAIN_CONFIGS.overworld.regions);
 startConnection();
 
 /** Swaps the domain inside the ONE persistent canvas in two phases: render

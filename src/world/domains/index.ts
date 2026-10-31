@@ -3,6 +3,7 @@ import type { ActorSpec } from "../../objects/actors/spec";
 import { domainConfigOf, domainNodeOf } from "../content/config";
 import type { ContentNode } from "../content/types";
 import type { DomainConfig } from "../../utils/workers/types";
+import { NotFoundDomain } from "./404";
 import { HomeDomain } from "./home";
 import { OverworldDomain } from "./overworld";
 import type { DomainId } from "./types";
@@ -15,6 +16,7 @@ import type { DomainId } from "./types";
 export const DOMAIN_TREES: Record<DomainId, JSX.Element> = {
   home: HomeDomain,
   overworld: OverworldDomain,
+  "404": NotFoundDomain,
 };
 
 /** Each tree read as data, once. */

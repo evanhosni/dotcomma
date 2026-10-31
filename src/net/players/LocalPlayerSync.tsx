@@ -4,19 +4,20 @@ import * as THREE from "three";
 import { useGameContext } from "../../context/GameContext";
 import { wrapAngle } from "../../utils/math";
 import { onServerMessage, send } from "../connection";
+import { PUBLISH_INTERVAL_MS } from "../entities/interpolation";
 
 /**
- * Publishes the local player's movement as INTENT CHANGES (velocity / yaw /
- * stop / extrapolation drift / re-init), never per-frame positions. useFrame
- * priority -2: after the Player (-3) has written this frame's position.
+ * Publishes the local player's movement: every PUBLISH_INTERVAL_MS while moving (the entity cadence:
+ * receivers sample the server-stamped track like an entity's, net/entities/interpolation.ts, and a
+ * moving track that goes quiet for longer only extrapolates MAX_EXTRAPOLATION_MS, then holds), plus at
+ * once on a start / stop / velocity or yaw change / relocation / re-init. Nothing while standing still.
+ * useFrame priority -2: after the Player (-3) has written this frame's position.
  */
 
 const VEL_THRESHOLD = 1.5; // u/s — walk is 15, sprint 45, so any real change clears this
 const VEL_THRESHOLD_Y = 6; // coarse: gravity changes vy every frame
 const STOP_SPEED = 0.35;
 const YAW_THRESHOLD = 0.12; // rad ≈ 7°
-const DRIFT_THRESHOLD = 0.75; // u
-const DRIFT_CHECK_MS = 250;
 const MIN_SEND_INTERVAL_MS = 50; // 20Hz ceiling during a turn/wiggle; stops bypass it
 const VEL_SMOOTH = 0.35; // EMA factor on the instantaneous velocity
 
@@ -50,11 +51,9 @@ export const LocalPlayerSync = () => {
   const prev = useRef(new THREE.Vector3());
   const havePrev = useRef(false);
   const vel = useRef(new THREE.Vector3());
-  const sentPos = useRef(new THREE.Vector3());
   const sentVel = useRef(new THREE.Vector3());
   const sentYaw = useRef(0);
   const sentAt = useRef(0);
-  const lastDriftCheck = useRef(0);
   const forceSend = useRef(false);
 
   useEffect(
@@ -103,14 +102,7 @@ export const LocalPlayerSync = () => {
       const dyaw = wrapAngle(yaw - sentYaw.current);
       if (Math.abs(dyaw) > YAW_THRESHOLD) reason = "change";
     }
-    if (!reason && now - lastDriftCheck.current > DRIFT_CHECK_MS) {
-      lastDriftCheck.current = now;
-      const age = (now - sentAt.current) / 1000;
-      const ex = sentPos.current.x + sv.x * age - pos.x;
-      const ey = sentPos.current.y + sv.y * age - pos.y;
-      const ez = sentPos.current.z + sv.z * age - pos.z;
-      if (ex * ex + ey * ey + ez * ez > DRIFT_THRESHOLD * DRIFT_THRESHOLD) reason = "change";
-    }
+    if (!reason && moving && now - sentAt.current >= PUBLISH_INTERVAL_MS) reason = "change";
     if (!reason) return;
     if (reason === "change" && !forceSend.current && now - sentAt.current < MIN_SEND_INTERVAL_MS) return;
 
@@ -129,7 +121,6 @@ export const LocalPlayerSync = () => {
 
     forceSend.current = false;
     sentAt.current = now;
-    sentPos.current.copy(pos);
     if (stopped) sentVel.current.set(0, 0, 0);
     else sentVel.current.copy(v);
     sentYaw.current = yaw;

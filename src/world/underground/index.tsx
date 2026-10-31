@@ -1,8 +1,8 @@
 import { traceSpan } from "../../utils/spikeTrace";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../utils/cursor";
+import { claimHover, releaseHover, type HoverTarget } from "../../utils/cursor";
 import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
 import { COVER_RADIUS } from "../../utils/workers/underground/constants";
 import type { TunnelStyle } from "../../utils/workers/underground/types";
@@ -63,7 +63,7 @@ const _quaternion = new THREE.Quaternion();
 
 /** The manhole under the screen's center: from above its COVER's disc wherever it lies; from below the
  *  hole, and only through the shaft's foot when under the box ceiling. */
-const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>): CoverRuntime | null => {
+const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>, hit: { distance: number }): CoverRuntime | null => {
   _raycaster.setFromCamera(_center, camera);
   const ray = _raycaster.ray;
   const camY = camera.position.y;
@@ -103,6 +103,7 @@ const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>):
       }
     }
   }
+  hit.distance = bestDistance;
   return best;
 };
 
@@ -200,18 +201,18 @@ const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, colliderD
     [registry],
   );
 
-  useEffect(() => {
-    if (style !== "sewer") return;
-    const handleClick = (e: MouseEvent) => {
-      if (e.button !== 0 || !hoverRef.current) return;
-      toggleOpen(hoverRef.current.id);
-    };
-    window.addEventListener("click", handleClick);
-    return () => {
-      window.removeEventListener("click", handleClick);
-      if (hoverRef.current) hideCursor();
-    };
-  }, [style]);
+  /** Claimed while a door or manhole is hovered (utils/cursor): its click toggles it. */
+  const hoverTarget = useMemo<HoverTarget>(
+    () => ({
+      distance: Infinity,
+      growsCursor: true,
+      onMouse: (e) => {
+        if (e.type === "click" && e.button === 0 && hoverRef.current) toggleOpen(hoverRef.current.id);
+      },
+    }),
+    [],
+  );
+  useEffect(() => () => releaseHover(hoverTarget), [hoverTarget]);
 
   // Scratch for the frame loop (nothing is allocated per frame).
   const aliveRef = useRef<TunnelChunkObject[]>([]);
@@ -232,9 +233,9 @@ const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, colliderD
         ids.push(d.id);
       }
     }
-    const door = hoveredDoor(camera, leaves, DOOR_REACH);
+    const door = hoveredDoor(camera, leaves, DOOR_REACH, hoverTarget);
     if (door >= 0) return { kind: "door", id: ids[door] };
-    const cover = pickManhole(camera, alive);
+    const cover = pickManhole(camera, alive, hoverTarget);
     return cover ? { kind: "manhole", id: cover.id } : null;
   };
 
@@ -252,8 +253,8 @@ const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, colliderD
     if (style !== "sewer" || frameRef.current++ % PICK_INTERVAL_FRAMES !== 0) return;
     const hover = pickHover(state.camera, alive);
     if ((hover?.id ?? null) !== (hoverRef.current?.id ?? null)) {
-      if (hover && !hoverRef.current) showCursor();
-      if (!hover && hoverRef.current) hideCursor();
+      if (hover) claimHover(hoverTarget);
+      else releaseHover(hoverTarget);
       hoverRef.current = hover;
     }
   });

@@ -37,7 +37,7 @@
     ],
     "moduleNameMapper": {
       "/worker$": "<rootDir>/config/jest/rendererStub.js",
-      "^@react-three/drei/core/Gltf$": "<rootDir>/config/jest/rendererStub.js"
+      "^@react-three/drei/core/useGLTF$": "<rootDir>/config/jest/rendererStub.js"
     }
   },
   "browserslist": {

@@ -2,8 +2,9 @@
 
 ## How it works
 
-A DOMAIN is one switchable world. There are two: `overworld` (THE game, one infinite map — every
-URL path but `/` is an address inside it) and `home` (the landing page at `/`).
+A DOMAIN is one switchable world. There are three: `overworld` (THE game, one infinite map — every
+URL path that is an address boots it there), `home` (the landing page at `/`) and `404` (where every
+other path lands, rewritten to `/404`).
 
 - **[index.ts](index.ts)** — `DOMAIN_TREES` (each world as the one JSX element it is), `DOMAIN_NODES`
   (each tree read as data), `DOMAIN_CONFIGS` (what the workers and the SERVER run on) and
@@ -13,7 +14,7 @@ URL path but `/` is an address inside it) and `home` (the landing page at `/`).
   `whenDomainReady()`.
 - **[navigation.ts](navigation.ts)** — fake paths (`pushState` only), travel events, the back trap.
 - **[reset.ts](reset.ts)** — what a domain switch tears down between the old tree and the new.
-- **overworld/**, **home/** — each world's tree, in its own folder.
+- **overworld/**, **home/**, **404/** — each world's tree, in its own folder.
 
 A switch happens inside ONE persistent `<CustomCanvas>`: render no domain, `resetDomainSystems()`,
 mount the new tree. The canvas, GL context, compiled programs, physics world, Player and overlays

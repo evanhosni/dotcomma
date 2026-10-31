@@ -5,6 +5,7 @@ import { resetFoliageWorker } from "../../objects/foliage/worker";
 import { resetSpawnWorker } from "../../objects/actors/spawning/worker";
 import { resetSpriteWorkers } from "../../objects/sprite-lod/worker";
 import { resetTerrainSystem } from "../terrain";
+import { resetPlace } from "../place";
 import { resetActiveDomain } from "./utils";
 
 /** Domain-switch teardown; runs while NO domain is mounted. Deliberately NOT
@@ -20,4 +21,5 @@ export const resetDomainSystems = () => {
   resetUndergroundWorker();
   resetFarMouths();
   resetActiveDomain();
+  resetPlace();
 };

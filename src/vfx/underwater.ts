@@ -49,6 +49,9 @@ export const setCameraWaterDepth = (depth: number, look: LiquidLook = "water"): 
 
 export const isCameraUnderwater = (): boolean => cameraWaterDepth > 0;
 
+/** Devmode's live mixes over every liquid's fog density and blur (vfx/tuning.ts); 1 = as designed. */
+export const UNDERWATER_MIX = { fog: 1, blur: 1 };
+
 /** Surface light fades with the camera's own depth over ~this many units. */
 const LIGHT_FALLOFF_DEPTH = 25;
 
@@ -183,8 +186,8 @@ export class UnderwaterPass {
     u.uDeep.value.fromArray(look.deep);
     u.uLit.value.fromArray(look.lit);
     u.uTint.value.fromArray(look.tint);
-    u.uFogDensity.value = look.fogDensity;
-    u.uBlur.value = look.blur;
+    u.uFogDensity.value = look.fogDensity * UNDERWATER_MIX.fog;
+    u.uBlur.value = look.blur * UNDERWATER_MIX.blur;
     u.uProjectionInverse.value.copy(camera.projectionMatrixInverse);
     u.uCameraRotation.value.setFromMatrix4(camera.matrixWorld);
     gl.render(this.quadScene, this.quadCamera);

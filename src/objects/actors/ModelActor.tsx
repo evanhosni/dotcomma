@@ -1,5 +1,5 @@
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
-import { useGLTF } from "@react-three/drei/core/Gltf";
+import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { RootState, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
@@ -11,7 +11,7 @@ import { ActorAttributes } from "../types";
 import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from ".";
 import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
 import { createColliders } from "./colliders/worker";
-import { BoxCollider, CapsuleCollider, SphereCollider, TrimeshCollider } from "./colliders/Colliders";
+import { useModelColliders } from "./colliders/useModelColliders";
 import type { ModelColliders } from "./colliders/types";
 import { useKinematicMover } from "./kinematicMover";
 import {
@@ -92,7 +92,6 @@ export const ModelActor = ({
   despawnDistance,
   frustumPadding,
   onDestroy,
-  collidersNeverMove = true,
   wholeTrimesh = false,
   excludeColliderNames,
   quantization,
@@ -209,6 +208,8 @@ export const ModelActor = ({
     },
   });
 
+  useModelColliders(body !== "kinematic" && body !== "none" ? colliders : null, coordinates, lifecycle.collidersActive);
+
   const mover = useKinematicMover({
     // The capsule appears with the model (a pool miss renders nothing until its clone lands).
     enabled: isKinematic && pooled !== null,
@@ -283,22 +284,6 @@ export const ModelActor = ({
       <group ref={setGroup} visible={false} position={coordinates}>
         <primitive object={pooled.scene} scale={scale} rotation={rotation} />
       </group>
-      {body !== "kinematic" && body !== "none" && lifecycle.collidersActive && colliders && (
-        <>
-          {colliders.capsuleColliders.map((collider, index) => (
-            <CapsuleCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.sphereColliders.map((collider, index) => (
-            <SphereCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.boxColliders.map((collider, index) => (
-            <BoxCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-          {colliders.trimeshColliders.map((collider, index) => (
-            <TrimeshCollider key={index} {...collider} positionRef={positionRef} collidersNeverMove={collidersNeverMove} />
-          ))}
-        </>
-      )}
     </Suspense>
   );
 };

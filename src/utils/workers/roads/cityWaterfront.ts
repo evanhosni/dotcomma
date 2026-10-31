@@ -8,7 +8,7 @@ import { domainConfig } from "../computeConfig";
 import { riverListKey, riverListNearSegment, riverStraight, riverStraightNear } from "../rivers/riverField";
 import type { RiverQuaySample, Wall } from "../types";
 import { isCanonicalWall } from "../voronoi";
-import { smoothMin } from "./freewayNetwork";
+import { smoothMin } from "../../math";
 
 /** A belt wall counts as DROWNED (the river's footprint reaches over it) across this window centered
  *  where its river-side curb is just dry (bank + freewayWidth), fading in over it (real units). Over 30u

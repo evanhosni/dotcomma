@@ -33,7 +33,7 @@ describe("the content tree", () => {
     const features = Object.fromEntries(
       config.regions.flatMap((r) => r.biomes.map((b) => [b.name, Object.keys(b.features).sort()])),
     );
-    expect(features.city).toEqual(["bridges", "freewayLamps", "powerLines", "roadMarkers", "sewers", "streetLamps", "trafficLights"]);
+    expect(features.city).toEqual(["bridges", "cityLights", "freewayLamps", "powerLines", "roadMarkers", "sewers", "streetLamps", "trafficLights"]);
     expect(features.mountain).toEqual(["caves", "riverBanks", "rocks", "snow"]);
     expect(features.tundra).toEqual(["rocks", "snow"]);
     expect(features.lake).toEqual(["lakeBubbles", "water"]);

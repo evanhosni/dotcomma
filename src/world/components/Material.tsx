@@ -10,6 +10,8 @@ export interface MaterialProps {
   /** Its sampler uniforms: uniform name → filename under public/textures/. Uniform names are GLOBAL
    *  across every biome/region shader (the terrain is one material) — reuse a name only for the same file. */
   textures?: Readonly<Record<string, string>>;
+  /** Instead of a shader: one flat color ("#rrggbb"), e.g. the lines of a wireframe <Terrain>. */
+  color?: string;
   /** Instead of shader + textures: builds the material itself (non-texture uniforms). */
   getMaterial?: () => Promise<MaterialData>;
   /** Biome scope: the bed under this biome's rivers, cross-faded by the biome weights. */
@@ -24,14 +26,21 @@ export const Material = declare<MaterialProps>({ kind: "material", within: ["dom
 
 const BUILDERS = new WeakMap<object, () => Promise<MaterialData>>();
 
-/** A <Material>'s builder: its own `getMaterial`, else one assembled from its shader + textures
- *  (memoized per props object, which is stable while its element is). */
+/** "#rrggbb" → a fragment shader painting it. */
+const flatColorShader = (hex: string): string => {
+  const channel = (i: number) => (parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255).toFixed(4);
+  return `void main() { gl_FragColor = vec4(${channel(0)}, ${channel(1)}, ${channel(2)}, 1.0); }`;
+};
+
+/** A <Material>'s builder: its own `getMaterial`, else one assembled from its shader + textures or its
+ *  color (memoized per props object, which is stable while its element is). */
 export const materialBuilderOf = (props: MaterialProps): (() => Promise<MaterialData>) | undefined => {
   if (props.getMaterial) return props.getMaterial;
-  if (props.shader === undefined) return undefined;
+  const shader = props.shader ?? (props.color && flatColorShader(props.color));
+  if (shader === undefined) return undefined;
   const cached = BUILDERS.get(props);
   if (cached) return cached;
-  const builder = _material.fromShader(props.shader, props.textures ?? {});
+  const builder = _material.fromShader(shader, props.textures ?? {});
   BUILDERS.set(props, builder);
   return builder;
 };

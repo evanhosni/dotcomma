@@ -1,33 +1,31 @@
 import { useSyncExternalStore } from "react";
 import type * as THREE from "three";
 import { onServerMessage } from "../connection";
-import type { PlayerSnapshot } from "../protocol";
+import { PosePlayback } from "../entities/posePlayback";
+import { pushSnapshot, type Snapshot } from "../entities/interpolation";
+import type { PuppetTarget } from "../entities/useSyncedEntity";
+import type { PlayerSnapshot, ServerMoveMessage } from "../protocol";
+import type { PointXZ } from "../../utils/math/types";
 
 /**
  * Module state mutated per frame; React only sees the ROSTER through a version
- * counter, so a move re-renders nothing. RemotePlayers.tsx drives the display
- * transform toward the last intent.
+ * counter, so a move re-renders nothing. Each player's moves are a server-stamped
+ * snapshot track, played back by the entities' sampler (RemotePlayers.tsx).
  */
-
-import type { PointXZ } from "../../utils/math/types";
 
 export interface RemotePlayer {
   id: string;
   color: string;
-  targetX: number;
-  targetY: number;
-  targetZ: number;
-  vx: number;
-  vy: number;
-  vz: number;
-  ry: number;
-  receivedAt: number;
-  /** Displayed position (eased toward the target). */
+  snapshots: Snapshot[];
+  playback: PosePlayback;
+  /** The sampled pose (capsule CENTER); `valid` once the first sample landed. */
+  pose: PuppetTarget;
+  /** Where it is drawn (capsule CENTER): what local systems read (an NPC's nearest player). */
   x: number;
   y: number;
   z: number;
+  /** Displayed facing, eased toward the sampled one. */
   displayYaw: number;
-  needsInitialPlacement: boolean;
   object: THREE.Object3D | null;
   /** Where its last snow stamp was laid (RemotePlayers.tsx, snow-drift/trail.ts). */
   lastStamp: PointXZ;
@@ -42,22 +40,27 @@ const bumpRoster = () => {
   rosterListeners.forEach((l) => l());
 };
 
+const snapshotOf = (m: PlayerSnapshot | ServerMoveMessage): Snapshot => ({
+  st: m.st,
+  x: m.x,
+  y: m.y,
+  z: m.z,
+  ry: m.ry,
+  vx: m.vx,
+  vy: m.vy,
+  vz: m.vz,
+});
+
 const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   id: p.id,
   color: p.color,
-  targetX: p.x,
-  targetY: p.y,
-  targetZ: p.z,
-  vx: p.vx,
-  vy: p.vy,
-  vz: p.vz,
-  ry: p.ry,
-  receivedAt: performance.now(),
+  snapshots: [snapshotOf(p)],
+  playback: new PosePlayback(),
+  pose: { valid: false, x: p.x, y: p.y, z: p.z, ry: p.ry, vx: 0, vy: 0, vz: 0 },
   x: p.x,
   y: p.y,
   z: p.z,
   displayYaw: p.ry,
-  needsInitialPlacement: true,
   object: null,
   lastStamp: { x: Infinity, z: Infinity },
 });
@@ -87,15 +90,7 @@ onServerMessage((msg) => {
       break;
     case "move": {
       const p = players.get(msg.id);
-      if (!p) break;
-      p.targetX = msg.x;
-      p.targetY = msg.y;
-      p.targetZ = msg.z;
-      p.vx = msg.vx;
-      p.vy = msg.vy;
-      p.vz = msg.vz;
-      p.ry = msg.ry;
-      p.receivedAt = performance.now();
+      if (p) pushSnapshot(p.snapshots, snapshotOf(msg));
       break;
     }
     case "leave":

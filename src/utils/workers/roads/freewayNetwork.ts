@@ -12,6 +12,7 @@
  */
 
 import Delaunator from "delaunator";
+import { smoothMin } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { dropOldestHalf } from "../cellCache";
@@ -540,12 +541,6 @@ export const networkOf = (ctx: BiomeContext): WallNetwork => {
     networkByGrid.set(ctx.grid, network);
   }
   return network;
-};
-
-/** Polynomial smooth minimum (Inigo Quilez): min(a, b) with the crease within k rounded off. */
-export const smoothMin = (a: number, b: number, k: number): number => {
-  const h = Math.max(k - Math.abs(a - b), 0) / k;
-  return Math.min(a, b) - h * h * k * 0.25;
 };
 
 /** The gently meandered point a freeway distance is measured from (written by meanderFreewayQuery). */

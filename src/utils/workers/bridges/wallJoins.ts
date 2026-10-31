@@ -3,6 +3,7 @@
  *  the other's inner face: a butt joint with a small overlap, not a miter. Only walls and colliders: the
  *  run-ons are drawn over the slabs, which (and so the ground cut) stay as they are. */
 
+import { distanceToSegment } from "../../math";
 import { BRIDGE_PARAPET_WIDTH } from "./constants";
 import { bridgeParapetAt, bridgeSections } from "./deckGeometry";
 import { bridgeDrawnTopAt, drawnOn } from "./drawnSlab";
@@ -124,17 +125,11 @@ export const bridgeWallFootprints = (b: FreewayBridge): number[][] => {
 
 /** A run-on along an edge has met the partner's wall within this. */
 const EDGE_TOUCH = 0.05;
-const segmentDistance = (x: number, z: number, ax: number, az: number, cx: number, cz: number): number => {
-  const dx = cx - ax;
-  const dz = cz - az;
-  const u = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)));
-  return Math.hypot(x - ax - dx * u, z - az - dz * u);
-};
 /** Distance from a point to a wall footprint quad (0 inside). */
 const quadDistance = (q: number[], x: number, z: number): number => {
   if (inQuad(q, x, z)) return 0;
   let d = Infinity;
-  for (let k = 0; k < 4; k++) d = Math.min(d, segmentDistance(x, z, q[2 * k], q[2 * k + 1], q[(2 * k + 2) % 8], q[(2 * k + 3) % 8]));
+  for (let k = 0; k < 4; k++) d = Math.min(d, distanceToSegment(x, z, q[2 * k], q[2 * k + 1], q[(2 * k + 2) % 8], q[(2 * k + 3) % 8]));
   return d;
 };
 

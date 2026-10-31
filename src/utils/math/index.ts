@@ -73,6 +73,13 @@ export const clamp = (x: number, min: number, max: number): number => Math.min(M
 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+/** Polynomial smooth minimum (Inigo Quilez): min(a, b) with the crease within k rounded off; never
+ *  lower than min(a, b) − k/4. */
+export const smoothMin = (a: number, b: number, k: number): number => {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+};
+
 /** An angle (radians) wrapped into [-π, π]. */
 export const wrapAngle = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 

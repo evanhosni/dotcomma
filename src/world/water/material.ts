@@ -29,6 +29,7 @@ ${CHUNK_PROJECTION_GLSL}
 attribute float waterDepth;
 attribute vec2 waterFlow;
 uniform float uTime;
+uniform float uWaterSwell;
 varying float vDepth;
 varying vec2 vFlow;
 varying vec3 vViewPos;
@@ -47,7 +48,7 @@ void main() {
     + 0.05 * sin(world.z * TAU / ${glslFloat(SWELL_MID)} + uTime * 1.5 * rate)
     + 0.035 * (0.5 + 0.8 * flowLen) * sin((world.x + world.z) * TAU / ${glslFloat(SWELL_SHORT)} + uTime * 2.3 * rate);
   vec3 localUp = normalize(vec3(0.0, 1.0, 0.0) * mat3(modelMatrix));
-  vec3 displaced = position + localUp * (swell * wet);
+  vec3 displaced = position + localUp * (swell * wet * uWaterSwell);
   vec3 worldQ = quantizeWorldPos(wrapOrigin + mat3(modelMatrix) * displaced);
   vViewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldQ - wrapOrigin);
   vDepth = waterDepth;
@@ -186,6 +187,8 @@ void main() {
 
 /** The one clock every water mesh reads (advanced by the terrain renderer, tickWater). */
 const WATER_CLOCK = { value: 0 };
+/** Devmode's live mix of the swell height (vfx/tuning.ts); 1 = as designed. */
+export const WATER_SWELL_MIX = { value: 1 };
 export const tickWater = (elapsedSeconds: number): void => {
   WATER_CLOCK.value = elapsedSeconds;
 };
@@ -200,6 +203,7 @@ export const getWaterMaterial = (): THREE.ShaderMaterial => {
     defines: { WORLD_WRAP: glslFloat(WORLD_WRAP), [FAR_FADE_DEFINE]: "" },
     uniforms: {
       uTime: WATER_CLOCK,
+      uWaterSwell: WATER_SWELL_MIX,
       uNightBlend: NIGHT_BLEND_UNIFORM,
       uSunDir: { value: SUN_DIRECTION.clone() },
       [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) },

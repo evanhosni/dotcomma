@@ -9,18 +9,15 @@ import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
 
 /**
  * Remote players as capsules, ALL driven from ONE useFrame that mutates Object3Ds;
- * React only sees the roster. Per frame: target = last intent extrapolated (age
- * capped), display eases toward it frame-rate-independently. Snaps only on the
- * first frame and on a TELEPORT_DISTANCE jump (respawn).
+ * React only sees the roster. Positions are played back on the SERVER clock by the
+ * entities' snapshot sampler (net/entities/interpolation.ts: a relocation snaps);
+ * only the facing is eased on top, so a 7° turn step never pops.
  */
 
 const CAPSULE_RADIUS = PLAYER_RADIUS;
 const CAPSULE_LENGTH = PLAYER_HEIGHT - 2 * PLAYER_RADIUS;
 
-/** Bounds the damage of a lost/late correction. */
-const MAX_EXTRAPOLATION_S = 0.5;
-const SMOOTH_RATE = 12; // 1/s — ~63% of the gap closed every 83ms
-const TELEPORT_DISTANCE = 40;
+const YAW_SMOOTH_RATE = 12; // 1/s — ~63% of the gap closed every 83ms
 
 const capsuleGeometry = new THREE.CapsuleGeometry(CAPSULE_RADIUS, CAPSULE_LENGTH, 4, 12);
 const visorGeometry = new THREE.BoxGeometry(0.5, 0.16, 0.12);
@@ -63,40 +60,18 @@ export const RemotePlayers = () => {
   const list = useMemo(() => Array.from(getRemotePlayers().values()), [version]);
 
   useFrame((_, delta) => {
-    const dt = Math.min(delta, 0.1);
-    const now = performance.now();
-    const k = 1 - Math.exp(-SMOOTH_RATE * dt);
+    const k = 1 - Math.exp(-YAW_SMOOTH_RATE * Math.min(delta, 0.1));
 
     for (const p of getRemotePlayers().values()) {
       const obj = p.object;
       if (!obj) continue;
-
-      const age = Math.min((now - p.receivedAt) / 1000, MAX_EXTRAPOLATION_S);
-      const tx = p.targetX + p.vx * age;
-      const ty = p.targetY + p.vy * age;
-      const tz = p.targetZ + p.vz * age;
-
-      if (p.needsInitialPlacement) {
-        p.x = tx;
-        p.y = ty;
-        p.z = tz;
-        p.displayYaw = p.ry;
-        p.needsInitialPlacement = false;
-      } else {
-        const dx = tx - p.x;
-        const dy = ty - p.y;
-        const dz = tz - p.z;
-        if (dx * dx + dy * dy + dz * dz > TELEPORT_DISTANCE * TELEPORT_DISTANCE) {
-          p.x = tx;
-          p.y = ty;
-          p.z = tz;
-        } else {
-          p.x += dx * k;
-          p.y += dy * k;
-          p.z += dz * k;
-        }
-        p.displayYaw += wrapAngle(p.ry - p.displayYaw) * k;
-      }
+      const first = !p.pose.valid;
+      if (p.playback.sample(p, delta, p.pose) === "none") continue;
+      const pose = p.pose;
+      p.x = pose.x;
+      p.y = pose.y;
+      p.z = pose.z;
+      p.displayYaw = first ? pose.ry : p.displayYaw + wrapAngle(pose.ry - p.displayYaw) * k;
 
       obj.position.set(p.x, p.y, p.z);
       obj.rotation.y = p.displayYaw;

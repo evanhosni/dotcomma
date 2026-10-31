@@ -302,7 +302,7 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
      body: "kinematic",
      collider: { shape: "capsule", radius: 0.5, height: 2.4 },
      movement: "ground",          // or "free" for a flyer / swimmer
-     model: "/models/x.glb", scale: [1, 1, 1], collidersNeverMove: false,
+     model: "/models/x.glb", scale: [1, 1, 1],
      footprint: 5, density: 200, clustering: 0, renderDistance: 200, priority: 80,
    };
    ```

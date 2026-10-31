@@ -7,7 +7,7 @@ import { combineBiomeMaterials } from "../shaders/combineBiomeMaterials";
 import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, CHUNK_PROJECTION_VARYINGS } from "../shaders/chunkProjection";
 import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS } from "../shaders/farFade";
+import { FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, WIREFRAME_DEFINE } from "../shaders/farFade";
 import { ENTRANCE_PATCH_DEFINE, TERRAIN_HOLES_DEFINE } from "../shaders/terrainHoles";
 import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
@@ -51,6 +51,7 @@ export const getMaterial = async () => {
     FREEWAY_HALF_WIDTH: glslFloat(params.cityConfig.freewayWidth),
     RIVER_HALF_WIDTH: glslFloat(params.river.halfWidth),
     RIVER_BED_REACH: glslFloat(params.river.halfWidth + params.river.bank),
+    ...(params.wireframe ? { [WIREFRAME_DEFINE]: "" } : {}),
   };
 
   const material = await combineBiomeMaterials(biomes, regions, vertexShader, {
@@ -86,6 +87,7 @@ export const getMaterial = async () => {
   // Shared uniform OBJECTS so the terrain bends and snaps in lockstep with everything on it; assigned
   // here (vertex-only) to stay out of the generated fragment block.
   Object.assign(material.uniforms, CHUNK_PROJECTION_UNIFORMS);
+  material.wireframe = params.wireframe;
   // Read only by the variants compiled with FAR_FADE_DEFINE.
   material.uniforms[FAR_FADE_UNIFORM] = FAR_FADE_UNIFORMS[FAR_FADE_UNIFORM];
 
@@ -100,6 +102,7 @@ const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, stri
     vertexShader: base.vertexShader,
     fragmentShader: base.fragmentShader,
     lights: base.lights,
+    wireframe: base.wireframe,
   });
 
 /** The terrain's ONE `discard` program: the LOD cross-fade's dither (lodSwaps.ts), the far fade and the

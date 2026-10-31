@@ -16,7 +16,6 @@ export const BEEBLE_SPEC: ActorSpec = {
   movement: "ground",
   model: "/models/beeble.glb",
   scale: [1.2, 1.2, 1.2],
-  collidersNeverMove: false,
   footprint: 5,
   density: 200,
   clustering: 0,

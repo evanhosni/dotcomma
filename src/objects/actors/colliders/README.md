@@ -7,7 +7,7 @@ A `<ModelActor>` with `body: "fixed"` builds its physics shapes from its model f
 - [collider.ts](collider.ts) `createColliders(…)` walks the model's top-level meshes and sends each tagged mesh's geometry to [collider.worker.ts](collider.worker.ts), which fits the shape off-thread. Results are cached per model + scale + rotation + options.
 - Each mesh is classified by a GLTF custom property: `capsule`, `sphere`, `box` (fitted to its bounds) or `trimesh` (exact triangles). Untagged meshes get nothing; tagged meshes still render.
 - `wholeTrimesh: true` skips the tags and makes one trimesh of the whole model, minus `excludeColliderNames`.
-- [Colliders.tsx](Colliders.tsx) holds the Rapier components ModelActor mounts within the actor's `colliderDistance`; [types.ts](types.ts) holds the message and prop types.
+- [useModelColliders.ts](useModelColliders.ts) builds them as ONE fixed Rapier body at the actor (every shape a collider at its model-space offset), imperatively, within the actor's `colliderDistance`; [types.ts](types.ts) holds the message and shape types. A moving actor is `body: "kinematic"` (kinematicMover.tsx), never fitted shapes.
 - Client only: the server does not load GLTFs.
 
 ## How to add another

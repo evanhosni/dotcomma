@@ -7,6 +7,9 @@ import { getNightBlend } from "../../../../../../../lighting/dayNight";
 import { smoothstep } from "../../../../../../../utils/math";
 import { ditherGLSL } from "../../../../../../../vfx/dither";
 import { BACKGROUND_RANK, TaskQueue } from "../../../../../../../utils/task-queue/TaskQueue";
+import { createTravelRefetch, selectNearest } from "../../../../../../../utils/nearbyPool";
+import { featureMounts } from "../../../../../../../utils/workers/biomeFlags";
+import { declare } from "../../../../../../content";
 
 // FIXED pools: a changing scene light count recompiles every lit material.
 // Unused lights park below the world at zero intensity.
@@ -96,32 +99,8 @@ const createAuraMaterial = (map: THREE.Texture, color: string): THREE.SpriteMate
   return mat;
 };
 
-/** Fills `nearest` (and `nearestDistSq`, ascending) with the `nearest.length` sites closest to
- *  (camX, camZ); null past the site count. An insertion sort into a fixed array: no allocation. */
-const selectNearestSites = (
-  sites: ReadonlyMap<string, CitySitePoint>,
-  camX: number,
-  camZ: number,
-  nearest: (CitySitePoint | null)[],
-  nearestDistSq: Float64Array,
-): void => {
-  const capacity = nearest.length;
-  for (let i = 0; i < capacity; i++) nearest[i] = null;
-  let count = 0;
-  sites.forEach((p) => {
-    const d = (p.x - camX) * (p.x - camX) + (p.z - camZ) * (p.z - camZ);
-    if (count < capacity) count++;
-    else if (d >= nearestDistSq[capacity - 1]) return;
-    let i = count - 1;
-    while (i > 0 && nearestDistSq[i - 1] > d) {
-      nearestDistSq[i] = nearestDistSq[i - 1];
-      nearest[i] = nearest[i - 1];
-      i--;
-    }
-    nearestDistSq[i] = d;
-    nearest[i] = p;
-  });
-};
+const siteX = (p: CitySitePoint): number => p.x;
+const siteZ = (p: CitySitePoint): number => p.z;
 
 /** A pool's slots: the nearest `size` sites plus the first outside it (each slot's fade is measured against that one). */
 class SitePool {
@@ -132,7 +111,7 @@ class SitePool {
     this.distSq = new Float64Array(size + 1);
   }
   select(sites: ReadonlyMap<string, CitySitePoint>, camX: number, camZ: number): void {
-    selectNearestSites(sites, camX, camZ, this.assigned, this.distSq);
+    selectNearest(sites, siteX, siteZ, camX, camZ, this.assigned, this.distSq);
   }
   /** How lit slot `i` is (0–1): fading out as the first site outside the pool closes in on it, and
    *  over the last share of `reach`. Continuous through every re-pick: a slot changes sites only at weight ~0. */
@@ -148,9 +127,19 @@ class SitePool {
 
 const _forward = new THREE.Vector3();
 
+const CITY_LIGHTS = "cityLights";
+
 /** One far-throw point light per city-biome voronoi cell (see CLAUDE.md), and an aura sprite per cell
- *  out to the sprite distance. */
-export const CityLights = ({
+ *  out to the sprite distance. ONE system however many biomes mount it: the light sites are every
+ *  city cell's (objects/dressing/worker getCityLightSites), and its pools are fixed. */
+export const CityLights = declare<CityLightsProps>({
+  kind: CITY_LIGHTS,
+  within: "biome",
+  read: (node) => ({ ...node.props }),
+  Driver: () => <CityLightsDriver {...featureMounts<CityLightsProps>(CITY_LIGHTS)[0]?.params} />,
+});
+
+const CityLightsDriver = ({
   color = "#ffdb8d",
   // Brightness = intensity / d^decay at hundreds of units, so decay is the
   // REACH knob (1 → 1.1 roughly halves the lit radius) and intensity dims uniformly.
@@ -168,8 +157,6 @@ export const CityLights = ({
   const lightRefs = useRef<(THREE.PointLight | null)[]>([]);
   const spriteRefs = useRef<(THREE.Sprite | null)[]>([]);
   const sites = useRef(new Map<string, CitySitePoint>()).current;
-  const scanning = useRef(false);
-  const lastScan = useRef<{ x: number; z: number } | null>(null);
   const lightPool = useRef(new SitePool(LIGHT_POOL_SIZE)).current;
   const auraPool = useRef(new SitePool(AURA_POOL_SIZE)).current;
   const sitesVersion = useRef(0);
@@ -197,28 +184,24 @@ export const CityLights = ({
   }, [intensity, heightOffset]);
 
   /** Every RESCAN_DISTANCE of travel, refreshes the city sites within the scan reach (background work). */
-  const rescanSites = (camX: number, camZ: number): void => {
-    const movedSq = lastScan.current
-      ? (camX - lastScan.current.x) ** 2 + (camZ - lastScan.current.z) ** 2
-      : Infinity;
-    if (scanning.current || !(movedSq > RESCAN_DISTANCE * RESCAN_DISTANCE)) return;
-    scanning.current = true;
-    const sx = camX;
-    const sz = camZ;
-    scanQueue.addTask(async () => {
-      try {
-        const points = await getCityLightSites(sx - scanReach, sz - scanReach, sx + scanReach, sz + scanReach);
-        points.forEach((p) => sites.set(p.key, p));
-        sites.forEach((p, key) => {
-          if (Math.hypot(p.x - sx, p.z - sz) > scanReach * 1.5) sites.delete(key);
-        });
-        lastScan.current = { x: sx, z: sz };
-        sitesVersion.current++;
-      } finally {
-        scanning.current = false;
-      }
-    });
-  };
+  const siteScan = useMemo(
+    () =>
+      createTravelRefetch(
+        RESCAN_DISTANCE,
+        (sx, sz) =>
+          new Promise<CitySitePoint[]>((resolve, reject) => {
+            scanQueue.addTask(() => getCityLightSites(sx - scanReach, sz - scanReach, sx + scanReach, sz + scanReach).then(resolve, reject));
+          }),
+        (points, sx, sz) => {
+          points.forEach((p) => sites.set(p.key, p));
+          sites.forEach((p, key) => {
+            if (Math.hypot(p.x - sx, p.z - sz) > scanReach * 1.5) sites.delete(key);
+          });
+          sitesVersion.current++;
+        },
+      ),
+    [sites, scanReach],
+  );
 
   /** Moves each pool onto its nearest sites (parking the rest), only after RESELECT_DISTANCE of
    *  travel or a site-set change. Lights are interchangeable, so a site changing slots changes nothing. */
@@ -279,7 +262,7 @@ export const CityLights = ({
   };
 
   useFrame(({ camera }) => {
-    rescanSites(camera.position.x, camera.position.z);
+    siteScan.update(camera.position.x, camera.position.z);
     reassignPools(camera.position.x, camera.position.z);
     applyWeights(camera);
   });

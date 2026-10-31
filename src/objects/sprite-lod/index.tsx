@@ -20,6 +20,7 @@ import {
 } from "./worker";
 import type { SpriteKind, SpriteLook } from "./types";
 import { spriteClock } from "./utils";
+import { debugGlobal } from "../../utils/utils";
 
 /**
  * THE SPRITE TIER (sprite-lod/README.md): every loaded sprite of one look in one instanced draw, rebased near
@@ -139,7 +140,7 @@ export const SpriteLods = ({ kinds, descriptors, maxFootprint }: SpriteLodsProps
   }, [kinds, descriptors, maxFootprint]);
 
   useEffect(() => {
-    (window as any).__spriteLod = () => {
+    return debugGlobal("__spriteLod", () => {
       const { originX, originZ } = renderedRef.current;
       return {
         ...spriteLoadingStats(),
@@ -153,10 +154,7 @@ export const SpriteLods = ({ kinds, descriptors, maxFootprint }: SpriteLodsProps
         camera: [Math.round(camera.position.x), Math.round(camera.position.z)],
         origin: [originX, originZ],
       };
-    };
-    return () => {
-      delete (window as any).__spriteLod;
-    };
+    });
   }, [camera]);
 
   useFrame((state) => {

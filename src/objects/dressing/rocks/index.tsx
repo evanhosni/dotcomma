@@ -6,7 +6,6 @@ import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
 import { meshTemplate } from "../../../utils/warmPrograms";
 import type { RockPoint } from "../../../utils/workers/vertexCompute";
 import { ditherGLSL } from "../../../vfx/dither";
-import { _spawnFade } from "../../../vfx/spawnFade";
 import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/chunkProjection";
 import commonShader from "../../../world/shaders/common.glsl";
 import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../../../world/shaders/constants";
@@ -78,7 +77,6 @@ const createRockMaterial = (): THREE.ShaderMaterial => {
       }
     `,
   });
-  _spawnFade.patchMaterial(material);
   _material
     .loadTextures([ROCK_TEXTURE])
     .then(([texture]) => {

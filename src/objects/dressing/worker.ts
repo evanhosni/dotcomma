@@ -55,9 +55,9 @@ export const fetchSurfaceModifiers: SurfaceFetch = (x, z, feetY, answer) => {
   );
 };
 
-/** Where a world point is (region/biome, sky weights, address cell) — the
- *  sky, the stats overlay and the address bar poll this at a low rate. null until the worker is up. */
-export const getPlaceInfo = async (x: number, z: number): Promise<PlaceInfo | null> => {
+/** Where a world point is (region/biome, sky weights, address cell) and the ground there
+ *  (utils/workers/ground.ts) — world/place.ts polls it for the player. null until the worker is up. */
+export const getPlaceInfo = async (x: number, z: number): Promise<(PlaceInfo & { ground: string }) | null> => {
   const points = await request({ type: "PLACE_INFO", x, z });
-  return (points[0] as PlaceInfo) ?? null;
+  return (points[0] as PlaceInfo & { ground: string }) ?? null;
 };

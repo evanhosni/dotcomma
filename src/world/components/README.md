@@ -7,7 +7,7 @@ carries what the walker reads and what React draws, so mounting one is the whole
 
 | component | where | what it means |
 |---|---|---|
-| `<Domain terrain background playerSpawn>` | the root | ONE world. Walks its children, publishes the config, mounts the systems and every `Driver` the tree asked for. |
+| `<Domain playerSpawn>` | the root | ONE world. Walks its children, publishes the config, mounts the systems and every `Driver` the tree asked for. |
 | `<Region id name blendWidth>` | in a domain | a group of biomes on one base terrain, look and sky. Its order among its siblings is VORONOI order. |
 | `<Biome id name joinable blendWidth>` | in a region | one voronoi zone. Everything true of it is a child. |
 | `<Terrain seed gridSize …>` | in a domain | its global terrain knobs over [defaults.ts](../defaults.ts). |

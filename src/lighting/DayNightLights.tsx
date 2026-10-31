@@ -21,8 +21,9 @@ const FILL_DIRECTION = new THREE.Vector3(-0.8, 0.3, 0.25).normalize();
 const _dir = new THREE.Vector3();
 
 /** Unlit shaders (terrain, grass) dim via NIGHT_BLEND_UNIFORM instead; building interiors
- *  deliberately stay bright. */
-export const DayNightLights = () => {
+ *  deliberately stay bright. `brightness` scales every intensity (a domain without a <DayNightCycle>
+ *  stays at the day values). */
+export const DayNightLights = ({ brightness = 1 }: { brightness?: number }) => {
   const hemisphereRef = useRef<THREE.HemisphereLight>(null);
   const directionalRef = useRef<THREE.DirectionalLight>(null);
   const fillRef = useRef<THREE.DirectionalLight>(null);
@@ -31,14 +32,14 @@ export const DayNightLights = () => {
     const blend = getNightBlend();
     const hemisphere = hemisphereRef.current;
     if (hemisphere) {
-      hemisphere.intensity = DAY_HEMISPHERE + (NIGHT_HEMISPHERE - DAY_HEMISPHERE) * blend;
+      hemisphere.intensity = brightness * (DAY_HEMISPHERE + (NIGHT_HEMISPHERE - DAY_HEMISPHERE) * blend);
       hemisphere.color.lerpColors(DAY_SKY_COLOR, NIGHT_HEMISPHERE_COLOR, blend);
       hemisphere.groundColor.lerpColors(DAY_GROUND_COLOR, NIGHT_HEMISPHERE_COLOR, blend);
     }
-    if (fillRef.current) fillRef.current.intensity = DAY_FILL + (NIGHT_FILL - DAY_FILL) * blend;
+    if (fillRef.current) fillRef.current.intensity = brightness * (DAY_FILL + (NIGHT_FILL - DAY_FILL) * blend);
     const directional = directionalRef.current;
     if (directional) {
-      directional.intensity = DAY_DIRECTIONAL + (NIGHT_DIRECTIONAL - DAY_DIRECTIONAL) * blend;
+      directional.intensity = brightness * (DAY_DIRECTIONAL + (NIGHT_DIRECTIONAL - DAY_DIRECTIONAL) * blend);
       // Normalized so the sun → moon swing passes overhead.
       _dir
         .copy(SUN_DIRECTION)
@@ -53,17 +54,17 @@ export const DayNightLights = () => {
     <>
       <hemisphereLight
         ref={hemisphereRef}
-        args={[DAY_SKY_COLOR, DAY_GROUND_COLOR, DAY_HEMISPHERE]}
+        args={[DAY_SKY_COLOR, DAY_GROUND_COLOR, brightness * DAY_HEMISPHERE]}
       />
       <directionalLight
         ref={directionalRef}
         position={SUN_DIRECTION.clone().multiplyScalar(100).toArray()}
-        intensity={DAY_DIRECTIONAL}
+        intensity={brightness * DAY_DIRECTIONAL}
       />
       <directionalLight
         ref={fillRef}
         position={FILL_DIRECTION.clone().multiplyScalar(100).toArray()}
-        intensity={DAY_FILL}
+        intensity={brightness * DAY_FILL}
       />
     </>
   );

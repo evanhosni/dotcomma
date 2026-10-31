@@ -1,5 +1,5 @@
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
-import { useGLTF } from "@react-three/drei/core/Gltf";
+import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { useFrame, useThree } from "@react-three/fiber";
 import React, { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useGameContext } from "../../../context/GameContext";

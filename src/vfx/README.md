@@ -4,7 +4,8 @@
 
 World-wide visual effects, configured once per domain through `<PostProcessing>` and applied by the class bases, never per object.
 
-- [PostProcessing.tsx](PostProcessing.tsx): a config carrier inside `<Domain>`; props `quantization`, `curvature`, `curvatureStart`, `fpsCap`, `pixelation`, each reset on unmount.
+- [PostProcessing.tsx](PostProcessing.tsx): a config carrier inside `<Domain>`; props `quantization`, `curvature`, `curvatureStart`, `fpsCap`, `pixelation`, each reset on unmount. Pixelation is NOT a post-process pass: `PixelationDriver` (mounted once by CustomCanvas) lowers the canvas's pixel ratio and the browser upscales it with `image-rendering: pixelated`. The `EffectComposer` pass it replaced fought CustomCanvas's own render loop (every frame drawn twice, every program relinked, ~2 fps).
+- [tuning.ts](tuning.ts): `VFX_KNOBS`, every effect's live knob for devmode's "vfx" sliders (menus/overlay/DevOverlay.tsx). Each reads and writes the effect's live value (a uniform, or a mix object the effect multiplies in: `LAMP_GLOW_MIX`, `WATER_SWELL_MIX`, `UNDERWATER_MIX`). Nothing is saved; a domain switch puts back that domain's values.
 - [quantization.ts](quantization.ts) (`_quantization`): world-aligned vertex snapping of object-relative offsets (`setGridSize`, `QUANTIZE_GLSL`, `patchMaterial`).
 - [curvature.ts](curvature.ts) (`_curvature`): the globe illusion — vertices past `uCurveStart` sink with horizontal camera distance (`CURVE_GLSL`, `curveViewPos`). Visual only; physics and placement stay flat; the sky is exempt.
 - [spawnFade.ts](spawnFade.ts) (`_spawnFade`): objects dither in (and out) with a screen-door `discard` (`SCREEN_DOOR_GLSL`) over `DURATION`. Shared materials are drawn through per-fade twin views carrying their own `uSpawnFade`. `SpawnFade`, `SpawnFadeSet`.
@@ -21,4 +22,5 @@ The sprite tier's base material (`objects/sprite-lod/material.ts`) is a call sit
 
 1. Create `vfx/<effect>.ts` with its uniform, GLSL and an idempotent `patchMaterial` built on `chainMaterialPatch` ([curvature.ts](curvature.ts) is the template).
 2. Add a prop to `PostProcessing` that sets it and resets it on unmount.
-3. Call the patcher from the class bases (`prepareActorMaterial`, `prepareChunkMaterial`, the foliage shader, the sprite material, unless it is wrong for a far billboard) and the terrain/water shaders — not from individual objects.
+3. Add its knob to `VFX_KNOBS` ([tuning.ts](tuning.ts)) so devmode can tune it live.
+4. Call the patcher from the class bases (`prepareActorMaterial`, `prepareChunkMaterial`, the foliage shader, the sprite material, unless it is wrong for a far billboard) and the terrain/water shaders — not from individual objects.

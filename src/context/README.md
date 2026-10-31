@@ -9,7 +9,7 @@ Two React contexts; types in [types.ts](types.ts).
   - `terrainLoaded` / `progress`: the terrain gate; the Player holds at spawn until `terrainLoaded`.
   - `playerSpawn`: the spawn position from `<Domain>` or fast travel.
 - [DevContext.tsx](DevContext.tsx) (mounted in [index.tsx](../index.tsx)):
-  - `devMode`: on exactly while the URL carries `?devmode` (any value); there is no key for it. Navigation carries the query string through every path change.
+  - `devMode`: the saved setting `settings.devmode` (save/), synced with the URL: at load `?devmode=true` turns it on and `?devmode=false` or no param turns it off (the save follows); F1 with devmode off turns it on (with it on, F1 is the noclip toggle), the devmode panel's × turns it off (`setDevMode`), and the URL follows either way.
   - one boolean per `DEV_TOGGLES` entry ([constants.ts](constants.ts)) plus `setToggle`. Each entry's `key` (F1 = noclip, F2 = physics debug, …) flips it while devmode is on, unmodified only (Ctrl+F5 still reloads). The selection is saved to the device (`devmode` in [save/](../save/README.md)) on every change. While devmode is off, every flag reads false, but the selection is kept, so devmode comes back with it.
 
 Read with `useGameContext()` / `useDevContext()`.

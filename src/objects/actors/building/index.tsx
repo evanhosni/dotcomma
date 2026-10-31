@@ -3,7 +3,7 @@ import type Rapier from "@dimforge/rapier3d-compat";
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../../utils/cursor";
+import { claimHover, releaseHover, type HoverTarget } from "../../../utils/cursor";
 import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
 import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
@@ -176,6 +176,8 @@ export const Building = (props: BuildingProps) => {
   const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const hingeRefs = useRef<(THREE.Group | null)[]>([]);
   const hoverDoorRef = useRef(-1);
+  /** Claimed while a door is hovered (utils/cursor): its click toggles that door. Set up below. */
+  const doorHoverRef = useRef<HoverTarget>({ distance: Infinity, growsCursor: true, onMouse: () => undefined });
   const doorsMovingRef = useRef(false);
 
   const doorsGroupRef = useRef<THREE.Group>(null);
@@ -238,11 +240,12 @@ export const Building = (props: BuildingProps) => {
       }
 
       if (doorRaycastFrameRef.current++ % DOOR_RAYCAST_INTERVAL_FRAMES === 0) {
+        const target = doorHoverRef.current;
         const hover =
-          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? hoveredDoor(state.camera, doorMeshRefs.current, DOOR_INTERACT_REACH) : -1;
+          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? hoveredDoor(state.camera, doorMeshRefs.current, DOOR_INTERACT_REACH, target) : -1;
         if (hover !== hoverDoorRef.current) {
-          if (hover >= 0 && hoverDoorRef.current < 0) showCursor();
-          if (hover < 0 && hoverDoorRef.current >= 0) hideCursor();
+          if (hover >= 0) claimHover(target);
+          else releaseHover(target);
           hoverDoorRef.current = hover;
         }
       }
@@ -328,21 +331,17 @@ export const Building = (props: BuildingProps) => {
 
   // Local toggle is prediction; the server's broadcast confirms for everyone.
   useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (e.button !== 0) return;
+    doorHoverRef.current.onMouse = (e) => {
       const idx = hoverDoorRef.current;
-      if (idx < 0) return;
+      if (e.type !== "click" || e.button !== 0 || idx < 0) return;
       setDoorOpen(idx, !doorsOpenRef.current[idx]);
       sync?.interact(`door:${idx}`);
     };
-    window.addEventListener("click", handleClick);
-    return () => window.removeEventListener("click", handleClick);
   }, [sync, setDoorOpen]);
 
   useEffect(() => {
-    return () => {
-      if (hoverDoorRef.current >= 0) hideCursor();
-    };
+    const target = doorHoverRef.current;
+    return () => releaseHover(target);
   }, []);
 
   if (!assets) return null;

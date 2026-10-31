@@ -12,6 +12,7 @@ import {
   describeBiomeCell,
   encodeCell,
   formatAddressPath,
+  isKnownAddress,
   parseAddressPath,
   resolveAddress,
 } from "./address";
@@ -90,6 +91,16 @@ describe("address paths", () => {
     expect(parseAddressPath("/city/not-words-1")).toBeNull();
     expect(parseAddressPath("/index.html")).toBeNull();
     expect(formatAddressPath(["famous", "sprawl"], ["amber", "lagoon"])).toBe("/famous-sprawl/amber-lagoon");
+  });
+
+  it("knows a path only when every part names something (the rest is the 404 domain)", () => {
+    const known = (path: string) => isKnownAddress(parseAddressPath(path)!, OVERWORLD_CONFIG.regions);
+    expect(known("/desert")).toBe(true);
+    expect(known("/snow/mountain")).toBe(true);
+    expect(known("/famous-sprawl/velvet-town")).toBe(true);
+    expect(known("/nowhere")).toBe(false);
+    expect(known("/snow/nowhere")).toBe(false);
+    expect(known("/notaword-sprawl")).toBe(false);
   });
 });
 

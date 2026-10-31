@@ -5,7 +5,7 @@
  *   IN:  { type: "INIT", config: DomainConfig }
  *   IN:  { type: "ENUMERATE",     id, name: DressingEnumeratorName, bounds: ChunkBounds, args }
  *   IN:  { type: "VERTEX_SAMPLE", id, x, z, raw? } (single height sample, padded or raw — the Player's backstop and water probe)
- *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell)
+ *   IN:  { type: "PLACE_INFO",    id, x, z } (region/biome + sky weights + address cell + the ground there)
  *   IN:  { type: "SURFACE",       id, x, z, feetY } (the movement modifiers under a capsule — the Player's snow wading and traction)
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "DRESSING_RESULT", id, points }
@@ -13,6 +13,7 @@
 
 import { computeVertexData, computeVertexDataRaw, getPlaceInfo, initCompute, surfaceModifiersAt, DomainConfig } from "./vertexCompute";
 import { isDressingEnumerator, runDressingEnumerator } from "../../objects/dressing/enumerators";
+import { groundAt } from "./ground";
 
 let initialized = false;
 
@@ -57,7 +58,7 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   if (type === "PLACE_INFO") {
-    reply(id, [getPlaceInfo(e.data.x, e.data.z)]);
+    reply(id, [{ ...getPlaceInfo(e.data.x, e.data.z), ground: groundAt(e.data.x, e.data.z) }]);
     return;
   }
 

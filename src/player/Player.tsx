@@ -8,7 +8,7 @@ import { useDevContext } from "../context/DevContext";
 import { useGameContext } from "../context/GameContext";
 import { getAssignedSpawnOffset } from "../net/connection";
 import { fetchSurfaceModifiers } from "../objects/dressing/worker";
-import { createCharacter, createStepResult, disposeCharacter, stepCharacter, type Character, type SwimInput } from "../physics/characterMovement";
+import { createCharacter, createStepResult, disposeCharacter, GRAVITY, stepCharacter, TERMINAL_VELOCITY, type Character, type SwimInput } from "../physics/characterMovement";
 import { createSurfaceSampler } from "../physics/movementModifiers";
 import { setCameraWaterDepth, type LiquidLook } from "../vfx/underwater";
 import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personalLight";
@@ -23,8 +23,11 @@ import { useWaterProbe } from "./waterProbe";
 
 /** BODY-CENTER position; the player free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
-/** Held this far above the spawn's ground until the terrain exists, then dropped: a spawn point inside a
- *  building's footprint lands the player on top of it instead of inside its walls. */
+/** The default hold above a COMPUTED spawn's ground until the terrain exists, then dropped: a spawn point
+ *  inside a building's footprint lands the player on top of it instead of inside its walls. A spawn's own
+ *  drop height (GameContext spawnDropHeight) overrides it: higher starts there and falls to this hold while
+ *  the ground loads (entering the overworld), 0 stands the player exactly on the spawn (a domain's own,
+ *  hand-placed one). */
 const SPAWN_DROP_HEIGHT = 100;
 
 // Movement feel (slopes, gravity, jump, substepping) is tuned in physics/characterMovement.ts.
@@ -84,7 +87,7 @@ const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }
 export const Player = () => {
   const inputRef = useInput();
   const { camera } = useThree();
-  const { terrainLoaded, playerPosition, playerSpawn: spawnPosition } = useGameContext();
+  const { terrainLoaded, playerPosition, playerSpawn: spawnPosition, spawnDropHeight } = useGameContext();
   const { noclip, flashlight } = useDevContext();
 
   const rigidBodyRef = useRef<RapierRigidBody | null>(null);
@@ -114,6 +117,12 @@ export const Player = () => {
     [spawnPosition?.[0], spawnPosition?.[1], spawnPosition?.[2]]
   );
 
+  /** The capsule's height while the ground loads; NaN = start over from the spawn's drop height. */
+  const holdY = useRef(NaN);
+  useEffect(() => {
+    if (!terrainLoaded) holdY.current = NaN;
+  }, [spawn, spawnDropHeight, terrainLoaded]);
+
   useEffect(() => {
     const character = createCharacter(rapier, world, { height: PLAYER_HEIGHT, radius: PLAYER_RADIUS });
     characterRef.current = character;
@@ -128,16 +137,28 @@ export const Player = () => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
-  /** Pins the capsule (and camera) at the spawn plus the server's spawn offset until the ground exists.
+  /** Holds the capsule (and camera) over the spawn plus the server's spawn offset until the ground exists:
+   *  falling from the spawn's drop height, never below the hold (SPAWN_DROP_HEIGHT, or a lower drop height).
    *  The offset is applied here, not via the RigidBody position prop: it can change on reconnect and
    *  must never teleport a player who has already landed. */
-  const holdAtSpawn = (rb: RapierRigidBody, character: Character): void => {
-    const off = getAssignedSpawnOffset();
+  const holdAtSpawn = (rb: RapierRigidBody, character: Character, dt: number): void => {
+    // A hand-placed spawn (drop height 0: a <Domain playerSpawn>) is exact: the server's multiplayer spread
+    // would put the home page's title off-center.
+    const off = spawnDropHeight === 0 ? null : getAssignedSpawnOffset();
     const sx = spawn[0] + (off?.x ?? 0);
     const sz = spawn[2] + (off?.z ?? 0);
-    const sy = spawn[1] + SPAWN_DROP_HEIGHT;
+    const drop = spawnDropHeight ?? SPAWN_DROP_HEIGHT;
+    const lowest = spawn[1] + Math.min(drop, SPAWN_DROP_HEIGHT);
+    if (Number.isNaN(holdY.current)) {
+      holdY.current = spawn[1] + drop;
+      character.state.vy = 0;
+    } else if (holdY.current > lowest) {
+      character.state.vy = Math.max(character.state.vy + GRAVITY * dt, TERMINAL_VELOCITY);
+      holdY.current = Math.max(holdY.current + character.state.vy * dt, lowest);
+    }
+    if (holdY.current <= lowest) character.state.vy = 0;
+    const sy = holdY.current;
     rb.setTranslation({ x: sx, y: sy, z: sz }, true);
-    character.state.vy = 0;
     _camTarget.set(sx, sy + PLAYER_HEIGHT * 0.5, sz);
     camera.position.copy(_camTarget);
     cameraReady.current = false;
@@ -166,7 +187,7 @@ export const Player = () => {
     const pos = rb.translation();
 
     if (!terrainLoaded && !noclip) {
-      holdAtSpawn(rb, character);
+      holdAtSpawn(rb, character, dt);
       // A teleport or domain switch: the last sample is another place's water, and the player starts outside.
       water.clear();
       underground.reset();

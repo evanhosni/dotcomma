@@ -10,7 +10,7 @@ export const CityRegion = content(
   <Region id={1} name="city">
     <Material shader={baseShader} textures={{ grasstexture: "grass.png" }} />
     <Noise params={DEFAULT_TERRAIN_PARAMS.baseNoise} />
-    <Skybox topColor="#4a90d9" horizonColor="#87ceeb" bottomColor="#666666" />
+    <Skybox />
     <Rivers chance={0.35} />
 
     <CityBiome />

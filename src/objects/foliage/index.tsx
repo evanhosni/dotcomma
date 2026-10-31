@@ -11,7 +11,7 @@ import { reportContentError } from "../../utils/contentError";
 import { BiomeContext } from "../../world/components/context";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
-import { createDefaultsGroup, definedOnly, warnUnsupportedSync } from "../utils";
+import { definedOnly, warnUnsupportedSync } from "../utils";
 import {
   CHUNK_HALF_DIAG,
   chunkBoxDistSq,
@@ -37,9 +37,6 @@ import { FoliageChunkParams, FoliageChunkResult, generateFoliageChunk, initFolia
  * Deliberately NOT on the Dressing chunk base: ~32k instances per chunk stream from the worker straight
  * into GPU attributes, and Dressing's Matrix4-per-instance assembly would regress at that count.
  */
-
-const FoliageGroup = createDefaultsGroup<Pick<FoliageAttributes, "renderDistance">>("foliage");
-export const Foliage = FoliageGroup.Group;
 
 const MAX_PENDING_CHUNKS = 4; // worker requests in flight at once
 const UPDATE_INTERVAL_FRAMES = 3;
@@ -153,7 +150,7 @@ interface FoliageFieldProps extends FoliageAttributes {
 }
 
 /** Without explicit `biomeIds`, restricts itself to the enclosing <Biome>. Mounted only through
- *  createFoliage, which has already resolved mount > <Foliage> group > plant defaults. */
+ *  createFoliage, which has already resolved mount > plant defaults. */
 const FoliageField: React.FC<FoliageFieldProps> = ({
   density = 800_000,
   biomeIds,
@@ -444,13 +441,11 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
   return <group ref={groupRef} matrixAutoUpdate={false} />;
 };
 
-/** A plant type: its defaults baked in. Precedence, as for <Dressing>: the mount's own props,
- *  then the enclosing <Foliage> group's, then these defaults. */
+/** A plant type: its defaults baked in; the mount's own props win. */
 export const createFoliage = (defaults: FoliageAttributes) => {
   const plant = {};
   const PlantField = (overrides: FoliageAttributes): JSX.Element => {
-    const group = FoliageGroup.useDefaults();
-    return <FoliageField {...defaults} {...definedOnly(group)} {...definedOnly(overrides)} plant={plant} />;
+    return <FoliageField {...defaults} {...definedOnly(overrides)} plant={plant} />;
   };
   return PlantField;
 };

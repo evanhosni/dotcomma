@@ -1,12 +1,12 @@
 import { useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { getNightBlend, NIGHT_SKY_COLORS } from "../../lighting/dayNight";
 import { ditherGLSL } from "../../vfx/dither";
-import { getPlaceInfo, PlaceInfo } from "../../objects/dressing/worker";
 import { childrenOfKind, declare } from "../content";
 import type { ContentNode } from "../content/types";
 import { getActiveRegions, getActiveSkyboxes } from "../domains/utils";
+import { onPlaceChange, type PlayerPlace } from "../place";
 
 export interface SkyboxSettings {
   topColor: string;
@@ -23,6 +23,8 @@ export const SKYBOX_DEFAULTS: SkyboxSettings = {
 };
 
 export interface SkyboxProps {
+  /** One color for the whole sky: the default of the three below. */
+  color?: string;
   topColor?: string;
   horizonColor?: string;
   bottomColor?: string;
@@ -41,9 +43,9 @@ export interface SkyboxRecord extends SkyboxSettings {
 export const Skybox = declare<SkyboxProps>({ kind: "skybox", within: ["domain", "region", "biome"] });
 
 const settingsOf = (node: ContentNode<SkyboxProps>): SkyboxSettings => ({
-  topColor: node.props.topColor ?? SKYBOX_DEFAULTS.topColor,
-  horizonColor: node.props.horizonColor ?? SKYBOX_DEFAULTS.horizonColor,
-  bottomColor: node.props.bottomColor ?? SKYBOX_DEFAULTS.bottomColor,
+  topColor: node.props.topColor ?? node.props.color ?? SKYBOX_DEFAULTS.topColor,
+  horizonColor: node.props.horizonColor ?? node.props.color ?? SKYBOX_DEFAULTS.horizonColor,
+  bottomColor: node.props.bottomColor ?? node.props.color ?? SKYBOX_DEFAULTS.bottomColor,
   radius: node.props.radius ?? SKYBOX_DEFAULTS.radius,
 });
 
@@ -85,7 +87,6 @@ void main() {
 }
 `;
 
-const PLACE_POLL_INTERVAL_S = 0.5;
 const COLOR_LERP_RATE = 2; // higher = faster sky cross-fade
 
 const _nightTop = new THREE.Color(NIGHT_SKY_COLORS.top);
@@ -100,9 +101,7 @@ export const SkyboxSystem = () => {
   const { camera } = useThree();
 
   const meshRef = useRef<THREE.Mesh>(null);
-  const placeRef = useRef<PlaceInfo | null>(null);
-  const pollTimerRef = useRef(0);
-  const pollInFlightRef = useRef(false);
+  const placeRef = useRef<PlayerPlace | null>(null);
 
   const skyboxes = getActiveSkyboxes();
   const domainSky = useMemo(
@@ -178,6 +177,14 @@ export const SkyboxSystem = () => {
   }, [skyboxes, hasScopedSkyboxes, domainSky]);
 
   useLayoutEffect(() => resolveTarget(), [resolveTarget]);
+  useEffect(
+    () =>
+      onPlaceChange((place) => {
+        placeRef.current = place;
+        resolveTarget();
+      }),
+    [resolveTarget],
+  );
 
   const targetColors = useRef({
     top: new THREE.Color(),
@@ -187,24 +194,6 @@ export const SkyboxSystem = () => {
 
   useFrame((_, delta) => {
     if (meshRef.current) meshRef.current.position.copy(camera.position);
-
-    if (hasScopedSkyboxes && !pollInFlightRef.current) {
-      pollTimerRef.current += delta;
-      if (pollTimerRef.current >= PLACE_POLL_INTERVAL_S) {
-        pollTimerRef.current = 0;
-        pollInFlightRef.current = true;
-        getPlaceInfo(camera.position.x, camera.position.z)
-          .then((place) => {
-            if (!place) return;
-            placeRef.current = place;
-            resolveTarget();
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            pollInFlightRef.current = false;
-          });
-      }
-    }
 
     const resolved = resolvedColors.current;
     const t = targetColors.current;

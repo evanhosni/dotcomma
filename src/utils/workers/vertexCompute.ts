@@ -13,7 +13,7 @@
  * before it is initialized). Values cross modules only inside functions.
  */
 
-import { smoothstep } from "../math";
+import { smoothMin, smoothstep } from "../math";
 import { RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { clearBridgeCaches, enumeratingBridges } from "./bridges/freewayBridges";
@@ -43,7 +43,7 @@ import {
   offCityRoad,
 } from "./roads/offCityFreeway";
 import { FREEWAY_GRADE_RAMP, clearFreewayGrades, freewayGradeAt } from "./roads/freewayGrade";
-import { FREEWAY_SMIN_K, type WallNetwork, clearNetworkCache, nearestFreewayRun, nearestRun, networkOf, smoothMin } from "./roads/freewayNetwork";
+import { FREEWAY_SMIN_K, type WallNetwork, clearNetworkCache, nearestFreewayRun, nearestRun, networkOf } from "./roads/freewayNetwork";
 import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, ISLAND_LAND_FIELD, TO_BANK, TO_ROAD, blockIslandAt, clearRoadFragments, islandRoad, inRoadFragment } from "./roads/roadFragments";
 import { clearSnowCaches, snowMovementAt } from "./snow/snowDrift";
 import { createMovementModifiers, resetMovementModifiers, type MovementModifiers } from "../../physics/movementModifiers";

@@ -4,7 +4,7 @@
 
 An infinite LOD quadtree of chunk meshes around the camera (plus optional water mesh and collider). This folder only renders; every height and attribute comes from the height pipeline in [../../utils/workers/](../../utils/workers/README.md).
 
-- [TerrainRenderer.tsx](TerrainRenderer.tsx): the chunk lifecycle, all imperative in `useFrame` (`updateTerrain`). Mounted by `<Domain>` unless `terrain={false}`.
+- [TerrainRenderer.tsx](TerrainRenderer.tsx): the chunk lifecycle, all imperative in `useFrame` (`updateTerrain`). Mounted by every `<Domain>`; `<Terrain wireframe>` draws it as lines only (no skirts, faded out by `WIREFRAME_FADE`, shaders/farFade.ts).
   1. Recompute the desired set (`computeDesiredChunks`, [lodQuadtree.ts](lodQuadtree.ts)) after camera movement; skip the pass in steady state.
   2. Queue new/changed chunks, sorted collider LODs first then nearest-first (`prepareBuildQueue`).
   3. Build until `BUILD_BUDGET_MS`: `buildChunk` awaits the chunk's worker build and writes it into pooled geometry (`acquireGeometry`, `writeTerrainBuffers`, [chunkGeometry.ts](chunkGeometry.ts)). Far LODs throttle to `FAR_BUILD_INTERVAL_MS` while `isMachineStruggling()`.

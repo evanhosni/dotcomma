@@ -1,9 +1,11 @@
 import * as THREE from "three";
 import { AXIS_LIFT, MOUTH_RIM_AMP } from "../../utils/workers/underground/constants";
 import type { MouthPiece } from "../../utils/workers/underground/types";
-import { _curvature } from "../../vfx/curvature";
+import { createTravelRefetch, selectNearest } from "../../utils/nearbyPool";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { instancedTemplate, warmPrograms } from "../../utils/warmPrograms";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../shaders/chunkProjection";
+import { glslFloat, WORLD_WRAP } from "../shaders/constants";
 import { LOD1_MAX_DISTANCE, LOD2_MAX_DISTANCE } from "../terrain/lodConfig";
 import { fetchCaveMouths } from "./worker";
 
@@ -40,17 +42,24 @@ interface FarMouthState {
   mesh: THREE.InstancedMesh | null;
   strength: THREE.InstancedBufferAttribute | null;
   mouths: MouthPiece[];
-  fetchedAt: { x: number; z: number } | null;
-  fetching: boolean;
   originX: number;
   originZ: number;
 }
 
-const state: FarMouthState = { scene: null, mesh: null, strength: null, mouths: [], fetchedAt: null, fetching: false, originX: 0, originZ: 0 };
+const state: FarMouthState = { scene: null, mesh: null, strength: null, mouths: [], originX: 0, originZ: 0 };
+
+const mouthFetch = createTravelRefetch(
+  REFETCH_TRAVEL,
+  (x, z) => fetchCaveMouths({ minX: x - FETCH_REACH, minZ: z - FETCH_REACH, maxX: x + FETCH_REACH, maxZ: z + FETCH_REACH }),
+  (mouths) => {
+    state.mouths = mouths;
+  },
+);
 
 const createMaterial = (): THREE.ShaderMaterial =>
   new THREE.ShaderMaterial({
-    uniforms: { uCurveStart: _curvature.uniforms.uCurveStart, uCurveK: _curvature.uniforms.uCurveK },
+    uniforms: { ...CHUNK_PROJECTION_UNIFORMS },
+    defines: { WORLD_WRAP: glslFloat(WORLD_WRAP) },
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -58,7 +67,7 @@ const createMaterial = (): THREE.ShaderMaterial =>
       attribute float aStrength;
       varying vec2 vUv;
       varying float vStrength;
-      ${_curvature.CURVE_GLSL}
+      ${CHUNK_PROJECTION_GLSL}
       void main() {
         vUv = uv;
         vStrength = aStrength;
@@ -69,8 +78,7 @@ const createMaterial = (): THREE.ShaderMaterial =>
         float dist = length(toCamera);
         vec3 pull = toCamera / max(dist, 1e-3) * clamp(dist * ${PULL_SHARE.toFixed(4)}, ${PULL_MIN.toFixed(2)}, ${PULL_MAX.toFixed(2)});
         vec3 local = (instanceMatrix * vec4(position, 1.0)).xyz + pull;
-        vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * local;
-        gl_Position = projectionMatrix * vec4(curveViewPos(viewPos), 1.0);
+        gl_Position = projectChunkLocal(local, vec3(0.0, 1.0, 0.0));
       }
     `,
     fragmentShader: /* glsl */ `
@@ -131,46 +139,24 @@ export const driveFarMouths = (camera: THREE.Camera, fadeOf: (id: string) => num
   const mesh = state.mesh;
   if (!mesh || !state.scene) return;
   const { x, z } = camera.position;
-  const far = state.fetchedAt === null || Math.hypot(x - state.fetchedAt.x, z - state.fetchedAt.z) > REFETCH_TRAVEL;
-  if (far && !state.fetching) {
-    state.fetching = true;
-    const at = { x, z };
-    fetchCaveMouths({ minX: x - FETCH_REACH, minZ: z - FETCH_REACH, maxX: x + FETCH_REACH, maxZ: z + FETCH_REACH })
-      .then((mouths) => {
-        state.mouths = mouths;
-        state.fetchedAt = at;
-      })
-      .finally(() => {
-        state.fetching = false;
-      });
-  }
+  mouthFetch.update(x, z);
   // Rebased on the camera's position at the last fetch: everything is within FETCH_REACH of it.
-  if (state.fetchedAt && (state.originX !== state.fetchedAt.x || state.originZ !== state.fetchedAt.z)) {
-    state.originX = state.fetchedAt.x;
-    state.originZ = state.fetchedAt.z;
+  const fetchedAt = mouthFetch.fetchedAt;
+  if (fetchedAt && (state.originX !== fetchedAt.x || state.originZ !== fetchedAt.z)) {
+    state.originX = fetchedAt.x;
+    state.originZ = fetchedAt.z;
     mesh.position.set(state.originX, 0, state.originZ);
     mesh.updateMatrix();
     mesh.updateMatrixWorld(true);
   }
-  // The nearest MAX_FAR_MOUTHS within the draw distance, by an index sort over scratch arrays (every
-  // frame: no lists are built).
-  const mouths = state.mouths;
-  if (_distance.length < mouths.length) {
-    _distance = new Float64Array(mouths.length);
-    _order = new Int32Array(mouths.length);
-  }
+  // The nearest MAX_FAR_MOUTHS within the draw distance (every frame, into fixed scratch: no lists are built).
+  const count = selectNearest(state.mouths, mouthX, mouthZ, x, z, _nearest, _nearestDistSq);
   let shown = 0;
-  for (let i = 0; i < mouths.length; i++) {
-    const d = Math.hypot(mouths[i].ox - x, mouths[i].oz - z);
-    _distance[i] = d;
-    if (d < FAR_MOUTH_DISTANCE) _order[shown++] = i;
-  }
-  const order = _order.subarray(0, shown).sort(_byDistance);
-  if (shown > MAX_FAR_MOUTHS) shown = MAX_FAR_MOUTHS;
+  while (shown < count && _nearestDistSq[shown] < FAR_MOUTH_DISTANCE * FAR_MOUTH_DISTANCE) shown++;
   const strength = state.strength!;
   for (let i = 0; i < shown; i++) {
-    const m = mouths[order[i]];
-    const d = _distance[order[i]];
+    const m = _nearest[i]!;
+    const d = Math.sqrt(_nearestDistSq[i]);
     const r = m.r0 * (1 + MOUTH_RIM_AMP) * SPREAD;
     _p.set(m.ox - state.originX, m.oy + AXIS_LIFT * m.r0, m.oz - state.originZ);
     // Facing out of the tunnel: the disc's +z toward −d.
@@ -186,13 +172,14 @@ export const driveFarMouths = (camera: THREE.Camera, fadeOf: (id: string) => num
   mesh.instanceMatrix.needsUpdate = true;
   strength.needsUpdate = true;
 };
-let _distance = new Float64Array(0);
-let _order = new Int32Array(0);
-const _byDistance = (a: number, b: number): number => _distance[a] - _distance[b];
+const _nearest: (MouthPiece | null)[] = new Array(MAX_FAR_MOUTHS).fill(null);
+const _nearestDistSq = new Float64Array(MAX_FAR_MOUTHS);
+const mouthX = (m: MouthPiece): number => m.ox;
+const mouthZ = (m: MouthPiece): number => m.oz;
 
 /** A domain reset: the fetched mouths belong to the old world. */
 export const resetFarMouths = (): void => {
   state.mouths = [];
-  state.fetchedAt = null;
+  mouthFetch.reset();
   if (state.mesh) state.mesh.count = 0;
 };

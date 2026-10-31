@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../../utils/cursor";
+import { claimHover, releaseHover, type HoverTarget } from "../../../utils/cursor";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
 import { mouseActionOf, type MouseFlag } from "./runner";
 import type { StateMachineHandle } from "./useStateMachine";
@@ -33,6 +33,40 @@ const raise = (bb: Record<string, any>, flag: MouseFlag, sync: SyncHandle | null
   bb[flag] = true;
   bb.__mouse_dirty = true;
   if (sync && sync.known) sync.interact(mouseActionOf(flag));
+};
+
+/** One mouse event as the machine's input flags (the arbiter only sends it while this actor is hovered). */
+const dispatchMouse = (e: MouseEvent, bb: Record<string, any>, sync: SyncHandle | null): void => {
+  const input = (flag: MouseFlag) => raise(bb, flag, sync);
+  switch (e.type) {
+    case "click":
+      if (e.button === 0) input("__mouse_left_click");
+      break;
+    case "contextmenu":
+      input("__mouse_right_click");
+      break;
+    case "pointerdown":
+      if (e.button === 0) input("__mouse_left_click_down");
+      else if (e.button === 1) input("__mouse_middle_click");
+      else if (e.button === 2) input("__mouse_right_click_down");
+      break;
+    case "pointerup":
+      if (e.button === 0) {
+        input("__mouse_left_click_up");
+      } else if (e.button === 2) {
+        input("__mouse_right_click");
+        input("__mouse_right_click_up");
+      }
+      break;
+    case "dblclick":
+      input("__mouse_double_click");
+      break;
+    case "wheel":
+      input("__mouse_scroll");
+      if ((e as WheelEvent).deltaY < 0) input("__mouse_scroll_up");
+      else if ((e as WheelEvent).deltaY > 0) input("__mouse_scroll_down");
+      break;
+  }
 };
 
 /** Past `reach`, padded for the model's height/radius: the camera is too far for any hit. */
@@ -109,10 +143,16 @@ export function useMouseEvents(
   const growCursor = options.shouldGrowCursor ?? false;
   const reach = options.reach;
   const activeHoverRef = useRef(false);
-  const hitDistRef = useRef(Infinity);
   const syncRef = useRef<SyncHandle | null>(null);
   const frameCountRef = useRef(options.framePhase ?? 0);
   const cachedMeshesRef = useRef<THREE.SkinnedMesh[]>([]);
+  const bbRef = useRef(bb);
+  bbRef.current = bb;
+  /** Claimed (utils/cursor) while hovered: the arbiter hands it the mouse when it is the nearest. */
+  const hoverTarget = useMemo<HoverTarget>(
+    () => ({ distance: Infinity, growsCursor: growCursor, onMouse: (e) => bbRef.current && dispatchMouse(e, bbRef.current, syncRef.current) }),
+    [growCursor],
+  );
 
   /** The screen-center ray's distance to the model; Infinity when out of range or off the view cone. */
   const measureHitDistance = (camera: THREE.Camera, group: THREE.Group, distanceSq2D: number): number => {
@@ -137,86 +177,27 @@ export function useMouseEvents(
     if (!bb) return;
     if (++frameCountRef.current % MOUSE_RAYCAST_INTERVAL_FRAMES !== 0) return;
 
-    let isHovering = false;
     const group = groupRef.current;
-    if (group) {
-      hitDistRef.current = measureHitDistance(camera, group, distanceSq2D);
-      isHovering = hitDistRef.current <= reach;
-    }
+    hoverTarget.distance = group ? measureHitDistance(camera, group, distanceSq2D) : Infinity;
+    const isHovering = hoverTarget.distance <= reach;
 
     if (isHovering && !activeHoverRef.current) {
       activeHoverRef.current = true;
       raise(bb, "__mouse_hover_enter", sync);
       bb.__mouse_hover_active = true;
-      if (growCursor) showCursor();
+      claimHover(hoverTarget);
     } else if (!isHovering && activeHoverRef.current) {
       activeHoverRef.current = false;
       raise(bb, "__mouse_hover_leave", sync);
       // false, not delete: deleting keys forces the blackboard into dictionary mode.
       bb.__mouse_hover_active = false;
-      if (growCursor) hideCursor();
+      releaseHover(hoverTarget);
     }
   };
   const tickRef = useRef(tick);
   tickRef.current = tick;
 
-  useEffect(() => {
-    if (!bb) return;
-    const inReach = () => hitDistRef.current <= reach;
-    const input = (flag: MouseFlag) => raise(bb, flag, syncRef.current);
-
-    const handleClick = (e: MouseEvent) => {
-      if (e.button === 0 && inReach()) input("__mouse_left_click");
-    };
-
-    const handleContextMenu = () => {
-      if (inReach()) input("__mouse_right_click");
-    };
-
-    const handlePointerDown = (e: PointerEvent) => {
-      if (!inReach()) return;
-      if (e.button === 0) input("__mouse_left_click_down");
-      else if (e.button === 1) input("__mouse_middle_click");
-      else if (e.button === 2) input("__mouse_right_click_down");
-    };
-
-    const handlePointerUp = (e: PointerEvent) => {
-      if (!inReach()) return;
-      if (e.button === 0) {
-        input("__mouse_left_click_up");
-      } else if (e.button === 2) {
-        input("__mouse_right_click");
-        input("__mouse_right_click_up");
-      }
-    };
-
-    const handleDblClick = () => {
-      if (inReach()) input("__mouse_double_click");
-    };
-
-    const handleWheel = (e: WheelEvent) => {
-      if (!inReach()) return;
-      input("__mouse_scroll");
-      if (e.deltaY < 0) input("__mouse_scroll_up");
-      else if (e.deltaY > 0) input("__mouse_scroll_down");
-    };
-
-    window.addEventListener("click", handleClick);
-    window.addEventListener("contextmenu", handleContextMenu);
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("dblclick", handleDblClick);
-    window.addEventListener("wheel", handleWheel);
-
-    return () => {
-      window.removeEventListener("click", handleClick);
-      window.removeEventListener("contextmenu", handleContextMenu);
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("dblclick", handleDblClick);
-      window.removeEventListener("wheel", handleWheel);
-    };
-  }, [bb, reach]);
+  useEffect(() => () => releaseHover(hoverTarget), [hoverTarget]);
 
   // NOTHING is attached to the R3F group: even no-op pointer handlers register the
   // actor in R3F's interaction list, which raycasts it recursively on every pointermove.

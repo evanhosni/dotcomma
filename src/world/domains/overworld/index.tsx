@@ -20,7 +20,7 @@ export const OverworldDomain = (
   <Domain>
     <Terrain seed="123" />
     <Material riverTexture="potato_sack.jpg" />
-    <Skybox topColor="#4a90d9" horizonColor="#87ceeb" bottomColor="#666666" />
+    <Skybox />
 
     <DayNightLights />
     <DayNightCycle />

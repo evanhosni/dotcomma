@@ -32,8 +32,6 @@ export interface ModelAttributes {
   /** Public-URL GLTF path. */
   model: string;
   scale?: [number, number, number];
-  /** Default true; movers pass false. */
-  collidersNeverMove?: boolean;
   /** One trimesh over the whole model instead of per-node colliders. */
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
