@@ -12,7 +12,7 @@ const BEEBLE_COLLIDER: CapsuleColliderSpec = {
 export const BEEBLE_SPEC: ActorSpec = {
   id: "beeble",
   stateMachine: BEEBLE_SM,
-  animation: { frameRate: 10, procedural: [ASCEND_CLIP], layers: [HEAD_TURN_LAYER] },
+  animation: { frameRate: 15, procedural: [ASCEND_CLIP], layers: [HEAD_TURN_LAYER] },
   motion: { rotationStep: 45 },
   body: "kinematic",
   collider: BEEBLE_COLLIDER,
