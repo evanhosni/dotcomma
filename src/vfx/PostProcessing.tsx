@@ -3,6 +3,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import { _quantization, QuantizationGrowth } from "./quantization";
 import { _curvature } from "./curvature";
 import { setMainRenderFpsCap } from "./frameCap";
+import { DREAM } from "./dream";
+import { DEEP_DREAM } from "./deep-dream";
 
 /** Screen pixels per rendered pixel (≤ 1 = off). Drawn by lowering the canvas's pixel ratio and letting the
  *  browser upscale with hard edges (PixelationDriver): a post-process pass fought CustomCanvas's own render
@@ -34,6 +36,10 @@ interface PostProcessingProps {
   curvatureStart?: number;
   /** Presented frames only; the rAF loop keeps display rate (vfx/frameCap.ts). Unset/0 = uncapped. */
   fpsCap?: number;
+  /** The shader imitation of a dream (vfx/dream.ts), 0–1: no network, nearly free. Unset/0 = off. */
+  dream?: number;
+  /** Real DeepDream (MobileNet on a worker, vfx/deep-dream/) shown at this strength, 0–1. Unset/0 = off. */
+  deepDream?: number;
 }
 
 export const PostProcessing = ({
@@ -43,6 +49,8 @@ export const PostProcessing = ({
   curvature,
   curvatureStart,
   fpsCap,
+  dream,
+  deepDream,
 }: PostProcessingProps) => {
   // The uniforms are module-level and survive a domain switch — reset each on unmount, or a
   // quantized/curved/capped domain leaks its setting into the next one.
@@ -68,6 +76,20 @@ export const PostProcessing = ({
     setMainRenderFpsCap(fpsCap);
     return () => setMainRenderFpsCap(undefined);
   }, [fpsCap]);
+
+  useEffect(() => {
+    DREAM.strength = dream ?? 0;
+    return () => {
+      DREAM.strength = 0;
+    };
+  }, [dream]);
+
+  useEffect(() => {
+    DEEP_DREAM.strength = deepDream ?? 0;
+    return () => {
+      DEEP_DREAM.strength = 0;
+    };
+  }, [deepDream]);
 
   useEffect(() => {
     setPixelation(pixelationProp ?? 0);

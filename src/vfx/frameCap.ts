@@ -11,6 +11,8 @@ export const setMainRenderFpsCap = (fps: number | undefined): void => {
   renderThisFrame = true;
 };
 
+export const getMainRenderFpsCap = (): number => fpsCap;
+
 /** Call exactly once per rAF tick, before any render-producing useFrame. */
 export const shouldPresentThisFrame = (): boolean => {
   if (fpsCap <= 0) {

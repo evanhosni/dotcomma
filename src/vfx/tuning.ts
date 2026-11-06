@@ -1,6 +1,9 @@
 import { LAMP_GLOW_MIX } from "../lighting/lampGlow";
 import { WATER_SWELL_MIX } from "../world/water/material";
 import { _curvature } from "./curvature";
+import { DEEP_DREAM } from "./deep-dream";
+import { DREAM } from "./dream";
+import { getMainRenderFpsCap, setMainRenderFpsCap } from "./frameCap";
 import { getPixelation, setPixelation } from "./PostProcessing";
 import { _quantization } from "./quantization";
 import { UNDERWATER_MIX } from "./underwater";
@@ -27,7 +30,10 @@ const CURVE_PROBE = 1000;
 const curveRun = (): number => Math.max(1, CURVE_PROBE - _curvature.uniforms.uCurveStart.value) ** 2;
 
 export const VFX_KNOBS: readonly VfxKnob[] = [
+  { group: "screen", label: "fps cap (0 = off)", min: 0, max: 240, step: 5, get: getMainRenderFpsCap, set: setMainRenderFpsCap },
   { group: "screen", label: "pixelation (px)", min: 1, max: 16, step: 1, get: () => Math.max(1, getPixelation()), set: setPixelation },
+  { group: "screen", label: "dream", min: 0, max: 1, step: 0.01, get: () => DREAM.strength, set: (v) => (DREAM.strength = v) },
+  { group: "screen", label: "deep dream", min: 0, max: 1, step: 0.01, get: () => DEEP_DREAM.strength, set: (v) => (DEEP_DREAM.strength = v) },
   {
     group: "geometry",
     label: "quantization (u)",

@@ -1,16 +1,12 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../lighting/dayNight";
 import type { LiquidLook } from "../utils/workers/underground/tunnelSpace";
+import { SCREEN_QUAD_VERTEX_SHADER, ScreenFrame, ScreenPass, ScreenQuad } from "./screenPass";
 
 /**
- * UNDERWATER: while the camera is under a water surface the scene renders into a target and a
- * full-screen pass draws it back blurred, wobbling and fogged toward the water's color by the
- * DEPTH BUFFER's distance — so every object class is covered without touching its material.
- *
- * The target is flagged `isXRRenderTarget` with an sRGB texture: three keys a program by the target's
- * output color space and tone mapping, and a plain target would give every material a second program,
- * all linked on the first dive (the terrain's alone takes ~1s under ANGLE). Flagged, every program is
- * the screen's own; the sRGB8 storage hands the pass back exactly what the screen would have shown.
+ * UNDERWATER: while the camera is under a water surface a full-screen pass (vfx/screenPass.ts) draws
+ * the scene back blurred, wobbling and fogged toward the water's color by the DEPTH BUFFER's distance —
+ * so every object class is covered without touching its material.
  */
 
 let cameraWaterDepth = 0;
@@ -54,14 +50,6 @@ export const UNDERWATER_MIX = { fog: 1, blur: 1 };
 
 /** Surface light fades with the camera's own depth over ~this many units. */
 const LIGHT_FALLOFF_DEPTH = 25;
-
-const VERTEX_SHADER = /* glsl */ `
-varying vec2 vUv;
-void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy, 0.0, 1.0);
-}
-`;
 
 const FRAGMENT_SHADER = /* glsl */ `
 #include <packing>
@@ -112,71 +100,46 @@ void main() {
 }
 `;
 
-const _size = new THREE.Vector2();
+export class UnderwaterPass implements ScreenPass {
+  private readonly quad = new ScreenQuad(
+    new THREE.ShaderMaterial({
+      uniforms: {
+        tColor: { value: null },
+        tDepth: { value: null },
+        uTexel: { value: new THREE.Vector2() },
+        uNear: { value: 0.1 },
+        uFar: { value: 1000 },
+        uTime: { value: 0 },
+        uCameraDepth: { value: 0 },
+        uNightBlend: NIGHT_BLEND_UNIFORM,
+        uDeep: { value: new THREE.Vector3() },
+        uLit: { value: new THREE.Vector3() },
+        uTint: { value: new THREE.Vector3() },
+        uFogDensity: { value: LOOKS.water.fogDensity },
+        uBlur: { value: 1 },
+        uProjectionInverse: { value: new THREE.Matrix4() },
+        uCameraRotation: { value: new THREE.Matrix3() },
+      },
+      vertexShader: SCREEN_QUAD_VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
 
-export class UnderwaterPass {
-  private target: THREE.WebGLRenderTarget | null = null;
-  private readonly material = new THREE.ShaderMaterial({
-    uniforms: {
-      tColor: { value: null },
-      tDepth: { value: null },
-      uTexel: { value: new THREE.Vector2() },
-      uNear: { value: 0.1 },
-      uFar: { value: 1000 },
-      uTime: { value: 0 },
-      uCameraDepth: { value: 0 },
-      uNightBlend: NIGHT_BLEND_UNIFORM,
-      uDeep: { value: new THREE.Vector3() },
-      uLit: { value: new THREE.Vector3() },
-      uTint: { value: new THREE.Vector3() },
-      uFogDensity: { value: LOOKS.water.fogDensity },
-      uBlur: { value: 1 },
-      uProjectionInverse: { value: new THREE.Matrix4() },
-      uCameraRotation: { value: new THREE.Matrix3() },
-    },
-    vertexShader: VERTEX_SHADER,
-    fragmentShader: FRAGMENT_SHADER,
-    depthTest: false,
-    depthWrite: false,
-  });
-  private readonly quadScene = new THREE.Scene();
-  private readonly quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-
-  constructor() {
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
-    quad.frustumCulled = false;
-    this.quadScene.add(quad);
+  isActive(): boolean {
+    return isCameraUnderwater();
   }
 
-  /** Links the pass's program now, not on the first dive. */
   warm(gl: THREE.WebGLRenderer): void {
-    gl.compile(this.quadScene, this.quadCamera);
+    this.quad.warm(gl);
   }
 
-  private targetFor(gl: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
-    gl.getDrawingBufferSize(_size);
-    const w = Math.max(1, Math.floor(_size.x));
-    const h = Math.max(1, Math.floor(_size.y));
-    if (this.target && this.target.width === w && this.target.height === h) return this.target;
-    this.target?.dispose();
-    const target = new THREE.WebGLRenderTarget(w, h);
-    target.texture.colorSpace = THREE.SRGBColorSpace;
-    target.depthTexture = new THREE.DepthTexture(w, h);
-    (target as any).isXRRenderTarget = true;
-    this.target = target;
-    return target;
-  }
-
-  render(gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, time: number): void {
-    const target = this.targetFor(gl);
-    gl.setRenderTarget(target);
-    gl.render(scene, camera);
-    gl.setRenderTarget(null);
-
-    const u = this.material.uniforms;
-    u.tColor.value = target.texture;
-    u.tDepth.value = target.depthTexture;
-    u.uTexel.value.set(1 / target.width, 1 / target.height);
+  render(gl: THREE.WebGLRenderer, frame: ScreenFrame, _output: THREE.WebGLRenderTarget | null, camera: THREE.Camera, time: number): void {
+    const u = this.quad.material.uniforms;
+    u.tColor.value = frame.color;
+    u.tDepth.value = frame.depth;
+    u.uTexel.value.set(1 / frame.width, 1 / frame.height);
     const perspective = camera as THREE.PerspectiveCamera;
     u.uNear.value = perspective.near;
     u.uFar.value = perspective.far;
@@ -190,12 +153,10 @@ export class UnderwaterPass {
     u.uBlur.value = look.blur * UNDERWATER_MIX.blur;
     u.uProjectionInverse.value.copy(camera.projectionMatrixInverse);
     u.uCameraRotation.value.setFromMatrix4(camera.matrixWorld);
-    gl.render(this.quadScene, this.quadCamera);
+    this.quad.draw(gl);
   }
 
   dispose(): void {
-    this.target?.dispose();
-    this.target = null;
-    this.material.dispose();
+    this.quad.dispose();
   }
 }

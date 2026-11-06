@@ -234,7 +234,7 @@ src/
   context/  GameContext, DevContext, constants.ts (DEV_TOGGLES)  context/README.md
   menus/overlay/  StatsOverlay, DevOverlay, LogsOverlay, NetOverlay, styles.ts  menus/README.md
   save/  save.ts: ONE JSON save in two stores, device (localStorage) and account (the hosted blob)  save/README.md
-  vfx/  PostProcessing, curvature, quantization, spawnFade, dither, frameCap, materialPatch  vfx/README.md
+  vfx/  PostProcessing, screenPass (THE post chain: underwater → deep-dream/ → dream), curvature, quantization, spawnFade, dither, frameCap, materialPatch  vfx/README.md
   utils/  math/ (seedRand, seededStream), material/ (textures, fromShader), cursor/, task-queue/,
                          geometry.ts (bakeVertexColor, mergeOrThrow — vertex-colored parts, shared by
                          buildings, doors and tunnels), warmPrograms, uploadOnFirstDraw, contentError,
