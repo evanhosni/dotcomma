@@ -5,6 +5,7 @@ import { _curvature } from "./curvature";
 import { setMainRenderFpsCap } from "./frameCap";
 import { DREAM } from "./dream";
 import { DEEP_DREAM } from "./deep-dream";
+import { TRACE } from "./trace";
 
 /** Screen pixels per rendered pixel (≤ 1 = off). Drawn by lowering the canvas's pixel ratio and letting the
  *  browser upscale with hard edges (PixelationDriver): a post-process pass fought CustomCanvas's own render
@@ -40,6 +41,8 @@ interface PostProcessingProps {
   dream?: number;
   /** Real DeepDream (MobileNet on a worker, vfx/deep-dream/) shown at this strength, 0–1. Unset/0 = off. */
   deepDream?: number;
+  /** The window trail (vfx/trace.ts), 0–1: how long the stamped copies persist. Unset/0 = off. */
+  trace?: number;
 }
 
 export const PostProcessing = ({
@@ -51,6 +54,7 @@ export const PostProcessing = ({
   fpsCap,
   dream,
   deepDream,
+  trace,
 }: PostProcessingProps) => {
   // The uniforms are module-level and survive a domain switch — reset each on unmount, or a
   // quantized/curved/capped domain leaks its setting into the next one.
@@ -90,6 +94,13 @@ export const PostProcessing = ({
       DEEP_DREAM.strength = 0;
     };
   }, [deepDream]);
+
+  useEffect(() => {
+    TRACE.strength = trace ?? 0;
+    return () => {
+      TRACE.strength = 0;
+    };
+  }, [trace]);
 
   useEffect(() => {
     setPixelation(pixelationProp ?? 0);

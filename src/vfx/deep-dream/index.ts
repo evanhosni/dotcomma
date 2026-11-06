@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { reportContentError } from "../../utils/contentError";
 import { SCREEN_QUAD_VERTEX_SHADER, ScreenFrame, ScreenPass, ScreenQuad } from "../screenPass";
 import { DREAM_EDGE_FADE, DREAM_EDGE_SPILL, DREAM_FEEDBACK, DREAM_HEIGHT, DREAM_OVERSCAN, DREAM_STALE_AFTER, DREAM_WIDTH } from "./constants";
-import { dreamStep, isDeepDreamReady, startDeepDream } from "./worker";
+import { dreamStep, isDeepDreamReady, preloadDeepDream, startDeepDream } from "./worker";
 
 /**
  * DEEP DREAM: Google's actual technique — gradient ascent on the image to excite a layer of a trained
@@ -139,6 +139,7 @@ export class DeepDreamPass implements ScreenPass {
   }
 
   warm(gl: THREE.WebGLRenderer): void {
+    preloadDeepDream();
     // Two programs: one keyed for the plain feed target, one for the chain's targets and the screen.
     gl.setRenderTarget(this.feedTarget);
     this.quad.warm(gl);

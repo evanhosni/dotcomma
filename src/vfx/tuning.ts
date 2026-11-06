@@ -6,6 +6,7 @@ import { DREAM } from "./dream";
 import { getMainRenderFpsCap, setMainRenderFpsCap } from "./frameCap";
 import { getPixelation, setPixelation } from "./PostProcessing";
 import { _quantization } from "./quantization";
+import { TRACE } from "./trace";
 import { UNDERWATER_MIX } from "./underwater";
 
 /** One live VFX knob for devmode's "vfx" sliders (menus/overlay/DevOverlay.tsx). It reads and writes the
@@ -34,6 +35,8 @@ export const VFX_KNOBS: readonly VfxKnob[] = [
   { group: "screen", label: "pixelation (px)", min: 1, max: 16, step: 1, get: () => Math.max(1, getPixelation()), set: setPixelation },
   { group: "screen", label: "dream", min: 0, max: 1, step: 0.01, get: () => DREAM.strength, set: (v) => (DREAM.strength = v) },
   { group: "screen", label: "deep dream", min: 0, max: 1, step: 0.01, get: () => DEEP_DREAM.strength, set: (v) => (DEEP_DREAM.strength = v) },
+  { group: "screen", label: "trace", min: 0, max: 1, step: 0.01, get: () => TRACE.strength, set: (v) => (TRACE.strength = v) },
+  { group: "screen", label: "trace stamp interval (s)", min: 0, max: 0.5, step: 0.01, get: () => TRACE.interval, set: (v) => (TRACE.interval = v) },
   {
     group: "geometry",
     label: "quantization (u)",

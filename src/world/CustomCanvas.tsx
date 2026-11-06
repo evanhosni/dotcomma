@@ -16,6 +16,7 @@ import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
 import { UnderwaterPass } from "../vfx/underwater";
 import { DeepDreamPass } from "../vfx/deep-dream";
 import { DreamPass } from "../vfx/dream";
+import { TracePass } from "../vfx/trace";
 import { ScreenPassChain } from "../vfx/screenPass";
 import { PixelationDriver } from "../vfx/PostProcessing";
 import { debugGlobal } from "../utils/utils";
@@ -38,8 +39,12 @@ const SceneRender = () => {
   useFrame(() => {
     shouldPresentThisFrame();
   }, -10);
-  // In order: the liquid sits between the camera and the world, then the dreams paint over the result.
-  const passes = useMemo(() => new ScreenPassChain([new UnderwaterPass(), new DeepDreamPass(), new DreamPass()]), []);
+  // In order: the liquid sits between the camera and the world, the trace stamps what that shows, then the
+  // dreams paint over the result.
+  const passes = useMemo(
+    () => new ScreenPassChain([new UnderwaterPass(), new TracePass(), new DeepDreamPass(), new DreamPass()]),
+    [],
+  );
   useEffect(() => {
     passes.warm(gl);
     return () => passes.dispose();
