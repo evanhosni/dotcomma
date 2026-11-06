@@ -1,5 +1,5 @@
 import type { EntityUpdateFields } from "../../../../src/net/protocol";
-import type { AnimationState } from "../../../../src/objects/actors/state/animation";
+import type { AnimationState } from "../../../../src/animation";
 import type { StateMachineRunner } from "../../../../src/objects/actors/state/runner";
 import type { Pose } from "../physics/npcBody.js";
 

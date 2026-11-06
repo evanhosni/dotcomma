@@ -1,6 +1,8 @@
+import type { AnimationConfig } from "../../animation";
 import type { ActorAttributes } from "../types";
 import { BUILDING_HULL_KEYS } from "./building/spec";
 import type { BuildingAttributes } from "./building/types";
+import type { MotionConfig } from "./state/motion";
 import type { StateMachineConfig } from "./state/types";
 
 /**
@@ -41,6 +43,10 @@ export interface ModelAttributes {
 export interface ActorSimulationAttributes {
   /** Synced instances run it on the server and mirror its state here; local ones run it here. */
   stateMachine?: StateMachineConfig;
+  /** The machine's animation channel defaults and the procedural clips it can play. */
+  animation?: AnimationConfig;
+  /** The movement counterpart: speed and turn multipliers (simulated), drawn frame rate and yaw step (client). */
+  motion?: MotionConfig;
   body?: BodyKind;
   /** Kinematic body shape (default DEFAULT_COLLIDER). */
   collider?: ColliderSpec;

@@ -103,8 +103,8 @@ describe("EntityManager (server authority)", () => {
     const animUpdate = ua.find((u: any) => u.anim);
     assert.ok(animUpdate, "the animation channel state is published");
     assert.equal(animUpdate.anim.clip, "walk");
-    assert.equal(typeof animUpdate.anim.t0, "number", "…with the server-time clock it started on");
-    assert.ok(animUpdate.anim.t0 >= t0, "clip clock is server time (the tick's now)");
+    assert.equal(typeof animUpdate.anim.anchor, "number", "…with the server-time clock it started on");
+    assert.ok(animUpdate.anim.anchor >= t0, "clip clock is server time (the tick's now)");
     assert.ok(ua.some((u: any) => u.sm === "idle-walk"), "machine state id published");
     // y is authoritative: the registration's y=3 was only a hint. The spawn stands on a 23° salt-flat
     // slope now, and a capsule on a slope rests above the analytic ground at its center, so 1u.

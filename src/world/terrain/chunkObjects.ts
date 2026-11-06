@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { markTerrainCollider } from "../../physics/characterMovement";
 import { traceEvent } from "../../utils/spikeTrace";
 import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
+import { BLEND_FIELDS_CLAMPED_UNIFORM } from "../shaders/lodBlur";
 import { LOD_FADE_UNIFORM } from "../shaders/lodFade";
 import { getWaterMaterial } from "../water/material";
 import { acquireGeometry, releaseGeometry } from "./chunkGeometry";
@@ -16,18 +17,31 @@ import type { Chunk } from "./types";
  *  later, one under it (bubbles) earlier. */
 export const WATER_RENDER_ORDER = 10;
 
-/** A chunk's dither range into whichever material draws it (the fade variant, or the water): three
- *  uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
- *  mesh writes its own range right before its draw. The opaque terrain material has no uLodFade. */
-export const syncLodFade =
+/** A chunk's per-mesh uniforms into whichever material draws it: its dither range (the fade variant, or
+ *  the water) and whether its biome fields are clamped (the terrain programs, world/shaders/lodBlur.ts).
+ *  three uploads a shared material's uniforms only on a program switch or uniformsNeedUpdate, so each
+ *  mesh writes its own values right before its draw, and flags an upload only when one changed. */
+export const syncChunkUniforms =
   (chunk: Chunk) =>
   (_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, _camera: THREE.Camera, _geometry: THREE.BufferGeometry, material: THREE.Material) => {
-    const uniform = (material as THREE.ShaderMaterial).uniforms?.[LOD_FADE_UNIFORM];
-    if (!uniform) return;
-    const range = uniform.value as THREE.Vector2;
-    if (range.x === chunk.fadeLo && range.y === chunk.fadeHi) return;
-    range.set(chunk.fadeLo, chunk.fadeHi);
-    (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
+    const uniforms = (material as THREE.ShaderMaterial).uniforms;
+    if (!uniforms) return;
+    let changed = false;
+    const fade = uniforms[LOD_FADE_UNIFORM];
+    if (fade) {
+      const range = fade.value as THREE.Vector2;
+      if (range.x !== chunk.fadeLo || range.y !== chunk.fadeHi) {
+        range.set(chunk.fadeLo, chunk.fadeHi);
+        changed = true;
+      }
+    }
+    const clamped = uniforms[BLEND_FIELDS_CLAMPED_UNIFORM];
+    const flag = chunk.lod.clampBlendFields ? 1 : 0;
+    if (clamped && clamped.value !== flag) {
+      clamped.value = flag;
+      changed = true;
+    }
+    if (changed) (material as THREE.ShaderMaterial).uniformsNeedUpdate = true;
   };
 
 /** A new chunk's plane, hidden until its swap draws it and static once placed (the build re-composes it). */
@@ -63,7 +77,7 @@ export const ensureWaterMesh = (chunk: Chunk): THREE.Mesh => {
   // Warmed with its plane like every streamed mesh: the first water in view otherwise compiled the
   // water program and uploaded its buffers at the frame the player turned to it.
   uploadOnFirstDraw(water);
-  water.onBeforeRender = syncLodFade(chunk);
+  water.onBeforeRender = syncChunkUniforms(chunk);
   chunk.plane.add(water);
   chunk.water = water;
   return water;

@@ -130,10 +130,10 @@ Rules the sampler follows:
   respawn): jump, don't interpolate.
 
 Animation uses the same delayed clock. The server publishes the animation
-channel's whole state — clip, loop, speed, paused, and the server times it
-started / paused / last changed. `ModelActor` (`animationPlayer.ts`) applies
-it once `serverTime − 200ms` reaches the change time, computing the exact clip
-time from those clocks. So the idle clip begins exactly as the interpolated
+channel's whole state — clip, params, and a playhead anchored on the server
+clock (`src/animation/`). `ModelActor`'s `AnimationPlayer` takes it once
+`serverTime − 200ms` reaches the change time, computing the exact clip time
+from those clocks. So the idle clip begins exactly as the interpolated
 body reaches the spot the server stopped it — on every client — and a pause
 or a speed change lands in phase too.
 
@@ -141,8 +141,7 @@ The client still has a Rapier capsule for each beeble, parked at the drawn
 pose every frame (`kinematicMover.tsx`), so the local player collides with
 NPCs. It is not used to move anything.
 
-State-keyed visuals (head tracking, the sphere-inflate on ascend) run on the
-client: `ModelActor`'s state machine mirrors the server's current state id and
+State-keyed visuals (head tracking) run on the client: `ModelActor`'s state machine mirrors the server's current state id and
 enters the same state locally, but every output it produces is ignored.
 
 ## 5. Input: clicking a beeble
@@ -188,7 +187,7 @@ the server.
 
 ### The contract
 
-- **Move through `ctx.motion`.** `ctx.motion.move(vx, vz)` (units/s),
+- **Move through `ctx.motion`.** Tune it with the spec's `motion: { speed, turnSpeed, frameRate, rotationStep }` and `ctx.motion.setSpeed` / `.pause()` / `.resume()` (src/objects/actors/state/README.md). `ctx.motion.move(vx, vz)` (units/s),
   `.heading(angle, speed)`, `.toward(x, z, speed)`, `.stop()`. `ctx.motion.fly(vy)`
   only when you want to drive vertical motion yourself (the beeble's ascend);
   `fly(null)` (the default after `stop()`) means normal gravity/ground
@@ -201,10 +200,11 @@ the server.
   The framework applies all of this — never move the model yourself.
 - **Animate by declaring it on the state** — `animation: { clip: "walk" }`
   (loops) or `{ clip: "stare at hands", loop: "once" }` (plays through, holds
-  the last frame) — or from a behavior through `ctx.animation`: `.play(clip,
-  { loop, speed, restart })`, `.pause()`, `.resume()`, `.stop()`, `.setSpeed(s)`.
-  Clip names are the GLTF's clips. Re-playing the clip that is already
-  playing keeps its phase (a one-shot restarts).
+  the last frame) — or from a behavior through `ctx.animation` (`.play`,
+  `.pause`, `.reverse`, `.setIntensity`, … — [src/animation/README.md](src/animation/README.md)).
+  Clip names are the GLTF's clips or the spec's procedural clips (the
+  beeble's `ascend` inflate). Re-playing the clip that is already playing
+  keeps its phase (a one-shot restarts).
 - **Keep your own memory on the blackboard.** Anything the machine needs to
   remember between ticks (a target direction, a timer) goes in `ctx.blackboard`.
 - **Guard scene access.** `ctx.groupRef.current` is the model on the client
@@ -273,12 +273,11 @@ custom("player-visible", (ctx) => {
 Stopping is `ctx.motion.stop()` (the `alert` state does exactly that and
 switches to the `idle` clip). Turning toward the player is
 `ctx.motion.turnToward(px, pz, rate * ctx.delta)`. Flying up is
-`ctx.motion.fly(vy)` (the `ascending` state ramps it from 0 to 8 u/s). A
-scene-only effect like the sphere-inflate lives in `onEnter` behind the
-`groupRef` guard and returns a cleanup.
+`ctx.motion.fly(vy)` (the `ascending` state ramps it from 0 to 8 u/s) while
+it plays the procedural `ascend` clip. Any other scene-only effect lives in
+`onEnter` behind the `groupRef` guard and returns a cleanup.
 
-`onEnter` may return a function; it runs when the state is left (the beeble
-uses it to dispose the inflate).
+`onEnter` may return a function; it runs when the state is left.
 
 ### What `ctx` gives you
 
@@ -353,7 +352,7 @@ the two output channels.
 | client: snapshot buffer | `src/net/entities/entityStore.ts` |
 | client: interpolation (unit-tested) + per-actor playback | `src/net/entities/interpolation.ts`, `posePlayback.ts` |
 | client: draws the pose / registers | `src/objects/actors/index.tsx` (`useSyncedEntity`) |
-| client: behavior wiring, animation, collision capsule | `src/objects/actors/ModelActor.tsx`, `animationPlayer.ts`, `kinematicMover.tsx` |
+| client: behavior wiring, animation, collision capsule | `src/objects/actors/ModelActor.tsx`, `src/animation/`, `kinematicMover.tsx` |
 | wire format (ONE copy, the server imports it) | `src/net/protocol.ts` |
 
 ## 8. Debugging

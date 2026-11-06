@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { useDevContext } from "../../context/DevContext";
 import { DEV_TOGGLES } from "../../context/constants";
 import { getOrCreateLeftColumn } from "./overlayContainer";
-import { VFX_KNOBS } from "../../vfx/tuning";
-import { createHudCheckbox, createHudSlider, paintHudCheckbox, PANEL_CSS } from "./styles";
+import { VFX_GROUPS, VFX_KNOBS } from "../../vfx/tuning";
+import { createHudCheckbox, createHudSlider, HUD_COLOR, paintHudCheckbox, PANEL_CSS } from "./styles";
 
 export const DevOverlay = () => {
   const dev = useDevContext();
@@ -16,7 +16,12 @@ export const DevOverlay = () => {
     const column = getOrCreateLeftColumn();
 
     const panel = document.createElement("div");
-    panel.style.cssText = "order:0;" + PANEL_CSS;
+    // The one panel of the column that shrinks (min-height:0) and scrolls when the open vfx list would push
+    // the column past the screen; it takes the pointer so the wheel can scroll it.
+    panel.style.cssText = "order:0;" + PANEL_CSS + `min-height:0;overflow-y:auto;pointer-events:auto;scrollbar-width:thin;scrollbar-color:${HUD_COLOR} transparent;`;
+    // drei's PointerLockControls listens on the DOCUMENT: no click or scroll in the panel reaches the game.
+    panel.addEventListener("click", (e) => e.stopPropagation());
+    panel.addEventListener("wheel", (e) => e.stopPropagation());
 
     const title = document.createElement("div");
     title.style.cssText = "margin-bottom:4px;display:flex;justify-content:space-between;";
@@ -39,14 +44,25 @@ export const DevOverlay = () => {
       return checkbox.input;
     });
 
-    // "vfx ▸" expands one live slider per world effect (vfx/tuning.ts), re-read on every open: a domain
-    // switch resets them to that domain's values.
+    // "vfx ▸" expands one live slider per world effect (vfx/tuning.ts), sectioned by its group (the panel
+    // scrolls), re-read on every open: a domain switch resets them to that domain's values.
     const vfxToggle = document.createElement("div");
     vfxToggle.style.cssText = "margin-top:4px;cursor:pointer;pointer-events:auto;user-select:none;";
     const vfx = document.createElement("div");
     vfx.style.cssText = "display:none;min-width:200px;";
-    const sliders = VFX_KNOBS.map((knob) => createHudSlider(knob.label, knob, knob.get, knob.set));
-    for (const slider of sliders) vfx.appendChild(slider.row);
+    const sliders = VFX_GROUPS.flatMap((group) => {
+      const knobs = VFX_KNOBS.filter((knob) => knob.group === group);
+      if (knobs.length === 0) return [];
+      const header = document.createElement("div");
+      header.style.cssText = "margin-top:6px;opacity:0.6;text-transform:uppercase;letter-spacing:1px;";
+      header.textContent = group;
+      vfx.appendChild(header);
+      return knobs.map((knob) => {
+        const slider = createHudSlider(knob.label, knob, knob.get, knob.set);
+        vfx.appendChild(slider.row);
+        return slider;
+      });
+    });
     const setVfxOpen = (open: boolean): void => {
       vfx.style.display = open ? "block" : "none";
       vfxToggle.textContent = open ? "vfx ▾" : "vfx ▸";
@@ -58,8 +74,6 @@ export const DevOverlay = () => {
       setVfxOpen(vfx.style.display === "none");
     };
     setVfxOpen(false);
-    // Dragging a slider must not lock the pointer either.
-    vfx.addEventListener("click", (e) => e.stopPropagation());
     panel.append(vfxToggle, vfx);
 
     panelRef.current = panel;

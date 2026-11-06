@@ -67,7 +67,7 @@ void main() {
   vec3 chunkOrigin = modelMatrix[3].xyz;
   vec3 wrapOrigin = vec3(mod(chunkOrigin.x, WORLD_WRAP), chunkOrigin.y, mod(chunkOrigin.z, WORLD_WRAP));
   vec3 localWorld = mat3(modelMatrix) * local;
-  vec3 world = quantizeWorldPos(wrapOrigin + localWorld);
+  vec3 world = quantizeWorldPos(wrapOrigin + localWorld, modelViewMatrix[3].xyz + mat3(viewMatrix) * localWorld);
   vWorldPosWrapped = world;
   vWorldPosAbs = chunkOrigin + localWorld;
   vWorldNormal = vec3(0.0, 1.0, 0.0);

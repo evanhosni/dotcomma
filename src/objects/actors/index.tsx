@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { patchStandardMaterialLampGlow } from "../../lighting/lampGlow";
 import { patchMaterialTunnelLight } from "../../lighting/tunnelLight";
+import { frameTimeAt } from "../../animation/utils";
 import { _quantization } from "../../vfx/quantization";
 import { framePhaseFromCoords, getDistance2DSq, stopMatrixUpdatesWhenFrozen } from "../../utils/utils";
 import { _curvature } from "../../vfx/curvature";
@@ -24,6 +25,10 @@ import type { StateMachineHandle } from "./state/useStateMachine";
 export const MAX_COLLIDER_RENDER_DISTANCE = 500;
 export const DEFAULT_RENDER_DISTANCE = 500;
 export const DEFAULT_FRUSTUM_PADDING = 3;
+
+/** An instance's shift of every frame-rate grid (drawn movement, animation): spread over a second, so a crowd
+ *  never steps on one frame, and shared, so equal rates step body and pose together. */
+export const framePhaseMsOf = (coordinates: readonly number[]): number => framePhaseFromCoords(coordinates[0], coordinates[2], 1000);
 /** Hard-kill distance as a multiple of renderDistance, when none is given. */
 const DESPAWN_DISTANCE_FACTOR = 1.2;
 
@@ -103,6 +108,10 @@ export interface ActorLifecycleOptions {
   throttleColliderActivation?: boolean;
   /** Distance inside which dynamic content (children, interiors, doors) is live. */
   nearDistance?: number;
+  /** MotionConfig.rotationStep: degrees the DRAWN yaw is stepped by, relative to the camera's line of sight. */
+  rotationStep?: number;
+  /** MotionConfig.frameRate: the drawn position and yaw are held between this grid's ticks. */
+  motionFrameRate?: number;
   /** Static actors: freeze the matrix subtree, unfreeze inside nearDistance. */
   freezeMatrices?: boolean;
   /** Per-frame work inside the shared driver — never a useFrame of your own. */
@@ -162,6 +171,8 @@ export const useActorLifecycle = ({
   throttleColliderActivation = false,
   nearDistance,
   freezeMatrices = false,
+  rotationStep = 0,
+  motionFrameRate = 0,
   onFrame,
 }: ActorLifecycleOptions): ActorLifecycle => {
   const groupRef = useRef<THREE.Group>(null);
@@ -326,6 +337,35 @@ export const useActorLifecycle = ({
     if (group.rotation.y !== t.ry) group.rotation.y = t.ry;
   };
 
+  const yawStep = THREE.MathUtils.degToRad(rotationStep);
+  const framePhaseMs = framePhaseMsOf(coordinates);
+  /** The real yaw survives the drawn one: a yaw on the group that differs from what the base last LEFT there is
+   *  a new real yaw (a behavior or the server wrote it); otherwise only the camera or the clock moved. */
+  const drawn = useRef({ realYaw: 0, leftYaw: NaN, frameMs: NaN, heldPosition: new THREE.Vector3(), heldYaw: 0 }).current;
+
+  const stepYawToView = (group: THREE.Group, camera: THREE.Camera, realYaw: number | null): void => {
+    if (realYaw !== null) drawn.realYaw = realYaw;
+    else if (group.rotation.y !== drawn.leftYaw) drawn.realYaw = group.rotation.y;
+    const towardCamera = Math.atan2(camera.position.x - group.position.x, camera.position.z - group.position.z);
+    const relative = THREE.MathUtils.euclideanModulo(drawn.realYaw - towardCamera + Math.PI, Math.PI * 2) - Math.PI;
+    const yaw = towardCamera + Math.round(relative / yawStep) * yawStep;
+    if (group.rotation.y !== yaw) group.rotation.y = yaw;
+  };
+
+  /** Stop-motion: whatever wrote the transform this frame is shown only from the tick it lands on; the body
+   *  (colliders, the server's pose) keeps moving underneath. */
+  const holdDrawnFrame = (group: THREE.Group, clockMs: number): void => {
+    const frameMs = frameTimeAt(clockMs, motionFrameRate, framePhaseMs);
+    if (frameMs !== drawn.frameMs) {
+      drawn.frameMs = frameMs;
+      drawn.heldPosition.copy(group.position);
+      drawn.heldYaw = group.rotation.y;
+      return;
+    }
+    if (!group.position.equals(drawn.heldPosition)) group.position.copy(drawn.heldPosition);
+    if (group.rotation.y !== drawn.heldYaw) group.rotation.y = drawn.heldYaw;
+  };
+
   const frameUpdaterRef = useRef<ActorFrameUpdater>(() => {});
   frameUpdaterRef.current = (state, delta) => {
     // onDestroy fires ONCE: re-firing until the pool unmounts us rewrote the
@@ -375,7 +415,13 @@ export const useActorLifecycle = ({
     }
 
     // The server's pose wins over anything the component's logic wrote.
-    if (synced && group && sync.target.valid) applyServerPose(group, sync.target);
+    const serverPosed = synced && !!group && sync.target.valid;
+    if (serverPosed) applyServerPose(group!, sync.target);
+    if (group && (yawStep > 0 || motionFrameRate > 0)) {
+      if (yawStep > 0) stepYawToView(group, state.camera, serverPosed ? sync.target.ry : null);
+      if (motionFrameRate > 0) holdDrawnFrame(group, synced ? playback.renderTime : state.clock.elapsedTime * 1000);
+      drawn.leftYaw = group.rotation.y;
+    }
   };
 
   const resetFade = (): void => {

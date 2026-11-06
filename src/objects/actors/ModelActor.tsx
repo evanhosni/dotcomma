@@ -1,15 +1,17 @@
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { RootState, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { AnimationChannel, type AnimationChannelOptions, type AnimationInputs } from "../../animation";
+import { AnimationPlayer } from "../../animation/mixer";
+import { proceduralDurations } from "../../animation/utils";
 import { reportContentError } from "../../utils/contentError";
 import { TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { framePhaseFromCoords } from "../../utils/utils";
 import { warmPrograms } from "../../utils/warmPrograms";
 import { ActorAttributes } from "../types";
-import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from ".";
-import { AnimationPlayer, getOrCreateAction } from "./animationPlayer";
+import { ActorFrameContext, DEFAULT_RENDER_DISTANCE, framePhaseMsOf, MAX_COLLIDER_RENDER_DISTANCE, useActorLifecycle } from ".";
 import { createColliders } from "./colliders/worker";
 import { useModelColliders } from "./colliders/useModelColliders";
 import type { ModelColliders } from "./colliders/types";
@@ -18,6 +20,7 @@ import {
   acquireModelClone,
   acquirePooledModelClone,
   PooledModelClone,
+  markPoseChanged,
   reclaimModelClone,
   releaseModelClone,
 } from "./modelClonePool";
@@ -28,14 +31,13 @@ import { machineHasTrigger } from "./state/runner";
 import { MOUSE_RAYCAST_INTERVAL_FRAMES, useMouseEvents } from "./state/useMouseEvents";
 import { useStateMachine } from "./state/useStateMachine";
 
-// Animation LOD: mixers pause while frustum-culled and run at half rate past this
-// fraction of the render distance; skipped time accumulates (capped) so loops stay continuous.
+// Animation LOD: no posing while frustum-culled, and every other frame past this fraction of the render distance.
 const ANIM_HALF_RATE_FRACTION = 0.4;
-const MAX_ANIM_CATCHUP = 0.5;
+const NO_INPUTS: AnimationInputs = {};
 
 const taskQueue = new TaskQueue();
 
-// Debug "E = toggle animations" for instances without a state machine: ONE window
+// Debug "E = toggle animations" for instances without a state machine (their first clip): ONE window
 // listener — a listener per instance made every keypress O(spawns).
 let manualAnimationsPlaying = false;
 const manualAnimationSubscribers = new Set<() => void>();
@@ -82,6 +84,8 @@ export const ModelActor = ({
   positionRef: ownerPositionRef,
   groupRef: ownerGroupRef,
   stateMachine,
+  animation,
+  motion: motionConfig,
   body,
   collider,
   movement = "ground",
@@ -126,7 +130,14 @@ export const ModelActor = ({
     };
   }, [pooled, model, gltf, quantization]);
 
-  const machine = useStateMachine(stateMachine, positionRef, groupRef);
+  const animationOptions = useMemo<AnimationChannelOptions>(() => {
+    const clips = (gltf as { animations?: THREE.AnimationClip[] }).animations ?? [];
+    const durations = Object.fromEntries(clips.map((clip) => [clip.name, clip.duration]));
+    return { defaults: animation, durations: { ...durations, ...proceduralDurations(animation?.procedural) } };
+  }, [gltf, animation]);
+  const runnerOptions = useMemo(() => ({ animation: animationOptions, motion: motionConfig }), [animationOptions, motionConfig]);
+  const machine = useStateMachine(stateMachine, positionRef, groupRef, runnerOptions);
+  const [manualChannel] = useState(() => (stateMachine ? null : new AnimationChannel(animationOptions)));
   const hasClickTrigger = !!stateMachine && machineHasTrigger(stateMachine, "mouse-left-click");
   const mouse = useMouseEvents(machine, groupRef, {
     reach: interactReach,
@@ -135,12 +146,12 @@ export const ModelActor = ({
   });
   const localMotion = useRef(createMotionOutput()).current;
   const motion = machine ? machine.motion.out : localMotion;
-  const animPlayer = useRef(new AnimationPlayer()).current;
+  const [animPlayer] = useState(() => new AnimationPlayer(animation));
 
-  const animDeltaRef = useRef(0);
-  // Half-rate parity is phase-offset per instance, or a whole batch skips the same frames.
+  // Phase-offset per instance, or a whole batch re-poses (and skips half-rate frames) on the same frame. The actor
+  // base steps drawn movement on the same phase, so equal rates step body and pose together.
+  const animFramePhaseMs = framePhaseMsOf(coordinates);
   const animFrameParityRef = useRef(framePhaseFromCoords(coordinates[0], coordinates[2], 2) === 1);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [colliders, setColliders] = useState<ModelColliders | null>(null);
 
   const hasColliders =
@@ -151,26 +162,25 @@ export const ModelActor = ({
       colliders.trimeshColliders.length >
       0;
 
-  /** Synced: the SERVER's channel, applied when the DELAYED render clock reaches its change time, so an
-   *  idle clip starts exactly as the interpolated body stops. Local: the machine's own channel. */
-  const applyAnimationChannel = (clone: PooledModelClone, state: RootState, ctx: ActorFrameContext, serverDriven: boolean): void => {
-    if (serverDriven) {
-      const anim = ctx.sync!.entity?.remote?.anim;
-      if (anim && ctx.syncRenderTime >= anim.changedAt) animPlayer.apply(clone, anim, ctx.syncRenderTime);
-    } else if (machine) {
-      animPlayer.apply(clone, machine.animation.state, state.clock.elapsedTime * 1000);
-    }
-  };
-
-  const advanceMixer = (mixer: THREE.AnimationMixer, delta: number, ctx: ActorFrameContext): void => {
-    animDeltaRef.current = Math.min(animDeltaRef.current + delta, MAX_ANIM_CATCHUP);
+  /** Synced: the SERVER's channel, taken when the DELAYED render clock reaches its change time, so an
+   *  idle clip starts exactly as the interpolated body stops. Local: the machine's (or manual) channel.
+   *  The layers' inputs are always the local machine's (a mirror runs the behavior too). */
+  const animate = (clone: PooledModelClone, state: RootState, ctx: ActorFrameContext, serverDriven: boolean): void => {
     animFrameParityRef.current = !animFrameParityRef.current;
     const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
-    const skipFarFrame = ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current;
-    if (ctx.visible && !skipFarFrame) {
-      mixer.update(animDeltaRef.current);
-      animDeltaRef.current = 0;
+    if (!ctx.visible || (ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current)) return;
+    const root = groupRef.current;
+    const channel = machine?.animation ?? manualChannel;
+    if (serverDriven) {
+      const anim = ctx.sync!.entity?.remote?.anim;
+      const posed = animPlayer.update(clone, root, anim && ctx.syncRenderTime >= anim.changedAt ? anim : null, channel?.inputs ?? NO_INPUTS, ctx.syncRenderTime, animFramePhaseMs);
+      if (posed) markPoseChanged(clone);
+      return;
     }
+    if (!channel) return;
+    const nowMs = state.clock.elapsedTime * 1000;
+    channel.setClock(nowMs);
+    if (animPlayer.update(clone, root, channel.state, channel.inputs, nowMs, animFramePhaseMs)) markPoseChanged(clone);
   };
 
   const lifecycle = useActorLifecycle({
@@ -183,6 +193,8 @@ export const ModelActor = ({
     despawnDistance,
     onDestroy,
     frustumPadding,
+    rotationStep: motionConfig?.rotationStep,
+    motionFrameRate: motionConfig?.frameRate,
     boundsRadius: pooled ? pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]) : undefined,
     fadeOut: true,
     // Colliders gate on DISTANCE only: gating on the frustum rebuilt the Rapier
@@ -201,10 +213,7 @@ export const ModelActor = ({
       ctx.motion = motion;
       onFrame?.(state, delta, ctx);
       mover.step(delta, ctx, motion, serverDriven);
-
-      if (!pooled) return;
-      applyAnimationChannel(pooled, state, ctx, serverDriven);
-      if (pooled.mixer && (machine || serverDriven || isPlaying)) advanceMixer(pooled.mixer, delta, ctx);
+      if (pooled) animate(pooled, state, ctx, serverDriven);
     },
   });
 
@@ -226,37 +235,33 @@ export const ModelActor = ({
     if (!pooled) return;
     reclaimModelClone(pooled);
     lifecycle.resetLife();
-    animPlayer.reset(); // a reused clone may be mid-clip from its previous life
+    animPlayer.reset();
+    markPoseChanged(pooled);
 
-    return () => releaseModelClone(pooled);
+    return () => {
+      animPlayer.reset();
+      markPoseChanged(pooled);
+      releaseModelClone(pooled);
+    };
   }, [pooled]);
 
   useEffect(() => {
-    if (stateMachine || !pooled) return;
+    const firstClip = pooled?.animations[0]?.name;
+    if (!manualChannel || !firstClip) return;
 
     const apply = () => {
-      setIsPlaying(manualAnimationsPlaying);
-      if (manualAnimationsPlaying) {
-        for (const clip of pooled.animations ?? []) {
-          const action = getOrCreateAction(pooled, clip.name);
-          if (action) {
-            action.paused = false;
-            if (!action.isRunning()) action.play();
-          }
-        }
-      } else {
-        pooled.actions.forEach((action) => {
-          action.paused = true;
-        });
-      }
+      if (!manualAnimationsPlaying) manualChannel.pause();
+      else if (manualChannel.clip) manualChannel.resume();
+      else manualChannel.play(firstClip);
     };
+    apply();
 
     ensureManualAnimationListener();
     manualAnimationSubscribers.add(apply);
     return () => {
       manualAnimationSubscribers.delete(apply);
     };
-  }, [stateMachine, pooled]);
+  }, [manualChannel, pooled]);
 
   useEffect(() => {
     const task = async () => {

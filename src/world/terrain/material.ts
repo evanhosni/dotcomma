@@ -9,6 +9,7 @@ import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constant
 import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
 import { FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, WIREFRAME_DEFINE } from "../shaders/farFade";
 import { ENTRANCE_PATCH_DEFINE, TERRAIN_HOLES_DEFINE } from "../shaders/terrainHoles";
+import { BLEND_FIELDS_CLAMPED_UNIFORM } from "../shaders/lodBlur";
 import { FADE_OPAQUE_HI } from "./lodSwaps";
 import terrainVertexBody from "../shaders/vertex.glsl";
 
@@ -94,10 +95,12 @@ export const getMaterial = async () => {
   return material;
 };
 
-/** The same program source with extra defines: every uniform object is SHARED with the base. */
+/** The same program source with extra defines: every uniform object is SHARED with the base, except the
+ *  per-mesh ones — the chunk's clamp flag (lodBlur.ts), its own per variant because each variant is its own
+ *  program, whose uploaded value only the meshes drawing it may change (chunkObjects.ts syncChunkUniforms). */
 const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, string>, uniforms: Record<string, THREE.IUniform> = {}): THREE.ShaderMaterial =>
   new THREE.ShaderMaterial({
-    uniforms: { ...base.uniforms, ...uniforms },
+    uniforms: { ...base.uniforms, [BLEND_FIELDS_CLAMPED_UNIFORM]: { value: 0 }, ...uniforms },
     defines: { ...base.defines, ...defines },
     vertexShader: base.vertexShader,
     fragmentShader: base.fragmentShader,
@@ -111,7 +114,7 @@ const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, stri
  *  underground (no skirts: a uniform) — a settled chunk's dither range is [0, FADE_OPAQUE_HI), which keeps
  *  every pixel. One program, not one per combination: Firefox links each on the main thread (~0.6s per
  *  terrain program, PERFORMANCE.md). The near terrain keeps the base program and its early depth test.
- *  Every uniform object is SHARED with the base except the per-mesh dither range (chunkObjects.ts syncLodFade). */
+ *  Every uniform object is SHARED with the base except the per-mesh ones (chunkObjects.ts syncChunkUniforms). */
 export const createDiscardMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
   terrainVariant(base, { [LOD_FADE_DEFINE]: "", [FAR_FADE_DEFINE]: "", [TERRAIN_HOLES_DEFINE]: "" }, { [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } });
 

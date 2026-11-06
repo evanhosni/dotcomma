@@ -1,6 +1,6 @@
 import { useThree } from "@react-three/fiber";
 import { useEffect, useSyncExternalStore } from "react";
-import { _quantization } from "./quantization";
+import { _quantization, QuantizationGrowth } from "./quantization";
 import { _curvature } from "./curvature";
 import { setMainRenderFpsCap } from "./frameCap";
 
@@ -25,6 +25,9 @@ export const setPixelation = (granularity: number): void => {
 interface PostProcessingProps {
   pixelation?: number;
   quantization?: number;
+  /** The farther a vertex, the coarser it snaps (vfx/quantization.ts): nothing inside `start`, then
+   *  size × (km past start)^power. Unset = the base grid everywhere. */
+  quantizationGrowth?: QuantizationGrowth;
   /** Illusory planet radius in world units (vfx/curvature.ts); 20000 drops 20u at 1000u out. Unset/0 = flat. */
   curvature?: number;
   /** Flat zone around the player (default 100) — every interaction reach must sit inside it. */
@@ -36,6 +39,7 @@ interface PostProcessingProps {
 export const PostProcessing = ({
   pixelation: pixelationProp,
   quantization,
+  quantizationGrowth,
   curvature,
   curvatureStart,
   fpsCap,
@@ -47,6 +51,13 @@ export const PostProcessing = ({
     _quantization.setGridSize(quantization);
     return () => _quantization.setGridSize(0);
   }, [quantization]);
+
+  useEffect(() => {
+    if (!quantizationGrowth) return;
+    _quantization.setGridGrowth(quantizationGrowth);
+    return () => _quantization.setGridGrowth({ size: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a literal prop: its fields, not its identity
+  }, [quantizationGrowth?.start, quantizationGrowth?.size, quantizationGrowth?.power]);
 
   useEffect(() => {
     _curvature.setCurvature(curvature, curvatureStart);

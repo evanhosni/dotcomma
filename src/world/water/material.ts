@@ -13,7 +13,7 @@ import { FADE_OPAQUE_HI } from "../terrain/lodSwaps";
  * every chunk's water mesh (world/terrain/chunkObjects.ts). Per vertex it reads `waterDepth` and
  * `waterFlow` (x/z): swells beat faster and higher with the flow, the surface noise drifts on still water
  * and is ADVECTED along a river, a steep sheet (a fall) whitens and streaks. The LOD cross-fade and the far
- * fade dither it like the ground under it (uLodFade is written per mesh by chunkObjects.ts syncLodFade).
+ * fade dither it like the ground under it (uLodFade is written per mesh by chunkObjects.ts syncChunkUniforms).
  */
 
 /** Swell wavelengths: each divides WORLD_WRAP, so the phase survives the wrap. */
@@ -49,7 +49,7 @@ void main() {
     + 0.035 * (0.5 + 0.8 * flowLen) * sin((world.x + world.z) * TAU / ${glslFloat(SWELL_SHORT)} + uTime * 2.3 * rate);
   vec3 localUp = normalize(vec3(0.0, 1.0, 0.0) * mat3(modelMatrix));
   vec3 displaced = position + localUp * (swell * wet * uWaterSwell);
-  vec3 worldQ = quantizeWorldPos(wrapOrigin + mat3(modelMatrix) * displaced);
+  vec3 worldQ = quantizeWorldPos(wrapOrigin + mat3(modelMatrix) * displaced, modelViewMatrix[3].xyz + mat3(viewMatrix) * (mat3(modelMatrix) * displaced));
   vViewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldQ - wrapOrigin);
   vDepth = waterDepth;
   vFlow = waterFlow;

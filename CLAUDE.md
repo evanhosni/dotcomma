@@ -178,11 +178,11 @@ src/
     actors/  ACTOR class: index.tsx = THE BASE (useActorLifecycle, prepareActorMaterial)  actors/README.md
       ModelActor.tsx  the standard GLTF member (+ the behavior wiring for any spec with a stateMachine)
       spec.ts  ActorSpec / ActorMount (Three-free); catalog.ts = actorCatalogOf; components.ts = ACTOR_COMPONENTS
-      modelClonePool.ts, animationPlayer.ts, kinematicMover.tsx
+      modelClonePool.ts, kinematicMover.tsx
       spawning/  ActorPool, worker.ts (the spawn worker's client), radii, types  spawning/README.md
-      state/  the Three-free state machine core + motion/animation/input channels  state/README.md
+      state/  the Three-free state machine core + motion/input channels (animation: src/animation/)  state/README.md
       colliders/  worker.ts (client) + collider.worker.ts (thread) + useModelColliders (one fixed body)  colliders/README.md
-      beeble/  the template NPC: spec.ts + stateMachine.ts (+ inflate.ts, its ascend morph)
+      beeble/  the template NPC: spec.ts + stateMachine.ts (+ animations.ts: its procedural ascend clip and head-turn layer)
       building/  procedural buildings: generatePlan → assets.ts (cache, phased builds) → index.tsx  building/README.md
     dressing/  DRESSING class: index.tsx = THE BASE (instanced assembly + useSolidDressing, on the
                          WORLD's chunk lifecycle); utils.ts = farthest  dressing/README.md
@@ -225,6 +225,8 @@ src/
                          The dressing and the tunnels are both built on it; TERRAIN is not (its
                          chunks are per-LOD). types.ts is Three-free — the server shares it  chunks/README.md
     sky/  Skybox (the <Skybox> declaration + SkyboxSystem), DayNightCycle + celestialBodies  sky/README.md
+  animation/  THE animation system: index.ts = AnimationChannel (Three-free, the server's is published),
+                         mixer.ts = AnimationPlayer (poses a model from a channel's state), procedural clips + layers  animation/README.md
   lighting/  dayNight.ts channels, DayNightLights, lampGlow (the glow grid), personalLight  lighting/README.md
   physics/  characterMovement.ts — THE capsule resolver (player + server NPCs); movementModifiers.ts  physics/README.md
   player/  Player.tsx, undergroundMode.ts, groundSafetyNets.ts, waterProbe.ts, useInput.tsx, spec.ts  player/README.md

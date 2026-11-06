@@ -8,6 +8,10 @@ export const WORLD_WRAP = 4200;
 /** World units per repeat of a terrain texture (`vWorldUv`, the TEXTURE_TILE define); divides WORLD_WRAP. */
 export const TERRAIN_TEXTURE_TILE = 26.25;
 
+/** The terrain's LOD blur (world/shaders/lodBlur.ts): a paint edge softens over this share of the vertex
+ *  spacing of the LOD ring the camera distance has reached. 0 = every edge crisp at every distance. */
+export const MATERIAL_LOD_BLUR = 0.5;
+
 export const glslFloat = (v: number): string => (Number.isInteger(v) ? `${v}.0` : `${v}`);
 
 /** The freeway CORRIDOR off the city, in the road field's normalized street units: the terrain shader

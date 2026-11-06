@@ -25,6 +25,7 @@ import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
 import { SKIRT_TINT_GLSL, SKIRT_TINT_UNIFORM, skirtTintUniform } from "./skirtTint";
 import { ENTRANCE_FADE_UNIFORM, ENTRANCE_PATCH_DEFINE, ENTRANCE_PATCH_GLSL, PATCH_GROUND_SHARE, TERRAIN_HOLES_DEFINE, TERRAIN_HOLES_GLSL, TERRAIN_HOLE_UNIFORMS } from "./terrainHoles";
 import { TUNNEL_ROCK_GLSL } from "./tunnelRock";
+import { BLEND_FIELDS_CLAMPED_UNIFORM, LOD_BLUR_GLSL } from "./lodBlur";
 import { biomeNoiseConfigOf } from "../../utils/workers/biomeFlags";
 
 // THE TERRAIN FRAGMENT SHADER GENERATOR: every region's base shader and every biome's shader become
@@ -302,7 +303,7 @@ const biomeMixGLSL = (input: BiomeMixInput): string[] => {
   const tiers = crispnessTiers(input.slotsWithMaterial, halfOf);
   return tiers.map(
     (tier, t) => `{
-        ${tier.map((k) => `float w${k} = smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", k)});`).join("\n        ")}
+        ${tier.map((k) => `float e${k} = 1.0 + fieldBlur * ${glslFloat(1 / halfOf(k))}; float w${k} = smoothstep(-e${k}, e${k}, ${slotOf("vBiomeSdf", k)});`).join("\n        ")}
         float tierSum = ${tier.map((k) => `w${k}`).join(" + ")};
         float tierScale = remaining * (tierSum >= 1.0 ? 1.0 / tierSum : 1.0);
         ${tier
@@ -325,11 +326,12 @@ const biomeMixGLSL = (input: BiomeMixInput): string[] => {
  *  sums the ROCK slots' weights (`rockSlots`). */
 const riverbedWeightsGLSL = (slotCount: number, bedGroupOf: number[], bedHalves: number[] | undefined, rockSlots: boolean[]): string => {
   const slots = Array.from({ length: slotCount }, (_, k) => k);
-  const tiers = crispnessTiers(slots, (k) => bedHalves?.[k] ?? 1);
+  const bedHalfOf = (k: number) => bedHalves?.[k] ?? 1;
+  const tiers = crispnessTiers(slots, bedHalfOf);
   return tiers
     .map(
       (tier, t) => `{
-        ${tier.map((k) => `float r${k} = smoothstep(-1.0, 1.0, ${slotOf("vRiverbedSdf", k)});`).join("\n        ")}
+        ${tier.map((k) => `float re${k} = 1.0 + fieldBlur * ${glslFloat(1 / bedHalfOf(k))}; float r${k} = smoothstep(-re${k}, re${k}, ${slotOf("vRiverbedSdf", k)});`).join("\n        ")}
         float bedTierSum = ${tier.map((k) => `r${k}`).join(" + ")};
         float bedTierScale = bedRemaining * (bedTierSum >= 1.0 ? 1.0 / bedTierSum : 1.0);
         ${tier.map((k) => `bedW${bedGroupOf[k]} += r${k} * bedTierScale;${rockSlots[k] ? ` bedRock += r${k} * bedTierScale;` : ""}`).join("\n        ")}
@@ -359,8 +361,8 @@ const riverBedGLSL = (bedKeys: string[], bedGroupOf: number[], bedHalves: number
         float bedSum = 0.0;
         ${bedKeys.map((_, g) => `if (bedW${g} > ${BIOME_WEIGHT_VISIBLE}) { bed += ${riverbedSampleGLSL(g, bedKeys)} * bedW${g}; bedSum += bedW${g}; }`).join("\n        ")}
         vec4 riverColor = vec4(bedShade(bed / max(bedSum, 1e-4), vWorldPosWrapped, vUnderwaterDepth), 1.0);
-        float riverBlend = smoothstep(RIVER_BED_REACH - ${glslFloat(RIVER_BED_FULL_INSET)}, RIVER_BED_REACH - ${glslFloat(RIVER_BED_FADE_INSET)}, vRiverBedDistance);
-        float pavement = ${cityIdx >= 0 ? `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", cityIdx)})` : "0.0"} * (1.0 - smoothstep(ROAD_HALF_WIDTH + 4.0, ROAD_HALF_WIDTH + 5.0, vDistanceToRoadCenter));
+        float riverBlend = blurStep(RIVER_BED_REACH - ${glslFloat(RIVER_BED_FULL_INSET)}, RIVER_BED_REACH - ${glslFloat(RIVER_BED_FADE_INSET)}, vRiverBedDistance);
+        float pavement = ${cityIdx >= 0 ? `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", cityIdx)})` : "0.0"} * (1.0 - blurStep(ROAD_HALF_WIDTH + 4.0, ROAD_HALF_WIDTH + 5.0, vDistanceToRoadCenter));
         float bedSteep = (1.0 - smoothstep(${cosDegGLSL(RIVER_BED_SLOPE_END_DEG)}, ${cosDegGLSL(RIVER_BED_SLOPE_START_DEG)}, normalize(vWorldNormal).y)) * min(bedRock, 1.0)
           * (1.0 - smoothstep(0.0, ${glslFloat(RIVER_BED_UNDERWATER_FADE)}, vUnderwaterDepth));
         gl_FragColor = mix(riverColor, gl_FragColor, max(max(riverBlend, pavement), bedSteep));
@@ -375,7 +377,7 @@ const cityCorridorGLSL = (cityName: string | null): string =>
   cityName === null
     ? ""
     : `if (vDistanceToRoadCenter < ${glslFloat(FREEWAY_CORRIDOR_OUTER)}) {
-        float corridor = 1.0 - smoothstep(${glslFloat(FREEWAY_CORRIDOR_INNER)}, ${glslFloat(FREEWAY_CORRIDOR_OUTER)}, vDistanceToRoadCenter);
+        float corridor = 1.0 - blurStep(${glslFloat(FREEWAY_CORRIDOR_INNER)}, ${glslFloat(FREEWAY_CORRIDOR_OUTER)}, vDistanceToRoadCenter);
         vec4 ground = gl_FragColor;
         ${cityName}_frag();
         gl_FragColor = mix(ground, gl_FragColor, corridor);
@@ -420,12 +422,12 @@ export const combineBiomeMaterials = async (
   const { riverTexture, slotRiverbeds = [], riverbedTextures = new Map(), varyingDeclarations = [], defines = {}, slotHalves, bedSlotHalves, slotRegions } = options;
   // uNightBlend, the lamp-grid, the holes' and the personal light's uniforms are SHARED objects so every
   // terrain material dims, cuts and lights in lockstep.
-  const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS, [SKIRT_TINT_UNIFORM]: skirtTintUniform, ...TERRAIN_HOLE_UNIFORMS, ...PERSONAL_LIGHT_UNIFORMS, [ENTRANCE_FADE_UNIFORM]: { value: 0 } };
+  const combinedUniforms: any = { uNightBlend: NIGHT_BLEND_UNIFORM, ...LAMP_GRID_UNIFORMS, [SKIRT_TINT_UNIFORM]: skirtTintUniform, ...TERRAIN_HOLE_UNIFORMS, ...PERSONAL_LIGHT_UNIFORMS, [ENTRANCE_FADE_UNIFORM]: { value: 0 }, [BLEND_FIELDS_CLAMPED_UNIFORM]: { value: 0 } };
 
   // The scene point lights' struct/array uniforms are written by the renderer (material.lights),
   // so they must NOT go through the scalar declaration generator; nor the declared-by-hand ones.
   Object.assign(combinedUniforms, THREE.UniformsUtils.clone(THREE.UniformsLib.lights));
-  const UNDECLARED_KEYS = new Set([...Object.keys(THREE.UniformsLib.lights), ...Object.keys(TERRAIN_HOLE_UNIFORMS), ...Object.keys(PERSONAL_LIGHT_UNIFORMS), ENTRANCE_FADE_UNIFORM]);
+  const UNDECLARED_KEYS = new Set([...Object.keys(THREE.UniformsLib.lights), ...Object.keys(TERRAIN_HOLE_UNIFORMS), ...Object.keys(PERSONAL_LIGHT_UNIFORMS), ENTRANCE_FADE_UNIFORM, BLEND_FIELDS_CLAMPED_UNIFORM]);
 
   if (riverTexture) {
     combinedUniforms.rivertexture = { value: riverTexture };
@@ -451,6 +453,8 @@ export const combineBiomeMaterials = async (
     ${TERRAIN_FRAGMENT_DECLARATIONS_GLSL}
 
     ${commonShader}
+
+    ${LOD_BLUR_GLSL}
 
     ${TUNNEL_ROCK_GLSL}
 
@@ -481,6 +485,10 @@ export const combineBiomeMaterials = async (
       if (vSkirt > 0.0 || entranceFadeDiscards()) discard;
       if (vEntranceRock.x < ${glslFloat(PATCH_GROUND_SHARE)} && !mouthCutsHere(vWorldPosAbs)) discard;
       #endif
+      // Paint edges soften with the LOD rings' vertex spacing (world/shaders/lodBlur.ts); the biome fields
+      // only where this chunk left them unclamped.
+      lodBlur = lodBlurAt(vFarDistance);
+      float fieldBlur = lodBlur * (1.0 - ${BLEND_FIELDS_CLAMPED_UNIFORM});
       vec4 blended = vec4(0.0);
       float weightSum = 0.0;
       float remaining = 1.0;

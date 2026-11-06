@@ -15,6 +15,35 @@ describe("Motion (state machine movement output)", () => {
     expect(m.yaw).toBeCloseTo(Math.PI / 2);
   });
 
+  it("speed scales every requested velocity, now and on later changes", () => {
+    const m = new Motion(at(0, 0), { speed: 0.5 });
+    m.move(4, 2).fly(6);
+    expect([m.out.vx, m.out.vz, m.out.vy]).toEqual([2, 1, 3]);
+    m.setSpeed(2);
+    expect([m.out.vx, m.out.vz, m.out.vy]).toEqual([8, 4, 12]);
+    m.fly(null);
+    expect(m.out.vy).toBeNull();
+  });
+
+  it("pause holds the body (a flyer hovers) and resume restores what the behavior asked for", () => {
+    const m = new Motion(at(0, 0));
+    m.move(3, 4).fly(null);
+    m.pause();
+    expect([m.out.vx, m.out.vz, m.out.vy]).toEqual([0, 0, 0]);
+    m.turnTo(1, 1);
+    expect(m.yaw).toBe(0);
+    m.resume();
+    expect([m.out.vx, m.out.vz, m.out.vy]).toEqual([3, 4, null]);
+    m.faceHeading();
+    expect(m.yaw).toBeCloseTo(Math.atan2(3, 4));
+  });
+
+  it("turnSpeed scales each turn step", () => {
+    const m = new Motion(at(0, 0), { turnSpeed: 2 });
+    m.turnTo(1, 0.1);
+    expect(m.yaw).toBeCloseTo(0.2);
+  });
+
   it("toward aims at a point and stops inside the arrive radius", () => {
     const m = new Motion(at(0, 0));
     m.toward(3, 4, 10);

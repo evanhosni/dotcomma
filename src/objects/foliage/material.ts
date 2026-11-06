@@ -66,7 +66,7 @@ void main() {
   pos.x += (gust + flutter) * bend;
   pos.z += cos(t * 0.7 + (offset.x - offset.z) * 0.12 + phase) * bend * 0.7;
 
-  pos = quantizeWorldPos(pos);
+  pos = quantizeWorldPos(pos, modelViewMatrix[3].xyz + mat3(viewMatrix) * pos);
 
   // modelViewMatrix[3] = chunk origin in view space, resolved on the CPU in float64.
   vec3 viewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * pos;
@@ -115,6 +115,7 @@ export const createFoliageMaterial = (texture: THREE.Texture, quantization: numb
       uRenderDistance: { value: look.renderDistance },
       // Shared uniform objects, never mutated here.
       uGridSize: quantization !== undefined ? { value: quantization } : _quantization.uniforms.uGridSize,
+      uGridGrowth: _quantization.uniforms.uGridGrowth,
       uCurveStart: _curvature.uniforms.uCurveStart,
       uCurveK: _curvature.uniforms.uCurveK,
       uNightBlend: NIGHT_BLEND_UNIFORM,

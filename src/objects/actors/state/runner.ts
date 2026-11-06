@@ -1,7 +1,7 @@
 import { reportContentError } from "../../../utils/contentError";
-import { AnimationChannel } from "./animation";
+import { AnimationChannel, type AnimationChannelOptions } from "../../../animation";
 import { Input } from "./input";
-import { Motion, type Vec3Like } from "./motion";
+import { Motion, type MotionParams, type Vec3Like } from "./motion";
 import type { BehaviorContext, StateDef, StateMachineConfig, TransitionDef, TriggerDef } from "./types";
 
 /**
@@ -92,10 +92,15 @@ const getConfigMaps = (config: StateMachineConfig): ConfigMaps => {
 export const machineHasTrigger = (config: StateMachineConfig, id: string): boolean =>
   getConfigMaps(config).triggers.some((t) => t.id === id);
 
+export interface RunnerOptions {
+  animation?: AnimationChannelOptions;
+  motion?: Partial<MotionParams>;
+}
+
 export class StateMachineRunner {
   readonly blackboard: Record<string, any> = {};
   readonly motion: Motion;
-  readonly animation = new AnimationChannel();
+  readonly animation: AnimationChannel;
   readonly input = new Input(this.blackboard);
   private readonly stateMap: Map<string, StateDef>;
   private readonly transitionsOf: Map<string, ResolvedTransition[]>;
@@ -110,12 +115,14 @@ export class StateMachineRunner {
     private readonly config: StateMachineConfig,
     positionRef: { current: Vec3Like },
     groupRef: { current: any },
+    options: RunnerOptions = {},
   ) {
+    this.animation = new AnimationChannel(options.animation);
     const maps = getConfigMaps(config);
     this.stateMap = maps.stateMap;
     this.transitionsOf = maps.transitionsOf;
     this.stateId = config.initialState;
-    this.motion = new Motion(positionRef);
+    this.motion = new Motion(positionRef, options.motion);
     this.ctx = {
       positionRef: positionRef as BehaviorContext["positionRef"],
       playerPosition: positionRef.current as BehaviorContext["playerPosition"],

@@ -1,6 +1,6 @@
 import type * as THREE from "three";
 import type { MutableRefObject } from "react";
-import type { AnimationChannel, AnimationSpec } from "./animation";
+import type { AnimationChannel, AnimationSpec } from "../../../animation";
 import type { Input } from "./input";
 import type { Motion } from "./motion";
 

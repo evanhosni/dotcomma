@@ -1,4 +1,4 @@
-import type { AnimationState } from "../objects/actors/state/animation";
+import type { AnimationState } from "../animation";
 
 /**
  * WIRE PROTOCOL — JSON text frames discriminated on `t`. The one copy: the server

@@ -32,6 +32,10 @@ class RootRelativeSkeleton extends THREE.Skeleton {
   private readonly root: THREE.Object3D;
   /** Identity until the first update(), correct while the detached clone sits at the origin. */
   readonly rootInverse = new THREE.Matrix4();
+  /** Bone matrices are root-relative, so they change only with the POSE, never as the actor moves: while
+   *  it holds (a stepped clip between frames), update() skips the bone loop and the bone-texture upload.
+   *  Whoever re-poses the bones sets it (markPoseChanged). */
+  poseChanged = true;
 
   constructor(bones: THREE.Bone[], boneInverses: THREE.Matrix4[], root: THREE.Object3D) {
     super(bones, boneInverses);
@@ -43,7 +47,10 @@ class RootRelativeSkeleton extends THREE.Skeleton {
     const boneInverses = this.boneInverses;
     const boneMatrices = this.boneMatrices;
 
+    // Refreshed every frame: applyBoneTransformRootRelative (bounds, raycasts) pairs it with the live bone.matrixWorld.
     this.rootInverse.copy(this.root.matrixWorld).invert();
+    if (!this.poseChanged) return;
+    this.poseChanged = false;
 
     for (let i = 0, il = bones.length; i < il; i++) {
       const matrix = bones[i] ? bones[i].matrixWorld : _identityMatrix;
@@ -109,7 +116,7 @@ export interface PooledModelClone {
 const pools = new Map<string, PooledModelClone[]>();
 
 /** One vertex range of a merged skinned geometry: its SOURCE mesh's bounding sphere, which the
- *  beeble's ascend morph (beeble/inflate.ts) inflates that range onto, exactly as it did per mesh. */
+ *  beeble's ascend morph (beeble/animations.ts) inflates that range onto, exactly as it did per mesh. */
 export interface MergedSkinnedPart {
   start: number;
   count: number;
@@ -372,6 +379,10 @@ export const acquireModelClone = (
   acquirePooledModelClone(model, quantization) ?? createClone(poolKey(model, quantization), gltf, quantization);
 
 /** Cancels a pending release so a StrictMode remount keeps its clone. */
+export const markPoseChanged = (clone: PooledModelClone): void => {
+  for (const skeleton of clone.skeletons) if (skeleton instanceof RootRelativeSkeleton) skeleton.poseChanged = true;
+};
+
 export const reclaimModelClone = (clone: PooledModelClone): void => {
   if (clone.releaseTimer !== null) {
     clearTimeout(clone.releaseTimer);

@@ -1,12 +1,15 @@
 import type * as THREE from "three";
+import type { ProceduralClip, ProceduralLayer, ProceduralPose } from "../../../animation";
 
-// The "ascend" sphere morph. Geometry is SHARED with the source GLTF and the
+// The beeble's procedural animations (src/animation/README.md).
+//
+// The "ascend" clip: a sphere morph. Geometry is SHARED with the source GLTF and the
 // clone is POOLED, so each mesh morphs a private clone and dispose() must
 // restore the original — otherwise the next beeble reusing the clone
 // inherited a sphere-morphed body, and the buffers leaked.
 
 /** modelClonePool's MergedSkinnedPart, restated: this file is in the SERVER's type graph (the beeble
- *  state machine imports it) and the pool is not Three-free. */
+ *  spec imports it) and the pool is not Three-free. */
 interface MergedSkinnedPart {
   start: number;
   count: number;
@@ -20,15 +23,10 @@ interface MorphTarget {
   sphere: Float32Array;
 }
 
-export interface Inflate {
-  update(dt: number): void;
-  dispose(): void;
-}
-
-const INFLATE_RATE = 0.5; // t per second
+const INFLATE_SECONDS = 2;
 const MAX_SCALE_UP = 0.5;
 
-export const beginInflate = (group: THREE.Object3D): Inflate => {
+const beginInflate = (group: THREE.Object3D): ProceduralPose => {
   const swapped: { node: THREE.Mesh; original: THREE.BufferGeometry; cloned: THREE.BufferGeometry }[] = [];
   const targets: MorphTarget[] = [];
 
@@ -68,14 +66,9 @@ export const beginInflate = (group: THREE.Object3D): Inflate => {
     targets.push({ posAttr, original, sphere });
   });
 
-  let t = 0;
-  let done = false;
-
   return {
-    update(dt) {
-      if (done) return;
-      t = Math.min(t + dt * INFLATE_RATE, 1);
-      // One final write at t=1, then stop — writing on would re-upload every buffer every frame.
+    pose(time, weight) {
+      const t = Math.min(Math.max(time / INFLATE_SECONDS, 0), 1) * weight;
       for (const m of targets) {
         const arr = m.posAttr.array as Float32Array;
         for (let i = 0; i < arr.length; i++) arr[i] = m.original[i] + (m.sphere[i] - m.original[i]) * t;
@@ -83,7 +76,6 @@ export const beginInflate = (group: THREE.Object3D): Inflate => {
       }
       const s = 1 + t * MAX_SCALE_UP;
       group.scale.set(s, s, s);
-      if (t >= 1) done = true;
     },
     dispose() {
       for (const s of swapped) {
@@ -94,4 +86,29 @@ export const beginInflate = (group: THREE.Object3D): Inflate => {
       group.scale.set(1, 1, 1);
     },
   };
+};
+
+export const ASCEND_CLIP: ProceduralClip = { name: "ascend", duration: INFLATE_SECONDS, create: beginInflate };
+
+/** The head bone's yaw relative to the body (radians), set by the behavior. */
+export const HEAD_YAW_INPUT = "headYaw";
+
+export const HEAD_TURN_LAYER: ProceduralLayer = {
+  name: "head-turn",
+  create: (root) => {
+    let head: THREE.Object3D | undefined;
+    root.traverse((node: any) => {
+      if (node.isBone && node.name === "head") head = node;
+    });
+    const rest = head?.quaternion.clone();
+    return {
+      pose(inputs, weight) {
+        const yaw = inputs[HEAD_YAW_INPUT];
+        if (head && yaw !== undefined) head.rotation.y = yaw * weight;
+      },
+      dispose() {
+        if (head && rest) head.quaternion.copy(rest);
+      },
+    };
+  },
 };

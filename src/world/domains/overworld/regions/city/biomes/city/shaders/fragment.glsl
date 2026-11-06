@@ -18,16 +18,18 @@ void main() {
 
   vec4 roadColor = texture2D(roadtexture, adjustedUV);
 
-  float gutter = smoothstep(R - 1.6, R, roadDist) * (1.0 - smoothstep(R, R + 0.6, roadDist));
+  // A band narrower than the LOD blur (world/shaders/lodBlur.ts) dims by its share of it, as an average
+  // would: widened at full strength, a 1u gutter or a lane line would draw as a fat stripe far out.
+  float gutter = (smoothstep(R - 1.6, R, roadDist) * (1.0 - smoothstep(R, R + 0.6, roadDist))) * 1.1 / (1.1 + lodBlur);
   roadColor.rgb *= 1.0 - gutter * 0.25;
 
   vec4 sidewalkColor = texture2D(sidewalktexture, adjustedUV);
   vec3 curbColor = min(sidewalkColor.rgb * 1.3, vec3(1.0));
   vec3 interiorColor = texture2D(sidewalktexture, fract(vWorldUv * 0.35)).rgb * vec3(0.8, 0.79, 0.77);
 
-  vec3 groundColor = mix(roadColor.rgb, curbColor, smoothstep(R - 0.3, R + 0.5, roadDist));
-  groundColor = mix(groundColor, sidewalkColor.rgb, smoothstep(R + 0.9, R + 1.9, roadDist));
-  groundColor = mix(groundColor, interiorColor, smoothstep(R + 5.0, R + 7.2, roadDist));
+  vec3 groundColor = mix(roadColor.rgb, curbColor, blurStep(R - 0.3, R + 0.5, roadDist));
+  groundColor = mix(groundColor, sidewalkColor.rgb, blurStep(R + 0.9, R + 1.9, roadDist));
+  groundColor = mix(groundColor, interiorColor, blurStep(R + 5.0, R + 7.2, roadDist));
 
   // Freeway dashed lane lines. Both varyings JUMP between vertices at wall
   // seams / axis switches, where interpolation sweeps mod() into zebra
@@ -38,7 +40,7 @@ void main() {
   // REAL units here, unlike R above.
   float laneLine = 1.0 - smoothstep(0.22, 0.4, abs(vDistanceToFreewayCenter - FREEWAY_HALF_WIDTH * 0.5));
   float laneDash = step(mod(vFreewayAlong, 10.0), 5.0);
-  groundColor = mix(groundColor, vec3(0.82, 0.82, 0.8), laneLine * laneDash * seamOk * 0.52);
+  groundColor = mix(groundColor, vec3(0.82, 0.82, 0.8), laneLine * laneDash * seamOk * 0.52 * 0.31 / (0.31 + lodBlur));
 
   // The city's edge is the belt freeway itself — no boundary band (the terrain
   // material cross-fades this color into the neighbor over the biome's feather).

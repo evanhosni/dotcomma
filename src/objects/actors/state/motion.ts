@@ -25,6 +25,25 @@ export interface Vec3Like {
 
 export const createMotionOutput = (): MotionOutput => ({ vx: 0, vy: null, vz: 0, yaw: 0 });
 
+/** The simulated knobs (server and local alike): they change where the actor actually goes. */
+export interface MotionParams {
+  /** Multiplies every velocity a behavior asks for. */
+  speed: number;
+  /** Multiplies every turn step (`turnTo`, `turnToward`). */
+  turnSpeed: number;
+}
+
+export const DEFAULT_MOTION_PARAMS: MotionParams = { speed: 1, turnSpeed: 1 };
+
+/** An actor's motion knobs, the movement counterpart of AnimationConfig. */
+export interface MotionConfig extends Partial<MotionParams> {
+  /** Stop-motion: the DRAWN position and yaw update this many times a second; the body moves smoothly. Client-only. */
+  frameRate?: number;
+  /** Degrees: the DRAWN yaw is rounded to a multiple of it relative to the camera's line of sight, so the
+   *  viewer always sees it at an exact step (its real yaw is untouched). Client-only. */
+  rotationStep?: number;
+}
+
 /** Wrap to (−π, π]. */
 export const wrapAngle = (a: number): number => {
   let d = a;
@@ -45,16 +64,27 @@ export const stepAngle = (a: number, b: number, maxStep: number): number => {
 };
 
 export class Motion {
-  /** Read by the mover/publisher; behaviors use the methods. */
+  /** Read by the mover/publisher: what the behavior asked for, scaled by the params (zero while paused). */
   readonly out: MotionOutput = createMotionOutput();
+  private readonly requested = createMotionOutput();
+  private readonly params: MotionParams;
+  private paused = false;
 
-  constructor(private readonly position: { current: Vec3Like }) {}
+  constructor(
+    private readonly position: { current: Vec3Like },
+    params: Partial<MotionParams> = {},
+  ) {
+    this.params = {
+      speed: params.speed ?? DEFAULT_MOTION_PARAMS.speed,
+      turnSpeed: params.turnSpeed ?? DEFAULT_MOTION_PARAMS.turnSpeed,
+    };
+  }
 
   /** Horizontal velocity; the vertical channel is left as it was. */
   move(vx: number, vz: number): this {
-    this.out.vx = vx;
-    this.out.vz = vz;
-    return this;
+    this.requested.vx = vx;
+    this.requested.vz = vz;
+    return this.applyVelocity();
   }
 
   heading(angle: number, speed: number): this {
@@ -72,16 +102,41 @@ export class Motion {
 
   /** Drive the vertical velocity; null = gravity / ground. */
   fly(vy: number | null): this {
-    this.out.vy = vy;
-    return this;
+    this.requested.vy = vy;
+    return this.applyVelocity();
   }
 
   /** Zero horizontal velocity and hand the vertical back to gravity. */
   stop(): this {
-    this.out.vx = 0;
-    this.out.vz = 0;
-    this.out.vy = null;
+    this.requested.vx = 0;
+    this.requested.vz = 0;
+    this.requested.vy = null;
+    return this.applyVelocity();
+  }
+
+  setSpeed(speed: number): this {
+    this.params.speed = Math.max(0, speed);
+    return this.applyVelocity();
+  }
+
+  setTurnSpeed(turnSpeed: number): this {
+    this.params.turnSpeed = Math.max(0, turnSpeed);
     return this;
+  }
+
+  /** Holds the body (a flyer hovers) and its turning; the behavior's requests are kept for `resume`. */
+  pause(): this {
+    this.paused = true;
+    return this.applyVelocity();
+  }
+
+  resume(): this {
+    this.paused = false;
+    return this.applyVelocity();
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
   }
 
   face(yaw: number): this {
@@ -91,7 +146,7 @@ export class Motion {
 
   /** No-op while not moving horizontally. */
   faceHeading(): this {
-    const { vx, vz } = this.out;
+    const { vx, vz } = this.requested;
     if (vx * vx + vz * vz > 1e-8) this.out.yaw = Math.atan2(vx, vz);
     return this;
   }
@@ -100,9 +155,9 @@ export class Motion {
     return this.face(this.angleTo(x, z));
   }
 
-  /** Call per tick with rate × dt. */
+  /** Call per tick with rate × dt (scaled by `turnSpeed`; held while paused). */
   turnTo(yaw: number, maxStep: number): this {
-    this.out.yaw = stepAngle(this.out.yaw, yaw, maxStep);
+    if (!this.paused) this.out.yaw = stepAngle(this.out.yaw, yaw, maxStep * this.params.turnSpeed);
     return this;
   }
 
@@ -128,5 +183,14 @@ export class Motion {
 
   get moving(): boolean {
     return this.out.vx !== 0 || this.out.vz !== 0 || (this.out.vy !== null && this.out.vy !== 0);
+  }
+
+  private applyVelocity(): this {
+    const scale = this.paused ? 0 : this.params.speed;
+    const { vx, vy, vz } = this.requested;
+    this.out.vx = vx * scale;
+    this.out.vz = vz * scale;
+    this.out.vy = vy === null ? (this.paused ? 0 : null) : vy * scale;
+    return this;
   }
 }

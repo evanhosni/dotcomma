@@ -22,7 +22,7 @@ import {
   setTerrainLoading,
 } from "./buildRequests";
 import { releaseGeometry, writeTerrainBuffers, writeWaterBuffers } from "./chunkGeometry";
-import { createChunkPlane, ensureWaterMesh, generateColliders, releaseWater, syncLodFade } from "./chunkObjects";
+import { createChunkPlane, ensureWaterMesh, generateColliders, releaseWater, syncChunkUniforms } from "./chunkObjects";
 import { CHUNK_SIZE, chunkReachesFarFade, LODLevel } from "./lodConfig";
 import { computeDesiredChunks, DesiredChunks, getLod1SitesVersion, lod1KeyAt } from "./lodQuadtree";
 import { FADE_OPAQUE_HI, LOD_FADE_SECONDS, LodSwapper, SwapHooks } from "./lodSwaps";
@@ -202,7 +202,7 @@ const queueChunk = (chunkKey: string, offset: PointXZ, lod: LODLevel, material: 
     fadeLo: 0,
     fadeHi: FADE_OPAQUE_HI,
   };
-  plane.onBeforeRender = syncLodFade(chunk);
+  plane.onBeforeRender = syncChunkUniforms(chunk);
 
   terrain.group.add(plane);
   terrain.queuedToBuild.push(chunk);

@@ -8,7 +8,7 @@ HUD panels in [overlay/](overlay/), plain DOM over the canvas:
 - [DevOverlay.tsx](overlay/DevOverlay.tsx): one checkbox per `DEV_TOGGLES` entry ([context/constants.ts](../context/constants.ts)).
 - [LogsOverlay.tsx](overlay/LogsOverlay.tsx): captured console output (devmode only).
 - [NetOverlay.tsx](overlay/NetOverlay.tsx): connection status and players here (devmode only).
-- The devmode panel ([DevOverlay.tsx](overlay/DevOverlay.tsx)): the `DEV_TOGGLES` checkboxes, an × that turns devmode off, and "vfx ▸", which expands one live slider per `VFX_KNOBS` entry (vfx/tuning.ts). Its controls are `createHudCheckbox` / `createHudSlider` ([styles.ts](overlay/styles.ts)).
+- The devmode panel ([DevOverlay.tsx](overlay/DevOverlay.tsx)): the `DEV_TOGGLES` checkboxes, an × that turns devmode off, and "vfx ▸", which expands one live slider per `VFX_KNOBS` entry (vfx/tuning.ts), sectioned by its `group` in `VFX_GROUPS` order. The left column never exceeds the screen height: the devmode panel is the one panel that shrinks and scrolls (`overlayContainer.ts`). Its controls are `createHudCheckbox` / `createHudSlider` ([styles.ts](overlay/styles.ts)).
 
 The last three mount in [index.tsx](../index.tsx). Bottom-left panels share one column from `getOrCreateLeftColumn()` ([overlayContainer.ts](overlay/overlayContainer.ts)). Imperative panels update text nodes directly so per-frame numbers never re-render React. Shared style lives in [overlay/styles.ts](overlay/styles.ts): `PANEL_STYLE`, `PANEL_CSS`, `FONT_CSS`, `FONT`, `HUD_COLOR`, `PANEL_BACKGROUND`, `HUD_Z_INDEX`, and `fontOfSize(px)` for canvas text — use them instead of retyping values.
 

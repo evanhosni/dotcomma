@@ -4,10 +4,10 @@ import * as THREE from "three";
 import { useGameContext } from "../../../context/GameContext";
 import type { SyncHandle } from "../../../net/entities/useSyncedEntity";
 import { getRemotePlayers } from "../../../net/players/store";
-import type { AnimationChannel } from "./animation";
+import type { AnimationChannel } from "../../../animation";
 import type { Input } from "./input";
 import type { Motion, MotionOutput } from "./motion";
-import { StateMachineRunner } from "./runner";
+import { StateMachineRunner, type RunnerOptions } from "./runner";
 import type { StateMachineConfig } from "./types";
 
 /**
@@ -63,12 +63,13 @@ export function useStateMachine(
   config: StateMachineConfig | undefined,
   positionRef: React.MutableRefObject<THREE.Vector3>,
   groupRef: React.MutableRefObject<THREE.Group | null>,
+  options?: RunnerOptions,
 ): StateMachineHandle | null {
   const { playerPosition } = useGameContext();
 
   const runner = useMemo(
-    () => (config ? new StateMachineRunner(config, positionRef, groupRef) : null),
-    [config, positionRef, groupRef],
+    () => (config ? new StateMachineRunner(config, positionRef, groupRef, options) : null),
+    [config, positionRef, groupRef, options],
   );
   useEffect(() => () => runner?.dispose(), [runner]);
 

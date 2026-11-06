@@ -1,12 +1,11 @@
-import type * as THREE from "three";
 import { angleDiffAbs, lerpAngle } from "../state/motion";
 import { custom, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/triggers";
 import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
-import { beginInflate, type Inflate } from "./inflate";
+import { HEAD_YAW_INPUT } from "./animations";
 
 /** The template NPC behavior: wanders, notices a player in its sight cone, turns
- *  to face them, ascends when clicked. Only the head bone and the inflate touch
- *  the scene, both guarded on `ctx.groupRef.current` (null on the server). */
+ *  to face them, ascends when clicked. It never touches the scene: the head turn
+ *  is an animation layer fed the yaw (./animations.ts). */
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
@@ -23,29 +22,18 @@ const randomAngle = (): number => Math.random() * Math.PI * 2;
 const randomRange = (min: number, max: number): number => min + Math.random() * (max - min);
 const angleToPlayer = (ctx: TriggerContext): number => ctx.motion.angleTo(ctx.playerPosition.x, ctx.playerPosition.z);
 
-function findHeadBone(ctx: BehaviorContext): void {
-  if (ctx.blackboard.__head_bone) return;
-  if (!ctx.groupRef.current) return;
-  ctx.groupRef.current.traverse((node: any) => {
-    if (node.isBone && node.name === "head") {
-      ctx.blackboard.__head_bone = node;
-    }
-  });
-}
-
-function resetHeadBone(ctx: BehaviorContext): void {
-  const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
-  if (bone) bone.rotation.y = 0;
+/** Hands the head back to the clip. */
+function releaseHead(ctx: BehaviorContext): void {
+  ctx.animation.setInput(HEAD_YAW_INPUT, undefined);
 }
 
 function updateHeadTracking(ctx: BehaviorContext): void {
-  const bone = ctx.blackboard.__head_bone as THREE.Bone | undefined;
-  if (!bone) return;
   let relAngle = angleToPlayer(ctx) - ctx.motion.yaw;
   while (relAngle > Math.PI) relAngle -= Math.PI * 2;
   while (relAngle < -Math.PI) relAngle += Math.PI * 2;
   relAngle = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, relAngle));
-  bone.rotation.y = lerpAngle(bone.rotation.y, relAngle, HEAD_LERP_SPEED * ctx.delta);
+  const yaw = ctx.animation.inputs[HEAD_YAW_INPUT] ?? 0;
+  ctx.animation.setInput(HEAD_YAW_INPUT, lerpAngle(yaw, relAngle, HEAD_LERP_SPEED * ctx.delta));
 }
 
 /** The PER-PLAYER effect example: on a client mirror `ctx.input` is this player's
@@ -79,7 +67,7 @@ export const BEEBLE_SM: StateMachineConfig = {
         bb.__dir_timer = randomRange(1, 5);
         bb.__dir_elapsed = 0;
         ctx.motion.face(angle);
-        resetHeadBone(ctx);
+        releaseHead(ctx);
       },
       onUpdate: (ctx) => {
         const bb = ctx.blackboard;
@@ -104,7 +92,7 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clip: "stare at hands", loop: "once" },
       onEnter: (ctx) => {
         ctx.motion.stop();
-        resetHeadBone(ctx);
+        releaseHead(ctx);
       },
       transitions: [
         { trigger: PLAYER_VISIBLE, target: "alert" },
@@ -117,7 +105,6 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clip: "idle" },
       onEnter: (ctx) => {
         ctx.motion.stop();
-        findHeadBone(ctx);
       },
       onUpdate: (ctx) => {
         updateHeadTracking(ctx);
@@ -135,7 +122,7 @@ export const BEEBLE_SM: StateMachineConfig = {
       animation: { clip: "walk" },
       onEnter: (ctx) => {
         ctx.motion.stop();
-        resetHeadBone(ctx);
+        releaseHead(ctx);
       },
       onUpdate: (ctx) => {
         ctx.motion.turnToward(ctx.playerPosition.x, ctx.playerPosition.z, DIR_LERP_SPEED * ctx.delta);
@@ -150,23 +137,14 @@ export const BEEBLE_SM: StateMachineConfig = {
 
     {
       id: "ascending",
-      animation: { clip: "ascend" },
+      animation: { clip: "ascend", loop: "once" },
       onEnter: (ctx) => {
-        resetHeadBone(ctx);
+        releaseHead(ctx);
         ctx.motion.move(0, 0);
-        const group = ctx.groupRef.current;
-        if (!group) return;
-        const inflate = beginInflate(group);
-        ctx.blackboard.__inflate = inflate;
-        return () => {
-          inflate.dispose();
-          ctx.blackboard.__inflate = null;
-        };
       },
       onUpdate: (ctx) => {
         const ramp = Math.min(ctx.stateElapsed / 1, 1); // ease in over 1s
         ctx.motion.fly(ASCEND_SPEED * ramp * ramp);
-        (ctx.blackboard.__inflate as Inflate | null)?.update(ctx.delta);
       },
       transitions: [],
     },

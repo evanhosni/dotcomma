@@ -9,6 +9,7 @@ import { createNpcBody, type NpcBody, type Pose } from "../physics/npcBody.js";
 import { DEFAULT_WORK_BUDGET_MS, PHYSICS_DOMAIN, type PhysicsWorld } from "../physics/physicsWorld.js";
 import { PlayerBodies } from "../physics/playerBodies.js";
 import { TICK_HZ, TICK_SECONDS } from "../tick.js";
+import { clipDurationsOf } from "./clipDurations.js";
 import { createPublished, fullUpdate, publishTick, type Published } from "./publish.js";
 
 /**
@@ -165,7 +166,12 @@ export class EntityManager {
       kind: item.kind,
       domain,
       registrants: new Set(),
-      runner: spec?.stateMachine ? new StateMachineRunner(spec.stateMachine, { current: position }, { current: null }) : null,
+      runner: spec?.stateMachine
+        ? new StateMachineRunner(spec.stateMachine, { current: position }, { current: null }, {
+            animation: { defaults: spec.animation, durations: clipDurationsOf(spec) },
+            motion: spec.motion,
+          })
+        : null,
       position,
       npc,
       hull: null,
