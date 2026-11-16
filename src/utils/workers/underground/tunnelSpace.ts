@@ -1,8 +1,8 @@
 import { dropOldestHalf } from "../cellCache";
 import { FIELD_REACH, SEWER_LIQUID_VISCOSITY } from "./constants";
 import { liquidLevelOf } from "./sewerMesh";
-import { compileField, inFrontOfMouthOpening, insideMouthCut, mouthFootprintBounds, probeRockAlongY, rockEscapeAt, surfaceAboveAt, type FieldFn, type RockEscape } from "./tunnelField";
-import type { ShaftPiece, TunnelEntrance, TunnelPiece, UndergroundChunk } from "./types";
+import { compileField, insideMouthCut, probeRockAlongY, rockEscapeAt, surfaceAboveAt, type FieldFn, type RockEscape } from "./tunnelField";
+import type { MouthPiece, ShaftPiece, TunnelEntrance, TunnelPiece, UndergroundChunk } from "./types";
 
 /**
  * THE TUNNELS AS A BODY SEES THEM: the air of a set of loaded tunnel chunks, merged (a piece two chunks
@@ -15,8 +15,6 @@ import type { ShaftPiece, TunnelEntrance, TunnelPiece, UndergroundChunk } from "
 /** What a body's step needs of a chunk (the client has the whole UndergroundChunk; the server keeps this). */
 export type TunnelSpaceChunk = Pick<UndergroundChunk, "style" | "centerX" | "centerZ" | "pieces" | "systemEntrances" | "liquid">;
 
-export type LiquidLook = "water" | "sewage";
-
 export interface UndergroundProbe {
   /** False while no tunnel chunk is loaded at all: the field is not known (a body keeps its last state). */
   known: boolean;
@@ -24,12 +22,11 @@ export interface UndergroundProbe {
   field: number;
   /** The first rock below the point; NaN out of the air. */
   floorY: number;
-  /** The liquid level whose swimming range holds the point; NaN when none. */
+  /** The liquid level whose swimming range holds the point (the sewers' sewage: no cave holds water);
+   *  NaN when none. */
   liquidY: number;
-  /** That liquid's viscosity relative to water: a spring cave's water is water, the sewers' liquid is thick. */
+  /** That liquid's viscosity relative to water (1 where there is none). */
   liquidViscosity: number;
-  /** What the liquid looks like from under it. */
-  liquidLook: LiquidLook;
 }
 
 /** The probe index's cell size. */
@@ -70,12 +67,11 @@ export class TunnelSpace {
   private readonly chunks = new Set<TunnelSpaceChunk>();
   private piecesList: TunnelPiece[] = [];
   private shaftList: ShaftPiece[] = [];
+  private mouthList: MouthPiece[] = [];
   private entranceMap = new Map<string, TunnelEntrance>();
   private cellPieces = new Map<number, TunnelPiece[]>();
   private cellFields = new Map<number, FieldFn>();
-  private readonly probeResult: UndergroundProbe = { known: false, field: FIELD_REACH, floorY: NaN, liquidY: NaN, liquidViscosity: 1, liquidLook: "water" };
-  /** The style of the chunk the last liquid level came from. */
-  private liquidStyle: TunnelSpaceChunk["style"] = "sewer";
+  private readonly probeResult: UndergroundProbe = { known: false, field: FIELD_REACH, floorY: NaN, liquidY: NaN, liquidViscosity: 1 };
   private readonly shaftOpen = (s: ShaftPiece): boolean => this.isOpen(s.id);
 
   /** `isOpen`: a manhole's (and a door's) open state, by id. */
@@ -90,7 +86,7 @@ export class TunnelSpace {
   get shafts(): readonly ShaftPiece[] {
     return this.shaftList;
   }
-  /** Every entrance of the loaded chunks' systems, by id. */
+  /** Every manhole of the loaded chunks' systems, by id. */
   get entrances(): ReadonlyMap<string, TunnelEntrance> {
     return this.entranceMap;
   }
@@ -120,6 +116,7 @@ export class TunnelSpace {
     }
     this.piecesList = Array.from(byKey.values());
     this.shaftList = this.piecesList.filter((p): p is ShaftPiece => p.kind === "shaft");
+    this.mouthList = this.piecesList.filter((p): p is MouthPiece => p.kind === "mouth");
     this.entranceMap = entrances;
     this.cellPieces = new Map();
     this.cellFields = new Map();
@@ -150,10 +147,7 @@ export class TunnelSpace {
     for (const c of this.chunks) {
       if (!c.liquid) continue;
       const level = liquidLevelOf(c.liquid, x - c.centerX, z - c.centerZ);
-      if (!Number.isNaN(level)) {
-        this.liquidStyle = c.style;
-        return level;
-      }
+      if (!Number.isNaN(level)) return level;
     }
     return NaN;
   }
@@ -166,6 +160,7 @@ export class TunnelSpace {
     probe.field = field;
     probe.floorY = NaN;
     probe.liquidY = NaN;
+    probe.liquidViscosity = 1;
     if (field < 0) {
       probe.floorY = probeRockAlongY(this.fieldAt(x, z), x, y, z, -1, FLOOR_STEP, FLOOR_REACH);
       const level = this.liquidLevelAt(x, z);
@@ -173,8 +168,7 @@ export class TunnelSpace {
       // channel's surface; a room's pool floor lies 5u under it) and the point is not far above it.
       if (!Number.isNaN(level) && level > probe.floorY && y <= level + SWIM_ABOVE_SURFACE) {
         probe.liquidY = level;
-        probe.liquidViscosity = this.liquidStyle === "sewer" ? SEWER_LIQUID_VISCOSITY : 1;
-        probe.liquidLook = this.liquidStyle === "sewer" ? "sewage" : "water";
+        probe.liquidViscosity = SEWER_LIQUID_VISCOSITY;
       }
     }
     return probe;
@@ -186,27 +180,10 @@ export class TunnelSpace {
     return this.chunks.size === 0 ? null : rockEscapeAt(this.fieldAt(x, z), x, y, z, clearance);
   }
 
-  /** Whether a point stands in front of a loaded mouth's opening (tunnelField.ts inFrontOfMouthOpening): the
-   *  field reads rock there, but it is open air. */
-  inFrontOfOpeningAt(x: number, y: number, z: number): boolean {
-    for (const p of this.piecesList) {
-      if (p.kind !== "mouth") continue;
-      const b = p.bounds;
-      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
-      if (inFrontOfMouthOpening(p, x, y, z)) return true;
-    }
-    return false;
-  }
-
-  /** Whether a point is in a loaded mouth's terrain cut (tunnelField.ts insideMouthCut): there the entrance
-   *  patch is the ground, and the terrain's heightfield, which draws nothing there, is not. */
+  /** Whether a point is in a loaded mouth's CUT (tunnelField.ts insideMouthCut): the ground there is the
+   *  entrance patch, and nothing is rock to the backstops. */
   inMouthCutAt(x: number, y: number, z: number): boolean {
-    for (const p of this.piecesList) {
-      if (p.kind !== "mouth") continue;
-      const b = mouthFootprintBounds(p);
-      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
-      if (insideMouthCut(p, x, y, z)) return true;
-    }
+    for (const m of this.mouthList) if (insideMouthCut(m, x, y, z)) return true;
     return false;
   }
 

@@ -18,11 +18,14 @@ export interface ChunkBuildResult {
   distFreeway: Float32Array;
   freewayAlong: Float32Array;
   normals: Float32Array;
-  /** Water surface per vertex (NaN = none), its depth (negative = a dive toward a cave's water) and its
-   *  flow (x/z pairs); all three present, or all null when no vertex has water over the ground. */
+  /** Water surface per vertex (NaN = none), its depth, its flow (x/z pairs) and its owning body's colours
+   *  (shallow RGB; deep RGB + the deep colour's depth): all present, or all null when no vertex has water
+   *  over the ground. */
   waterHeights: Float32Array | null;
   waterDepths: Float32Array | null;
   waterFlow: Float32Array | null;
+  waterShallow: Float32Array | null;
+  waterDeep: Float32Array | null;
   /** The terrain's own snow depth per vertex; null when no vertex has snow. */
   snowDepths: Float32Array | null;
   /** Rapier column-major heightfield; null unless the LOD has a collider. */

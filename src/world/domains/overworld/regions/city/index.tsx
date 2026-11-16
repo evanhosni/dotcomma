@@ -1,5 +1,6 @@
-import { content, Material, Noise, Region, Rivers, Skybox } from "../../../../components";
+import { content, Material, Noise, Pond, Region, Rivers, Skybox } from "../../../../components";
 import { DEFAULT_TERRAIN_PARAMS } from "../../../../defaults";
+import { POND } from "../../water/spec";
 import { CityBiome } from "./biomes/city";
 import { GrassBiome } from "./biomes/grass";
 import baseShader from "./shaders/base.glsl";
@@ -11,7 +12,8 @@ export const CityRegion = content(
     <Material shader={baseShader} textures={{ grasstexture: "grass.png" }} />
     <Noise params={DEFAULT_TERRAIN_PARAMS.baseNoise} />
     <Skybox />
-    <Rivers chance={0.35} />
+    <Rivers chance={0.61} />
+    <Pond kind={POND} riverEnd={0.5} />
 
     <CityBiome />
     <GrassBiome />

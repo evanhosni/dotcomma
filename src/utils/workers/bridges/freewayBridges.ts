@@ -38,8 +38,8 @@
 
 import { domainConfig } from "../computeConfig";
 import { warp, warpMax } from "../noise";
-import { riverWetReach } from "../rivers/constants";
-import { riverPiecesNear, riverPiecesRaw, riversEnabled } from "../rivers/riverNetwork";
+import { riverWetReach } from "../water/rivers/constants";
+import { riverPiecesNear, riverPiecesRaw, riversEnabled } from "../water/rivers/network";
 import { BRIDGE_MAX_DEVIATION, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, deckWidth } from "./constants";
 import { clearPavedCache } from "./landings";
 import { clearCrossingCaches, CROSSING_MID_REACH, crossingChain, findCrossings, resolveCrossingChain } from "./crossings";
@@ -96,7 +96,7 @@ const runBridgeQuery = (minX: number, minZ: number, maxX: number, maxZ: number, 
   // of a wet sample + the deck's half-width, so a box no raw piece comes that close to meets none.
   const pad = query.kind === "overlap" ? query.pad : 0;
   const reach = riverWetReach() + BRIDGE_WET_MERGE + BRIDGE_WET_SAMPLE + BRIDGE_MAX_DEVIATION + warpMax() + deckWidth() / 2 + pad;
-  if (riverPiecesRaw(warp((minX + maxX) / 2, (minZ + maxZ) / 2), minX, minZ, maxX, maxZ, reach).length === 0) return [];
+  if (riverPiecesRaw(minX, minZ, maxX, maxZ, reach).length === 0) return [];
   return whileEnumeratingBridges(() => {
     for (let i = 0; i < BRIDGE_WINDOWS.length; i++) {
       const decks = bridgesInWindow(minX, minZ, maxX, maxZ, params, BRIDGE_WINDOWS[i], i === BRIDGE_WINDOWS.length - 1, query);

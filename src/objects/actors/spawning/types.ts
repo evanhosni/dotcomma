@@ -26,6 +26,7 @@ export const SPAWN_ONLY_KEYS = [
   "immediateRadius",
   "biomeIds",
   "feature",
+  "zone",
   "heightRange",
   "slopeRange",
   "roadDistanceRange",
@@ -71,6 +72,7 @@ export interface SerializedActorDescriptor
     | "spacingOverrides"
     | "flattenGround"
     | "feature"
+    | "zone"
   > {}
 
 export interface SpawnPoint {

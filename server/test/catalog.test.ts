@@ -20,7 +20,7 @@ describe("actor catalog", () => {
     for (const domain of Object.values(DOMAIN_NODES)) {
       for (const region of childrenOfKind(domain, "region")) {
         for (const biome of childrenOfKind(region, "biome")) {
-          for (const { id, mount } of actorPlacementsOf(biome)) {
+          for (const { id, mount } of actorPlacementsOf(biome, region)) {
             if (!specNeedsServer(mount.actor)) continue;
             placed.add(mount.actor);
             ids.set(mount.actor.id, mount.actor).set(id, mount.actor);

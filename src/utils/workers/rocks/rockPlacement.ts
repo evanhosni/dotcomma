@@ -1,9 +1,9 @@
 /**
  * ROCK placement: density fields per biome kept by slope (steeper ground keeps more), clear of roads
- * and cave openings, plus every rim and strewn spot of every cave mouth; each rock's whole look seeded
+ * and cave openings, plus every spot of every cave mouth; each rock's whole look seeded
  * from its position and buried into the DRAWN ground. Three-free: the client draws from these, the
  * server builds the same colliders (objects/dressing/rocks/spec.ts). The boulders in every
- * waterfall are the river's rule (rivers/waterfallRocks.ts), built on the same look.
+ * waterfall are the river's rule (water/parts/boulders.ts), built on the same look.
  */
 
 import { seedRand, smoothstep } from "../../math";
@@ -17,7 +17,7 @@ import type { RockParams } from "../types";
 import { domainConfig } from "../computeConfig";
 import { generateDensityPoints, slopeDegreesAt } from "../densityPoints";
 import { mouthSpots } from "../underground/caves";
-import { OPENING_RADIUS_MAX, STREWN_REACH_RADII } from "../underground/constants";
+import { OPENING_RADIUS_MAX, MOUTH_ROCK_REACH_RADII } from "../underground/constants";
 import { drawnGroundAt } from "../underground/drawnGround";
 import { caveMouthsNear } from "../underground/systems";
 import { insideMouthOpening, mouthSectionDistanceToRect } from "../underground/tunnelField";
@@ -65,8 +65,8 @@ const BURY_MIN = 0.2;
 const BURY_MAX = 0.5;
 /** A mouth's rock cannot stand where the ground rises more than this many heights across it (the hood's face). */
 const MOUTH_ROCK_RISE_HEIGHTS = 2;
-/** A mouth's rocks reach this far from its opening point: the strewn reach of the widest opening, doubled, plus a pad. */
-const MOUTH_ROCK_REACH = STREWN_REACH_RADII * OPENING_RADIUS_MAX * 2 + 20;
+/** A mouth's rocks reach this far from its opening point: the scatter reach of the widest opening, doubled, plus a pad. */
+const MOUTH_ROCK_REACH = MOUTH_ROCK_REACH_RADII * OPENING_RADIUS_MAX * 2 + 20;
 /** Mouths are fetched this far beyond their reach (a mouth's section runs into the mountain). */
 const MOUTH_FETCH_PAD = 100;
 
@@ -188,7 +188,7 @@ const mouthsAround = (b: RectXZ): MouthPiece[] => {
 
 /** Every field rock of a chunk: the fields' points (kept by slope, clear of roads and openings) and the
  *  mouths' spots, each belonging to the chunk holding its position. The waterfalls' boulders are the
- *  river's (rivers/waterfallRocks.ts); the `rocks` enumerator joins the two. */
+ *  river's (water/parts/boulders.ts), drawn by its own <WaterfallBoulders/>. */
 export const getRocks = (minX: number, minZ: number, maxX: number, maxZ: number, params: RockPlacementParams): RockPoint[] => {
   const b = { minX, minZ, maxX, maxZ };
   const mouths = mouthsAround(b);

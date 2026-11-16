@@ -9,7 +9,7 @@ export interface RegionProps extends RegionIdentity {
 
 /**
  * A REGION: a group of biomes on ONE base terrain (its <Noise>) under one base <Material> and
- * <Skybox>, with its own river density (<Rivers chance>). Its <Biome> children are in VORONOI
+ * <Skybox>, with its own river chance (<Rivers chance>). Its <Biome> children are in VORONOI
  * order — the biome roll is `floor(u × count)` over them — as the regions themselves are inside
  * <Domain>. Regions have no boundary of their own: they cross-fade into their neighbors.
  */

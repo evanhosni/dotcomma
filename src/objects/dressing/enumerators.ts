@@ -10,8 +10,6 @@
 
 import {
   type BridgePlacementParams,
-  type BubbleEmitter,
-  type BubbleEmitterParams,
   type CityFreewaySidePoint,
   type CitySitePoint,
   type CityTrafficLightPoint,
@@ -24,6 +22,10 @@ import {
   type SnowDriftMesh,
   type SplashEmitter,
   type SplashEmitterParams,
+  type PondSurfaceEmitter,
+  type PondSurfaceEmitterParams,
+  type WaterEmitter,
+  type WaterEmitterParams,
   computeVertexData,
   getCityFreewayEdgePoints,
   getCityRoadMarkers,
@@ -32,16 +34,17 @@ import {
   getFreewayBridges,
   getFreewayRunLamps,
   getFreewayRunMarkers,
-  getLakeBubbleEmitters,
   getRiverSplashEmitters,
   getRocks,
   getWaterfallRocks,
   getSnowDrift,
-  waterBiomeIds,
+  getPondSurfaceEmitters,
+  getWaterEmitters,
 } from "../../utils/workers/vertexCompute";
 import { biomeIdsWith } from "../../utils/workers/biomeFlags";
 import { rockFieldBiomeIds } from "../../utils/workers/rocks/params";
 import { snowBiomeIds } from "../../utils/workers/snow/params";
+import { bodyBiomeIds } from "../../utils/workers/water/parts/params";
 import { biomesWeighWithin } from "../../utils/workers/zoneBlend";
 import { type DensityPointParams, generateDensityPoints } from "../../utils/workers/densityPoints";
 import { CITY_BIOME_ID } from "../../world/constants";
@@ -123,11 +126,12 @@ export const DRESSING_ENUMERATORS = defineEnumerators({
   cityLightSites: (b, _args: Record<string, never>): CitySitePoint[] => getCityVoronoiSites(b.minX, b.minZ, b.maxX, b.maxZ),
 
   /** Every `rocks` biome's field and every cave mouth's spots (skipped where none of the fields' biomes can be:
-   *  a mouth's spots lie in its cave biome), plus the boulders of every waterfall (rivers cross every region: no probe). */
-  rocks: (b, params: RockPlacementParams): RockPoint[] => {
-    const fields = chunkMayHoldBiomes(b, rockFieldBiomeIds()) ? getRocks(b.minX, b.minZ, b.maxX, b.maxZ, params) : [];
-    return fields.concat(getWaterfallRocks(b.minX, b.minZ, b.maxX, b.maxZ));
-  },
+   *  a mouth's spots lie in its cave biome). */
+  rocks: (b, params: RockPlacementParams): RockPoint[] => (chunkMayHoldBiomes(b, rockFieldBiomeIds()) ? getRocks(b.minX, b.minZ, b.maxX, b.maxZ, params) : []),
+
+  /** The boulders of every river, where the domain's <Water> mounts <WaterfallBoulders/> (rivers cross
+   *  every region: no probe). */
+  waterfallBoulders: (b, _args: Record<string, never>): RockPoint[] => getWaterfallRocks(b.minX, b.minZ, b.maxX, b.maxZ),
 
   /** The chunk's one snow sheet, or nothing. Skipped where no snow biome's cover can reach: the sheet
    *  samples ~17k drawn-ground heights per 256u chunk before it knows it is empty, and every chunk of
@@ -135,10 +139,20 @@ export const DRESSING_ENUMERATORS = defineEnumerators({
   snowDrift: (b, _args: Record<string, never>): SnowDriftMesh[] => (chunkMayHoldBiomes(b, snowBiomeIds()) ? getSnowDrift(b) : []),
 
   /** Rivers cross every region: no biome probe. */
-  riverSplashes: (b, params: SplashEmitterParams): SplashEmitter[] => getRiverSplashEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params),
+  waterfallSplashes: (b, params: SplashEmitterParams): SplashEmitter[] => getRiverSplashEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params),
 
-  /** Skipped where no water biome can be. */
-  lakeBubbles: (b, params: BubbleEmitterParams): BubbleEmitter[] => (chunkMayHoldBiomes(b, waterBiomeIds()) ? getLakeBubbleEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params) : []),
+  /** A water part's emitters (its bodies are the driver's mounts). Skipped where none of the biomes
+   *  carrying those bodies can be (a body owns water only where a biome carries it). */
+  waterEmitters: (b, params: WaterEmitterParams): WaterEmitter[] =>
+    chunkMayHoldBiomes(b, bodyBiomeIds(params.bodies.map((body) => body.slot)))
+      ? getWaterEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params)
+      : [],
+
+  /** A pond part's emitters on its still surface (its bodies are the driver's mounts). */
+  pondSurfaceEmitters: (b, params: PondSurfaceEmitterParams): PondSurfaceEmitter[] =>
+    chunkMayHoldBiomes(b, bodyBiomeIds(params.bodies.map((body) => body.slot)))
+      ? getPondSurfaceEmitters(b.minX, b.minZ, b.maxX, b.maxZ, params)
+      : [],
 });
 
 export type DressingEnumeratorName = keyof typeof DRESSING_ENUMERATORS;

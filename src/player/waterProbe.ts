@@ -1,4 +1,7 @@
 import { useRef } from "react";
+import { writeWaterColors } from "../utils/workers/water/material";
+import type { CameraWaterColors } from "../vfx/underwater";
+import { getActiveDomainConfig, isDomainCommitted } from "../world/domains/utils";
 import { getVertexSample } from "../world/terrain/vertexData";
 import { SAMPLE_GIVE_UP_MS } from "./groundSafetyNets";
 
@@ -13,6 +16,8 @@ export interface WaterProbe {
   /** The last sampled water surface over a point at height `y`, or NaN where no water stands above the
    *  ground or the point is under its bed (a tunnel under a river is not in it). */
   surfaceOver(y: number): number;
+  /** The colours of the last sampled water, its owning bodies' blended as the sheet draws them there. */
+  colors(): CameraWaterColors;
   clear(): void;
 }
 
@@ -22,7 +27,7 @@ export interface WaterProbe {
  *  under bridge decks. No sample until the worker is up. */
 export const useWaterProbe = (): WaterProbe => {
   // `since`: when the sample in flight started (-Infinity: none); one lost to a worker reset never resolves.
-  const state = useRef({ surfaceY: NaN, bedY: NaN, frame: 0, since: -Infinity, generation: 0 }).current;
+  const state = useRef({ surfaceY: NaN, bedY: NaN, frame: 0, since: -Infinity, generation: 0, colors: { shallow: new Float32Array(3), deep: new Float32Array(4) } }).current;
   return useRef<WaterProbe>({
     sample(x, z) {
       if (state.frame++ % PROBE_INTERVAL_FRAMES !== 0) return;
@@ -35,12 +40,14 @@ export const useWaterProbe = (): WaterProbe => {
           if (!vd || generation !== state.generation) return;
           state.surfaceY = vd.waterHeight > vd.height ? vd.waterHeight : NaN;
           state.bedY = vd.height;
+          if (isDomainCommitted()) writeWaterColors(vd.waterBody, vd.waterBodyShare, vd.waterBody2, state.colors.shallow, state.colors.deep, 0, getActiveDomainConfig());
         })
         .finally(() => {
           state.since = -Infinity;
         });
     },
     surfaceOver: (y) => (y < state.bedY - UNDER_BED_MARGIN ? NaN : state.surfaceY),
+    colors: () => state.colors,
     clear() {
       state.generation++;
       state.surfaceY = NaN;

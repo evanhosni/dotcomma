@@ -79,6 +79,7 @@ export const BIOME_NOUNS: Readonly<Record<string, readonly string[]>> = {
   city:     ["ville","town","burg","heights","port","vale","gate","market","crossing","station","depot","yards","works","row","commons","terrace"],
   grass:    ["meadow","field","pasture","lea","sward","prairie","paddock","grassland","downs","glade","clearing","heath","steppe","savanna","range","fold"],
   dust:     ["dune","drift","trough","flatland","scar","ridge","sink","gully","wash","arroyo","playa","bluff","scarp","rise","knoll","sweep"],
+  oasis:    ["wadi","palmgrove","waterhole","cistern","well","fount","seep","haven","palm","refuge","caravan","garden","orchard","verdure","qanat","date"],
   salt:     ["pan","salina","crust","glare","shelf","bed","table","plate","brine","glaze","sheet","pavement","floor","tract","span","level"],
   tundra:   ["moor","fell","bog","frost","waste","barren","reach","slope","bank","brae","ledge","lowland","mire","marsh","moss","stretch"],
   mountain: ["peak","summit","crag","spire","horn","tor","pinnacle","arete","massif","pass","saddle","col","cirque","aiguille","dome","crest"],

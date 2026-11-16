@@ -6,7 +6,7 @@ import { RoadMarkers } from "../../../../../../../objects/dressing/road-markers"
 import { FreewayLamps, StreetLamps } from "../../../../../../../objects/dressing/street-lamps";
 import { TrafficLights } from "../../../../../../../objects/dressing/traffic-lights";
 import { Rooms, Sewers } from "../../../../../../underground";
-import { Actor, Biome, content, Material } from "../../../../../../components";
+import { Actor, Biome, content, Material, Quays } from "../../../../../../components";
 import { CITY_BIOME_ID } from "../../../../../../constants";
 import { CityLights } from "./lights";
 import fragmentShader from "./shaders/fragment.glsl";
@@ -18,8 +18,10 @@ import fragmentShader from "./shaders/fragment.glsl";
  *  on the wall — against any neighbor, and the smaller side wins at a wall. Heights inherit it, so
  *  the plateau holds to the wall and the neighbor ramps. */
 export const CityBiome = content(
-  <Biome id={CITY_BIOME_ID} name="city" joinable blendWidth={2}>
+  <Biome id={CITY_BIOME_ID} name="city" joinable blendWidth={2} additionalHeight={0}>
     <Material shader={fragmentShader} textures={{ sidewalktexture: "sidewalk.png", roadtexture: "road.jpg" }} />
+    {/* Its own height code walls every river crossing it (the quays, the waterfront belt). */}
+    <Quays />
 
     <Sewers>
       <Rooms>

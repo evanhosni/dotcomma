@@ -1,8 +1,9 @@
 import { DayNightLights } from "../../../lighting/DayNightLights";
-import { RiverSplashes } from "../../../objects/particles/river-splashes";
+import { WaterfallBoulders } from "../../../objects/dressing/waterfall-boulders";
+import { WaterfallSplashes } from "../../../objects/particles/waterfall-splashes";
 import { PostProcessing } from "../../../vfx/PostProcessing";
 import { QUANTIZATION_GRID } from "../../constants";
-import { Domain, Material, Skybox, Terrain } from "../../components";
+import { Domain, Material, Skybox, Terrain, Water } from "../../components";
 import { DayNightCycle } from "../../sky/DayNightCycle";
 import { FastTravel } from "./FastTravel";
 import { CityRegion } from "./regions/city";
@@ -18,7 +19,7 @@ import { SnowRegion } from "./regions/snow";
  */
 export const OverworldDomain = (
   <Domain>
-    <Terrain seed="123" />
+    <Terrain seed="123" defaultAdditionalHeight={20} />
     <Material riverTexture="potato_sack.jpg" />
     <Skybox />
 
@@ -26,8 +27,11 @@ export const OverworldDomain = (
     <DayNightCycle />
     <PostProcessing quantization={QUANTIZATION_GRID} />
     <FastTravel />
-    {/* The spray of every river fall, wherever a river crosses: rivers belong to no biome. */}
-    <RiverSplashes />
+    {/* What every water shares, and what follows every water whatever body it is: every fall's boulders and spray. */}
+    <Water>
+      <WaterfallBoulders />
+      <WaterfallSplashes />
+    </Water>
 
     <CityRegion />
     <DesertRegion />

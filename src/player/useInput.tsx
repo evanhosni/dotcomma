@@ -8,7 +8,7 @@ export interface InputState {
   sprint: boolean;
   jump: boolean;
   /** Descend in noclip. */
-  control: boolean;
+  descend: boolean;
 }
 
 /** `KeyboardEvent.code` → the action it holds. */
@@ -19,8 +19,7 @@ const KEY_BINDINGS: Readonly<Record<string, keyof InputState>> = {
   KeyD: "right",
   ShiftLeft: "sprint",
   Space: "jump",
-  ControlLeft: "control",
-  ControlRight: "control",
+  KeyC: "descend",
 };
 
 /** A ref of the actions currently held, updated from document key events (never re-renders). */
@@ -32,7 +31,7 @@ export const useInput = (): React.MutableRefObject<InputState> => {
     right: false,
     sprint: false,
     jump: false,
-    control: false,
+    descend: false,
   });
 
   useEffect(() => {

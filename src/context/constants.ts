@@ -8,4 +8,5 @@ export const DEV_TOGGLES = [
   { flag: "tintSkirts", label: "tint skirts", key: "F3" },
   { flag: "noLodFade", label: "no LOD fade", key: "F4" },
   { flag: "flashlight", label: "flashlight", key: "F5" },
+  { flag: "permanentDaylight", label: "permanent daylight", key: "F6" },
 ] as const;

@@ -7,7 +7,7 @@ import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
 import { warp } from "../noise";
-import { drawnRiverSurface, riverFieldAt, riverSample } from "../rivers/riverField";
+import { drawnRiverSurface, riverFieldAt, riverSample } from "../water/rivers/field";
 import { computeVertexData } from "../vertexCompute";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_DECK_LIFT, BRIDGE_EDGE_GUARD, BRIDGE_MAX_ALONG_SHORE, BRIDGE_MAX_LENGTH, BRIDGE_MAX_TURN, BRIDGE_MIN_CROSSING, BRIDGE_MIN_T_SIN, BRIDGE_TEE_OFF_HOST, BRIDGE_WET_SAMPLE, deckWidth } from "./constants";
 import { boxApart, CROSSING_NEAR_PAD, CROSSING_OVERLAP_CLEAR, crossingBefore, crossingGeom, crossingGeoms, failedCrossing, FILL_CLEAR, FILL_SNAP_MAX, geomBoxApart, mouthBefore, mouthRank, resolveCrossingChain } from "./crossings";

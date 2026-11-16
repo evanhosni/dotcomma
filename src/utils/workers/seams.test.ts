@@ -6,7 +6,10 @@ import { DOMAIN_CONFIGS } from "../../world/domains";
 import { CITY_BIOME_ID } from "../../world/constants";
 import { combineSlotWeights, computeVertexDataRaw, getBiomeSlots, initCompute, riverbedSlotHalvesOf, unwarp, warp } from "./vertexCompute";
 import { biomeSiteAt, getBiomeContext, getBiomeGrid, getZoneWalls } from "./voronoi";
-import { riverbedSdfAt } from "./zoneBlend";
+import { ownReliefDist, riverbedSdfAt } from "./zoneBlend";
+import { riverGapAt } from "./water/rivers/field";
+import { biomeIdOf } from "../../world/content/config";
+import { RIVER_BED_TEXTURE_HALF } from "../../world/shaders/constants";
 
 const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
 
@@ -112,6 +115,60 @@ describe("terrain seams", () => {
   });
 });
 
+describe("the relief join (zoneBlend.ts joinReliefs)", () => {
+  afterAll(() => initCompute(OVERWORLD_CONFIG));
+
+  it("runs dust's dunes on across a dust|oasis wall as if the two were one biome", () => {
+    initCompute(OVERWORLD_CONFIG);
+    const dust = biomeIdOf(OVERWORLD_CONFIG, "dust");
+    const oasis = biomeIdOf(OVERWORLD_CONFIG, "oasis");
+    // Points on dust|oasis walls, far from every wall out of the join, with no water near — no channel,
+    // and no river or pond within the field's outer read (the walls and the valleys reach that far; the
+    // dry oasis turned to dust carries rivers).
+    const dry = (x: number, z: number): boolean => {
+      const w = warp(x, z);
+      return riverGapAt(w.x, w.z) === Infinity;
+    };
+    const points: { x: number; z: number; h: number }[] = [];
+    const seen = new Set<string>();
+    for (let ix = -60; ix <= 60 && points.length < 200; ix++) {
+      for (let iz = -60; iz <= 60 && points.length < 200; iz++) {
+        const site = biomeSiteAt(ix, iz);
+        if (site.zone.biome.id !== oasis) continue;
+        for (const w of getZoneWalls(site, getBiomeGrid(site))) {
+          const ids = [w.a.biome.id, w.b.biome.id];
+          if (!ids.includes(dust) || !ids.includes(oasis)) continue;
+          const key = [w.sx, w.sz, w.ex, w.ez].map(Math.round).sort().join();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          for (let t = 0.1; t < 1; t += 0.2) {
+            const at = unwarp(w.sx + (w.ex - w.sx) * t, w.sz + (w.ez - w.sz) * t);
+            const v = computeVertexDataRaw(at.x, at.z);
+            if ((v.biomeId !== dust && v.biomeId !== oasis) || ownReliefDist < 200 || v.distanceToRiverCenter < Infinity || !Number.isNaN(v.waterHeight) || !dry(at.x, at.z)) continue;
+            points.push({ ...at, h: v.height });
+          }
+        }
+      }
+    }
+    expect(points.length).toBeGreaterThan(20);
+    for (const p of points) expect(largestStepNear(p.x, p.z, 1, 0.25)).toBeLessThan(0.01);
+    // The same world with every oasis cell a dust cell: no wall there at all.
+    const merged = {
+      ...OVERWORLD_CONFIG,
+      regions: OVERWORLD_CONFIG.regions.map((r) => ({ ...r, biomes: r.biomes.map((b) => (b.id === oasis ? { ...r.biomes.find((d) => d.id === dust)!, weight: b.weight } : b)) })),
+    };
+    initCompute(merged);
+    let compared = 0;
+    for (const p of points) {
+      const v = computeVertexDataRaw(p.x, p.z);
+      if (v.distanceToRiverCenter < Infinity || !Number.isNaN(v.waterHeight) || !dry(p.x, p.z)) continue;
+      compared++;
+      expect(Math.abs(v.height - p.h)).toBeLessThan(1e-6);
+    }
+    expect(compared).toBeGreaterThan(20);
+  });
+});
+
 describe("the riverbed's texture across a crisp wall", () => {
   it("is what a vertex in the bed's reach carries (a city|tundra wall crossing a river)", () => {
     // (-7028, 8642): the wall meets a river 24 factor-1 units from its centerline.
@@ -159,12 +216,14 @@ describe("the riverbed's texture across a crisp wall", () => {
       riverbedSdfAt(w.x, w.z, ctx.zoneWalls, ctx.zone, v.biomeSdf, out);
       return combineSlotWeights(out, bedHalves)[city];
     };
-    // 4u inside and outside: the ground is all city / none, the bed's texture still mid-fade.
-    expect(bedCity(-4)).toBeGreaterThan(0.6);
-    expect(bedCity(-4)).toBeLessThan(0.98);
-    expect(bedCity(4)).toBeGreaterThan(0.02);
-    expect(bedCity(4)).toBeLessThan(0.4);
-    expect(bedCity(-20)).toBeGreaterThan(0.99);
-    expect(bedCity(20)).toBeLessThan(0.01);
+    // Half the bed's half-width inside and outside: the ground is all city / none, the bed's texture
+    // still mid-fade; whole 2.5 half-widths out.
+    const h = RIVER_BED_TEXTURE_HALF;
+    expect(bedCity(-h / 2)).toBeGreaterThan(0.6);
+    expect(bedCity(-h / 2)).toBeLessThan(0.98);
+    expect(bedCity(h / 2)).toBeGreaterThan(0.02);
+    expect(bedCity(h / 2)).toBeLessThan(0.4);
+    expect(bedCity(-2.5 * h)).toBeGreaterThan(0.99);
+    expect(bedCity(2.5 * h)).toBeLessThan(0.01);
   });
 });

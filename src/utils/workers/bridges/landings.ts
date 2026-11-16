@@ -8,7 +8,7 @@ import { PointCache } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { computeVertexDataRaw } from "../flattenPads";
 import { warp } from "../noise";
-import { riverFieldAt, riverSample } from "../rivers/riverField";
+import { riverFieldAt, riverSample } from "../water/rivers/field";
 import { computeVertexData } from "../vertexCompute";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_CUT_FLUSH, BRIDGE_MIN_T_SIN } from "./constants";
 import { axisAt, bridgeRampLength, pathMiters, pointAt } from "./deckGeometry";

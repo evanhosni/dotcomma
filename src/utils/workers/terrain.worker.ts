@@ -8,13 +8,15 @@
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "CHUNK_BUILT", id, heights, biomeSdf, biomePresence (count × slots, interleaved),
  *          slots, riverBed, distRoad, distFreeway, freewayAlong, normals,
- *          waterHeights (NaN = none) + waterDepths + waterFlow (x/z pairs) | null when the chunk has no water, snowDepths | null, colliderHeights? }
+ *          waterHeights (NaN = none) + waterDepths + waterFlow (x/z pairs) + waterShallow (RGB) + waterDeep
+ *          (RGB + depth) | null when the chunk has no water, snowDepths | null, colliderHeights? }
  */
 
 import { DomainConfig, initCompute, computeVertexData, computeVertexDataFar, getBiomeSlots, setDeckCutSpacing } from "./vertexCompute";
 import { RIVER_BED_FAR } from "../../world/shaders/constants";
 import { snowCoverOf, terrainSnowDepthFrom } from "./snow/snowDrift";
 import { snowBiomeIds } from "./snow/params";
+import { writeWaterColors } from "./water/material";
 
 let initialized = false;
 
@@ -113,8 +115,8 @@ self.onmessage = (e: MessageEvent) => {
     const n: number = segments + 1;
     const count = n * n;
     const half = chunkSize / 2;
-    // Far visual-only LODs skip flatten pads and the freeway runs, the farthest the river field too
-    // (computeVertexDataFar, LODLevel.carvesRivers, CLAUDE.md). A collider LOD always carves, and cuts
+    // Far visual-only LODs skip flatten pads and the freeway runs; the farthest reads the coarse far river
+    // field instead of the real one (computeVertexDataFar, LODLevel.carvesRivers, CLAUDE.md). A collider LOD always carves, and cuts
     // the ground under decks unless its LOD says not to (LODLevel.cutsDecks).
     const cut = cutsDecks !== false;
     const compute = visualOnly
@@ -146,6 +148,8 @@ self.onmessage = (e: MessageEvent) => {
     const waterHeights = new Float32Array(count);
     const waterDepths = new Float32Array(count);
     const waterFlow = new Float32Array(count * 2);
+    const waterShallow = new Float32Array(count * 3);
+    const waterDeep = new Float32Array(count * 4);
     const snowCover = snow ? new Float32Array(count) : null;
     let hasWater = false;
 
@@ -168,6 +172,7 @@ self.onmessage = (e: MessageEvent) => {
         waterDepths[i] = result.waterDepth;
         waterFlow[i * 2] = result.waterFlowX;
         waterFlow[i * 2 + 1] = result.waterFlowZ;
+        writeWaterColors(result.waterBody, result.waterBodyShare, result.waterBody2, waterShallow, waterDeep, i);
         if (result.waterDepth > 0) hasWater = true;
         if (snowCover) snowCover[i] = snowCoverOf(result);
       }
@@ -188,7 +193,7 @@ self.onmessage = (e: MessageEvent) => {
       freewayAlong.buffer,
       normals.buffer,
     ];
-    if (hasWater) transfer.push(waterHeights.buffer, waterDepths.buffer, waterFlow.buffer);
+    if (hasWater) transfer.push(waterHeights.buffer, waterDepths.buffer, waterFlow.buffer, waterShallow.buffer, waterDeep.buffer);
     if (colliderHeights) transfer.push(colliderHeights.buffer);
     if (snowDepths) transfer.push(snowDepths.buffer);
     (self as any).postMessage(
@@ -208,6 +213,8 @@ self.onmessage = (e: MessageEvent) => {
         waterHeights: hasWater ? waterHeights : null,
         waterDepths: hasWater ? waterDepths : null,
         waterFlow: hasWater ? waterFlow : null,
+        waterShallow: hasWater ? waterShallow : null,
+        waterDeep: hasWater ? waterDeep : null,
         snowDepths,
         colliderHeights,
       },

@@ -1,15 +1,14 @@
 import type { RootState } from "@react-three/fiber";
 import { smoothstep } from "../../utils/math";
-import { AXIS_LIFT, DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_BAND, SHAFT_HOLE_INSET } from "../../utils/workers/underground/constants";
-import { mouthCutCeiling, mouthFootprintRadius } from "../../utils/workers/underground/tunnelField";
+import { DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_BAND, SHAFT_HOLE_INSET } from "../../utils/workers/underground/constants";
+import { mouthCutCeiling, mouthFootprintCells, mouthFootprintRadius, mouthLightY } from "../../utils/workers/underground/tunnelField";
 import { TunnelSpace } from "../../utils/workers/underground/tunnelSpace";
-import type { MouthPiece, SkirtMask, TunnelEntrance, UndergroundChunk } from "../../utils/workers/underground/types";
+import type { MouthPiece, SkirtMask, UndergroundChunk } from "../../utils/workers/underground/types";
 import { LOD_FADE_SECONDS } from "../terrain/lodSwaps";
 import { lod1ShareAt } from "../terrain";
 import { setLod1Sites } from "../terrain/lodQuadtree";
 import { MAX_TERRAIN_HOLES, MAX_TUNNEL_MASKS, setTerrainHoles, type TerrainHole, type TunnelMask } from "../shaders/terrainHoles";
 import { WORLD_CHUNK_SIZE } from "../chunks/types";
-import { driveFarMouths } from "./farMouths";
 import { isOpen, onToggle } from "./toggles";
 
 /**
@@ -17,7 +16,7 @@ import { isOpen, onToggle } from "./toggles";
  * (utils/workers/underground/tunnelSpace.ts: the probe, the floor, the manhole columns, the liquid —
  * the same answers the server's NPCs move by), plus the client's own: the skirt masks, the mouths, and
  * the ONE per-frame driver every mounted tunnel feature calls (it runs once per frame whoever calls
- * first): the terrain's openings, the LOD1 sites, the entrance fades and the far mouths.
+ * first): the terrain's openings, the LOD1 sites and the entrance fades.
  */
 
 /** The cut set is re-picked every so many frames, or at once when the loaded set or a fade changed. */
@@ -27,13 +26,12 @@ const MASK_REACH = 600;
 /** An entrance fade moves at most one LOD fade per LOD fade: never faster than the swap under it. */
 const FADE_RATE = 1 / LOD_FADE_SECONDS;
 
+/** A mouth whose footprint reaches a loaded chunk: its entrance can show. */
 interface MouthRecord {
-  id: string;
-  /** From any chunk listing it (the same from every chunk). */
-  mouth: UndergroundChunk["entranceMouths"][number];
-  entrance: TunnelEntrance;
   piece: MouthPiece;
-  /** Every footprint chunk loaded: a LOD1 site (driveSites). */
+  /** Every streaming chunk ("minX,minZ") its footprint spans. */
+  cells: string[];
+  /** Every one of them loaded: a LOD1 site (driveSites). */
   sited: boolean;
 }
 
@@ -41,7 +39,9 @@ export const playerTunnels = new TunnelSpace(isOpen);
 const chunks = new Set<UndergroundChunk>();
 let masks: SkirtMask[] = [];
 let mouths = new Map<string, MouthRecord>();
-/** The dressing chunk keys ("minX,minZ") loaded, per style. */
+/** Every mouth of the loaded chunks' systems: each lights the tunnels around it. */
+let lightMouths: MouthPiece[] = [];
+/** The streaming chunk keys ("minX,minZ") loaded, of any style. */
 const loadedCells = new Set<string>();
 let version = 0;
 const fades = new Map<string, number>();
@@ -53,9 +53,13 @@ let lastPickVersion = -1;
 let lastPickFrame = -Infinity;
 let fadesMoved = false;
 
+/** The streaming chunk key of a tunnel chunk ("minX,minZ"). */
+const cellKeyOfChunk = (chunk: UndergroundChunk): string => `${chunk.centerX - WORLD_CHUNK_SIZE / 2},${chunk.centerZ - WORLD_CHUNK_SIZE / 2}`;
+
 /** Rebuilds the client's merged sets (masks, mouths) after the loaded set changed. */
 const rebuild = (): void => {
   const nextMouths = new Map<string, MouthRecord>();
+  const lights = new Map<string, MouthPiece>();
   const maskKeys = new Set<string>();
   const nextMasks: SkirtMask[] = [];
   for (const c of chunks) {
@@ -65,22 +69,21 @@ const rebuild = (): void => {
       maskKeys.add(k);
       nextMasks.push(m);
     }
-    for (const em of c.entranceMouths) {
-      if (nextMouths.has(em.id)) continue;
-      const entrance = c.systemEntrances.find((e) => e.id === em.id);
-      const piece = c.pieces.find((p): p is MouthPiece => p.kind === "mouth" && p.id === em.id);
-      if (entrance && piece) nextMouths.set(em.id, { id: em.id, mouth: em, entrance, piece, sited: false });
+    const cell = cellKeyOfChunk(c);
+    for (const m of c.mouths) {
+      if (!lights.has(m.id)) lights.set(m.id, m);
+      if (nextMouths.has(m.id)) continue;
+      const cells = mouthFootprintCells(m);
+      if (cells.includes(cell)) nextMouths.set(m.id, { piece: m, cells, sited: false });
     }
   }
   masks = nextMasks;
   mouths = nextMouths;
+  lightMouths = Array.from(lights.values());
   version++;
 };
 
-/** The dressing chunk key an entrance's footprint list names ("minX,minZ"). */
-const cellKeyOfChunk = (chunk: UndergroundChunk): string => `${chunk.centerX - WORLD_CHUNK_SIZE / 2},${chunk.centerZ - WORLD_CHUNK_SIZE / 2}`;
-
-/** Whether the dressing chunk ("minX,minZ") is loaded, of any style: what a border cap draws against. */
+/** Whether the streaming chunk ("minX,minZ") is loaded, of any style: what a border cap draws against. */
 export const isCellLoaded = (key: string): boolean => loadedCells.has(key);
 
 export const registerChunk = (chunk: UndergroundChunk): void => {
@@ -107,22 +110,20 @@ export const unregisterChunk = (chunk: UndergroundChunk): void => {
 /** A toggle changes a closed manhole's shaft top for the probe: the compiled fields are stale. */
 onToggle(() => playerTunnels.invalidateFields());
 
-/** The daylight reaching a point in a tunnel from the loaded entrances — the mesher's rule for its
- *  vertices (underground/chunkMesh.ts daylightAt) without the ground term: full within an entrance's
- *  near reach, gone by its far one. What the player's personal light judges the dark by. 1 when
- *  nothing is loaded (above ground, as far as the tunnels know). */
+/** The daylight reaching a point in a tunnel from the loaded openings — the mesher's rule for its
+ *  vertices (underground/assembly.ts daylightAt) without the ground term: full within a mouth's or a
+ *  manhole's near reach of its light point, gone by its far one. What the player's personal light judges
+ *  the dark by. 1 when nothing is loaded (above ground, as far as the tunnels know). */
 export const entranceDaylightAt = (x: number, y: number, z: number): number => {
   if (chunks.size === 0) return 1;
   let light = 0;
-  for (const e of playerTunnels.entrances.values()) {
-    const mouth = e.kind === "mouth" ? mouths.get(e.id)?.piece : undefined;
-    const far = e.kind === "mouth" ? DAYLIGHT_MOUTH_FAR : DAYLIGHT_MANHOLE_FAR;
-    const near = e.kind === "mouth" ? DAYLIGHT_MOUTH_NEAR : DAYLIGHT_MANHOLE_NEAR;
-    const ly = mouth ? mouth.oy + AXIS_LIFT * mouth.r0 : e.y;
-    if (Math.abs(e.x - x) > far || Math.abs(e.z - z) > far || Math.abs(ly - y) > far) continue;
-    const v = 1 - smoothstep(near, far, Math.hypot(e.x - x, ly - y, e.z - z));
+  const add = (lx: number, ly: number, lz: number, near: number, far: number): void => {
+    if (Math.abs(lx - x) > far || Math.abs(lz - z) > far || Math.abs(ly - y) > far) return;
+    const v = 1 - smoothstep(near, far, Math.hypot(lx - x, ly - y, lz - z));
     if (v > light) light = v;
-  }
+  };
+  for (const e of playerTunnels.entrances.values()) add(e.x, e.y, e.z, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MANHOLE_FAR);
+  for (const m of lightMouths) add(m.ox, mouthLightY(m), m.oz, DAYLIGHT_MOUTH_NEAR, DAYLIGHT_MOUTH_FAR);
   return light;
 };
 
@@ -137,17 +138,10 @@ const driveSites = (): void => {
   const sites: { x: number; z: number }[] = [];
   const siteIds: string[] = [];
   for (const r of mouths.values()) {
-    let loaded = true;
-    for (const cell of r.mouth.cells) {
-      if (!loadedCells.has(cell)) {
-        loaded = false;
-        break;
-      }
-    }
-    r.sited = loaded;
-    if (loaded) {
-      sites.push({ x: r.entrance.x, z: r.entrance.z });
-      siteIds.push(r.id);
+    r.sited = r.cells.every((cell) => loadedCells.has(cell));
+    if (r.sited) {
+      sites.push({ x: r.piece.ox, z: r.piece.oz });
+      siteIds.push(r.piece.id);
     }
   }
   const key = siteIds.sort().join("|");
@@ -164,11 +158,12 @@ const driveFades = (delta: number): void => {
   driveSites();
   const step = FADE_RATE * delta;
   for (const r of mouths.values()) {
-    const target = r.sited ? lod1ShareAt(r.entrance.x, r.entrance.z, 2 * r.piece.r0) : 0;
-    const current = fades.get(r.id) ?? 0;
+    const m = r.piece;
+    const target = r.sited ? lod1ShareAt(m.ox, m.oz, 2 * m.r0) : 0;
+    const current = fades.get(m.id) ?? 0;
     const next = Math.abs(target - current) <= step ? target : current + Math.sign(target - current) * step;
     if (next !== current) {
-      fades.set(r.id, next);
+      fades.set(m.id, next);
       fadesMoved = true;
     }
   }
@@ -179,12 +174,12 @@ const driveFades = (delta: number): void => {
 const pickHoles = (camX: number, camZ: number): void => {
   const holes: (TerrainHole & { d: number })[] = [];
   for (const s of playerTunnels.shafts) {
-    holes.push({ kind: "shaft", id: s.id, ax: s.x, ay: s.bottom, az: s.z, bx: s.x, by: s.street + 1, bz: s.z, radius: s.radius - SHAFT_HOLE_INSET, share: 1, capHeight: 0, band: 0, d: Math.hypot(s.x - camX, s.z - camZ) });
+    holes.push({ kind: "shaft", id: s.id, ax: s.x, ay: s.bottom, az: s.z, bx: s.x, by: s.street + 1, bz: s.z, radius: s.radius - SHAFT_HOLE_INSET, share: 1, capHeight: 0, band: 0, lightY: 0, d: Math.hypot(s.x - camX, s.z - camZ) });
   }
   for (const r of mouths.values()) {
-    const fade = fades.get(r.id) ?? 0;
-    if (fade <= 0) continue;
     const m = r.piece;
+    const fade = fades.get(m.id) ?? 0;
+    if (fade <= 0) continue;
     holes.push({
       kind: "mouth",
       id: m.id,
@@ -198,6 +193,7 @@ const pickHoles = (camX: number, camZ: number): void => {
       share: fade,
       capHeight: mouthCutCeiling(m),
       band: FOOTPRINT_BAND,
+      lightY: mouthLightY(m),
       d: Math.hypot(m.ox - camX, m.oz - camZ),
     });
   }
@@ -226,5 +222,4 @@ export const driveUnderground = (state: RootState, delta: number): void => {
     lastPickFrame = frame;
     pickHoles(x, z);
   }
-  driveFarMouths(state.camera, entranceFadeOf);
 };

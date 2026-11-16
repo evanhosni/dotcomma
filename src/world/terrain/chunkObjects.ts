@@ -58,18 +58,18 @@ export const createChunkPlane = (lod: LODLevel, material: THREE.Material): THREE
   return plane;
 };
 
-/** Drops a chunk's water surface back into the geometry pool (it shares the terrain's LOD family). */
+/** Drops a chunk's water surface back into the water grids' pool. */
 export const releaseWater = (chunk: Chunk) => {
   if (!chunk.water) return;
   chunk.plane.remove(chunk.water);
-  releaseGeometry(chunk.lod, chunk.water.geometry);
+  releaseGeometry(chunk.lod, chunk.water.geometry, "water");
   chunk.water = null;
 };
 
 /** The chunk's water mesh: a CHILD of its plane, so it shares the transform, visibility and LOD swaps. */
 export const ensureWaterMesh = (chunk: Chunk): THREE.Mesh => {
   if (chunk.water) return chunk.water;
-  const water = new THREE.Mesh(acquireGeometry(chunk.lod), getWaterMaterial());
+  const water = new THREE.Mesh(acquireGeometry(chunk.lod, "water"), getWaterMaterial());
   water.castShadow = false;
   water.receiveShadow = false;
   water.renderOrder = WATER_RENDER_ORDER;

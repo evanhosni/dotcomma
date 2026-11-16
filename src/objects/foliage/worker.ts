@@ -1,6 +1,8 @@
 /** Typed wrappers over the ONE foliage worker (utils/workers/foliage.worker.ts), shared by every field. */
 
 import { DomainConfig } from "../../utils/workers/vertexCompute";
+import type { WaterZone } from "../../utils/workers/water/types";
+import type { WaterBodyRef } from "../../world/components/context";
 import { createWorkerClient } from "../../utils/workers/workerClient";
 
 /** One chunk request (utils/workers/foliage.worker.ts reads this type too). */
@@ -17,8 +19,17 @@ export interface FoliageChunkParams {
   slopeBlend: number;
   /** Normalized street units from the nearest road centerline (freeways included) — blades stay off asphalt. */
   roadDistanceRange?: [number, number];
-  /** Only under water, `height` = the blade height (it is cut to the water's depth). */
-  underwater?: { height: number };
+  /** Mounted in a body of water (<Lake>, <Rivers>, <Pond>): placed by the share of the water there that
+   *  body owns (VertexResult.waterBody) instead of by a biome's weight. */
+  waterBody?: WaterBodyRef;
+  /** Where it grows by the water over the ground (the one zone rule, water/params.ts): submerged blades
+   *  are cut to the depth (`bladeHeight` tall uncut); unset = dry ground only. */
+  zone?: WaterZone;
+  bladeHeight?: number;
+  /** Submerged blades: the shallowest water, the tip's clearance under the surface, the least cut share. */
+  submergedMinDepth: number;
+  tipClearance: number;
+  minCutScale: number;
 }
 
 export interface FoliageChunkResult {

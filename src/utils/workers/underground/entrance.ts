@@ -1,53 +1,25 @@
 /**
- * A cave ENTRANCE is one surface: inside each mouth's footprint the mesher meshes "air above the
- * drawn ground OR in the tunnel" as one isosurface, so ground and walls share vertices. Every
- * footprint triangle is the PATCH, drawn by the terrain's own program: its ground vertices snapped
- * exactly onto the drawn ground with the terrain's normals, every vertex carrying the terrain's
- * per-vertex fields plus its rock share and daylight. Three-free.
+ * The ENTRANCE PATCH's buffers: every nets triangle inside a mouth's footprint, ground and walls as one
+ * surface, drawn by the terrain's own program (its ENTRANCE variant). So each vertex carries what the
+ * terrain worker gives a terrain vertex — the biome slots, the riverbed, the roads, and the water depth
+ * or MINUS the snow depth in one attribute (world/terrain/chunkGeometry.ts) — plus `entranceRock`: the
+ * rock share (0 on the drawn ground, 1 by PATCH_ROCK_FADE under it) and the daylight. Three-free.
  */
 
-import { WORLD_CHUNK_SIZE } from "../../../objects/dressing/types";
-import { RIVER_BED_FAR } from "../../../world/shaders/constants";
 import { smoothstep } from "../../math";
-import { terrainSnowDepth } from "../snow/snowDrift";
+import { RIVER_BED_FAR } from "../../../world/shaders/constants";
+import { snowBiomeIds } from "../snow/params";
+import { snowCoverOf, terrainSnowDepthFrom } from "../snow/snowDrift";
+import { BIOME_SDF_FAR } from "../zoneBlend";
 import { computeVertexData, getBiomeSlots } from "../vertexCompute";
 import { PATCH_ROCK_FADE } from "./constants";
 import { drawnGroundAt, drawnNormalAt } from "./drawnGround";
-import { insideMouthFootprint, mouthFootprintBounds } from "./tunnelField";
-import type { EntrancePatch, MouthPiece } from "./types";
+import type { EntrancePatch } from "./types";
 
-/** Two vec4 attributes per field: world/terrain/material.ts MAX_BIOME_SLOTS (not imported: it holds Three). */
-const MAX_BIOME_SLOTS = 8;
+/** The terrain program's biome slots: two vec4 attributes each (world/terrain/material.ts MAX_BIOME_SLOTS). */
+const SLOTS = 8;
 
-/** The mouths whose footprint reaches a square. */
-export const mouthsReaching = (mouths: readonly MouthPiece[], minX: number, minZ: number, maxX: number, maxZ: number): MouthPiece[] =>
-  mouths.filter((m) => {
-    const b = mouthFootprintBounds(m);
-    return b.minX <= maxX && b.maxX >= minX && b.minZ <= maxZ && b.maxZ >= minZ;
-  });
-
-/** Every dressing chunk ("minX,minZ") a mouth's footprint spans. */
-export const footprintCells = (m: MouthPiece): string[] => {
-  const b = mouthFootprintBounds(m);
-  const cells: string[] = [];
-  for (let cx = Math.floor(b.minX / WORLD_CHUNK_SIZE); cx <= Math.floor(b.maxX / WORLD_CHUNK_SIZE); cx++) {
-    for (let cz = Math.floor(b.minZ / WORLD_CHUNK_SIZE); cz <= Math.floor(b.maxZ / WORLD_CHUNK_SIZE); cz++) {
-      cells.push(`${cx * WORLD_CHUNK_SIZE},${cz * WORLD_CHUNK_SIZE}`);
-    }
-  }
-  return cells;
-};
-
-export const inAnyFootprint = (mouths: readonly MouthPiece[], x: number, z: number): boolean => {
-  for (const m of mouths) if (insideMouthFootprint(m, x, z)) return true;
-  return false;
-};
-
-
-/** The rock share of a vertex `depth` under the ground: 0 on the ground, 1 by PATCH_ROCK_FADE under it. */
-const rockShareAt = (depth: number): number => smoothstep(0, PATCH_ROCK_FADE, depth);
-
-/** The patch's buffers: one entry per patch vertex, in the order `vertices` lists them. */
+/** A patch vertex: absolute position, its normal (the drawn ground's on the ground), its daylight. */
 export interface PatchVertex {
   x: number;
   y: number;
@@ -55,89 +27,71 @@ export interface PatchVertex {
   nx: number;
   ny: number;
   nz: number;
-  ground: boolean;
-  daylight: number;
+  light: number;
 }
 
-/** Builds the entrance patch for `vertices` (positions absolute; written relative to the chunk's
- *  center), with the terrain's per-vertex fields evaluated at each one. */
-export const buildPatch = (vertices: readonly PatchVertex[], indices: number[], centerX: number, centerZ: number): EntrancePatch => {
+/** The patch from its vertices and triangles; positions relative to (centerX, 0, centerZ) like the walls. */
+export const buildPatch = (vertices: readonly PatchVertex[], indices: readonly number[], centerX: number, centerZ: number): EntrancePatch => {
   const n = vertices.length;
   const slots = getBiomeSlots().length;
-  const positions = new Float32Array(n * 3);
-  const normals = new Float32Array(n * 3);
-  const biomeSdf0 = new Float32Array(n * 4);
-  const biomeSdf1 = new Float32Array(n * 4);
-  const biomePresence0 = new Float32Array(n * 4);
-  const biomePresence1 = new Float32Array(n * 4);
-  const riverbedSdf0 = new Float32Array(n * 4);
-  const riverbedSdf1 = new Float32Array(n * 4);
-  const riverBedDistance = new Float32Array(n);
-  const distanceToRoadCenter = new Float32Array(n);
-  const distanceToFreewayCenter = new Float32Array(n);
-  const freewayAlong = new Float32Array(n);
-  const underwaterDepth = new Float32Array(n);
-  const entranceRock = new Float32Array(n * 2);
+  const snow = snowBiomeIds().length > 0;
+  const patch: EntrancePatch = {
+    positions: new Float32Array(n * 3),
+    normals: new Float32Array(n * 3),
+    indices: new Uint32Array(indices),
+    biomeSdf0: new Float32Array(n * 4),
+    biomeSdf1: new Float32Array(n * 4),
+    biomePresence0: new Float32Array(n * 4),
+    biomePresence1: new Float32Array(n * 4),
+    riverbedSdf0: new Float32Array(n * 4),
+    riverbedSdf1: new Float32Array(n * 4),
+    riverBedDistance: new Float32Array(n),
+    distanceToRoadCenter: new Float32Array(n),
+    distanceToFreewayCenter: new Float32Array(n),
+    freewayAlong: new Float32Array(n),
+    underwaterDepth: new Float32Array(n),
+    entranceRock: new Float32Array(n * 2),
+  };
   for (let i = 0; i < n; i++) {
     const v = vertices[i];
-    const ground = drawnGroundAt(v.x, v.z);
-    let y = v.y;
-    let nx = v.nx;
-    let ny = v.ny;
-    let nz = v.nz;
-    if (v.ground) {
-      y = ground;
-      const dn = drawnNormalAt(v.x, v.z);
-      nx = dn.x;
-      ny = dn.y;
-      nz = dn.z;
-    }
-    positions[i * 3] = v.x - centerX;
-    positions[i * 3 + 1] = y;
-    positions[i * 3 + 2] = v.z - centerZ;
-    normals[i * 3] = nx;
-    normals[i * 3 + 1] = ny;
-    normals[i * 3 + 2] = nz;
+    patch.positions[i * 3] = v.x - centerX;
+    patch.positions[i * 3 + 1] = v.y;
+    patch.positions[i * 3 + 2] = v.z - centerZ;
+    patch.normals[i * 3] = v.nx;
+    patch.normals[i * 3 + 1] = v.ny;
+    patch.normals[i * 3 + 2] = v.nz;
+    patch.entranceRock[i * 2] = smoothstep(0, PATCH_ROCK_FADE, drawnGroundAt(v.x, v.z) - v.y);
+    patch.entranceRock[i * 2 + 1] = v.light;
+    // The scratch buffers of this result are overwritten by the next call (and by the snow's reads):
+    // everything is copied out first.
     const vd = computeVertexData(v.x, v.z);
-    for (let s = 0; s < MAX_BIOME_SLOTS; s++) {
-      const sdf = s < slots ? vd.biomeSdf[s] : -1e4;
-      const pres = s < slots ? vd.biomePresence[s] : -1e4;
-      const bed = s < slots ? vd.riverbedSdf[s] : -1e4;
+    for (let s = 0; s < SLOTS; s++) {
+      const sdf = s < slots ? vd.biomeSdf[s] : -BIOME_SDF_FAR;
+      const presence = s < slots ? vd.biomePresence[s] : -BIOME_SDF_FAR;
+      const bed = s < slots ? vd.riverbedSdf[s] : -BIOME_SDF_FAR;
+      const o = i * 4 + (s & 3);
       if (s < 4) {
-        biomeSdf0[i * 4 + s] = sdf;
-        biomePresence0[i * 4 + s] = pres;
-        riverbedSdf0[i * 4 + s] = bed;
+        patch.biomeSdf0[o] = sdf;
+        patch.biomePresence0[o] = presence;
+        patch.riverbedSdf0[o] = bed;
       } else {
-        biomeSdf1[i * 4 + s - 4] = sdf;
-        biomePresence1[i * 4 + s - 4] = pres;
-        riverbedSdf1[i * 4 + s - 4] = bed;
+        patch.biomeSdf1[o] = sdf;
+        patch.biomePresence1[o] = presence;
+        patch.riverbedSdf1[o] = bed;
       }
     }
-    riverBedDistance[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
-    distanceToRoadCenter[i] = vd.distanceToRoadCenter;
-    distanceToFreewayCenter[i] = vd.distanceToFreewayCenter;
-    freewayAlong[i] = vd.freewayAlong;
-    const water = vd.waterHeight > vd.height ? vd.waterHeight - vd.height : 0;
-    const slope = (Math.acos(Math.min(1, Math.max(-1, ny))) * 180) / Math.PI;
-    underwaterDepth[i] = water > 0 ? water : -terrainSnowDepth(v.x, v.z, vd, slope);
-    entranceRock[i * 2] = rockShareAt(ground - y);
-    entranceRock[i * 2 + 1] = v.daylight;
+    patch.riverBedDistance[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
+    patch.distanceToRoadCenter[i] = vd.distanceToRoadCenter;
+    patch.distanceToFreewayCenter[i] = vd.distanceToFreewayCenter;
+    patch.freewayAlong[i] = vd.freewayAlong;
+    const waterDepth = vd.waterDepth;
+    const height = vd.height;
+    const cover = snow ? snowCoverOf(vd) : 0;
+    if (waterDepth > 0) patch.underwaterDepth[i] = waterDepth;
+    else if (cover > 0) {
+      const ny = drawnNormalAt(v.x, v.z).y;
+      patch.underwaterDepth[i] = -terrainSnowDepthFrom(v.x, v.z, height, cover, (Math.acos(Math.min(1, ny)) * 180) / Math.PI);
+    }
   }
-  return {
-    positions,
-    normals,
-    indices: new Uint32Array(indices),
-    biomeSdf0,
-    biomeSdf1,
-    biomePresence0,
-    biomePresence1,
-    riverbedSdf0,
-    riverbedSdf1,
-    riverBedDistance,
-    distanceToRoadCenter,
-    distanceToFreewayCenter,
-    freewayAlong,
-    underwaterDepth,
-    entranceRock,
-  };
+  return patch;
 };

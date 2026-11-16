@@ -3,6 +3,7 @@ import { getServerTime } from "../../net/connection";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { isMainRenderFrame } from "../../vfx/frameCap";
+import { useDevContext } from "../../context/DevContext";
 import {
   DAY_DURATION_MS,
   DAY_NIGHT_CYCLE_TRANSITION_MS,
@@ -51,6 +52,7 @@ export const DayNightCycle = ({
   transitionMs = DAY_NIGHT_CYCLE_TRANSITION_MS,
 }: DayNightCycleProps) => {
   const { camera, gl, scene } = useThree();
+  const { permanentDaylight } = useDevContext();
 
   const groupRef = useRef<THREE.Group>(null);
   const sunRef = useRef<THREE.Mesh>(null);
@@ -120,8 +122,8 @@ export const DayNightCycle = ({
     const group = groupRef.current;
     if (!group) return;
 
-    // Server clock, so every player sees the same time of day.
-    const blend = nightBlendAt(getServerTime(), dayDurationMs, nightDurationMs, transitionMs);
+    // Server clock, so every player sees the same time of day (devmode's permanent daylight pins it to noon locally).
+    const blend = permanentDaylight ? 0 : nightBlendAt(getServerTime(), dayDurationMs, nightDurationMs, transitionMs);
     setNightBlend(blend);
     tickWindowLights(delta * 1000);
 

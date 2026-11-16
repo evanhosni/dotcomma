@@ -2,13 +2,16 @@
  * THE tunnels' air as one signed field, negative in the air: pieces of one path union plainly, paths
  * of one system meet in a smooth junction, formations are subtracted (rock), separate systems simply
  * overlap. A function of the point alone — a piece counts only inside its bounds padded by FIELD_REACH
- * (else as that far) and the wall noise only within NOISE_SHELL of a wall — so every brick, chunk and
- * thread reads the same bits from whatever subset of pieces holds the air. Three-free.
+ * (else as that far) and the wall noise only within NOISE_SHELL of a
+ * wall — so every brick, chunk and thread reads the same bits from whatever subset of pieces holds the
+ * air. Also a mouth's geometry (its outline, floor, footprint and cut), which the bulge, the terrain's
+ * openings, the rocks and the bodies all read. Three-free.
  */
 
 import Noise from "noise-ts";
 import { seedRand, smoothMin } from "../../math";
 import type { RectXZ } from "../../math/types";
+import { WORLD_CHUNK_SIZE } from "../../../world/chunks/types";
 import {
   AXIS_LIFT,
   CHANNEL_DEPTH,
@@ -27,8 +30,8 @@ import {
   SECTION_FULL_SHARE,
   SHAFT_ABOVE_STREET,
   SHAFT_CLOSED_BELOW_STREET,
-  WALL_BULGE,
   TUBE_CAP_FLOOR_RISE,
+  WALL_BULGE,
 } from "./constants";
 import type { Bounds3, BoxPiece, ConePiece, MouthPiece, PipePiece, RoomPiece, ShaftPiece, TubePiece, TunnelPiece } from "./types";
 
@@ -38,8 +41,7 @@ const noise = new Noise(seedRand("tunnel walls"));
 
 // Both noises are functions of the point alone, and one field evaluation asks several pieces (every
 // consecutive tube of a path reaches most samples near it) at the SAME point: the last point's value is
-// kept, keyed on the exact coordinates, so a sample pays each noise once (simplex3 was 18% of a cave
-// chunk; DECISIONS.md).
+// kept, keyed on the exact coordinates, so a sample pays each noise once (DECISIONS.md).
 let wallAtX = NaN;
 let wallAtY = NaN;
 let wallAtZ = NaN;
@@ -47,6 +49,7 @@ let wallValue = 0;
 let bumpAtX = NaN;
 let bumpAtZ = NaN;
 let bumpValue = 0;
+
 
 /** Wall noise in [−1, 1]: big lumps (~13u) plus a little grain (~3.3u). */
 export const wallNoise = (x: number, y: number, z: number): number => {
@@ -57,6 +60,7 @@ export const wallNoise = (x: number, y: number, z: number): number => {
   return (wallValue = 0.78 * noise.simplex3(x / 13, y / 13, z / 13) + 0.22 * noise.simplex3(x / 3.3, y / 3.3, z / 3.3));
 };
 
+
 /** Floor bumps in [0, 1] (they only ever raise the floor). */
 const bumpNoise = (x: number, z: number): number => {
   if (x === bumpAtX && z === bumpAtZ) return bumpValue;
@@ -65,71 +69,111 @@ const bumpNoise = (x: number, z: number): number => {
   return (bumpValue = 0.5 + 0.5 * noise.simplex3(x / 5.5, 17.3, z / 5.5));
 };
 
-/** The ragged outline of a mouth: four sines of the angle about the axis and the distance along it,
- *  in [−1, 1]. */
-const mouthRimNoise = (theta: number, along: number, phase: number): number =>
-  0.25 *
-  (Math.sin(3 * theta + phase) +
-    Math.sin(5 * theta - 2 * phase + 0.4 * along) +
-    Math.sin(2 * theta + 0.7 * along + 1.7 * phase) +
-    Math.sin(7 * theta - 0.3 * along + 0.6 * phase));
+/** A mouth's ragged outline in [−1, 1]: four sines of the angle about the axis and the distance along it. */
+const rimNoise = (theta: number, along: number, phase: number): number =>
+  0.25 * (Math.sin(2 * theta + 0.7 * along + 1.7 * phase) + Math.sin(3 * theta + phase) + Math.sin(5 * theta + 0.4 * along - 2 * phase) + Math.sin(7 * theta - 0.3 * along + 0.6 * phase));
 
 // ── Mouth geometry ─────────────────────────────────────────────────────────
 
+const clampAlong = (m: MouthPiece, along: number): number => (along < 0 ? 0 : along > m.length ? m.length : along);
+
+/** The section's plain radius at `along`: r0 over its first SECTION_FULL_SHARE, then a linear taper to r1. */
 export const mouthRadiusAt = (m: MouthPiece, along: number): number => {
   const full = m.length * SECTION_FULL_SHARE;
   if (along <= full) return m.r0;
   if (along >= m.length) return m.r1;
-  return m.r0 + ((m.r1 - m.r0) * (along - full)) / (m.length - full);
+  return m.r0 + (m.r1 - m.r0) * ((along - full) / (m.length - full));
 };
 
-/** The section's floor: the opening's, descending at the grade into the mountain. */
-export const mouthFloorAt = (m: MouthPiece, along: number): number => m.oy - m.grade * (along < 0 ? 0 : along > m.length ? m.length : along);
+/** The section's floor at `along` (held level past either end). */
+export const mouthFloorAt = (m: MouthPiece, along: number): number => m.oy - m.grade * clampAlong(m, along);
 
-/** (along, lateral) of a world point in the mouth's frame: along from the opening into the mountain. */
+/** How much of the ragged swing is left at `along`: all of it at the opening, none at the inner end. */
+const raggedShare = (m: MouthPiece, along: number): number => 1 - clampAlong(m, along) / m.length;
+
+/** The widest outline at `along`: the radius swung fully out by what is left of the rim's amplitude. */
+export const mouthWidthAt = (m: MouthPiece, along: number): number => mouthRadiusAt(m, along) * (1 + MOUTH_RIM_AMP * raggedShare(m, along));
+
+/** The height of the point a mouth's daylight falls from: its axis over the opening (x/z are the opening's).
+ *  The ONE daylight rule's source — the walls' baked daylight, the player's light and the actors' alike. */
+export const mouthLightY = (m: MouthPiece): number => m.oy + AXIS_LIFT * m.r0;
+
+/** Along the section from the opening, and across it (to the left of its direction). */
 export const mouthAlong = (m: MouthPiece, x: number, z: number): number => (x - m.ox) * m.dx + (z - m.oz) * m.dz;
 export const mouthLateral = (m: MouthPiece, x: number, z: number): number => -(x - m.ox) * m.dz + (z - m.oz) * m.dx;
 
-/** Horizontal distance from a point to the section's segment (opening → inner end). */
+/** Horizontal distance from a point to the section (the segment from the opening to the inner end). */
 export const mouthSectionDistance = (m: MouthPiece, x: number, z: number): number => {
-  let a = mouthAlong(m, x, z);
-  if (a < 0) a = 0;
-  else if (a > m.length) a = m.length;
-  const px = m.ox + m.dx * a;
-  const pz = m.oz + m.dz * a;
-  return Math.sqrt((x - px) * (x - px) + (z - pz) * (z - pz));
+  const a = clampAlong(m, mouthAlong(m, x, z));
+  return Math.hypot(x - (m.ox + m.dx * a), z - (m.oz + m.dz * a));
 };
 
-/** Horizontal distance from a rectangle to the section (0 when the section crosses it): the section's
- *  distance from the opening's point clamped into the rectangle. */
-export const mouthSectionDistanceToRect = (m: MouthPiece, rect: RectXZ): number =>
-  mouthSectionDistance(m, Math.max(rect.minX, Math.min(rect.maxX, m.ox)), Math.max(rect.minZ, Math.min(rect.maxZ, m.oz)));
+/** Horizontal distance from the section to a rectangle (0 where they meet): for two convex shapes apart,
+ *  the nearest pair has an end of the segment or a corner of the rectangle in it. */
+export const mouthSectionDistanceToRect = (m: MouthPiece, rect: RectXZ): number => {
+  const ax = m.ox;
+  const az = m.oz;
+  const bx = m.ox + m.dx * m.length;
+  const bz = m.oz + m.dz * m.length;
+  // Clipped to the rectangle (Liang–Barsky): any part inside means they meet.
+  let t0 = 0;
+  let t1 = 1;
+  const ex = bx - ax;
+  const ez = bz - az;
+  const clip = (p: number, q: number): boolean => {
+    if (p === 0) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+  if (clip(-ex, ax - rect.minX) && clip(ex, rect.maxX - ax) && clip(-ez, az - rect.minZ) && clip(ez, rect.maxZ - az) && t0 <= t1) return 0;
+  const toRect = (x: number, z: number): number => Math.hypot(Math.max(rect.minX - x, 0, x - rect.maxX), Math.max(rect.minZ - z, 0, z - rect.maxZ));
+  return Math.min(
+    toRect(ax, az),
+    toRect(bx, bz),
+    mouthSectionDistance(m, rect.minX, rect.minZ),
+    mouthSectionDistance(m, rect.maxX, rect.minZ),
+    mouthSectionDistance(m, rect.minX, rect.maxZ),
+    mouthSectionDistance(m, rect.maxX, rect.maxZ),
+  );
+};
 
-/** The footprint: the capsule along the section FOOTPRINT_PAD wider than the widest outline. */
+/** A mouth's FOOTPRINT: the capsule along its section this much wider than its widest outline — where
+ *  the entrance is one surface of ground and walls, and the terrain is cut (less the band). */
 export const mouthFootprintRadius = (m: MouthPiece): number => m.width + FOOTPRINT_PAD;
-export const insideMouthFootprint = (m: MouthPiece, x: number, z: number, inset = 0): boolean =>
-  mouthSectionDistance(m, x, z) < mouthFootprintRadius(m) - inset;
+export const insideMouthFootprint = (m: MouthPiece, x: number, z: number, inset = 0): boolean => mouthSectionDistance(m, x, z) < mouthFootprintRadius(m) - inset;
+export const mouthFootprintReaches = (m: MouthPiece, rect: RectXZ): boolean => mouthSectionDistanceToRect(m, rect) < mouthFootprintRadius(m);
 
-/** The ceiling of a mouth's terrain CUT over its section's floor: the terrain discards under it inside the
- *  footprint (world/shaders/terrainHoles.ts mouthCutsHere), so the mountain above the opening stays. */
+/** Every streaming chunk ("minX,minZ") the footprint spans: the entrance shows once all are loaded. */
+export const mouthFootprintCells = (m: MouthPiece): string[] => {
+  const r = mouthFootprintRadius(m);
+  const bx = m.ox + m.dx * m.length;
+  const bz = m.oz + m.dz * m.length;
+  const s = WORLD_CHUNK_SIZE;
+  const cells: string[] = [];
+  for (let ix = Math.floor((Math.min(m.ox, bx) - r) / s); ix <= Math.floor((Math.max(m.ox, bx) + r) / s); ix++) {
+    for (let iz = Math.floor((Math.min(m.oz, bz) - r) / s); iz <= Math.floor((Math.max(m.oz, bz) + r) / s); iz++) {
+      if (mouthFootprintReaches(m, { minX: ix * s, minZ: iz * s, maxX: ix * s + s, maxZ: iz * s + s })) cells.push(`${ix * s},${iz * s}`);
+    }
+  }
+  return cells;
+};
+
+/** How high over the section's floor the terrain is cut inside the footprint (the terrain shader's
+ *  `mouthCutsHere`, from the hole's capHeight): the opening's crown and its hood, no more. */
 export const mouthCutCeiling = (m: MouthPiece): number => m.r0 * MOUTH_HOLE_CAP_RADII + MOUTH_HOLE_CAP_PAD;
 
-/** Whether a point is in a mouth's cut: in its footprint, under the cut's ceiling over the section's floor
- *  there. The entrance PATCH draws the ground and walls there, and is their collider: a body's step leaves
- *  the terrain heightfield out inside it (physics/tunnelRules.ts), which draws nothing there. */
-export const insideMouthCut = (m: MouthPiece, x: number, y: number, z: number): boolean => {
-  if (!insideMouthFootprint(m, x, z)) return false;
-  const a = Math.max(0, Math.min(m.length, mouthAlong(m, x, z)));
-  return y < m.oy - m.grade * a + mouthCutCeiling(m);
-};
+/** Whether a point is in a mouth's CUT: its footprint, under the cut's ceiling over the section's floor
+ *  (the same numbers the terrain shader cuts by). There the entrance patch is the ground. */
+export const insideMouthCut = (m: MouthPiece, x: number, y: number, z: number): boolean =>
+  y < mouthFloorAt(m, mouthAlong(m, x, z)) + mouthCutCeiling(m) && insideMouthFootprint(m, x, z);
 
-/** The horizontal extents of a footprint. */
-export const mouthFootprintBounds = (m: MouthPiece): RectXZ => {
-  const r = mouthFootprintRadius(m);
-  const ix = m.ox + m.dx * m.length;
-  const iz = m.oz + m.dz * m.length;
-  return { minX: Math.min(m.ox, ix) - r, maxX: Math.max(m.ox, ix) + r, minZ: Math.min(m.oz, iz) - r, maxZ: Math.max(m.oz, iz) + r };
-};
 
 // ── Bounds ────────────────────────────────────────────────────────────────
 
@@ -167,7 +211,7 @@ export type PieceInput = Unbounded<TunnelPiece>;
 export const pieceBounds = (p: PieceInput): Bounds3 => {
   switch (p.kind) {
     case "tube": {
-      const r = Math.max(p.ra * (1 + p.bulgeA), p.rb * (1 + p.bulgeB)) + FLOOR_BUMP;
+      const r = Math.max(p.ra, p.rb) * (1 + Math.max(p.bulgeA, p.bulgeB)) + FLOOR_BUMP;
       return segmentBounds(p.ax, p.ay + AXIS_LIFT * p.ra, p.az, p.bx, p.by + AXIS_LIFT * p.rb, p.bz, r);
     }
     case "mouth": {
@@ -200,136 +244,128 @@ export const pieceBounds = (p: PieceInput): Bounds3 => {
 
 export const withBounds = <P extends PieceInput>(p: P): P & { bounds: Bounds3 } => ({ ...p, bounds: pieceBounds(p) });
 
+
 // ── Per-piece fields ──────────────────────────────────────────────────────
 
+/** A tube: round about its axis (AXIS_LIFT radii over the floor, the radius interpolated along it), cut
+ *  flat at the floor, which rises at TUBE_CAP_FLOOR_RISE past either end into the round cap. The wall
+ *  lumps and floor bumps grow with bulge/bump, drawn only within NOISE_SHELL of the wall or floor. */
 const tubeField = (p: TubePiece): FieldFn => {
-  const ayAxis = p.ay + AXIS_LIFT * p.ra;
-  const byAxis = p.by + AXIS_LIFT * p.rb;
-  const dx = p.bx - p.ax;
-  const dy = byAxis - ayAxis;
-  const dz = p.bz - p.az;
-  const l2 = dx * dx + dy * dy + dz * dz || 1;
-  const len = Math.sqrt(l2);
-  const { ax, az, ay, by, ra, rb, bulgeA, bulgeB, bumpA, bumpB } = p;
+  const { ax, az, ra, rb, bulgeA, bulgeB, bumpA, bumpB } = p;
+  const ay = p.ay + AXIS_LIFT * ra;
+  const ex = p.bx - ax;
+  const ey = p.by + AXIS_LIFT * rb - ay;
+  const ez = p.bz - az;
+  const len2 = ex * ex + ey * ey + ez * ez;
+  const len = Math.sqrt(len2);
+  const floorY = p.ay;
+  const floorRise = p.by - p.ay;
   return (x, y, z) => {
-    let t = ((x - ax) * dx + (y - ayAxis) * dy + (z - az) * dz) / l2;
-    // How far past an end, into the round cap (TUBE_CAP_FLOOR_RISE).
-    const past = t < 0 ? -t * len : t > 1 ? (t - 1) * len : 0;
-    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    let t = len2 > 0 ? ((x - ax) * ex + (y - ay) * ey + (z - az) * ez) / len2 : 0;
+    let over = 0;
+    if (t < 0) {
+      over = -t * len;
+      t = 0;
+    } else if (t > 1) {
+      over = (t - 1) * len;
+      t = 1;
+    }
     const r = ra + (rb - ra) * t;
-    const px = x - (ax + dx * t);
-    const py = y - (ayAxis + dy * t);
-    const pz = z - (az + dz * t);
-    let d = Math.sqrt(px * px + py * py + pz * pz) - r;
-    if (d > -NOISE_SHELL && d < NOISE_SHELL) {
-      const bulge = (bulgeA + (bulgeB - bulgeA) * t) * r;
-      if (bulge > 0) d += bulge * wallNoise(x, y, z);
-    }
-    let floor = ay + (by - ay) * t + past * TUBE_CAP_FLOOR_RISE;
-    const over = y - floor;
-    if (over > -NOISE_SHELL && over < NOISE_SHELL) {
-      const bump = bumpA + (bumpB - bumpA) * t;
-      if (bump > 0) floor += bump * bumpNoise(x, z);
-    }
-    const cut = floor - y;
+    const dx = x - (ax + ex * t);
+    const dy = y - (ay + ey * t);
+    const dz = z - (az + ez * t);
+    let d = Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
+    const bulge = bulgeA + (bulgeB - bulgeA) * t;
+    if (bulge > 0 && d < NOISE_SHELL && d > -NOISE_SHELL) d += r * bulge * wallNoise(x, y, z);
+    let cutY = floorY + floorRise * t + TUBE_CAP_FLOOR_RISE * over;
+    const bump = bumpA + (bumpB - bumpA) * t;
+    if (bump > 0 && y - cutY < NOISE_SHELL && cutY - y < NOISE_SHELL) cutY += bump * bumpNoise(x, z);
+    const cut = cutY - y;
     return cut > d ? cut : d;
   };
 };
 
+/** A mouth: its section, round at the local radius swung by the ragged outline, cut flat at its floor,
+ *  closed past the opening's plane (the open air in front is the ground's, in the mesher) and past the
+ *  inner end's (the trunk's first tube carries on with the same section). */
 const mouthField = (m: MouthPiece): FieldFn => {
-  const { ox, oy, oz, dx, dz, length, grade, phase } = m;
-  const full = length * SECTION_FULL_SHARE;
-  const r0 = m.r0;
-  const r1 = m.r1;
+  const { ox, oz, dx, dz, length, phase } = m;
   return (x, y, z) => {
     const rx = x - ox;
     const rz = z - oz;
     const a = rx * dx + rz * dz;
     const l = -rx * dz + rz * dx;
-    const ac = a < 0 ? 0 : a > length ? length : a;
-    const r = ac <= full ? r0 : r0 + ((r1 - r0) * (ac - full)) / (length - full);
-    const floor = oy - grade * ac;
-    const axisY = floor + AXIS_LIFT * r;
-    const h = y - axisY;
-    const radial = Math.sqrt(l * l + h * h);
-    let ragged = 1;
-    if (a < length) {
-      const fade = a < 0 ? 1 : 1 - a / length;
-      ragged += MOUTH_RIM_AMP * fade * mouthRimNoise(Math.atan2(h, l), a, phase);
-    }
-    let d = radial - r * ragged;
-    if (a < 0) d = d > -a ? d : -a;
-    else if (a > length) d = d > a - length ? d : a - length;
+    const along = a < 0 ? 0 : a > length ? length : a;
+    const r = mouthRadiusAt(m, along);
+    const floor = m.oy - m.grade * along;
+    const h = y - (floor + AXIS_LIFT * r);
+    const swing = MOUTH_RIM_AMP * (1 - along / length);
+    // The rim runs on past the opening (its sines read the unclamped distance along).
+    const outline = swing > 0 ? r * (1 + swing * rimNoise(Math.atan2(h, l), a, phase)) : r;
+    let d = Math.sqrt(l * l + h * h) - outline;
     const cut = floor - y;
-    return cut > d ? cut : d;
+    if (cut > d) d = cut;
+    if (a < 0 && -a > d) d = -a;
+    else if (a > length && a - length > d) d = a - length;
+    return d;
   };
-};
-
-/** Whether a point stands IN FRONT of a mouth's opening: past its opening plane (outside the section, where
- *  the field closes the mouth with rock) yet within the opening's outline carried outward and over its sill.
- *  That rock is fictitious — it is the open air over the ground before the opening — so the player's rock
- *  backstops must not push out of it: they pushed a player stepping out of a mouth back in, every frame
- *  (Evan, the cave at (-3604, -17706); MEASURED in the page). */
-export const inFrontOfMouthOpening = (m: MouthPiece, x: number, y: number, z: number): boolean => {
-  const rx = x - m.ox;
-  const rz = z - m.oz;
-  const a = rx * m.dx + rz * m.dz;
-  if (a >= 0 || y < m.oy) return false;
-  const l = -rx * m.dz + rz * m.dx;
-  const h = y - (m.oy + AXIS_LIFT * m.r0);
-  const ragged = 1 + MOUTH_RIM_AMP * mouthRimNoise(Math.atan2(h, l), a, m.phase);
-  return Math.sqrt(l * l + h * h) < m.r0 * ragged;
 };
 
 const mouthFields = new WeakMap<MouthPiece, FieldFn>();
 
-/** Whether a point (the ground, for the rim rocks) lies in the mouth's air: inside its ragged opening. */
+/** Whether a point lies in a mouth's own air (inside its ragged outline, over its floor, within its section). */
 export const insideMouthOpening = (m: MouthPiece, x: number, y: number, z: number): boolean => {
   let f = mouthFields.get(m);
-  if (!f) mouthFields.set(m, (f = mouthField(m)));
+  if (!f) {
+    f = mouthField(m);
+    mouthFields.set(m, f);
+  }
   return f(x, y, z) < 0;
 };
 
+/** A room: a wide capsule between its floor points' axes, its wall lumped by half a passage's, cut flat
+ *  at its floor and bumped like one. */
 const roomField = (p: RoomPiece): FieldFn => {
-  const R = p.radius;
-  const ayAxis = p.ay + AXIS_LIFT * R;
-  const byAxis = p.by + AXIS_LIFT * R;
-  const dx = p.bx - p.ax;
-  const dy = byAxis - ayAxis;
-  const dz = p.bz - p.az;
-  const l2 = dx * dx + dy * dy + dz * dz || 1;
-  const { ax, az, ay, by } = p;
+  const { ax, ay, az, radius } = p;
+  const lift = AXIS_LIFT * radius;
+  const ex = p.bx - ax;
+  const ey = p.by - ay;
+  const ez = p.bz - az;
+  const len2 = ex * ex + ey * ey + ez * ez;
+  const bulge = radius * WALL_BULGE * 0.5;
   return (x, y, z) => {
-    let t = ((x - ax) * dx + (y - ayAxis) * dy + (z - az) * dz) / l2;
+    let t = len2 > 0 ? ((x - ax) * ex + (y - ay - lift) * ey + (z - az) * ez) / len2 : 0;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
-    const px = x - (ax + dx * t);
-    const py = y - (ayAxis + dy * t);
-    const pz = z - (az + dz * t);
-    let d = Math.sqrt(px * px + py * py + pz * pz) - R;
-    if (d > -NOISE_SHELL && d < NOISE_SHELL) d += WALL_BULGE * 0.5 * R * wallNoise(x, y, z);
-    let floor = ay + (by - ay) * t;
-    const over = y - floor;
-    if (over > -NOISE_SHELL && over < NOISE_SHELL) floor += FLOOR_BUMP * bumpNoise(x, z);
-    const cut = floor - y;
+    const floor = ay + ey * t;
+    const dx = x - (ax + ex * t);
+    const dy = y - (floor + lift);
+    const dz = z - (az + ez * t);
+    let d = Math.sqrt(dx * dx + dy * dy + dz * dz) - radius;
+    if (d < NOISE_SHELL && d > -NOISE_SHELL) d += bulge * wallNoise(x, y, z);
+    let cutY = floor;
+    if (y - cutY < NOISE_SHELL && cutY - y < NOISE_SHELL) cutY += FLOOR_BUMP * bumpNoise(x, z);
+    const cut = cutY - y;
     return cut > d ? cut : d;
   };
 };
 
-/** A cone's distance (approximate outside its base): negative inside the rock it adds. */
+/** A formation's ROCK (negative inside): a vertical cone from its root, `radius` wide there, to its tip. */
 const coneField = (c: ConePiece): FieldFn => {
   const { x: cx, y: cy, z: cz, length, radius, dir } = c;
   return (x, y, z) => {
+    // Written out as the old field (sqrt, not hypot; t clamped after the divide): any reordering moves
+    // the formations' surfaces by ulps (DECISIONS.md "Restored after the rebuild").
     const along = (y - cy) * dir;
     const t = along / length;
-    const r = radius * (1 - (t < 0 ? 0 : t > 1 ? 1 : t));
     const px = x - cx;
     const pz = z - cz;
-    let d = Math.sqrt(px * px + pz * pz) - r;
+    let d = Math.sqrt(px * px + pz * pz) - radius * (1 - (t < 0 ? 0 : t > 1 ? 1 : t));
     if (along < 0) d = d > -along ? d : -along;
     else if (along > length) d = d > along - length ? d : along - length;
     return d;
   };
 };
+
 
 const boxField = (p: BoxPiece): FieldFn => {
   const { cx, cz, floor, height, halfX, halfZ, cos, sin } = p;
@@ -412,7 +448,8 @@ export interface FieldOptions {
 
 const shaftTopOf = (shaft: ShaftPiece, open: boolean): number => shaft.street + (open ? SHAFT_ABOVE_STREET : -SHAFT_CLOSED_BELOW_STREET);
 
-const pieceField = (p: TunnelPiece, options: FieldOptions): FieldFn | null => {
+
+const pieceField = (p: TunnelPiece, options: FieldOptions): FieldFn => {
   switch (p.kind) {
     case "tube":
       return tubeField(p);
@@ -421,7 +458,7 @@ const pieceField = (p: TunnelPiece, options: FieldOptions): FieldFn | null => {
     case "room":
       return roomField(p);
     case "cone":
-      return options.withCones === false ? null : coneField(p);
+      return coneField(p);
     case "box":
       return boxField(p);
     case "pipe":
@@ -431,75 +468,82 @@ const pieceField = (p: TunnelPiece, options: FieldOptions): FieldFn | null => {
   }
 };
 
+/** A piece ready to evaluate: its field and its bounds padded by FIELD_REACH (outside, it is not there). */
 interface CompiledPiece {
-  f: FieldFn;
-  b: Bounds3;
+  field: FieldFn;
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
 }
 
-/** Every piece's value: its field inside its bounds padded by FIELD_REACH, else FIELD_REACH. */
-const pieceValue = (c: CompiledPiece, x: number, y: number, z: number): number => {
-  const b = c.b;
-  if (
-    x < b.minX - FIELD_REACH ||
-    x > b.maxX + FIELD_REACH ||
-    y < b.minY - FIELD_REACH ||
-    y > b.maxY + FIELD_REACH ||
-    z < b.minZ - FIELD_REACH ||
-    z > b.maxZ + FIELD_REACH
-  )
-    return FIELD_REACH;
-  return c.f(x, y, z);
-};
+interface CompiledSystem {
+  /** Its paths in ascending id order (the smooth junction is not associative: every reader folds alike). */
+  paths: CompiledPiece[][];
+  cones: CompiledPiece[];
+}
 
-/**
- * The field over `pieces` (the subset of a system's pieces in reach of a region — the value is the
- * same from any subset holding the air; see the module comment). `omittedAir`: whether some air
- * piece was left out, so each system still reads FIELD_REACH where its listed pieces are far.
- */
+const compilePiece = (p: TunnelPiece, options: FieldOptions): CompiledPiece => ({
+  field: pieceField(p, options),
+  minX: p.bounds.minX - FIELD_REACH,
+  minY: p.bounds.minY - FIELD_REACH,
+  minZ: p.bounds.minZ - FIELD_REACH,
+  maxX: p.bounds.maxX + FIELD_REACH,
+  maxY: p.bounds.maxY + FIELD_REACH,
+  maxZ: p.bounds.maxZ + FIELD_REACH,
+});
+
+const outOfReach = (c: CompiledPiece, x: number, y: number, z: number): boolean => x < c.minX || x > c.maxX || y < c.minY || y > c.maxY || z < c.minZ || z > c.maxZ;
+
+/** The field of a set of pieces: per system, each path the plain minimum of its pieces (one out of reach
+ *  counts as FIELD_REACH), the paths joined by the smooth junction, the formations cut out of the result;
+ *  the systems' minimum, never past FIELD_REACH (rock as far as the field knows). Whatever subset holds
+ *  the air, the field's sign and its values within the junction's reach of the air read alike. */
 export const compileField = (pieces: readonly TunnelPiece[], options: FieldOptions = {}): FieldFn => {
-  interface SystemGroup {
-    paths: Map<number, CompiledPiece[]>;
-    cones: CompiledPiece[];
-  }
-  const systems = new Map<string, SystemGroup>();
+  const withCones = options.withCones ?? true;
+  const bySystem = new Map<string, { paths: Map<number, CompiledPiece[]>; cones: CompiledPiece[] }>();
   for (const p of pieces) {
-    const f = pieceField(p, options);
-    if (!f) continue;
-    let s = systems.get(p.system);
-    if (!s) systems.set(p.system, (s = { paths: new Map(), cones: [] }));
-    const c = { f, b: p.bounds };
-    if (p.kind === "cone") s.cones.push(c);
-    else {
-      let path = s.paths.get(p.path);
-      if (!path) s.paths.set(p.path, (path = []));
-      path.push(c);
+    if (p.kind === "cone" && !withCones) continue;
+    let s = bySystem.get(p.system);
+    if (!s) {
+      s = { paths: new Map(), cones: [] };
+      bySystem.set(p.system, s);
     }
+    const c = compilePiece(p, options);
+    if (p.kind === "cone") {
+      s.cones.push(c);
+      continue;
+    }
+    const path = s.paths.get(p.path);
+    if (path) path.push(c);
+    else s.paths.set(p.path, [c]);
   }
-  const groups = Array.from(systems.values(), (s) => ({ paths: Array.from(s.paths.values()), cones: s.cones }));
-  if (groups.length === 0) return () => FIELD_REACH;
+  const systems: CompiledSystem[] = [];
+  for (const s of bySystem.values()) {
+    const ids = Array.from(s.paths.keys()).sort((a, b) => a - b);
+    systems.push({ paths: ids.map((id) => s.paths.get(id)!), cones: s.cones });
+  }
   return (x, y, z) => {
     let total = FIELD_REACH;
-    for (let g = 0; g < groups.length; g++) {
-      const { paths, cones } = groups[g];
-      let sys = FIELD_REACH;
-      for (let i = 0; i < paths.length; i++) {
-        const path = paths[i];
-        let pv = FIELD_REACH;
-        for (let j = 0; j < path.length; j++) {
-          const v = pieceValue(path[j], x, y, z);
-          if (v < pv) pv = v;
+    for (const s of systems) {
+      let air = FIELD_REACH;
+      for (let k = 0; k < s.paths.length; k++) {
+        let nearest = FIELD_REACH;
+        for (const c of s.paths[k]) {
+          if (outOfReach(c, x, y, z)) continue;
+          const v = c.field(x, y, z);
+          if (v < nearest) nearest = v;
         }
-        sys = i === 0 ? pv : smoothMin(sys, pv, JUNCTION_BLEND);
+        air = k === 0 ? nearest : smoothMin(air, nearest, JUNCTION_BLEND);
       }
-      // A cone counts only inside its padded bounds (outside it adds nothing), so any subset of the
-      // cones that reach a point reads the same.
-      for (let i = 0; i < cones.length; i++) {
-        const b = cones[i].b;
-        if (x < b.minX - FIELD_REACH || x > b.maxX + FIELD_REACH || y < b.minY - FIELD_REACH || y > b.maxY + FIELD_REACH || z < b.minZ - FIELD_REACH || z > b.maxZ + FIELD_REACH) continue;
-        const v = -cones[i].f(x, y, z);
-        if (v > sys) sys = v;
+      for (const c of s.cones) {
+        if (outOfReach(c, x, y, z)) continue;
+        const rock = -c.field(x, y, z);
+        if (rock > air) air = rock;
       }
-      if (sys < total) total = sys;
+      if (air < total) total = air;
     }
     return total;
   };
@@ -507,59 +551,82 @@ export const compileField = (pieces: readonly TunnelPiece[], options: FieldOptio
 
 // ── Bricks ────────────────────────────────────────────────────────────────
 
-/** Distance from a box to a 3D point, 0 inside. */
-const boxPointDistance = (b: Bounds3, x: number, y: number, z: number): number => {
-  const dx = x < b.minX ? b.minX - x : x > b.maxX ? x - b.maxX : 0;
-  const dy = y < b.minY ? b.minY - y : y > b.maxY ? y - b.maxY : 0;
-  const dz = z < b.minZ ? b.minZ - z : z > b.maxZ ? z - b.maxZ : 0;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-};
+/** The distance from a point to a box (0 inside). */
+const boxPointDistance = (b: Bounds3, x: number, y: number, z: number): number =>
+  Math.hypot(Math.max(b.minX - x, 0, x - b.maxX), Math.max(b.minY - y, 0, y - b.maxY), Math.max(b.minZ - z, 0, z - b.maxZ));
 
-/** A lower bound of the distance from a box to a segment: the box's distance to the nearest of a few
- *  points of the segment, less how far any point of the segment can be from the nearest sampled one. */
+/** A LOWER bound of the distance from a box to a segment: the distance along the segment is convex, so a
+ *  golden-section search brackets its minimum, less what the bracket left over (the distance moves at
+ *  most the segment's length per unit of t). */
 const boxSegmentDistanceBound = (b: Bounds3, ax: number, ay: number, az: number, bx: number, by: number, bz: number): number => {
-  const len = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2 + (bz - az) ** 2);
-  const steps = Math.max(1, Math.ceil(len / 4));
-  let best = Infinity;
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const d = boxPointDistance(b, ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t);
-    if (d < best) best = d;
+  const ex = bx - ax;
+  const ey = by - ay;
+  const ez = bz - az;
+  const at = (t: number): number => boxPointDistance(b, ax + ex * t, ay + ey * t, az + ez * t);
+  const g = (Math.sqrt(5) - 1) / 2;
+  let lo = 0;
+  let hi = 1;
+  let c = hi - g * (hi - lo);
+  let d = lo + g * (hi - lo);
+  let fc = at(c);
+  let fd = at(d);
+  for (let k = 0; k < 24; k++) {
+    if (fc < fd) {
+      hi = d;
+      d = c;
+      fd = fc;
+      c = hi - g * (hi - lo);
+      fc = at(c);
+    } else {
+      lo = c;
+      c = d;
+      fc = fd;
+      d = lo + g * (hi - lo);
+      fd = at(d);
+    }
   }
-  return best - len / steps / 2;
+  const best = Math.min(fc, fd, at(0), at(1));
+  return best - Math.sqrt(ex * ex + ey * ey + ez * ez) * (hi - lo);
 };
 
-/** A SOUND lower bound of a piece's field over a box (cones only add rock: +Infinity). */
+/** A sound lower bound of a piece's air field over a box (formations only add rock: −Infinity, never
+ *  claimed; sewer pieces are never settled this way). */
 const pieceLowerBound = (p: TunnelPiece, box: Bounds3): number => {
   switch (p.kind) {
-    case "tube":
-      return boxSegmentDistanceBound(box, p.ax, p.ay + AXIS_LIFT * p.ra, p.az, p.bx, p.by + AXIS_LIFT * p.rb, p.bz) - Math.max(p.ra * (1 + p.bulgeA), p.rb * (1 + p.bulgeB));
-    case "mouth":
-      return (
-        boxSegmentDistanceBound(box, p.ox, p.oy + AXIS_LIFT * p.r0, p.oz, p.ox + p.dx * p.length, p.oy - p.grade * p.length + AXIS_LIFT * p.r1, p.oz + p.dz * p.length) -
-        p.width
-      );
+    case "tube": {
+      // The tube's distance is to a point of its axis (the caps: its ends), never nearer than the axis
+      // segment; the wall swings out by at most the larger radius's largest lump (the two interpolate
+      // apart, so their product can peak between the ends).
+      const swing = Math.max(p.ra, p.rb) * (1 + Math.max(p.bulgeA, p.bulgeB));
+      return boxSegmentDistanceBound(box, p.ax, p.ay + AXIS_LIFT * p.ra, p.az, p.bx, p.by + AXIS_LIFT * p.rb, p.bz) - swing;
+    }
+    case "mouth": {
+      // The axis bends where the taper starts; past either end the plane takes over, which at worst
+      // halves the bound.
+      const full = p.length * SECTION_FULL_SHARE;
+      const ax = p.ox;
+      const ay = p.oy + AXIS_LIFT * p.r0;
+      const az = p.oz;
+      const fx = p.ox + p.dx * full;
+      const fy = p.oy - p.grade * full + AXIS_LIFT * p.r0;
+      const fz = p.oz + p.dz * full;
+      const bx = p.ox + p.dx * p.length;
+      const by = p.oy - p.grade * p.length + AXIS_LIFT * p.r1;
+      const bz = p.oz + p.dz * p.length;
+      const d = Math.min(boxSegmentDistanceBound(box, ax, ay, az, fx, fy, fz), boxSegmentDistanceBound(box, fx, fy, fz, bx, by, bz)) - p.width;
+      return d > 0 ? d / 2 : d;
+    }
     case "room":
-      return boxSegmentDistanceBound(box, p.ax, p.ay + AXIS_LIFT * p.radius, p.az, p.bx, p.by + AXIS_LIFT * p.radius, p.bz) - p.radius * (1 + WALL_BULGE * 0.5);
-    case "cone":
-      return Infinity;
-    case "box": {
-      const pb = pieceBounds(p);
-      return Math.max(boxPointDistance(box, (pb.minX + pb.maxX) / 2, (pb.minY + pb.maxY) / 2, (pb.minZ + pb.maxZ) / 2) - Math.hypot(pb.maxX - pb.minX, pb.maxY - pb.minY, pb.maxZ - pb.minZ) / 2, -Infinity);
-    }
-    case "pipe": {
-      const lo = Math.min(p.floorA, p.floorB);
-      const hi = Math.max(p.floorA, p.floorB);
-      return boxSegmentDistanceBound(box, p.ax, lo + PIPE_AXIS_LIFT, p.az, p.bx, hi + PIPE_AXIS_LIFT, p.bz) - PIPE_RADIUS - CHANNEL_OVERRUN - (hi - lo);
-    }
-    case "shaft":
-      return boxSegmentDistanceBound(box, p.x, p.bottom, p.z, p.x, p.street + SHAFT_ABOVE_STREET, p.z) - p.radius;
+      return (
+        boxSegmentDistanceBound(box, p.ax, p.ay + AXIS_LIFT * p.radius, p.az, p.bx, p.by + AXIS_LIFT * p.radius, p.bz) - p.radius * (1 + WALL_BULGE * 0.5)
+      );
+    default:
+      return -Infinity;
   }
 };
 
-/** Whether a box is provably all rock: every piece's lower bound clears the junctions' deepest dip —
- *  each smooth junction can dip JUNCTION_BLEND / 4 under the pieces, and a system of P paths meets in
- *  P − 1 of them (the lists are small: the distinct paths are counted in place). */
+/** How far the smooth junctions can pull a system's field under its pieces' least value: P paths fold
+ *  P − 1 times, each at most a quarter of the blend. */
 export const rockDipOf = (pieces: readonly TunnelPiece[]): number => {
   const paths = new Map<string, Set<number>>();
   for (const p of pieces) {
@@ -568,25 +635,32 @@ export const rockDipOf = (pieces: readonly TunnelPiece[]): number => {
     if (!s) paths.set(p.system, (s = new Set()));
     s.add(p.path);
   }
-  let deepest = 1;
-  for (const s of paths.values()) if (s.size - 1 > deepest) deepest = s.size - 1;
-  return (JUNCTION_BLEND / 4) * deepest;
+  let dip = 0;
+  for (const s of paths.values()) dip = Math.max(dip, ((s.size - 1) * JUNCTION_BLEND) / 4);
+  return dip;
 };
 
+/** Whether the field is provably rock over the whole box: every piece in reach stays clear of it by more
+ *  than the junctions' dip. */
 export const boxIsRock = (pieces: readonly TunnelPiece[], box: Bounds3, dip = rockDipOf(pieces)): boolean => {
-  for (const p of pieces) if (pieceLowerBound(p, box) <= dip + 1e-6) return false;
+  // A piece out of reach counts as FIELD_REACH: the junctions must not be able to pull that to the air.
+  if (dip >= FIELD_REACH) return false;
+  for (const p of pieces) {
+    if (p.kind === "cone" || !boundsTouch(p.bounds, box, FIELD_REACH)) continue;
+    if (pieceLowerBound(p, box) - dip <= 0) return false;
+  }
   return true;
 };
 
-/** Whether any piece's air can reach a box: its bounds touch it. */
+/** Whether any piece's air can reach the box (by the pieces' bounds, which hold their air). */
 export const airMayReach = (pieces: readonly TunnelPiece[], box: Bounds3): boolean => {
   for (const p of pieces) if (p.kind !== "cone" && boundsTouch(p.bounds, box)) return true;
   return false;
 };
 
-/** The pieces whose padded bounds touch a box: the subset a brick's field needs. */
-export const piecesTouching = (pieces: readonly TunnelPiece[], box: Bounds3, pad = FIELD_REACH): TunnelPiece[] =>
-  pieces.filter((p) => boundsTouch(p.bounds, box, pad));
+/** The pieces whose field reaches a box padded by `pad`: a brick's subset. */
+export const piecesTouching = (pieces: readonly TunnelPiece[], box: Bounds3, pad = FIELD_REACH): TunnelPiece[] => pieces.filter((p) => boundsTouch(p.bounds, box, pad));
+
 
 // ── Probing ───────────────────────────────────────────────────────────────
 

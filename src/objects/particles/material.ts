@@ -28,6 +28,8 @@ export const SPLASH_LOOK: ParticleLook = { color: [0.92, 0.94, 0.97], opacity: 0
 export const BUBBLE_LOOK: ParticleLook = { color: [0.75, 0.88, 1.0], opacity: 0.6, gravity: 0, wobble: { amplitude: 0.12, rate: 3.2 }, style: "bubble" };
 /** The mist hanging over white water: a few large, faint, slow quads per emitter, drifting with the air. */
 export const MIST_LOOK: ParticleLook = { color: [0.93, 0.95, 0.98], opacity: 0.22, gravity: 0, wobble: { amplitude: 0.6, rate: 0.7 }, style: "mist" };
+/** Steam off a pond: the mist's haze, whiter and denser, rising in tall slow plumes. */
+export const STEAM_LOOK: ParticleLook = { color: [0.96, 0.97, 0.98], opacity: 0.42, gravity: 0, wobble: { amplitude: 1.2, rate: 0.45 }, style: "mist" };
 
 const STYLE_INDEX: Record<ParticleLook["style"], number> = { spray: 0, bubble: 1, mist: 2 };
 

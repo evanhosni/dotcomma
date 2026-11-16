@@ -67,10 +67,17 @@ export const rawBiomeSiteAt = (ix: number, iz: number): RawBiomeSite => {
   return site;
 };
 /** The zone a cached site rolled: the region of the nearest region-grid site, then the biome roll
- *  over that region's list. */
+ *  over that region's list, each biome taking its `weight` of it in order — a cumulative pick, which
+ *  with every weight 1 is exactly floor(roll × count). */
 const zoneOfRawSite = (site: RawBiomeSite, rGrid: VoronoiCell[]): Zone => {
   const region: SerializedRegion = nearestCell(site, rGrid).element;
-  return zonesByRegion.get(region)![Math.floor(site.roll * region.biomes.length)];
+  const { biomes } = region;
+  let total = 0;
+  for (const b of biomes) total += b.weight ?? 1;
+  const t = site.roll * total;
+  let k = 0;
+  for (let cum = biomes[0].weight ?? 1; k < biomes.length - 1 && t >= cum; ) cum += biomes[++k].weight ?? 1;
+  return zonesByRegion.get(region)![k];
 };
 
 // Biome-grid sites + their zones, cached per cell: the network build and the bridge paths look up

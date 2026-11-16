@@ -15,7 +15,7 @@ export const actorCatalogOf = (domains: Iterable<ContentNode<any>>): Readonly<Re
   for (const domain of domains) {
     for (const region of childrenOfKind(domain, "region")) {
       for (const biome of childrenOfKind(region, "biome")) {
-        for (const { id, mount } of actorPlacementsOf(biome)) {
+        for (const { id, mount } of actorPlacementsOf(biome, region)) {
           const { actor } = mount;
           const listed = specById.get(actor.id);
           if (listed && listed !== actor) {

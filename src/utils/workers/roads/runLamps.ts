@@ -12,7 +12,7 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_INNER, FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warp } from "../noise";
-import { riverKeepOff } from "../rivers/constants";
+import { riverKeepOff } from "../water/rivers/constants";
 import { NO_ROAD_DISTANCE } from "./cityRoadField";
 import { computeVertexData } from "../vertexCompute";
 import { distanceToWall, getBiomeContext, cityWallsOf } from "../voronoi";

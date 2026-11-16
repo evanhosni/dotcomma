@@ -6,8 +6,8 @@
  *  piece (36u at (-1548, 1090), a gorge under the deck). */
 import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { BRIDGE_PLACEMENT } from "../../../objects/dressing/bridges/spec";
-import { riverPieceEndSurface, riverPieceEndTerrainSurface } from "../rivers/riverSurface";
-import { riverPiecesIn } from "../rivers/riverNetwork";
+import { edgeSurfaces } from "../water/rivers/surface";
+import { riverPiecesIn } from "../water/rivers/network";
 import { type FreewayBridge, bridgeSections, computeVertexData, computeVertexDataRaw, getFreewayBridges, initCompute } from "../vertexCompute";
 
 const OVERWORLD_CONFIG = DOMAIN_CONFIGS.overworld;
@@ -84,15 +84,20 @@ describe("a river under a crossing freeway", () => {
     const seen = new Set<string>();
     for (let z = -4000; z < 4000; z += 500) {
       for (let x = -4000; x < 4000; x += 500) {
-        for (const p of riverPiecesIn({ x: x + 250, z: z + 250 }, x, z, x + 500, z + 500, 0)) {
+        for (const p of riverPiecesIn(x, z, x + 500, z + 500, 0)) {
           const key = `${p.edge.key}:${p.index}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          const a = riverPieceEndSurface(p, 0);
-          const b = riverPieceEndSurface(p, 1);
-          const ta = riverPieceEndTerrainSurface(p, 0);
-          const tb = riverPieceEndTerrainSurface(p, 1);
+          const s = edgeSurfaces(p.edge);
+          const a = s.capped[p.index];
+          const b = s.capped[p.index + 1];
+          const ta = s.uncapped[p.index];
+          const tb = s.uncapped[p.index + 1];
           if (!(a < ta - 0.01 || b < tb - 0.01)) continue;
+          // A pond's level holds the joints within it (rivers/ponds.ts): a still level, not a road's cap.
+          const hw = OVERWORLD_CONFIG.river.halfWidth;
+          const still = edgeSurfaces(p.edge).ponds.some((d) => [[p.sx, p.sz], [p.ex, p.ez]].some(([x, z]) => Math.hypot(x - d.x, z - d.z) <= d.width * hw + 1e-6));
+          if (still) continue;
           capped++;
           expect(Math.abs(a - b) - Math.abs(ta - tb)).toBeLessThanOrEqual(6 + 1e-6);
         }

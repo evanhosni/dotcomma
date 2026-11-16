@@ -487,6 +487,10 @@ export const bridgeSections = (b: FreewayBridge): BridgeSection[] => {
   const twistOf = (cross: number): number => Math.min(Math.max(BRIDGE_CUT_TWIST, (Math.abs(cross) * half) / BRIDGE_TWIST_EDGE_PITCH), ((c1 - c0) * b.length) / 2);
   const cross0 = b.trimStartAxis ? b.trimStartAxis.slope - skew0 * pitchAt(c0) : 0;
   const cross1 = b.trimEndAxis ? b.trimEndAxis.slope - skew1 * pitchAt(c1) : 0;
+  // The share of a cut's cross-fall still held d past its clearance. A short deck whose oblique T cut
+  // clears only at its far end has no room to twist (twist 0): held whole up to the clearance, where
+  // smoothstep(0, 0, 0) is 0/0 — the NaN last section of a 17u T deck at (12319, −3921).
+  const heldShare = (d: number, twist: number): number => (d <= 0 ? 1 : 1 - smoothstep(0, twist, d));
   const twist0 = twistOf(cross0);
   const twist1 = twistOf(cross1);
   const flares = crotchFlares(b);
@@ -510,8 +514,8 @@ export const bridgeSections = (b: FreewayBridge): BridgeSection[] => {
       widen();
       return s;
     }
-    if (b.trimStartAxis) s.slope += (b.trimStartAxis.slope - skew0 * pitchAt(t)) * (1 - smoothstep(0, twist0, (t - c0) * b.length));
-    if (b.trimEndAxis) s.slope += (b.trimEndAxis.slope - skew1 * pitchAt(t)) * (1 - smoothstep(0, twist1, (c1 - t) * b.length));
+    if (b.trimStartAxis) s.slope += (b.trimStartAxis.slope - skew0 * pitchAt(t)) * heldShare((t - c0) * b.length, twist0);
+    if (b.trimEndAxis) s.slope += (b.trimEndAxis.slope - skew1 * pitchAt(t)) * heldShare((c1 - t) * b.length, twist1);
     const a = axisAt(b, miters, t);
     s.ax = a.x;
     s.az = a.z;

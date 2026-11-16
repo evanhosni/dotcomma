@@ -26,8 +26,8 @@ export const districtLayoutsNear = (biomeId: number, area: RectXZ, pad: number):
   return out;
 };
 
-/** The floor centre of every sewer side room whose centre lies in the area (what a <Spawn> inside
- *  <SewerSideRoom> stands one actor on). */
+/** The floor centre of every sewer side room whose centre lies in the area (what an <Actor> inside the
+ *  <Rooms> of <Sewers> stands one actor on). */
 export const sewerSideRoomsIn = (biomeId: number, area: RectXZ): { x: number; z: number; floor: number }[] => {
   const out: { x: number; z: number; floor: number }[] = [];
   for (const layout of districtLayoutsNear(biomeId, area, 0).values()) {

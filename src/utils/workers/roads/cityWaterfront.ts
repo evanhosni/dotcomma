@@ -5,7 +5,7 @@
 
 import { smoothstep } from "../../math";
 import { domainConfig } from "../computeConfig";
-import { riverListKey, riverListNearSegment, riverStraight, riverStraightNear } from "../rivers/riverField";
+import { riverListKey, riverListNearSegment, riverStraight, riverStraightNear } from "../water/rivers/field";
 import type { RiverQuaySample, Wall } from "../types";
 import { isCanonicalWall } from "../voronoi";
 import { smoothMin } from "../../math";
@@ -124,7 +124,7 @@ export const findWaterfrontBelt = (wx: number, wz: number, walls: Wall[], beltDi
     const dist = Math.hypot(wx - px, wz - pz);
     if (dist > farthest) continue;
     // A wall nowhere near the river is never drowned (the common case: a quick test per wall).
-    if (!riverListNearSegment(w, w.sx, w.sz, w.ex, w.ez, reach, fw + CITY_WATERFRONT_FADE)) {
+    if (!riverListNearSegment(w.sx, w.sz, w.ex, w.ez, reach, fw + CITY_WATERFRONT_FADE)) {
       dry = Math.min(dry, dist);
       continue;
     }

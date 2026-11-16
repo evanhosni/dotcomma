@@ -19,8 +19,7 @@ export const Noise = declare<NoiseProps>({ kind: "noise", within: ["region", "bi
 export type DomeProps = NonNullable<BiomeNoiseConfig["dome"]>;
 
 /** A DOME under the noise: the ground rises with the square of the depth inside the biome,
- *  measured across joined cells, so a joined group is ONE massif. A domed biome is ROCK — rivers
- *  build through it (waterfalls, pools, springs) and caves open in it. */
+ *  measured across joined cells, so a joined group is ONE massif. */
 export const Dome = declare<DomeProps>({ kind: "dome", within: "noise" });
 
 /** A layer added linearly at every depth, so a domed biome's foot keeps it. */

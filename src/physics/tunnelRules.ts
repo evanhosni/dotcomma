@@ -1,4 +1,4 @@
-import type { LiquidLook, TunnelSpace } from "../utils/workers/underground/tunnelSpace";
+import type { TunnelSpace } from "../utils/workers/underground/tunnelSpace";
 
 /**
  * THE BODY UNDERGROUND (CLAUDE.md "Tunnels"): whether a capsule is in a cave or sewer, what the terrain
@@ -60,10 +60,10 @@ export interface TunnelStep {
   vyOverride: number | null;
   /** Walking is held still (a manhole's catch). */
   holdWalk: boolean;
-  /** The liquid level over the capsule, or NaN, and its viscosity relative to water. */
+  /** The liquid level over the capsule (a tunnel's liquid is the sewers' sewage), or NaN, and its
+   *  viscosity relative to water. */
   liquidY: number;
   liquidViscosity: number;
-  liquidLook: LiquidLook;
   /** Move the body's CENTER here before the step (a manhole's catch or exit, a backstop); NaN x: stay. */
   teleportX: number;
   teleportY: number;
@@ -78,7 +78,6 @@ export const createTunnelStep = (): TunnelStep => ({
   holdWalk: false,
   liquidY: NaN,
   liquidViscosity: 1,
-  liquidLook: "water",
   teleportX: NaN,
   teleportY: NaN,
   teleportZ: NaN,
@@ -119,7 +118,6 @@ export const stepTunnelRules = (space: TunnelSpace, state: TunnelState, step: Tu
   step.holdWalk = false;
   step.liquidY = state.inside ? probe.liquidY : NaN;
   step.liquidViscosity = probe.liquidViscosity;
-  step.liquidLook = probe.liquidLook;
   step.teleportX = NaN;
   step.resetMotion = false;
 
@@ -181,12 +179,11 @@ export const stepTunnelRules = (space: TunnelSpace, state: TunnelState, step: Tu
     // MEASURED in the page).
     if (probe.field < 0) step.ignoreTerrain = true;
     const probeY = feet + PROBE_OVER_FEET;
-    // The rock in front of a mouth's opening is the field's closure, not rock: open air over the ground.
-    // Pushed out of it, a player stepping out of a mouth was put back in every frame. Nor is the field's
-    // rock real anywhere in a mouth's cut: the air there is the tunnel's AND the open air over the drawn
-    // ground, and the patch, its collider, is exact (pushed back into the tunnel from the opening's lip,
-    // a body walking out was held at the opening every step).
-    const realRock = probe.field > 0 && !inCut && !space.inFrontOfOpeningAt(body.x, probeY, body.z);
+    // The field's rock is not real anywhere in a mouth's cut: the air there is the tunnel's AND the open
+    // air over the drawn ground (the field closes each mouth at its opening), and the patch, its collider,
+    // is exact (pushed back into the tunnel from the opening's lip, a body walking out was held at the
+    // opening every step).
+    const realRock = probe.field > 0 && !inCut;
     // The capsule's axis is never in rock beside it: a wall embed (a step without the wall's collider)
     // is undone at once, before the next step carries it deeper, where the field has no gradient.
     if (realRock) {

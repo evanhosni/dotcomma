@@ -169,16 +169,16 @@ describe("an NPC in the tunnels", () => {
     }
   });
 
-  it("every tunnel collider body has its own key: the floor column at Evan's fall is never dropped", () => {
-    // (4854.5, -3358.5): two neighbouring cave chunks each own a column centred at (4856, -3352) — the
-    // floor (1954 triangles) and a sliver of patch past the other chunk's edge. Keyed by position, the
-    // client built one of the two.
-    const spot = { x: 4854.5, z: -3358.5 };
-    const gx = Math.floor(spot.x / 256);
-    const gz = Math.floor(spot.z / 256);
+  it("every tunnel collider body has its own key: a floor column two chunks share a position with is never dropped", () => {
+    // Evan fell through a cave floor at (4854.5, -3358.5): two neighbouring cave chunks each owned a column
+    // centred at one position — the floor (1954 triangles) and a sliver of patch past the other chunk's edge
+    // — and, keyed by position, the client built one of the two. The layouts have moved since (the Nov 2026
+    // cave rebuild); the same hazard stands around the first mountain cave's mouth.
+    const mouth = firstCave((s) => s.mouths.length > 0).mouths[0];
+    const gx = Math.floor(mouth.ox / 256);
+    const gz = Math.floor(mouth.oz / 256);
     const keys = new Set<string>();
-    const positions = new Map<string, number>();
-    let floorTris = 0;
+    const columns = new Map<string, number[]>();
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         for (const part of sampleTunnelChunk(gx + dx, gz + dz)) {
@@ -187,14 +187,15 @@ describe("an NPC in the tunnels", () => {
             assert.ok(!keys.has(b.key!), `the key ${b.key} is unique`);
             keys.add(b.key!);
             const at = `${b.x}_${b.z}`;
-            positions.set(at, (positions.get(at) ?? 0) + 1);
-            if (at === "4856_-3352") floorTris = Math.max(floorTris, (b.mesh?.indices.length ?? 0) / 3);
+            columns.set(at, [...(columns.get(at) ?? []), (b.mesh?.indices.length ?? 0) / 3]);
           }
         }
       }
     }
-    assert.ok(positions.get("4856_-3352")! >= 2, "two chunks' columns share the position (the hazard this pins)");
-    assert.ok(floorTris > 1000, `the floor column is among the keyed bodies (${floorTris} triangles)`);
+    const shared = [...columns.values()].filter((tris) => tris.length >= 2);
+    assert.ok(shared.length > 0, "two chunks' columns share a position (the hazard this pins)");
+    const floorTris = Math.max(...shared.flat());
+    assert.ok(floorTris > 1000, `a floor column is among the shared, keyed bodies (${floorTris} triangles)`);
   });
 
   it("down an open manhole it falls to the junction's floor, and stays", () => {

@@ -41,6 +41,7 @@ export const serializeDescriptors = (
     spacingOverrides: d.spacingOverrides,
     flattenGround: d.flattenGround,
     feature: d.feature,
+    zone: d.zone,
   }));
 
 // Client-side chunk cache: the pool re-requests ALL nearby chunks every batch,

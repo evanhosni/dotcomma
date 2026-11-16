@@ -4,6 +4,7 @@ import { uploadOnFirstDraw } from "../../utils/uploadOnFirstDraw";
 import { instancedTemplate, meshTemplate } from "../../utils/warmPrograms";
 import { COVER_RADIUS, COVER_THICKNESS, FRAME_INNER_RADIUS, FRAME_OUTER_RADIUS, FRAME_SAMPLES, FRAME_TOP_OVER_GROUND } from "../../utils/workers/underground/constants";
 import { LADDER_FACE, tunnelColliderBodies } from "../../utils/workers/underground/colliderBodies";
+import { mouthFootprintReaches } from "../../utils/workers/underground/tunnelField";
 import type { DiscPose, ManholeInfo, SewerDoor, TunnelEntrance, TunnelMesh, UndergroundChunk } from "../../utils/workers/underground/types";
 import { ENTRANCE_FADE_UNIFORM } from "../shaders/terrainHoles";
 import { createEntranceMaterial } from "../terrain/material";
@@ -11,7 +12,7 @@ import { makeDoorGeometry } from "../../objects/doors/door";
 import type { DoorHandle } from "../../objects/doors/types";
 import { bakeVertexColor, mergeOrThrow } from "../../utils/geometry";
 import { type ChunkWithPoints, selfPatchedMaterial, type SelfPatchedMaterial } from "../chunks";
-import { type ColliderBody, yawFromDir } from "../chunks/types";
+import { type ColliderBody, WORLD_CHUNK_SIZE, yawFromDir } from "../chunks/types";
 import { createCaveRockMaterial, createIronMaterial, createLiquidMaterial, createSewerWallMaterial, createTunnelObjectMaterial } from "./material";
 import { isOpen } from "./toggles";
 
@@ -197,9 +198,7 @@ const boundingSphereOf = (positions: Float32Array): THREE.Sphere => {
 };
 
 const buildLiquid = (chunk: UndergroundChunk, assets: TunnelAssets): THREE.Mesh | null => {
-  // A spring cave's water is the terrain's water sheet (utils/workers/underground/springWater.ts); the
-  // chunk's liquid triangles are only swum in.
-  if (!chunk.liquid || chunk.style === "cave") return null;
+  if (!chunk.liquid) return null;
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(chunk.liquid.positions, 3));
   g.setIndex(new THREE.BufferAttribute(chunk.liquid.indices, 1));
@@ -354,7 +353,10 @@ export const chunkColliderBodies = (obj: TunnelChunkObject): ColliderBody[] => t
 export const buildChunkObject = (chunk: UndergroundChunk, assets: TunnelAssets, entranceMaterial: THREE.ShaderMaterial | null): TunnelChunkObject => {
   const group = new THREE.Group();
   group.position.set(chunk.centerX, 0, chunk.centerZ);
-  const obj: TunnelChunkObject = { chunk, group, walls: null, patch: null, caps: [], doors: [], doorHinges: [], doorsOpen: [], covers: [], mouthIds: chunk.entranceMouths.map((m) => m.id), fade: chunk.entranceMouths.length === 0 ? 1 : 0, points: [] };
+  const half = WORLD_CHUNK_SIZE / 2;
+  const rect = { minX: chunk.centerX - half, minZ: chunk.centerZ - half, maxX: chunk.centerX + half, maxZ: chunk.centerZ + half };
+  const mouthIds = chunk.mouths.filter((m) => mouthFootprintReaches(m, rect)).map((m) => m.id);
+  const obj: TunnelChunkObject = { chunk, group, walls: null, patch: null, caps: [], doors: [], doorHinges: [], doorsOpen: [], covers: [], mouthIds, fade: mouthIds.length === 0 ? 1 : 0, points: [] };
   obj.walls = buildWalls(chunk, assets, obj);
   if (obj.walls) group.add(obj.walls);
   for (const cap of chunk.caps) {

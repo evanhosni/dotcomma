@@ -27,6 +27,10 @@ export const Snow = declare<SnowProps>({
 
 `within` may be a kind, a list of kinds, `null` (top level only) or omitted (anywhere — `<Actor>`
 stands in a biome or inside one of its features, and its path says which).
+An `<Actor>` inside a feature lists under the feature's PATH (`beeble@sewers.rooms`), each segment the
+kind — or the declaration's `placesAs(node)`, for a kind mounted several times per biome
+(`pond:pond`); `actorPlacementsOf(biome, region)` also folds in its region's bodies of water it does not override,
+and `utils/workers/featurePlacement.ts` maps each path to where it stands.
 
 ### A content file
 

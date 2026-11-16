@@ -1,13 +1,22 @@
 import { HOUSE_SPEC } from "../../../../../../../objects/actors/building/spec";
+import { BEEBLE_SPEC } from "../../../../../../../objects/actors/beeble/spec";
 import { GrassField } from "../../../../../../../objects/foliage/grass";
-import { Actor, Biome, content, Material, Noise } from "../../../../../../components";
+import { Actor, Biome, content, Material, Noise, Pond } from "../../../../../../components";
+import { POND } from "../../../../water/spec";
 import fragmentShader from "./shaders/fragment.glsl";
 
-/** Rolling perlin hills with houses scattered on flatten pads. */
+/** Per km² of the ponds' shallows (where they stand: the actor's zone): about three a pond. */
+const BEEBLES_PER_KM2 = 3000;
+
+/** Rolling perlin hills with houses scattered on flatten pads, and ponds with beebles wading in them. */
 export const GrassBiome = content(
   <Biome id={3} name="grass" joinable>
     <Material shader={fragmentShader} textures={{ grasstexture: "grass.png", grassdirttexture: "grass-dirt.png", dirttexture: "dirt.png" }} />
     <Noise params={{ type: "perlin", octaves: 3, persistence: 1, lacunarity: 1, exponentiation: 1, height: 100, scale: 100 }} />
+
+    <Pond kind={POND} riverEnd={0.5} midRiver={0.5} standalone={0.5}>
+      <Actor actor={BEEBLE_SPEC} density={BEEBLES_PER_KM2} />
+    </Pond>
 
     <GrassField
       density={8000000}

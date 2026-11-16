@@ -5,10 +5,10 @@ import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import { warp } from "../noise";
-import { riverFieldAt, riverSample } from "../rivers/riverField";
-import { riverWetReach } from "../rivers/constants";
-import { riverPieceBuilt, riverPieceEnds, riverPiecesNear } from "../rivers/riverNetwork";
-import type { RiverEdge } from "../rivers/types";
+import { riverFieldAt, riverSample } from "../water/rivers/field";
+import { riverWetReach } from "../water/rivers/constants";
+import { riverPieceBuilt, riverPieceEnds, riverPiecesNear } from "../water/rivers/network";
+import type { RiverEdge } from "../water/rivers/types";
 import { BRIDGE_ALONG_ALIGN, BRIDGE_MAX_ALONG_SHORE, BRIDGE_MAX_DEVIATION, BRIDGE_MAX_TURN, BRIDGE_MIN_CROSSING, MOUTH_SAMPLE } from "./constants";
 import { edgeDirWorld, edgeSide } from "./mouths";
 import { dropShortLegs, filletCorners, segIntersect, simplifyPolyline } from "./polyline";
@@ -110,7 +110,7 @@ export const sharpestTurn = (c: BridgeChain): number => {
 };
 
 /** The sharpest turn a deck along world polyline (x, z) makes once simplified and its corners rounded
- *  as a chain's path is (linkWetItems) — riverNetwork's road layer asks whether a road ending in the
+ *  as a chain's path is (linkWetItems) — the rivers' road layer asks whether a road ending in the
  *  water beside it could tee into its deck (a curve replacing it, smoothKink, leaves the T behind). */
 export const deckPathTurn = (x: number[], z: number[]): number => {
   if (x.length < 3) return 0;

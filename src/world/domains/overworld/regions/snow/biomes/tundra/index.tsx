@@ -1,7 +1,7 @@
 import { Rocks } from "../../../../../../../objects/dressing/rocks";
 import { Snow } from "../../../../../../../objects/dressing/snow-drift";
 import { Biome, content, Material, Noise } from "../../../../../../components";
-import { SNOW_RIVERBED } from "../../riverbed";
+import { SNOW_RIVERBED } from "../../material";
 import fragmentShader from "./shaders/fragment.glsl";
 
 /** Snowy tundra: low frozen ground with shallow hummocks; a modest feather into the snow base.

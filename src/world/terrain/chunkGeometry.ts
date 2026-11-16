@@ -114,26 +114,30 @@ const createChunkGeometry = (chunkSize: number, segments: number, skirtDepth: nu
   return geom;
 };
 
-const geometryPool: Map<number, THREE.BufferGeometry[]> = new Map();
+/** What a pooled grid is drawn as. Each role has its own pools: a grid keeps every attribute it was ever
+ *  given (and its GPU buffer), so one shared family left every water sheet holding a terrain chunk's ~30
+ *  stale floats a vertex, and every terrain grid that had been water the sheet's 10. */
+export type GridRole = "terrain" | "water";
+const geometryPools: Record<GridRole, Map<number, THREE.BufferGeometry[]>> = { terrain: new Map(), water: new Map() };
 
-/** A chunk grid of this LOD's size, from the pool when one is free. Terrain and water share the family. */
-export const acquireGeometry = (lod: LODLevel): THREE.BufferGeometry => {
-  const pool = geometryPool.get(lod.level);
+/** A chunk grid of this LOD's size for `role`, from its pool when one is free. */
+export const acquireGeometry = (lod: LODLevel, role: GridRole = "terrain"): THREE.BufferGeometry => {
+  const pool = geometryPools[role].get(lod.level);
   if (pool && pool.length > 0) {
     return pool.pop()!;
   }
   return createChunkGeometry(lod.chunkSize, lod.segments, lod.skirtDepth);
 };
 
-export const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry) => {
+export const releaseGeometry = (lod: LODLevel, geom: THREE.BufferGeometry, role: GridRole = "terrain") => {
   // three caches the lazily computed bounds for the geometry's life — a pooled
   // geometry otherwise keeps its FIRST chunk's sphere (edge-of-screen popping).
   geom.boundingSphere = null;
   geom.boundingBox = null;
-  let pool = geometryPool.get(lod.level);
+  let pool = geometryPools[role].get(lod.level);
   if (!pool) {
     pool = [];
-    geometryPool.set(lod.level, pool);
+    geometryPools[role].set(lod.level, pool);
   }
   pool.push(geom);
 };
@@ -255,8 +259,8 @@ export const writeTerrainBuffers = (geom: THREE.BufferGeometry, lod: LODLevel, r
   geom.attributes.normal.needsUpdate = true;
 };
 
-/** The water level a DRY vertex dives under: the lowest of its own reported surface (a lake's level, a
- *  spring cave's water; NaN past a river's water band) and the surfaces of its wet grid neighbours, all
+/** The water level a DRY vertex dives under: the lowest of its own reported surface (a lake's level; NaN
+ *  past a river's water band) and the surfaces of its wet grid neighbours, all
  *  EIGHT — a triangle's wet corner can be the diagonal one, and with four a few walls stood (in-page
  *  scan). Every triangle the vertex belongs to then descends from its wet corners. +∞ with none, which
  *  leaves the ground. */
@@ -285,9 +289,9 @@ const dryWaterLevel = (i: number, n: number, waterHeights: Float32Array, waterDe
  *  banks). Dived under the ground alone, a dry vertex on a high bank stood far ABOVE the water, and the
  *  triangle from the last wet vertex rose toward it: a wall of water in front of every steep shore, drawn
  *  as a fall (Evan's screenshot; the shader only hides it where the interpolated depth reaches 0, at the
- *  dry vertex itself). Under the water level the sheet always slopes DOWN into the bank. The same rule
- *  dives a spring cave's NEGATIVE depth (dived to the water alone, the sheet stood up in walls along a fall
- *  into a mouth). Skirt vertices copy the edge's position and flow with depth 0. */
+ *  dry vertex itself). Under the water level the sheet always slopes DOWN into the bank. Every vertex carries
+ *  its owning body's colours (`waterShallow`, `waterDeep`). Skirt vertices copy the edge's position, flow
+ *  and colours with depth 0. */
 export const writeWaterBuffers = (
   water: THREE.BufferGeometry,
   terrain: THREE.BufferGeometry,
@@ -296,6 +300,8 @@ export const writeWaterBuffers = (
   waterHeights: Float32Array,
   waterDepths: Float32Array,
   waterFlow: Float32Array,
+  waterShallow: Float32Array,
+  waterDeep: Float32Array,
 ): void => {
   const n = lod.segments + 1;
   const mainVertCount = n * n;
@@ -305,6 +311,10 @@ export const writeWaterBuffers = (
   const positions = water.attributes.position.array as Float32Array;
   const depths = ensureAttribute(water, "waterDepth");
   const flow = ensureAttribute(water, "waterFlow", 2);
+  const shallow = ensureAttribute(water, "waterShallow", 3);
+  const deep = ensureAttribute(water, "waterDeep", 4);
+  shallow.set(waterShallow.subarray(0, mainVertCount * 3));
+  deep.set(waterDeep.subarray(0, mainVertCount * 4));
   for (let i = 0; i < mainVertCount; i++) {
     const depth = waterDepths[i];
     positions[i * 3] = terrainPositions[i * 3];
@@ -317,10 +327,14 @@ export const writeWaterBuffers = (
   }
   copyEdgeToSkirt(positions, 3, perimeterIndices, mainVertCount);
   copyEdgeToSkirt(flow, 2, perimeterIndices, mainVertCount);
+  copyEdgeToSkirt(shallow, 3, perimeterIndices, mainVertCount);
+  copyEdgeToSkirt(deep, 4, perimeterIndices, mainVertCount);
   const perimCount = perimeterIndices.length;
   for (let i = 0; i < perimCount * 2; i++) depths[mainVertCount + i] = 0;
   water.attributes.position.needsUpdate = true;
   (water.getAttribute("waterDepth") as THREE.BufferAttribute).needsUpdate = true;
   (water.getAttribute("waterFlow") as THREE.BufferAttribute).needsUpdate = true;
+  (water.getAttribute("waterShallow") as THREE.BufferAttribute).needsUpdate = true;
+  (water.getAttribute("waterDeep") as THREE.BufferAttribute).needsUpdate = true;
   water.computeBoundingSphere();
 };

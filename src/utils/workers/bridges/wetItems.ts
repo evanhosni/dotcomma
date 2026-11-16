@@ -2,7 +2,7 @@
  *  one chain when nearly straight, as a T onto a deck passing by, or not at all. */
 
 import { warp } from "../noise";
-import { riverDistanceAt } from "../rivers/riverField";
+import { riverDistanceAt } from "../water/rivers/field";
 import { BRIDGE_EDGE_GUARD, BRIDGE_MAX_DEVIATION, BRIDGE_TEE_OFF_HOST, BRIDGE_WET_MERGE, deckWidth, runRiverYield } from "./constants";
 import { dropShortLegs, filletCorners, polyPointAt, projectOnPolyline, simplifyPolyline } from "./polyline";
 import type { BridgeChain, BridgeWindow, ChainEnd, FreewayBridge, RoadPath, WetItem, WindowScan } from "./types";

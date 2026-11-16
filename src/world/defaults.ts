@@ -10,6 +10,11 @@ export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
   // Wide, soft cross-fades unless a level narrows them (the city biome sets 2).
   defaultBlendWidth: 300,
   defaultHeightBlendWidth: 300,
+  // Every pond at least this wide (a biome or region may set its own): the terrain makes room for it.
+  defaultPondMinRadius: 55,
+  // Land rises this far above its water (a biome or region sets its own), over this far from it.
+  defaultAdditionalHeight: 0,
+  defaultAdditionalHeightBlend: 500,
   roadNoise: {
     type: "perlin",
     octaves: 2,

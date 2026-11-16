@@ -15,3 +15,13 @@ export const useBiome = (component: string): { biomeId: number; name: string } =
 /** Bumped when the domain has committed: systems that read the active domain mount after it. */
 export const DomainReadyContext = createContext(false);
 export const useDomainReady = (): boolean => useContext(DomainReadyContext);
+
+/** The body of water a view is mounted in (<Lake>, <Rivers>, <Pond>): its parts (seaweed) are placed by the
+ *  water it owns, not by the biome around it. The worker resolves it to its DomainConfig.waterBodies slot. */
+export interface WaterBodyRef {
+  /** The body's id (WaterBody.id) and where it is mounted. */
+  id: string;
+  biomeId?: number;
+  regionId?: number;
+}
+export const WaterBodyContext = createContext<WaterBodyRef | null>(null);

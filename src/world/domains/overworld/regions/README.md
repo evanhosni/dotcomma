@@ -19,11 +19,18 @@ regions/
 ```
 
 The four regions and what makes each: **city** (city + grass on the default base, rivers 0.35),
-**desert** (dust + salt on their own simplex base, 0.15), **snow** (tundra + mountain on a slow
+**desert** (dust, oasis and salt on their own simplex base, 0.03; the oasis is dust's relief in paler sand, dry, with rare springs; salt has no `<Material>`, so it draws the base), **snow** (tundra + mountain on a slow
 perlin base, 0.55), **ocean** (lake biomes on a near-flat base, 0.6).
 
 **JSX order is VORONOI order.** The region roll is `floor(u × count)` over the `<Region>` children
-of the domain, and the biome roll over the `<Biome>` children of each region.
+of the domain, and the biome roll a cumulative pick over the `<Biome>` children of each region, each
+taking its `weight` (default 1; all 1 is exactly `floor(u × count)`).
+
+**A biome that is another's relief with something more** (the oasis: dust's dunes + springs, no
+rivers) copies its `<Noise>` literal: two joinable biomes with the same one are ONE relief, so their
+shared walls do not sink to the region base (`zoneBlend.ts` `joinReliefs`). Its texture may reuse the
+other's uniform name for the same file; its own frag must tell it apart (the oasis's sand is paler), or the cells are invisible.
+A biome with no `<Material>` draws its region's BASE (`combineBiomeMaterials`: the salt flats).
 
 ## How to add a biome
 
@@ -48,9 +55,12 @@ address word and a shader function name).
 ## How to add a region
 
 The same, one level up: `<Region id name>` with a `<Material>` (its base), a `<Noise>`, a
-`<Skybox>`, a `<Rivers chance>` if it has any, and its biomes. Then one line in the domain's tree.
+`<Skybox>`, a `<Rivers chance>` if it has any (a biome may mount its own to override it; `chance={0}` = dry), a `<Pond riverEnd>` if its rivers should end in ponds (none: they all end round), and its biomes. Then one line in the domain's tree.
 
 ## Hazard
 
 **Adding or reordering either MOVES THE MAP** — every cell of that grid re-rolls and every address
-anyone has linked to points somewhere else.
+anyone has linked to points somewhere else. To move less, insert a biome in the MIDDLE with a small
+`weight`: only the cells it takes change (the oasis, `weight={0.25}` between dust and salt, took 11.0%
+of the desert's cells, half from each, and nothing else). A new biome needs its 16 address nouns
+(`address.ts` `BIOME_NOUNS`), and the terrain has 8 shader slots (`MAX_BIOME_SLOTS`): all 8 are used.

@@ -8,16 +8,19 @@
 import { smoothstep } from "../../math";
 import { runRiverYield } from "../bridges/constants";
 import { domainConfig } from "../computeConfig";
-import { riverMouthShare } from "../lakes";
+import { riverMouthShare } from "../water/joins";
 import { unwarp } from "../noise";
-import { carveRiverChannel, riverWaterBand } from "../rivers/riverChannel";
-import { riverQuay, riverQuayAt } from "../rivers/riverField";
+import { carveRiverChannel, riverWaterBand } from "../water/channel";
+import { riverQuay, riverQuayAt } from "../water/rivers/field";
 import type { BiomeContext, Wall, Zone } from "../types";
+import type { BankRelief } from "../water/types";
 import { blendedTerrainAt } from "../vertexCompute";
+import { cityWallsOf, getBiomeContext } from "../voronoi";
 import { CITY_QUAY_INNER_CAP, NO_ROAD_DISTANCE, cityCurbDip } from "./cityRoadField";
 import { wallDrownedAt } from "./cityWaterfront";
 import { FREEWAY_GRADE_RAMP } from "./freewayGrade";
 import { nearestRun } from "./freewayNetwork";
+import { isLakeBiome } from "../water/lakes/params";
 
 /** Within freewayWidth + this of BOTH a run and a city wall, the two roads are merging: no lane paint. */
 export const FREEWAY_MERGE_CLEAR = 12;
@@ -57,8 +60,8 @@ const smoothMaxRoad = (a: number, push: number): number => {
 /** The nearest city wall — the belt seen from OUTSIDE the city: distance (the belt's: step 2 pushes it
  *  off a drowned wall), the wall's own distance, along coordinate, closest point. */
 export const nearestCityWall = { distance: Infinity, wall: Infinity, along: 0, x: 0, z: 0 };
-export const findNearestCityWall = (px: number, pz: number, walls: Wall[]): void => {
-  nearestCityWall.distance = Infinity;
+export const findNearestCityWall = (px: number, pz: number, walls: Wall[], out: typeof nearestCityWall = nearestCityWall): void => {
+  out.distance = Infinity;
   for (let i = 0; i < walls.length; i++) {
     const w = walls[i];
     const dx = w.ex - w.sx;
@@ -70,14 +73,23 @@ export const findNearestCityWall = (px: number, pz: number, walls: Wall[]): void
     const cx = w.sx + t * dx;
     const cz = w.sz + t * dz;
     const d = Math.hypot(px - cx, pz - cz);
-    if (d < nearestCityWall.distance) {
-      nearestCityWall.distance = d;
-      nearestCityWall.wall = d;
-      nearestCityWall.along = t * Math.sqrt(lenSq) + w.sx + w.sz;
-      nearestCityWall.x = cx;
-      nearestCityWall.z = cz;
+    if (d < out.distance) {
+      out.distance = d;
+      out.wall = d;
+      out.along = t * Math.sqrt(lenSq) + w.sx + w.sz;
+      out.x = cx;
+      out.z = cz;
     }
   }
+};
+
+/** The real distance (warped) from a warped point to the nearest wall of a road-bearing biome — the
+ *  belt's centerline, findNearestCityWall's distance — as a pure query: the vertex in progress keeps its
+ *  own nearestCityWall. */
+const wallQuery = { distance: Infinity, wall: Infinity, along: 0, x: 0, z: 0 };
+export const cityWallDistance = (x: number, z: number): number => {
+  findNearestCityWall(x, z, cityWallsOf(getBiomeContext({ x, z })), wallQuery);
+  return wallQuery.distance;
 };
 
 /** Over this far off the wall (real units) the belt's field beside a river hands over from the city's
@@ -105,7 +117,8 @@ export const offCityRoad = { height: 0, roadField: NO_ROAD_DISTANCE, freewayFiel
 /** Step 5: the freeways OUTSIDE the city — the inter-city runs and the OUTER HALF of every city's belt
  *  (centered on the wall) — as one grade, one curb dip and one normalized road field, so the city road
  *  shader paints them as one surface with the city's rim. Reads step 2's nearestRun / nearestCityWall /
- *  roadReal / roadGrade and writes offCityRoad. */
+ *  roadReal / roadGrade, and step 4's channel at the vertex (its levee relief and depth scale: the belt's
+ *  outer half is carved by the river like any ground), and writes offCityRoad. */
 export const gradeOffCityFreeway = (
   height: number,
   cvx: number,
@@ -118,6 +131,8 @@ export const gradeOffCityFreeway = (
   riverFactor: number,
   riverSurface: number,
   lakeLevel: number,
+  bank: BankRelief,
+  channelDepth: number,
 ): void => {
   const river = domainConfig!.river;
   const cityCfg = domainConfig!.cityConfig;
@@ -194,7 +209,11 @@ export const gradeOffCityFreeway = (
     const approach = height + (grade - dip - height) * (1 - smoothstep(fw + APPROACH_WIDEN, fw + APPROACH_WIDEN + APPROACH_SHOULDER, roadReal));
     if (graded) {
       const ramp = 1 - smoothstep(fw, fw + FREEWAY_GRADE_RAMP, roadReal);
-      const runHeight = height + (grade - dip - height) * ramp * roadChannel;
+      const runTarget = height + (grade - dip - height) * ramp * roadChannel;
+      // A RUN only cuts (its profile already lies under the ground across its pavement): its shoulder
+      // never fills where the ground falls away beside it. The belt keeps its grade: its inner half is
+      // the city's rim.
+      const runCut = Math.min(height, runTarget);
       if (runShare < 1 && (beltStraight < Infinity || !Number.isNaN(riverSurface))) {
         // The belt's OUTER half beside a river is what the city's inner half is at the wall: the grade
         // with the curb dip of the quay-aware field, carved by the river like any city ground (the
@@ -203,13 +222,13 @@ export const gradeOffCityFreeway = (
         const beltDip = cityCurbDip(beltStraight < Infinity ? beltQuayField(normalized, nearestCityWall.wall) : normalized);
         let ground = grade - beltDip;
         if (!Number.isNaN(riverSurface)) {
-          const carved = carveRiverChannel(ground, distanceToRiver, riverSurface, riverFactor);
+          const carved = carveRiverChannel(ground, distanceToRiver, riverSurface, riverFactor, bank, channelDepth);
           const mouth = riverMouthShare(ground, lakeLevel);
           ground = mouth > 0 ? carved + (Math.min(carved, ground) - carved) * mouth : carved;
         }
         const beltHeight = height + (ground - height) * ramp;
-        height = runShare > 0 ? beltHeight + (runHeight - beltHeight) * runShare : beltHeight;
-      } else height = runHeight;
+        height = runShare > 0 ? beltHeight + (runCut - beltHeight) * runShare : beltHeight;
+      } else height = runTarget + (runCut - runTarget) * runShare;
       // No lane paint on the riverbed under a deck, nor in a merge.
       if (roadChannel > 0.999 && !merging && !(onBelt && beltDrowned)) {
         freewayField = roadReal;
@@ -217,7 +236,7 @@ export const gradeOffCityFreeway = (
       }
     }
     // (Not over a lake: a causeway's approach would fill the lakebed beside it.)
-    if (!own.biome.water) approachDelta = approach - height;
+    if (!isLakeBiome(own.biome)) approachDelta = approach - height;
   }
   offCityRoad.height = height;
   offCityRoad.roadField = roadField;

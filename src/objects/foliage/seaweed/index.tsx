@@ -45,5 +45,5 @@ export const SeaweedField = createFoliage({
   slopeRange: [0, 40],
   slopeBlend: 10,
   renderDistance: 260,
-  underwater: true,
+  zone: "submerged",
 });

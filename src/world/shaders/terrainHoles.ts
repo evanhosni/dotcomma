@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { AXIS_LIFT, DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_PAD, MOUTH_RIM_AMP } from "../../utils/workers/underground/constants";
+import { DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR } from "../../utils/workers/underground/constants";
 
 /**
  * TERRAIN OPENINGS: the per-pixel cuts the tunnels make in the ground. A hole is a manhole SHAFT (a
@@ -39,6 +39,8 @@ export interface TerrainHole {
   capHeight: number;
   /** A mouth: how far past `radius` the entrance PATCH keeps drawing (the footprint band both draw); a shaft: 0. */
   band: number;
+  /** A mouth: the height of its daylight's point over (ax, az) (tunnelField.ts mouthLightY); a shaft: unused. */
+  lightY: number;
 }
 
 export interface TunnelMask {
@@ -96,7 +98,7 @@ export const setTerrainHoles = (nextHoles: readonly TerrainHole[], nextMasks: re
     h[o + 8] = hole.kind === "shaft" ? 1 : 0;
     h[o + 9] = hole.capHeight;
     h[o + 10] = hole.band;
-    h[o + 11] = 0;
+    h[o + 11] = hole.lightY;
   });
   TERRAIN_HOLE_UNIFORMS.uTerrainHoleCount.value = holes.length;
   const m = TERRAIN_HOLE_UNIFORMS.uTunnelMasks.value;
@@ -132,8 +134,9 @@ export const squareTouchesTerrainHoles = (minX: number, minZ: number, maxX: numb
 
 /** VERTEX stage, for a mesh that is not part of the tunnels (an actor): whether a point is in a tunnel's
  *  AIR — inside a loaded skirt mask (the 32 nearest the camera) and under its ceiling, over a 1u edge —
- *  and the daylight reaching it from the openings (the 16 nearest: a shaft's street, a mouth's axis),
- *  falling off as the walls' baked daylight does (underground/chunkMesh.ts daylightAt). Reads the
+ *  and the daylight reaching it from the openings (the 16 nearest: a shaft's street, a mouth's axis over its
+ *  opening, handed in the hole's spare float), falling off as the walls' baked daylight does
+ *  (underground/assembly.ts daylightAt). Reads the
  *  terrain's own hole and mask uniforms: a program using it carries TERRAIN_HOLE_UNIFORMS. */
 export const TUNNEL_AIR_VERTEX_GLSL = /* glsl */ `
   uniform vec4 uTerrainHoles[${MAX_TERRAIN_HOLES * 3}];
@@ -171,9 +174,7 @@ export const TUNNEL_AIR_VERTEX_GLSL = /* glsl */ `
         near = ${DAYLIGHT_MANHOLE_NEAR.toFixed(1)};
         far = ${DAYLIGHT_MANHOLE_FAR.toFixed(1)};
       } else {
-        // The opening's radius r0 from the cut's radius (the widest outline + the pad, less the band).
-        float r0 = (h0.w + h2.z - ${FOOTPRINT_PAD.toFixed(1)}) / ${(1 + MOUTH_RIM_AMP).toFixed(2)};
-        source = h0.xyz + vec3(0.0, ${AXIS_LIFT.toFixed(2)} * r0, 0.0);
+        source = vec3(h0.x, h2.w, h0.z);
         near = ${DAYLIGHT_MOUTH_NEAR.toFixed(1)};
         far = ${DAYLIGHT_MOUTH_FAR.toFixed(1)};
       }

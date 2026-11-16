@@ -22,6 +22,7 @@ import { CellCache } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import type { DomainConfig, SerializedRegion, Wall, Zone } from "./types";
 import { biomeSiteAt, getBiomeContext } from "./voronoi";
+import { isLakeBiome } from "./water/lakes/params";
 
 /** Saturates the shader's smoothstep either way; small enough to stay exact in float32. */
 export const BIOME_SDF_FAR = 1e4;
@@ -112,9 +113,12 @@ let ownWallHalf = new Float64Array(0);
  *  drops the paint). */
 export let ownWallDistance = Infinity;
 export let ownWallAlong = 0;
+/** The own zone's nearest wall to a zone OUTSIDE its relief join (Zone.reliefGroup) in the last wall
+ *  pass: what every zone of the join takes its presence from (Infinity: none in reach, or no join). */
+export let ownReliefDist = Infinity;
 
 /** A copy of the wall pass's results (saveWallPass), for an evaluation that must leave the vertex in
- *  progress as it found it (riverNetwork's gorgeRise). */
+ *  progress as it found it (rivers/pieceRules.ts gorgeRise). */
 export interface WallPassStash {
   weights: Float64Array;
   final: Float64Array;
@@ -123,6 +127,7 @@ export interface WallPassStash {
   presence: Float64Array;
   distance: number;
   along: number;
+  reliefDist: number;
 }
 export const saveWallPass = (): WallPassStash => ({
   weights: zoneWeights.slice(),
@@ -132,6 +137,7 @@ export const saveWallPass = (): WallPassStash => ({
   presence: biomePresence.slice(),
   distance: ownWallDistance,
   along: ownWallAlong,
+  reliefDist: ownReliefDist,
 });
 export const restoreWallPass = (s: WallPassStash): void => {
   zoneWeights.set(s.weights);
@@ -141,6 +147,29 @@ export const restoreWallPass = (s: WallPassStash): void => {
   biomePresence.set(s.presence);
   ownWallDistance = s.distance;
   ownWallAlong = s.along;
+  ownReliefDist = s.reliefDist;
+};
+
+/** A value as JSON with its object keys sorted: two literals written in another key order are one. */
+const canonical = (v: unknown): string =>
+  v !== null && typeof v === "object"
+    ? Array.isArray(v)
+      ? `[${v.map(canonical).join(",")}]`
+      : `{${Object.keys(v as object).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}`
+    : JSON.stringify(v);
+
+/** The RELIEF JOIN: joinable zones whose biome relief is the same literal <Noise> (no dome: a dome's
+ *  depth reads its own zone's walls) are one relief, so no wall between them fades it to the base —
+ *  a dust|oasis wall is dunes running on. Every member reads its presence off the join's outer walls. */
+const joinReliefs = (config: DomainConfig): void => {
+  const byRelief = new Map<string, Zone[]>();
+  for (const zone of zones) {
+    const noise = config.biomeNoiseConfigs[zone.biome.id];
+    if (!zone.biome.joinable || zone.crisp || isLakeBiome(zone.biome) || !noise || noise.dome) continue;
+    const key = canonical(noise);
+    byRelief.set(key, [...(byRelief.get(key) ?? []), zone]);
+  }
+  for (const members of byRelief.values()) if (members.length > 1) for (const z of members) z.reliefGroup = members[0].index;
 };
 
 /** Interns the config's zones and sizes the wall-pass scratch. */
@@ -176,11 +205,13 @@ export const initZones = (config: DomainConfig): void => {
         heightPresenceWidth: heightHalf * 2,
         crisp: heightHalf <= CRISP_HALF,
         baseNoise: region.baseNoise ?? config.baseNoiseParams,
+        reliefGroup: -1,
       };
       zones.push(zone);
       zoneByKey.set(`${region.id}/${biome.id}`, zone);
     }
   }
+  joinReliefs(config);
   for (const region of config.regions) zonesByRegion.set(region, region.biomes.map((b) => zoneByKey.get(`${region.id}/${b.id}`)!));
   zoneWeights = new Float64Array(zones.length);
   zoneFinal = new Float64Array(zones.length);
@@ -294,6 +325,8 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
   biomeSdf[own.slot] = BIOME_SDF_FAR;
   ownWallDistance = Infinity;
   ownWallAlong = 0;
+  ownReliefDist = Infinity;
+  const relief = own.reliefGroup;
   const ownBiome = own.biome.id;
   if (ownWallD.length < walls.length) {
     ownWallD = new Float64Array(walls.length * 2);
@@ -326,6 +359,7 @@ export const accumulateWallFields = (px: number, pz: number, walls: Wall[], own:
     }
     if (d < zoneMinDist[a.index]) zoneMinDist[a.index] = d;
     if (d < zoneMinDist[b.index]) zoneMinDist[b.index] = d;
+    if (relief >= 0 && d < ownReliefDist && (a.reliefGroup === relief) !== (b.reliefGroup === relief)) ownReliefDist = d;
 
     if (a === b) continue; // a non-joinable biome's internal wall: boundary distance only
 

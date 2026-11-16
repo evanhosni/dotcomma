@@ -10,8 +10,9 @@ import { FADE_OPAQUE_HI } from "../terrain/lodSwaps";
 
 /**
  * THE water sheet's material (CLAUDE.md "Lakes", "Rivers"): one shared ShaderMaterial on one clock for
- * every chunk's water mesh (world/terrain/chunkObjects.ts). Per vertex it reads `waterDepth` and
- * `waterFlow` (x/z): swells beat faster and higher with the flow, the surface noise drifts on still water
+ * every chunk's water mesh (world/terrain/chunkObjects.ts). Per vertex it reads `waterDepth`, `waterFlow`
+ * (x/z) and the owning body's colours (`waterShallow`; `waterDeep`: RGB + the depth it is whole from — a
+ * spring's tint is an attribute, never a program of its own): swells beat faster and higher with the flow, the surface noise drifts on still water
  * and is ADVECTED along a river, a steep sheet (a fall) whitens and streaks. The LOD cross-fade and the far
  * fade dither it like the ground under it (uLodFade is written per mesh by chunkObjects.ts syncChunkUniforms).
  */
@@ -28,10 +29,14 @@ const WATER_VERTEX = /* glsl */ `
 ${CHUNK_PROJECTION_GLSL}
 attribute float waterDepth;
 attribute vec2 waterFlow;
+attribute vec3 waterShallow;
+attribute vec4 waterDeep;
 uniform float uTime;
 uniform float uWaterSwell;
 varying float vDepth;
 varying vec2 vFlow;
+varying vec3 vShallow;
+varying vec4 vDeep;
 varying vec3 vViewPos;
 
 const float TAU = 6.28318530718;
@@ -53,6 +58,8 @@ void main() {
   vViewPos = modelViewMatrix[3].xyz + mat3(viewMatrix) * (worldQ - wrapOrigin);
   vDepth = waterDepth;
   vFlow = waterFlow;
+  vShallow = waterShallow;
+  vDeep = waterDeep;
   gl_Position = projectChunkLocal(displaced, normal);
 }
 `;
@@ -65,6 +72,8 @@ uniform vec2 ${FAR_FADE_UNIFORM};
 uniform vec3 uSunDir;
 varying float vDepth;
 varying vec2 vFlow;
+varying vec3 vShallow;
+varying vec4 vDeep;
 varying vec3 vViewPos;
 varying vec3 vWorldPosWrapped;
 varying float vFarDistance;
@@ -164,8 +173,8 @@ void main() {
   vec3 n = normalize(mix(nFlat, nFall, fall));
 
   float fresnel = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-  float deep = smoothstep(0.0, 14.0, vDepth) * (1.0 - fall);
-  vec3 color = mix(vec3(0.22, 0.62, 0.62), vec3(0.12, 0.2, 0.28), deep);
+  float deep = smoothstep(0.0, vDeep.w, vDepth) * (1.0 - fall);
+  vec3 color = mix(vShallow, vDeep.rgb, deep);
   color = mix(color, vec3(0.55, 0.7, 0.85), fresnel * 0.6);
   // Broad sparse pale streaks from the two coarse octaves under a soft threshold.
   float streaks = smoothstep(0.58, 1.0, surf.z);

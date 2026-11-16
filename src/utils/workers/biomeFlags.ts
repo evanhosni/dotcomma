@@ -14,10 +14,6 @@ import { CITY_BIOME_ID } from "../../world/constants";
 import { domainConfig } from "./computeConfig";
 import type { DomainConfig, SerializedBiome } from "./types";
 
-/** ROCK is a domed biome: rivers build through its relief (waterfalls, pools, springs), only its banks
- *  end a riverbed by slope, and caves open in it. */
-export const isRockBiome = (noise: { dome?: unknown } | undefined): boolean => !!noise?.dome;
-
 interface BiomeIndex {
   byId: Map<number, SerializedBiome>;
   /** Biome ids per feature kind, in config order. */
@@ -79,6 +75,3 @@ export const featureMounts = <T>(kind: string): { biomeId: number; params: T }[]
 /** Biomes that bear roads of their own (streets, arterials, a belt): today the bespoke city. */
 export const roadBearingBiomeIds = (): number[] => current().roadBearing;
 
-/** Whether a region is an OCEAN: every one of its biomes is water-based. */
-export const isWaterRegion = (region: { biomes: readonly SerializedBiome[] }): boolean =>
-  region.biomes.length > 0 && region.biomes.every((b) => !!b.water);

@@ -17,11 +17,11 @@ describe("biome listings are an actor's biomes", () => {
     ]);
   });
 
-  it("every overworld kind spawns only in the biomes that mount it (the beeble is city-only)", () => {
+  it("every overworld kind spawns only in the biomes that mount it (the beeble roams the city alone; elsewhere a feature places it)", () => {
     const listed = new Map<string, number[]>();
     for (const region of childrenOfKind(DOMAIN_NODES.overworld, "region")) {
       for (const biome of childrenOfKind<{ id: number }>(region, "biome")) {
-        for (const { id } of actorPlacementsOf(biome)) listed.set(id, [...(listed.get(id) ?? []), biome.props.id]);
+        for (const { id } of actorPlacementsOf(biome, region)) listed.set(id, [...(listed.get(id) ?? []), biome.props.id]);
       }
     }
     expect(Object.fromEntries(listed)).toEqual({
@@ -30,6 +30,7 @@ describe("biome listings are an actor's biomes", () => {
       building: [1],
       skyscraper: [1],
       house: [3],
+      "beeble@pond:pond": [3],
       "beeble@caves.rooms": [7],
     });
   });

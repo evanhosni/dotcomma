@@ -3,6 +3,7 @@
  *  shapes its modules share. Three-free. */
 
 import type { PointXZ } from "../math/types";
+import type { WaterBase, WaterBody } from "./water/types";
 
 export interface TerrainNoiseParams {
   type: "simplex" | "perlin";
@@ -29,8 +30,7 @@ export interface BiomeNoiseConfig {
 
 /** A MASSIF under a biome's noise: the ground rises with the square of the point's depth inside the
  *  biome, by `height` at `reach`. Depth is measured to the nearest FOREIGN wall, so a group of joined
- *  cells is one mass whose summit is where the group is deepest (zoneBlend.ts domeDepthAt). A domed
- *  biome is ROCK to every system that asks (biomeFlags.ts isRockBiome). */
+ *  cells is one mass whose summit is where the group is deepest (zoneBlend.ts domeDepthAt). */
 export interface BiomeDomeConfig {
   height: number;
   /** Depth (warped units) at which the dome reaches `height`; deeper ground stays there. */
@@ -60,27 +60,27 @@ export interface SnowParams {
   depthScale: number;
 }
 
-/** Caves under a biome (a <Caves> in its spec's `features`): the chance a cell holds a system, and the
- *  rooms its <CaveSideRoom> child adds (null: none). */
+/** Caves under a biome (a <Caves> in its spec's `features`): the chance a cell holds a system and the
+ *  rooms its <Rooms> child adds (null: none). */
 export interface CaveParams {
   chance: number;
   sideRooms: CaveSideRoomParams | null;
 }
 
-/** <CaveSideRoom>: the chance of a room on the trunk (clear of the mouths) and at each branch's tip. */
+/** <Rooms> in <Caves>: the chance of a room on the trunk (clear of the mouths) and at each branch's tip. */
 export interface CaveSideRoomParams {
   trunkChance: number;
   tipChance: number;
 }
 
 /** Sewers under a street-bearing biome, registered by its <Sewers> mount: the chance a cell holds a
- *  system, and the side rooms its <SewerSideRoom> child adds (null: none). */
+ *  system, and the side rooms its <Rooms> child adds (null: none). */
 export interface SewerParams {
   chance: number;
   sideRooms: SewerSideRoomParams | null;
 }
 
-/** <SewerSideRoom>: the chance a junction gets a door into a side room (kept only where the room fits). */
+/** <Rooms> in <Sewers>: the chance a junction gets a door into a side room (kept only where the room fits). */
 export interface SewerSideRoomParams {
   chance: number;
 }
@@ -100,43 +100,48 @@ export interface RockParams {
   texture: string;
 }
 
-/** Bumpy river banks on a biome (`riverBankRelief: true | {…}`): a bank held up over low ground (a levee)
- *  takes the biome's OWN noise as relief (rivers/riverChannel.ts riverBankBump). Unset = a smooth bank. */
-export interface RiverBankReliefParams {
-  /** The share of the biome's noise the bank takes. */
-  share: number;
-  /** The same noise read this many times finer… */
-  fineScale: number;
-  /** …at this share of it. */
-  fineShare: number;
+/** The smallest pond radius (real units) at biome or region level; unset = the level above
+ *  (water/ponds pondMinRadiusAt). */
+export interface PondSizes {
+  pondMinRadius?: number;
 }
 
-export interface SerializedBiome extends BlendWidths {
+/** Land RISES AWAY FROM WATER (water/valleys): `additionalHeight` (real units, negative allowed) is 0 at
+ *  every body of water and whole `additionalHeightBlend` from the nearest; unset = the level above. */
+export interface AdditionalHeights {
+  additionalHeight?: number;
+  additionalHeightBlend?: number;
+}
+
+export interface SerializedBiome extends BlendWidths, PondSizes, AdditionalHeights {
   id: number;
   name: string;
   joinable: boolean;
-  /** A water-filled biome: the terrain bowls `depth` below the base; the Water system fills it. */
-  water?: { depth: number };
-  /** No inter-city freeway along this biome's walls (see getNetwork's walkable). DERIVED from
-   *  `water`: impassable ground is the only reason, and a second flag could only disagree. */
-  prohibitRoads?: boolean;
+  /** Its share of its region's biome roll (default 1: voronoi.ts zoneOfRawSite). */
+  weight?: number;
+  /** Its riverbed's slope yield (<Material riverbed={{ yieldSlope }}>, degrees): a river's bed ends where its
+   *  banks here steepen past it (water/rivers/bedLimit.ts). Unset: it never does. */
+  bedYieldSlope?: [number, number];
   /** EVERY feature mounted in the biome, keyed by its declaration's kind, holding that
    *  declaration's resolved params. A key is present because a component was mounted
    *  (world/content/) — nothing here is a flag anyone can set beside the mounting, and nothing
    *  downstream keys on a biome's id or name. Read through biomeFlags.ts. */
   features: Readonly<Record<string, unknown>>;
+  /** The DomainConfig.waterBodies slots of the bodies of water it carries: its own mounts, and its
+   *  region's it does not override (the same body id), in JSX order — the order a shared opportunity
+   *  rolls its ponds in. */
+  waterBodies?: number[];
 }
 
-export interface SerializedRegion extends BlendWidths {
+export interface SerializedRegion extends BlendWidths, PondSizes, AdditionalHeights {
   id: number;
   name: string;
   /** VORONOI (= JSX) order. */
   biomes: SerializedBiome[];
   /** This region's base terrain; unset = the domain's baseNoiseParams. */
   baseNoise?: TerrainNoiseParams;
-  /** River density: scales the chance a river-grid edge under this region carries a river
-   *  (RIVER_KEEP_PER_PROBABILITY). 0 = the region mounted no <Rivers/> and has none. */
-  riverProbability: number;
+  /** The chance a river-grid edge whose midpoint lies under this region carries a river: its <Rivers chance>. 0 = the region mounted no <Rivers/> and has none (a biome mounting its own overrides it: rivers/params.ts biomeRiverChance). */
+  riverChance: number;
 }
 
 export interface RiverParams {
@@ -153,10 +158,17 @@ export interface DomainConfig {
   regionGridSize: number;
   defaultBlendWidth: number;
   defaultHeightBlendWidth: number;
+  defaultPondMinRadius: number;
+  defaultAdditionalHeight: number;
+  defaultAdditionalHeightBlend: number;
   roadNoiseParams: TerrainNoiseParams;
   baseNoiseParams: TerrainNoiseParams;
   river: RiverParams;
   biomeNoiseConfigs: { [biomeId: number]: BiomeNoiseConfig };
+  /** The domain's <Water> base (null: it mounts none, and has no water anywhere). */
+  water: WaterBase | null;
+  /** Every body of water mounted, in tree order (each region's, then each of its biomes'). */
+  waterBodies: WaterBody[];
   cityConfig: {
     seed: string;
     gridSize: number; // block grid cell size
@@ -211,17 +223,21 @@ export interface VertexResult {
   distanceToFreewayCenter: number;
   /** Lane-paint dash phase along that freeway; 0 outside. */
   freewayAlong: number;
-  /** Water SURFACE height at this point (lake level, river surface, a spring cave's water), or NaN where
-   *  there is no water in reach. */
+  /** Water SURFACE height at this point (lake level, river surface), or NaN where there is no water in
+   *  reach. */
   waterHeight: number;
-  /** How deep the water stands over the ground (0 where dry). NEGATIVE within the cave-water margin of
-   *  a spring cave's water: a DIVE toward that water's level, clamped under the ground — the water sheet
-   *  dives there, and every "water over the ground" test reads it as dry. */
+  /** How deep the water stands over the ground (0 where dry). */
   waterDepth: number;
-  /** The water's flow (downhill along a river, scaled by its grade; 0 on a lake and over a mouth; a
-   *  spring cave's own under the mountain), carried to the water shader. */
+  /** The water's flow (downhill along a river, scaled by its grade; 0 on a lake and over a mouth),
+   *  carried to the water shader. */
   waterFlowX: number;
   waterFlowZ: number;
+  /** The DomainConfig.waterBodies slot the water here belongs to most (−1: no water), its share
+   *  (1 − waterBodyShare belongs to waterBody2, −1: none) — what a body's parts (seaweed, bubbles) are
+   *  placed by. CPU only. */
+  waterBody: number;
+  waterBodyShare: number;
+  waterBody2: number;
   /** Per BIOME SLOT (getBiomeSlots order): signed distance to that biome's material,
    *  scaled by the wall's half feather — the shader's weight is smoothstep(-1, 1, sdf).
    *  ±BIOME_SDF_FAR when no wall is in reach. Shared scratch buffer: copy, don't keep. */
@@ -254,6 +270,9 @@ export interface Zone {
   heightPresenceWidth: number;
   /** A crisp zone (city) keeps full presence everywhere, including as seen from a neighbor. */
   crisp: boolean;
+  /** Its RELIEF JOIN (−1: none): joinable zones whose biome relief is the same literal <Noise> share
+   *  one, and their presence ignores the walls between them (zoneBlend.ts ownReliefDist). */
+  reliefGroup: number;
   baseNoise: TerrainNoiseParams;
 }
 

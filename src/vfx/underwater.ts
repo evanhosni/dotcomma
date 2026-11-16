@@ -1,19 +1,20 @@
 import * as THREE from "three";
 import { NIGHT_BLEND_UNIFORM, NIGHT_GROUND_DIM } from "../lighting/dayNight";
-import type { LiquidLook } from "../utils/workers/underground/tunnelSpace";
+import { WATER_DEFAULTS } from "../utils/workers/water/params";
 import { SCREEN_QUAD_VERTEX_SHADER, ScreenFrame, ScreenPass, ScreenQuad } from "./screenPass";
 
 /**
  * UNDERWATER: while the camera is under a water surface a full-screen pass (vfx/screenPass.ts) draws
  * the scene back blurred, wobbling and fogged toward the water's color by the DEPTH BUFFER's distance —
- * so every object class is covered without touching its material.
+ * so every object class is covered without touching its material. Under a body of water with colours of
+ * its own (a hot spring's turquoise) the look follows them (bodyLook).
  */
 
 let cameraWaterDepth = 0;
 
 /** What a liquid looks like from under it: the water's blue, or the sewers' green sewage — thicker
  *  (a third of the water's visibility) and blurrier. */
-export type { LiquidLook };
+export type LiquidLook = "water" | "sewage";
 
 interface LookParams {
   /** The liquid's color looking down into the deep and up toward its lit surface. */
@@ -36,11 +37,41 @@ const LOOKS: Record<LiquidLook, LookParams> = {
 
 let cameraLook: LiquidLook = "water";
 
-/** How far the camera is under a liquid surface (≤ 0 = above it) and which liquid. The Player writes
- *  it every frame. */
-export const setCameraWaterDepth = (depth: number, look: LiquidLook = "water"): void => {
+/** The colours of the water the camera is in, as the sheet draws them there (utils/workers/water/material.ts
+ *  writeWaterColors): its shallow colour (RGB), and its deep colour with the depth that reaches it (RGB +
+ *  depth). */
+export interface CameraWaterColors {
+  shallow: ArrayLike<number>;
+  deep: ArrayLike<number>;
+}
+let cameraColors: CameraWaterColors | null = null;
+
+/** How far the camera is under a liquid surface (≤ 0 = above it), which liquid, and for water the colours
+ *  of the body it is in (none: the base's). The Player writes it every frame. */
+export const setCameraWaterDepth = (depth: number, look: LiquidLook = "water", colors: CameraWaterColors | null = null): void => {
   cameraWaterDepth = depth > 0 ? depth : 0;
   cameraLook = look;
+  cameraColors = colors;
+};
+
+/** The water look under a body's own colours: LOOKS.water is the look of the <Water> defaults' colours, and
+ *  each colour scales by the body's against those (as float32, the sheet's precision: the defaults' body
+ *  is LOOKS.water exactly), the fog thickening as the body reaches its deep colour sooner. */
+const BASE_SHALLOW = WATER_DEFAULTS.shallowColor.map(Math.fround);
+const BASE_DEEP = WATER_DEFAULTS.deepColor.map(Math.fround);
+const bodyLookScratch: LookParams = { deep: [0, 0, 0], lit: [0, 0, 0], tint: [0, 0, 0], fogDensity: 0, blur: 1 };
+const bodyLook = ({ shallow, deep }: CameraWaterColors): LookParams => {
+  const base = LOOKS.water;
+  const out = bodyLookScratch;
+  for (let c = 0; c < 3; c++) {
+    const lit = shallow[c] / BASE_SHALLOW[c];
+    out.lit[c] = base.lit[c] * lit;
+    out.tint[c] = Math.min(1, base.tint[c] * lit);
+    out.deep[c] = base.deep[c] * (deep[c] / BASE_DEEP[c]);
+  }
+  out.fogDensity = base.fogDensity * (Math.fround(WATER_DEFAULTS.deepDepth) / deep[3]);
+  out.blur = base.blur;
+  return out;
 };
 
 export const isCameraUnderwater = (): boolean => cameraWaterDepth > 0;
@@ -145,7 +176,7 @@ export class UnderwaterPass implements ScreenPass {
     u.uFar.value = perspective.far;
     u.uTime.value = time;
     u.uCameraDepth.value = cameraWaterDepth;
-    const look = LOOKS[cameraLook];
+    const look = cameraLook === "water" && cameraColors ? bodyLook(cameraColors) : LOOKS[cameraLook];
     u.uDeep.value.fromArray(look.deep);
     u.uLit.value.fromArray(look.lit);
     u.uTint.value.fromArray(look.tint);

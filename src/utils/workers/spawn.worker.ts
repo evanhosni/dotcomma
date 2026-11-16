@@ -204,13 +204,11 @@ const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunk
   }
 };
 
-/** A <Spawn> inside a feature: one instance on each place the feature holds in the chunk (underground,
- *  so kept out of the surface spacing hash). */
+/** An <Actor> inside a feature: one instance on each place the feature holds in the chunk (a tunnel's
+ *  rooms, a body of water's zone), kept out of the surface spacing hash. */
 const placeFeaturePoints = (desc: SerializedDescriptor, chunkMinX: number, chunkMinZ: number, out: SpawnPoint[]): void => {
   const area = { minX: chunkMinX, minZ: chunkMinZ, maxX: chunkMinX + SPAWN_CHUNK_SIZE, maxZ: chunkMinZ + SPAWN_CHUNK_SIZE };
-  for (const biomeId of desc.biomeIds ?? []) {
-    for (const p of featurePlacesIn(desc.feature!, biomeId, area)) out.push({ x: p.x, z: p.z, height: p.floor, biomeId, descriptorId: desc.id });
-  }
+  for (const p of featurePlacesIn({ ...desc, feature: desc.feature! }, area)) out.push({ x: p.x, z: p.z, height: p.floor, biomeId: p.biomeId, descriptorId: desc.id });
 };
 
 /** A chunk key, `${cx}_${cz}`, to its min corner. */

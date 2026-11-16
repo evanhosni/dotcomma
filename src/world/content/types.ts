@@ -21,6 +21,9 @@ export interface ContentDeclaration<P = Record<string, unknown>> {
   /** This declaration's RESOLVED params for the config the workers and the server read (its own
    *  defaults applied, its children folded in). Unset = the mounting alone is the whole fact. */
   read?: (node: ContentNode<P>) => unknown;
+  /** The segment the feature path of an <Actor> mounted inside it names it by (default its kind): a
+   *  kind mounted several times in one biome (<Pond>) tells its mounts apart by it. */
+  placesAs?: (node: ContentNode<P>) => string;
 }
 
 /** A declaration component: renders its View (or nothing) and carries its declaration for the walker. */

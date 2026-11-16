@@ -25,110 +25,107 @@ export const FLOOR_BUMP = 0.35;
 /** A mouth's ragged outline swings the radius up to this fraction. */
 export const MOUTH_RIM_AMP = 0.24;
 
+
 // ── Caves ──────────────────────────────────────────────────────────────────
-/** The entry tries this many directions from its random base angle, evenly around. */
-export const ENTRY_DIRECTIONS = 6;
-export const MOUTH_SEARCH_STEP = 8;
-export const MOUTH_SEARCH_MAX = 700;
-export const MOUTH_BACK_STEP = 4;
-export const MOUTH_BACK_MAX = 260;
+/** Rock kept over every crown (a cave passage's, a sewer's ceiling). */
+export const ROCK_COVER = 4;
+/** The default `trunkChance` / `tipChance` of <Rooms> in <Caves>. */
+export const ROOM_TRUNK_CHANCE = 0.5;
+export const ROOM_TIP_CHANCE = 0.35;
+
+/** The entry mouth: tried along MOUTH_RAYS evenly spaced rays from the cell's site (from a random base
+ *  angle), each walked out in MOUTH_SEARCH_STEP steps until it leaves the biome (at most
+ *  MOUTH_SEARCH_REACH), then back in by MOUTH_FOOT_STEP to the first FOOT: ground rising
+ *  MOUTH_FOOT_GRADE over MOUTH_FOOT_RUN. */
+export const MOUTH_RAYS = 6;
+export const MOUTH_SEARCH_STEP = 4;
+export const MOUTH_SEARCH_REACH = 900;
+export const MOUTH_FOOT_STEP = 2;
+export const MOUTH_FOOT_GRADE = 0.3;
+export const MOUTH_FOOT_RUN = 12;
+/** A mouth stands at least this far from the cell's site. */
 export const MOUTH_SITE_CLEAR = 40;
-/** The ground must climb this (rise/run) over MOUTH_CLIMB_RUN into the mountain at an opening. */
-export const MOUTH_CLIMB_GRADE = 0.3;
-export const MOUTH_CLIMB_RUN = 12;
+/** High mouths: this share of entries first climbs on up its ray (at most HIGH_MOUTH_CLIMB) to
+ *  HIGH_MOUTH_RISE over the foot, opening at the first spot no steeper than HIGH_MOUTH_GRADE along the
+ *  ray whose section fits, no higher than HIGH_MOUTH_RISE_MAX; else the foot (180u targets mostly
+ *  overshot the flanks). */
 export const HIGH_MOUTH_CHANCE = 0.6;
 export const HIGH_MOUTH_RISE_MIN = 20;
 export const HIGH_MOUTH_RISE_MAX = 100;
-export const HIGH_MOUTH_CLIMB_MAX = 400;
-/** A high mouth's spot is judged by the ground's grade over ±this along the ray, at most CLIMB_GRADE_MAX. */
-export const CLIMB_GRADE_HALF_RUN = 4;
-export const CLIMB_GRADE_MAX = 1;
+export const HIGH_MOUTH_GRADE = 1;
+/** The grade a high mouth stands on is read over this either side of it along the ray (the mountain's
+ *  bumps are steep over a few units). */
+export const HIGH_MOUTH_GRADE_RUN = 6;
+export const HIGH_MOUTH_CLIMB = 400;
+/** Fit ground for a mouth: this far over any water, this far past a road's or freeway's half width. */
+export const MOUTH_WATER_CLEAR = 0.5;
+export const MOUTH_ROAD_CLEAR = 12;
+/** A mouth's straight SECTION into the mountain: the shortest length (MIN to MAX in STEP steps) whose inner
+ *  end keeps ROCK_COVER over its bulged crown, on the axis and on both flanks COVER_FLANK_PAD past the
+ *  bulged wall, its floor descending at MOUTH_GRADE; fit ground is required every SECTION_FIT_STEP along it. */
+export const SECTION_LENGTH_MIN = 20;
+export const SECTION_LENGTH_MAX = 100;
+export const SECTION_LENGTH_STEP = 8;
+export const SECTION_FIT_STEP = 4;
+export const MOUTH_GRADE = 0.2;
+/** A settled section steeper than this is no way in. */
+export const MOUTH_STEEP_GRADE = 0.35;
+/** The exit: this chance, roughly opposite the entry (± EXIT_TURN rad, EXIT_TRIES rays), at a foot only,
+ *  at least EXIT_CLEAR from the entry. */
+export const EXIT_CHANCE = 0.5;
+export const EXIT_TURN = 0.6;
+export const EXIT_TRIES = 3;
+export const EXIT_CLEAR = 120;
+/** Every cover check (a section's inner end, a path sample, a room) reads the ground on both flanks this
+ *  far past the bulged wall as well as on the axis. */
+export const COVER_FLANK_PAD = 2;
+/** Opening and inner-end radii; full width over SECTION_FULL_SHARE of the section, then a linear taper. */
 export const OPENING_RADIUS_MIN = 8;
 export const OPENING_RADIUS_MAX = 11;
-export const PASSAGE_RADIUS_MIN = 6;
-export const PASSAGE_RADIUS_MAX = 7.5;
-/** A section descends at this grade (~11°) when planned; settled on the trunk's floor, a section
- *  steeper than MOUTH_STEEP_GRADE is no way in. */
-export const SECTION_GRADE = 0.2;
-export const MOUTH_STEEP_GRADE = 0.35;
-export const SECTION_MIN = 20;
-export const SECTION_MAX = 100;
-export const SECTION_STEP = 8;
-/** The opening keeps its full radius over this share of the section, then narrows. */
+export const INNER_RADIUS_MIN = 6;
+export const INNER_RADIUS_MAX = 7.5;
 export const SECTION_FULL_SHARE = 0.6;
-/** Rock kept over every crown (u), judged on the axis and on both flanks, this far past the bulged wall. */
-export const ROCK_COVER = 4;
-export const COVER_FLANK_PAD = 2;
-/** Fitness: a road's paved half width plus this. */
-export const MOUTH_ROAD_CLEAR = 12;
-export const MOUTH_WATER_CLEAR = 0.5;
-export const EXIT_CHANCE = 0.5;
-export const EXIT_TRIES = 3;
-export const EXIT_ANGLE_WANDER = 0.6;
-export const EXIT_MIN_DISTANCE = 120;
-/** Main path: the straight lead from each mouth and the sideways wander at the quarter points. */
-export const TRUNK_LEAD = 30;
 
-// ── Spring caves (caves.ts generateSpring) ─────────────────────────────────
-/** The opening's floor this far under the river's surface (the water runs in), its radius the river's
- *  half-width plus SPRING_OPENING_PAD, between the usual opening radii and SPRING_OPENING_MAX. */
-export const SPRING_SINK = 0.6;
-export const SPRING_OPENING_PAD = 1.5;
-export const SPRING_OPENING_MAX = 14;
-/** Past the section a flooded lead this long, then the POOL ROOM: a capsule of SPRING_ROOM_LENGTH at
- *  SPRING_ROOM_RADIUS (SPRING_ROOM_RADIUS_MIN where the rock cover is short), its floor
- *  SPRING_POOL_DEPTH under the lead's. A spring whose lead ends within SPRING_SHARE_REACH of another
- *  spring's of the cell connects to it instead (no pool: one river runs through). */
-export const SPRING_LEAD = 16;
-export const SPRING_ROOM_LENGTH = 22;
-export const SPRING_ROOM_RADIUS = 22;
-export const SPRING_ROOM_RADIUS_MIN = 14;
-export const SPRING_POOL_DEPTH = 3.5;
-export const SPRING_SHARE_REACH = 170;
-/** Two springs CONNECT instead (finishConnectedSpring): one river through a HALL between their leads, its floor
- *  SPRING_HALL_DEPTH under the water sloping between the two mouths' levels, whatever they are. */
-export const SPRING_HALL_RADIUS = 13;
-export const SPRING_HALL_DEPTH = 3;
-/** How deep the water sheet draws the opening's and lead's strip (the river's own carved depth, so the
- *  water reads the same through the opening; the strip's real floor is 0.6–1.1u under). */
-export const SPRING_STRIP_DEPTH = 2.5;
-/** How far around a spring's water the terrain's water sheet dives UNDER it instead of under the
- *  mountain (springWater.ts): past the coarsest quad the sheet is drawn into near a cave (LOD3, 70u). */
-export const SPRING_WATER_MARGIN = 72;
-/** A spring's section descends only this gently: the river's water fills it, and it stays wadeable with its crown in the air. */
-export const SPRING_SECTION_GRADE = 0.05;
-/** The standing water sits this far under the river's surface (never level with its sheet). */
-export const SPRING_WATER_BELOW_SURFACE = 0.05;
-export const TRUNK_WANDER = [25, 50, 25];
+/** Paths are sampled every PATH_STEP (4u put ~7 consecutive tubes inside every sample's bounds, and the
+ *  chunk took 20% longer). */
+export const PATH_STEP = 8;
+/** A trunk with an exit: a straight lead out of each mouth, then a bow wandering up to this far sideways
+ *  at its quarter points. */
+export const TRUNK_LEAD = 30;
+export const BOW_WANDER: readonly number[] = [25, 50, 25];
+/** A trunk without one: a lead to a junction, then a jittered ring of LOOP_POINTS beside it, back to the
+ *  junction; the junction's two visits are settled onto one floor in LOOP_SETTLE_ROUNDS rounds. */
 export const LOOP_LEAD_MIN = 20;
 export const LOOP_LEAD_MAX = 40;
+export const LOOP_POINTS = 8;
 export const LOOP_RADIUS_MIN = 45;
 export const LOOP_RADIUS_MAX = 85;
-export const LOOP_POINTS = 8;
 export const LOOP_JITTER = 0.2;
-export const LOOP_AIM = 0.4;
-export const PATH_STEP = 8;
-export const PASSAGE_SWELL_MIN = 5;
-export const PASSAGE_SWELL_MAX = 10;
-export const PASSAGE_WAVES = [37, 17];
-export const PASSAGE_WAVE_WEIGHTS = [0.6, 0.4];
-export const MOUTH_RAMP_START = 4;
-export const MOUTH_RAMP_END = 22;
-export const FLOOR_SWELL = 3;
-export const FLOOR_SWELL_WAVE_MIN = 140;
-export const FLOOR_SWELL_WAVE_MAX = 260;
-/** The floor swell fades in over this far from a mouth's inner end. */
-export const FLOOR_SWELL_RAMP = 40;
-/** A loop's junction and its last sample settle onto one floor in at most this many relax passes. */
-export const JUNCTION_SETTLE_PASSES = 8;
+export const LOOP_SETTLE_ROUNDS = 4;
+/** The trunk's radius swells between these: 0.6 sin(u / 37 + p1) + 0.4 sin(u / 17 + p2) (fixed
+ *  wavelengths, drawn phases). From each mouth's inner end ONE ramp, smoothstep(RADIUS_EASE_START,
+ *  RADIUS_EASE_END) of the distance to it, eases the radius out of the mouth's inner radius and brings in
+ *  the wall lumps and the floor bumps. */
+export const PASSAGE_RADIUS_MIN = 5;
+export const PASSAGE_RADIUS_MAX = 10;
+export const PASSAGE_WAVES: readonly [number, number] = [37, 17];
+export const RADIUS_EASE_START = 4;
+export const RADIUS_EASE_END = 22;
+/** Floors: rise over run never past FLOOR_GRADE (the highest floor the rock allows climbed at the full
+ *  grade for hundreds of units under a peak); the trunk aims at the line between its inner floors with a
+ *  ±FLOOR_SWELL swell over a FLOOR_WAVE wave, faded in over FLOOR_SWELL_FADE from the mouths. */
 export const FLOOR_GRADE = 0.3;
-/** Past its ends a tube's floor RISES this much per unit into its round cap (~24°: walkable, steeper than any
- *  piece joined there — MOUTH_STEEP_GRADE, FLOOR_GRADE). Flat at the end's level, the cap of the first tube
- *  reached ~5u back under its mouth, whose floor climbs toward the opening: a 1.2u ledge (50° at its worst)
- *  a player dropped down on the way in and could not climb on the way out (Evan, the cave at (-3604, -17706)). */
+export const FLOOR_SWELL = 3;
+export const FLOOR_WAVE_MIN = 140;
+export const FLOOR_WAVE_MAX = 260;
+export const FLOOR_SWELL_FADE = 40;
+/** Past a tube's end its floor RISES at this into the round end cap, steeper than any joined piece, so
+ *  the neighbour's floor wins across a joint: a flat cap floor left a 1.2u ledge under a mouth's
+ *  climbing floor (Evan's cave at (-3604, -17706)). */
 export const TUBE_CAP_FLOOR_RISE = 0.45;
-export const BRANCH_COUNT_MIN = 2;
-export const BRANCH_COUNT_MAX = 4;
+/** Blind branches off the trunk, leaving it BRANCH_END_CLEAR from its ends. */
+export const BRANCH_MIN = 2;
+export const BRANCH_MAX = 4;
 export const BRANCH_TRIES = 4;
 export const BRANCH_END_CLEAR = 25;
 export const BRANCH_TURN_MIN = 0.9;
@@ -136,103 +133,126 @@ export const BRANCH_TURN_MAX = 1.7;
 export const BRANCH_LENGTH_MIN = 35;
 export const BRANCH_LENGTH_MAX = 90;
 export const BRANCH_WANDER = 0.15;
-/** A branch's curve passes through this many wandering points along its length. */
-export const BRANCH_CONTROL_POINTS = 3;
 export const BRANCH_RADIUS_MIN = 3.6;
 export const BRANCH_RADIUS_MAX = 7.2;
-export const BRANCH_WAVES = [23, 11];
-export const BRANCH_EASE = 12;
+export const BRANCH_WAVES: readonly [number, number] = [23, 11];
+/** A branch's floor steps up or down this share of FLOOR_GRADE per unit of run (a fair coin each sample). */
 export const BRANCH_FLOOR_WALK = 0.4;
-export const BRANCH_AIR_CLEAR = 3;
-export const BRANCH_MIN_LENGTH = 16;
-export const ROOM_TRUNK_CHANCE = 0.5;
-export const ROOM_TIP_CHANCE = 0.35;
+export const BRANCH_EASE = 12;
+/** A branch ended shorter than this is dropped. */
+export const BRANCH_SHORTEST = 16;
+/** A branch or room keeps this much rock from another path's air. */
+export const PATH_CLEARANCE = 3;
+/** Side rooms (<Rooms>): one on the trunk ROOM_MOUTH_CLEAR from both mouths (ROOM_TRIES), one at each branch tip. */
 export const ROOM_MOUTH_CLEAR = 40;
 export const ROOM_TRIES = 4;
 export const ROOM_RADIUS_MIN = 12;
 export const ROOM_RADIUS_MAX = 18;
 export const ROOM_LENGTH_MIN = 6;
 export const ROOM_LENGTH_MAX = 16;
-export const ROOM_HEADING = 0.6;
-export const ROOM_AIR_CLEAR = 3;
+export const ROOM_TURN = 0.6;
+/** Formations, from the decoration stream: tried every FORMATION_STEP along every path past
+ *  FORMATION_MOUTH_CLEAR from a mouth, ROOM_FORMATION_TRIES times per spot along a room. */
 export const FORMATION_STEP = 4;
+export const FORMATION_MOUTH_CLEAR = 22;
 export const ROOM_FORMATION_TRIES = 3;
 export const STALACTITE_CHANCE = 0.4;
-export const STALACTITE_SPREAD = 0.65;
 export const STALACTITE_LENGTH_MIN = 1.5;
 export const STALACTITE_LENGTH_MAX = 5;
-export const STALACTITE_ROOM_LENGTH = 9;
+export const ROOM_STALACTITE_LENGTH_MAX = 9;
 export const STALACTITE_RADIUS_MIN = 0.9;
 export const STALACTITE_RADIUS_MAX = 2.6;
-export const STALACTITE_HEADROOM = 3.2;
+/** A stalactite hangs within this share of the floor's half width of the axis, its tip at least
+ *  STALACTITE_TIP_CLEAR over the floor. */
+export const STALACTITE_SPREAD = 0.65;
+export const STALACTITE_TIP_CLEAR = 3.2;
 export const STALAGMITE_CHANCE = 0.25;
-export const STALAGMITE_MIN_HALF_WIDTH = 2.8;
-export const STALAGMITE_PLACE_MIN = 0.5;
-export const STALAGMITE_PLACE_MAX = 0.85;
 export const STALAGMITE_HEIGHT_MIN = 1;
 export const STALAGMITE_HEIGHT_MAX = 3.5;
-export const STALAGMITE_ROOM_HEIGHT = 5;
+export const ROOM_STALAGMITE_HEIGHT_MAX = 5;
 export const STALAGMITE_RADIUS_MIN = 0.7;
 export const STALAGMITE_RADIUS_MAX = 1.8;
+/** A stalagmite needs this floor half width, stands this share of the way toward a wall, and keeps
+ *  STALAGMITE_CEILING_CLEAR under the ceiling. */
+export const STALAGMITE_MIN_HALF_WIDTH = 2.8;
+export const STALAGMITE_WALL_MIN = 0.5;
+export const STALAGMITE_WALL_MAX = 0.85;
 export const STALAGMITE_CEILING_CLEAR = 2;
-/** A formation is rooted this far into the rock the probe finds, probing from FORMATION_PROBE_LIFT over
- *  the floor; one shorter than FORMATION_MIN_LENGTH is dropped. */
+/** Every formation roots this deep in the rock it was found on, and stands at least FORMATION_SHORTEST in the air. */
 export const FORMATION_ROOT = 2.5;
-export const FORMATION_PROBE_LIFT = 1.5;
-export const FORMATION_PROBE_STEP = 1;
-export const FORMATION_PROBE_MAX = 30;
-export const FORMATION_MIN_LENGTH = 0.5;
-/** A skirt mask covers at most this much of a path. */
-export const MASK_RUN = 24;
+export const FORMATION_SHORTEST = 0.5;
+/** Skirt masks cover runs of at most this many path segments (24u). */
+export const MASK_RUN_SEGMENTS = 3;
 
 // ── Mouth rocks (consumed by the rock dressing) ────────────────────────────
-export const RIM_GRID = 2;
-export const RIM_FRONT = 6;
-export const RIM_SIDE_PAD = 4;
-export const RIM_ROCK_CHANCE = 0.75;
-export const RIM_ROCK_RISE = 1.6;
-export const RIM_ROCK_SIZE_MIN = 0.8;
-export const RIM_ROCK_SIZE_MAX = 3.4;
-export const RIM_ROCK_SETBACK = 0.45;
-export const RIM_ROCK_SPACING = 2.8;
-export const STREWN_MIN = 10;
-export const STREWN_MAX = 18;
-export const STREWN_SIZE_MIN = 0.8;
-export const STREWN_SIZE_MAX = 5;
-export const STREWN_REACH_RADII = 3;
-export const STREWN_FRONT_SHARE = 0.6;
-export const STREWN_APPROACH_IN = 0.5;
-export const STREWN_APPROACH_PAD = 2;
-export const STREWN_SPACING_PAD = 1;
-export const STREWN_TRIES = 30;
+/** A mouth's rocks scatter over a rectangle about its opening: along the section from FRONT_SHARE of the
+ *  reach (REACH_RADII opening radii) in front to the farther of the reach and the section's end, across
+ *  to the farther of the reach and the widest outline + SIDE_PAD. */
+export const MOUTH_ROCK_REACH_RADII = 3;
+export const MOUTH_ROCK_FRONT_SHARE = 0.6;
+export const MOUTH_ROCK_SIDE_PAD = 4;
+/** A RIM point has a neighbour this far away (±along, ±across) in the opening and is always kept; any
+ *  other point at FAR_KEEP, so the rocks cluster on the outline with a sparser scatter beyond. */
+export const MOUTH_ROCK_GRID = 2;
+export const MOUTH_ROCK_FAR_KEEP = 0.25;
+/** Sizes: SIZE_MIN + (SIZE_MAX − SIZE_MIN)·u³ (biased small). */
+export const MOUTH_ROCK_SIZE_MIN = 0.8;
+export const MOUTH_ROCK_SIZE_MAX = 5;
+/** Over the section no rock stands where the ground is under this over its floor (the passage floor). */
+export const MOUTH_ROCK_RISE = 1.6;
+/** A rim rock is set back outward by this share of its size. */
+export const MOUTH_ROCK_SETBACK = 0.45;
+/** The approach stays clear: within APPROACH_IN opening radii in, beside the opening ± size + APPROACH_PAD. */
+export const MOUTH_ROCK_APPROACH_IN = 0.5;
+export const MOUTH_ROCK_APPROACH_PAD = 2;
+/** Rocks keep their sizes plus this apart. */
+export const MOUTH_ROCK_SPACING_PAD = 1;
+export const MOUTH_ROCK_TRIES = 30;
+/** Rocks per mouth, set so the rock dressing DRAWS (after its own filters) about what the old rim and
+ *  strewn rules drew: 9.85 per mouth over the first 20 mountain mouths against 9.6 (DECISIONS.md "One
+ *  mouth-rock rule"). */
+export const MOUTH_ROCK_COUNT_MIN = 12;
+export const MOUTH_ROCK_COUNT_MAX = 16;
 
 // ── The mouth bulge (the one height step) ─────────────────────────────────
-export const BULGE_HEIGHT = 0.9;
-export const BULGE_REACH = 9;
-export const BULGE_FLOOR_STRIP_PAD = 1;
-export const BULGE_FLOOR_STRIP_FADE = 5;
-export const BULGE_RELIFT_LOW = 0.5;
-export const BULGE_RELIFT_HIGH = 3;
-/** The hood over a section rises to the crown + rock over this many opening radii from the opening (1 raised a
- *  near-vertical face the mountain material painted as a rock crescent over every entrance: Evan, "smoothed and
- *  better blended"), shouldered off beside the outline over HOOD_SHOULDER local radii. */
+/** The MOUND: a cosine bump MOUND_HEIGHT opening radii high over MOUND_RADIUS radii around each opening,
+ *  held off the walking strip in front — the floor's half width + MOUND_STRIP_IN, released by + MOUND_STRIP_OUT
+ *  (u) — while the ground there stands under MOUND_FLOOR_NEAR over the floor, released by MOUND_FLOOR_FAR (u). */
+export const MOUND_HEIGHT = 0.9;
+export const MOUND_RADIUS = 9;
+export const MOUND_STRIP_IN = 1;
+export const MOUND_STRIP_OUT = 6;
+export const MOUND_FLOOR_NEAR = 0.5;
+export const MOUND_FLOOR_FAR = 3;
+/** The HOOD: from the opening it rises over HOOD_RISE opening radii to the bulged crown (WALL_BULGE)
+ *  plus HOOD_ROCK local radii of rock; full over the widest outline (MOUTH_RIM_AMP and WALL_BULGE both
+ *  swung out), shouldered off over HOOD_SHOULDER local radii beside it, trailing off over HOOD_TAIL
+ *  opening radii past the inner end. Never lowers the ground.
+ *  A rise over 1 radius painted a gray crescent of rock over every snowy entrance (DECISIONS.md "A
+ *  gentler hood"); 0.5 radii stood a cliff the LOD1 lattice could not draw. */
 export const HOOD_RISE = 1.6;
-export const HOOD_CROWN_ROCK = 0.3;
+export const HOOD_ROCK = 0.3;
 export const HOOD_SHOULDER = 7;
 export const HOOD_TAIL = 5;
-export const LEDGE_SINK = 0.08;
-export const LEDGE_OUT = 1.5;
-export const LEDGE_SIDE = 1.1;
+/** The LEDGE in front: the ground levelled LEDGE_DROP under the floor over LEDGE_LENGTH radii out and
+ *  LEDGE_HALF_WIDTH radii either side, fading in from the opening's plane over LEDGE_FADE_IN radii and
+ *  rounding into the slope over LEDGE_ROUND radii. Levelled exactly to the floor it z-fought the cave's
+ *  floor; starting right at the plane it dug into the rim. */
+export const LEDGE_DROP = 0.08;
+export const LEDGE_LENGTH = 1.5;
+export const LEDGE_HALF_WIDTH = 1.1;
 export const LEDGE_FADE_IN = 0.3;
 export const LEDGE_ROUND = 1;
-export const BULGE_ROAD_PAD = 4;
-export const BULGE_ROAD_FADE = 8;
-/** A mouth's reach on the ground: the mound's, which is the widest. */
-export const BULGE_MAX_REACH = BULGE_REACH * OPENING_RADIUS_MAX + HOOD_TAIL * OPENING_RADIUS_MAX + SECTION_MAX;
+/** The bulge is nothing under water and within BULGE_MASK_PAD past a road's, freeway's or river's
+ *  keep-off, full BULGE_MASK_FADE further: cached road and deck data agree whether or not it was there. */
+export const BULGE_MASK_PAD = 4;
+export const BULGE_MASK_FADE = 8;
+/** The farthest a bulge reaches from its section: the mound of the widest opening. */
+export const BULGE_MAX_REACH = MOUND_RADIUS * OPENING_RADIUS_MAX;
+/** The terrain looks mouths up per tile of this size (the tiles kept before the oldest half goes). */
 export const MOUTH_TILE = 128;
-export const MOUTH_TILE_CACHE_MAX = 4096;
-/** Nothing grows (foliage, snow) this far around a mouth's section: the widest outline plus this
- *  many radii plus the pad. */
+export const MOUTH_TILES_MAX = 4096;
+/** Growth keeps off a section by its widest outline + KEEP_OFF_RADII opening radii + KEEP_OFF_PAD. */
 export const KEEP_OFF_RADII = 0.9;
 export const KEEP_OFF_PAD = 3;
 
@@ -269,7 +289,7 @@ export const ROOM_HALF = 13;
 export const ROOM_HEIGHT = 10;
 export const POOL_DEPTH = 5;
 export const ROOM_WALKWAY = 3.5;
-/** <SewerSideRoom>'s default `chance`. */
+/** The default `chance` of <Rooms> in <Sewers>. */
 export const SIDE_ROOM_CHANCE = 0.45;
 /** The opening in the wall (the frame's jambs and lintel stand inside it, undergroundMeshes.ts buildDoor). */
 export const DOOR_WIDTH = 2.4;
@@ -320,12 +340,6 @@ export const DAYLIGHT_MOUTH_FAR = 45;
 export const DAYLIGHT_MANHOLE_NEAR = 1.5;
 export const DAYLIGHT_MANHOLE_FAR = 14;
 export const DAYLIGHT_GROUND_DEPTH = 6;
-/** Cave colors (linear). */
-export const CAVE_WALL_COLOR: readonly [number, number, number] = [0.4, 0.4, 0.43];
-export const CAVE_FLOOR_COLOR: readonly [number, number, number] = [0.33, 0.3, 0.27];
-export const CAVE_FLOOR_UP_START = 0.2;
-export const CAVE_FLOOR_UP_END = 0.85;
-export const CAVE_GRAIN = 0.12;
 /** Sewer colors (linear). */
 export const SEWER_WALL_COLOR: readonly [number, number, number] = [0.08, 0.105, 0.15];
 export const SEWER_WALKWAY_COLOR: readonly [number, number, number] = [0.1, 0.11, 0.13];

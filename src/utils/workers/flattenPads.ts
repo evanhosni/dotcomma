@@ -11,7 +11,7 @@ import { smoothstep } from "../math";
 import { dropOldestHalf } from "./cellCache";
 import { domainConfig } from "./computeConfig";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "./densityGrid";
-import { riverKeepOff } from "./rivers/constants";
+import { riverKeepOff } from "./water/rivers/constants";
 import type { DomainConfig, FlattenDescriptor, VertexResult } from "./types";
 import { computeVertexData, outsideBiomes } from "./vertexCompute";
 

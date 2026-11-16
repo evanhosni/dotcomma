@@ -59,10 +59,11 @@ export interface LODLevel {
    *  LOD3|4 398u, hence 30 / 230 / 460. Finer segments only shrink the gaps. LOD4 is the outermost ring, with
    *  no coarser neighbor, so its 1000 only hangs past the far plane. */
   skirtDepth: number;
-  /** Whether the chunk evaluates the river field (channel, river water, bed paint, city quay). The
-   *  farthest visual-only LODs (840u / 3360u spacing) do not: a river there drew under 0.5% of its
-   *  true water as isolated specks while building the per-cell river lists cost ~90% of their build
-   *  time. LOD3 (210u) keeps it: it still draws a wide river near the ocean. */
+  /** Whether the chunk evaluates the river field (channel, river water, bed paint, city quay). LOD4
+   *  (210u spacing) does not: a river there drew isolated specks of water while the field's road layer
+   *  was most of its build time. It reads the coarse FAR field instead (rivers/field.ts farRiverFieldAt:
+   *  the walls and the valleys' gap), so its land keeps the water's shape. LOD3 (70u) keeps the real
+   *  field: it still draws a wide river near the ocean. */
   carvesRivers: boolean;
   /** Whether a collider LOD cuts the ground under bridge decks (computeVertexData step 11: the cut, the
    *  landing approaches, the mouths) and bulges the ground at cave mouths; the visual-only LODs never do

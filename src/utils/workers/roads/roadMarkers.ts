@@ -7,7 +7,7 @@
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { domainConfig } from "../computeConfig";
 import { unwarp, warp } from "../noise";
-import { riverKeepOff } from "../rivers/constants";
+import { riverKeepOff } from "../water/rivers/constants";
 import { computeVertexData } from "../vertexCompute";
 import { isCanonicalWall } from "../voronoi";
 import { CITY_RING_RADIUS_FRAC, CITY_SHAPE_CIRCLE, CITY_SHAPE_TRI_NE, CITY_SHAPE_TRI_NW, type CityCell } from "./cityCells";

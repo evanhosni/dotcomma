@@ -8,7 +8,8 @@ import { freezeStaticSubtree } from "../../utils/utils";
 import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
 import { _spawnFade } from "../../vfx/spawnFade";
 import { reportContentError } from "../../utils/contentError";
-import { BiomeContext } from "../../world/components/context";
+import { BiomeContext, WaterBodyContext } from "../../world/components/context";
+import { WATER_ZONE_DEFAULTS } from "../../utils/workers/water/parts/params";
 import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
 import { FoliageAttributes } from "../types";
 import { definedOnly, warnUnsupportedSync } from "../utils";
@@ -149,7 +150,8 @@ interface FoliageFieldProps extends FoliageAttributes {
   plant?: object;
 }
 
-/** Without explicit `biomeIds`, restricts itself to the enclosing <Biome>. Mounted only through
+/** Without explicit `biomeIds`, restricts itself to the enclosing <Biome> — or, mounted in a body of
+ *  water, to the water that body owns. Mounted only through
  *  createFoliage, which has already resolved mount > plant defaults. */
 const FoliageField: React.FC<FoliageFieldProps> = ({
   density = 800_000,
@@ -167,7 +169,10 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
   swaySpeed = 1.2,
   renderDistance = 500,
   seed = "foliage",
-  underwater,
+  zone,
+  submergedMinDepth = 1.5,
+  tipClearance = 0.8,
+  minCutScale = 0.25,
   quantization,
   serverSynced,
   plant,
@@ -193,7 +198,9 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
   const { terrainLoaded, progress } = useGameContext();
 
   const biomeCtx = useContext(BiomeContext);
-  const effectiveBiomeIds = biomeIds ?? (biomeCtx ? [biomeCtx.biomeId] : undefined);
+  // In a body of water its own water decides where it grows; elsewhere the enclosing biome does.
+  const waterBody = useContext(WaterBodyContext);
+  const effectiveBiomeIds = biomeIds ?? (biomeCtx && !waterBody ? [biomeCtx.biomeId] : undefined);
 
   const texture = useMemo(() => {
     if (png) {
@@ -227,9 +234,14 @@ const FoliageField: React.FC<FoliageFieldProps> = ({
       slopeRange,
       slopeBlend,
       roadDistanceRange,
-      underwater: underwater ? { height } : undefined,
+      waterBody: waterBody ?? undefined,
+      zone: zone ?? (waterBody ? WATER_ZONE_DEFAULTS.foliage : undefined),
+      bladeHeight: height,
+      submergedMinDepth,
+      tipClearance,
+      minCutScale,
     }),
-    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), JSON.stringify(heightRange), JSON.stringify(slopeRange), JSON.stringify(roadDistanceRange), underwater, underwater ? height : 0],
+    [seed, density, slopeBlend, JSON.stringify(effectiveBiomeIds), waterBody, JSON.stringify(heightRange), JSON.stringify(slopeRange), JSON.stringify(roadDistanceRange), zone, height, submergedMinDepth, tipClearance, minCutScale],
   );
 
   useEffect(() => {

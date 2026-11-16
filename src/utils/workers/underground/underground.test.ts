@@ -7,12 +7,12 @@ import { computeVertexData, computeVertexDataRaw, initCompute } from "../vertexC
 import { biomeSiteAt } from "../voronoi";
 import { mouthSpots } from "./caves";
 import { buildUndergroundChunk, setRockTestEnabled } from "./chunkMesh";
-import { AXIS_LIFT, FLOOR_GRADE, LIQUID_BELOW_WALKWAY, MOUTH_STEEP_GRADE, OPENING_RADIUS_MAX, OPENING_RADIUS_MIN, PASSAGE_RADIUS_MAX, PASSAGE_RADIUS_MIN, POOL_DEPTH, ROCK_COVER, SEWER_DEPTH, SPRING_HALL_RADIUS, SPRING_SHARE_REACH, VOXEL } from "./constants";
+import { AXIS_LIFT, FLOOR_GRADE, INNER_RADIUS_MAX, INNER_RADIUS_MIN, LIQUID_BELOW_WALKWAY, MOUTH_STEEP_GRADE, OPENING_RADIUS_MAX, OPENING_RADIUS_MIN, POOL_DEPTH, ROCK_COVER, SEWER_DEPTH, VOXEL } from "./constants";
 import { drawnGroundAt } from "./drawnGround";
 import { layoutPieces, mergeLayouts, type SewerSystem } from "./sewers";
 import { buildSewerTriangles, liquidLevelOf } from "./sewerMesh";
 import { meshBrick, NetVertices, type NetsOutput } from "./surfaceNets";
-import { clearTunnelCaches, systemAt, systemsNear } from "./systems";
+import { clearTunnelCaches, systemAt } from "./systems";
 import { compileField, mouthFloorAt, mouthRadiusAt } from "./tunnelField";
 import type { ConePiece, TubePiece, TunnelSystem, UndergroundChunk } from "./types";
 import { biomeIdOf } from "../../../world/content/config";
@@ -48,9 +48,9 @@ const firstSystem = (style: "cave" | "sewer", biomeId: number, tries: number): T
   throw new Error(`no ${style} system in the first ${tries} ${biomeId} cells`);
 };
 
-/** A short digest of a system's pieces (the spots are placed later, on demand). */
+/** A short digest of a system's pieces. */
 const digest = (s: TunnelSystem): string => {
-  const text = JSON.stringify(s.pieces.map((p) => ({ ...p, spots: undefined })));
+  const text = JSON.stringify(s.pieces);
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
   return `${text.length}:${h >>> 0}`;
@@ -72,8 +72,8 @@ describe("caves", () => {
       expect(Math.abs(computeVertexData(m.ox, m.oz).height - m.oy)).toBeLessThan(0.5);
       expect(m.r0).toBeGreaterThanOrEqual(OPENING_RADIUS_MIN);
       expect(m.r0).toBeLessThanOrEqual(OPENING_RADIUS_MAX);
-      expect(m.r1).toBeGreaterThanOrEqual(PASSAGE_RADIUS_MIN);
-      expect(m.r1).toBeLessThanOrEqual(PASSAGE_RADIUS_MAX);
+      expect(m.r1).toBeGreaterThanOrEqual(INNER_RADIUS_MIN);
+      expect(m.r1).toBeLessThanOrEqual(INNER_RADIUS_MAX);
       expect(m.grade).toBeLessThanOrEqual(MOUTH_STEEP_GRADE);
     }
   });
@@ -150,8 +150,7 @@ describe("caves", () => {
     for (const arr of [c.mesh.positions, c.mesh.normals, c.mesh.colors, c.mesh.daylight]) for (let i = 0; i < arr.length; i++) expect(Number.isFinite(arr[i])).toBe(true);
     expect(c.mesh.indices.length).toBeGreaterThan(0);
     expect(c.colliders.length).toBeGreaterThan(0);
-    expect(c.entrances.some((e) => e.id === m.id)).toBe(true);
-    expect(c.entranceMouths.some((e) => e.id === m.id)).toBe(true);
+    expect(c.mouths.some((e) => e.id === m.id)).toBe(true);
     expect(c.patch).not.toBeNull();
     let max = 0;
     let min = 1;
@@ -176,30 +175,6 @@ describe("caves", () => {
     expect(skipped.mesh.positions).toEqual(full.mesh.positions);
     expect(skipped.mesh.indices).toEqual(full.mesh.indices);
     expect(skipped.mesh.normals).toEqual(full.mesh.normals);
-  });
-
-  it("connects two springs that meet in the rock through one hall, and pools neither (Evan at (-6615, 8821))", () => {
-    const area = { minX: -6615 - 300, minZ: 8821 - 300, maxX: -6615 + 300, maxZ: 8821 + 300 };
-    const springs = systemsNear("cave", MOUNTAIN, area).filter((s) => s.key.startsWith("spring|"));
-    expect(springs.length).toBeGreaterThanOrEqual(2);
-    const rooms = springs.filter((s) => s.pieces.some((piece) => piece.kind === "room"));
-    const halls = springs.filter((s) => s.pieces.some((piece) => piece.kind === "tube" && (piece as TubePiece).ra === SPRING_HALL_RADIUS && (piece as TubePiece).rb === SPRING_HALL_RADIUS));
-    // Stacked pools: two rooms within a hall's reach of each other.
-    for (const a of rooms) {
-      for (const b of rooms) {
-        if (a === b) continue;
-        const d = Math.hypot(a.mouths[0].ox - b.mouths[0].ox, a.mouths[0].oz - b.mouths[0].oz);
-        expect(d).toBeGreaterThan(SPRING_SHARE_REACH);
-      }
-    }
-    expect(halls.length).toBeGreaterThanOrEqual(1);
-    // The paired springs agree from both cells: a hall holder's partner (the other spring whose mouth is
-    // within reach) has neither a room nor a hall of its own.
-    for (const h of halls) {
-      const partners = springs.filter((s) => s !== h && Math.hypot(s.mouths[0].ox - h.mouths[0].ox, s.mouths[0].oz - h.mouths[0].oz) < SPRING_SHARE_REACH * 2);
-      expect(partners.length).toBeGreaterThanOrEqual(1);
-      for (const s of partners) expect(rooms.includes(s)).toBe(false);
-    }
   });
 });
 

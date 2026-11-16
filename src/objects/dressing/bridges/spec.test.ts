@@ -203,6 +203,23 @@ describe("bridge colliders", () => {
 });
 
 describe("bridge ribbon", () => {
+  it("is finite everywhere, even a short T deck whose oblique cut clears only at its far end", () => {
+    // (12319, −3921): a 17u drawn T deck; its cut's twist window was 0 long and its last section's
+    // cross-fall smoothstep(0, 0, 0) — NaN positions (THREE's "computed radius is NaN").
+    let short = 0;
+    for (let gx = 46; gx <= 50; gx++) {
+      for (let gz = -18; gz <= -13; gz++) {
+        for (const b of getFreewayBridges(gx * 256, gz * 256, (gx + 1) * 256, (gz + 1) * 256, BRIDGE_PLACEMENT)) {
+          if (Math.hypot(b.x - 12319, b.z + 3921) < 2) short++;
+          const out = { positions: [] as number[], normals: [] as number[], colors: [] as number[], uvs: [] as number[], road: [] as number[] };
+          bridgeRibbon(b, b.x, 0, b.z, 0, 0, out);
+          expect([...out.positions, ...out.normals, ...out.road].every(Number.isFinite)).toBe(true);
+        }
+      }
+    }
+    expect(short).toBeGreaterThan(0);
+  });
+
   it("faces every slab top up, even a T end's sweep with a near-zero triangle", () => {
     // (-8000, -13500): a Y whose child's first top quad (its cut to the first square section) has two
     // corners nearly coinciding; its normal came from that triangle and flipped the slab top over.

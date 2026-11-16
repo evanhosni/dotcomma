@@ -100,13 +100,31 @@ export const drawnOf = (b: FreewayBridge): DrawnDeck => {
   return entry;
 };
 
-/** Barycentric (l1, l2) of (x, z) in the triangle at tri[o]: corners p0, p1, p2 (5 numbers each). */
+/** A slab triangle thinner than this — twice its area over its longest edge squared, i.e. its least
+ *  altitude per unit of its longest edge — has no plane: it covers no ground, and its plane, fitted
+ *  through three nearly collinear corners whose heights disagree, tilts without bound. A Y deck's crotch
+ *  flare fans its sections out until one's corner lands on the previous one's cross line (a quad of zero
+ *  width), and the ground beside it, resting on that plane carried 3u on, went down to −1.7e11: a
+ *  hexagonal well in the river beside the deck, its six LOD triangles standing vertical (Evan's report
+ *  at 18198, −2946; bridges/DECISIONS.md "Sliver slab triangles"). Absolute thresholds on the
+ *  determinant (1e-12 here, 1e-9 in triangleOverSlab) missed it: over 40u edges a collinear triangle's
+ *  det was 5e-12. Over 32 km² of decks (17.5k triangles) 9 measure ≤ 4e-14 and 4 near 8e-5; every other
+ *  is ≥ 7e-4. */
+const SLAB_SLIVER = 1e-4;
+const isSliver = (det: number, e1x: number, e1z: number, e2x: number, e2z: number): boolean => {
+  const e3x = e2x - e1x, e3z = e2z - e1z;
+  const longest = Math.max(e1x * e1x + e1z * e1z, e2x * e2x + e2z * e2z, e3x * e3x + e3z * e3z);
+  return !(Math.abs(det) > SLAB_SLIVER * longest);
+};
+
+/** Barycentric (l1, l2) of (x, z) in the triangle at tri[o]: corners p0, p1, p2 (5 numbers each).
+ *  False for a sliver (SLAB_SLIVER), which has no plane to place the point on. */
 const baryOf = (tri: Float64Array, o: number, x: number, z: number, out: number[]): boolean => {
   const x0 = tri[o], z0 = tri[o + 1];
   const e1x = tri[o + 5] - x0, e1z = tri[o + 6] - z0;
   const e2x = tri[o + 10] - x0, e2z = tri[o + 11] - z0;
   const det = e1x * e2z - e2x * e1z;
-  if (Math.abs(det) < 1e-12) return false;
+  if (isSliver(det, e1x, e1z, e2x, e2z)) return false;
   out[0] = ((x - x0) * e2z - e2x * (z - z0)) / det;
   out[1] = (e1x * (z - z0) - (x - x0) * e1z) / det;
   return true;
@@ -435,7 +453,7 @@ const triangleOverSlab = (b: FreewayBridge, tx: number[], tz: number[], ty: numb
       // The slab triangle, counter-clockwise.
       let ox0 = tri[o], oz0 = tri[o + 1], ox1 = tri[o + 5], oz1 = tri[o + 6], ox2 = tri[o + 10], oz2 = tri[o + 11];
       const area = (ox1 - ox0) * (oz2 - oz0) - (ox2 - ox0) * (oz1 - oz0);
-      if (Math.abs(area) < 1e-9) continue;
+      if (isSliver(area, ox1 - ox0, oz1 - oz0, ox2 - ox0, oz2 - oz0)) continue;
       if (area < 0) {
         [ox1, ox2] = [ox2, ox1];
         [oz1, oz2] = [oz2, oz1];

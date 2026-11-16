@@ -18,6 +18,9 @@ const GRASS = {
   slopeRange: [0, 28] as [number, number],
   slopeBlend: 12,
   roadDistanceRange: [8.5, 99999] as [number, number],
+  submergedMinDepth: 1.5,
+  tipClearance: 0.8,
+  minCutScale: 0.25,
 };
 
 const bits = (a: Float32Array, n = a.length) => Array.from(new Uint32Array(a.buffer, a.byteOffset, n));

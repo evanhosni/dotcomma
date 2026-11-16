@@ -10,7 +10,7 @@ import { getAssignedSpawnOffset } from "../net/connection";
 import { fetchSurfaceModifiers } from "../objects/dressing/worker";
 import { createCharacter, createStepResult, disposeCharacter, GRAVITY, stepCharacter, TERMINAL_VELOCITY, type Character, type SwimInput } from "../physics/characterMovement";
 import { createSurfaceSampler } from "../physics/movementModifiers";
-import { setCameraWaterDepth, type LiquidLook } from "../vfx/underwater";
+import { setCameraWaterDepth } from "../vfx/underwater";
 import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personalLight";
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/trail";
@@ -72,14 +72,14 @@ const readMoveDirection = (camera: THREE.Camera, input: InputState, out: THREE.V
   return out;
 };
 
-/** Free flight: no collision, no gravity; jump/control rise and sink. */
+/** Free flight: no collision, no gravity; jump/C rise and sink. */
 const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }, input: InputState, move: THREE.Vector3, dt: number): void => {
   const hSpeed = input.sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
   const vSpeed = input.sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(hSpeed);
   let vy = 0;
   if (input.jump) vy += vSpeed;
-  if (input.control) vy -= vSpeed;
+  if (input.descend) vy -= vSpeed;
   rb.setTranslation({ x: pos.x + move.x * dt, y: pos.y + vy * dt, z: pos.z + move.z * dt }, true);
 };
 
@@ -198,7 +198,6 @@ export const Player = () => {
     }
 
     let liquidY = NaN;
-    let liquidLook: LiquidLook = "water";
     if (noclip) {
       flyNoclip(rb, pos, input, move, dt);
     } else {
@@ -210,7 +209,6 @@ export const Player = () => {
         surface.sample(at.x, at.z, at.y - PLAYER_HEIGHT / 2);
         // Inside a tunnel its liquid is the water; outside, the water probe's surface.
         liquidY = ug.liquidY;
-        liquidLook = ug.liquidLook;
         const surfaceY = underground.isInside() ? liquidY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
         swimInput.surfaceY = surfaceY;
         swimInput.viscosity = underground.isInside() ? ug.liquidViscosity : 1;
@@ -243,7 +241,8 @@ export const Player = () => {
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
     const cameraSurface = underground.isInside() ? liquidY : water.surfaceOver(camera.position.y);
-    setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, underground.isInside() ? liquidLook : "water");
+    if (underground.isInside()) setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "sewage");
+    else setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "water", water.colors());
   }, -3);
 
   return (

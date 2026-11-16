@@ -7,7 +7,7 @@ import { CITY_BIOME_ID } from "../../../world/constants";
 import { FREEWAY_CORRIDOR_OUTER } from "../../../world/shaders/constants";
 import { domainConfig } from "../computeConfig";
 import { unwarp } from "../noise";
-import { riverKeepOff } from "../rivers/constants";
+import { riverKeepOff } from "../water/rivers/constants";
 import type { Wall } from "../types";
 import { computeVertexData } from "../vertexCompute";
 import { isCanonicalWall } from "../voronoi";

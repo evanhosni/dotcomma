@@ -60,7 +60,7 @@ export const passesPlacementFilters = (
   riverKeepOff: number,
 ): boolean => {
   // Nothing stands under water: past a river's keep-off, the land a river merges into a lake beside it
-  // (lakes.ts riverLakeMerge) is lakebed.
+  // (water/joins riverLakeMerge) is lakebed.
   if (vd.distanceToRiverCenter < riverKeepOff || vd.underDeck > 0 || vd.waterHeight > vd.height) return false;
   if (f.biomeIds && f.biomeIds.length > 0 && !f.biomeIds.includes(vd.biomeId)) return false;
   if (f.heightRange && (vd.height < f.heightRange[0] || vd.height > f.heightRange[1])) return false;

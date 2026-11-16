@@ -10,7 +10,7 @@ import type { PointXZ } from "../../math/types";
 import type { SewerSideRoomParams } from "../types";
 import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
-import { riverKeepOff } from "../rivers/constants";
+import { riverKeepOff } from "../water/rivers/constants";
 import { cityLocalToWorld, getCityDistrict, type CityDistrict } from "../roads/cityDistricts";
 import { computeVertexData } from "../vertexCompute";
 import {

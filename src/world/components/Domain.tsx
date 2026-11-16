@@ -56,7 +56,7 @@ const actorsOf = (domain: ContentNode<any>): AnyActorDescriptor[] =>
   mergeActorListings(
     childrenOfKind<RegionIdentity>(domain, "region").flatMap((region) =>
       childrenOfKind<BiomeIdentity>(region, "biome").flatMap((biome) =>
-        actorPlacementsOf(biome).map(({ id, mount, feature }) => descriptorOfMount(mount, id, biome.props.id, feature)),
+        actorPlacementsOf(biome, region).map(({ id, mount, feature }) => descriptorOfMount(mount, id, biome.props.id, feature)),
       ),
     ),
   );

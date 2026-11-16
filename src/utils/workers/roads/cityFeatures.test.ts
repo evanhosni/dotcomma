@@ -21,7 +21,7 @@ import { DRESSING_ENUMERATORS, runDressingEnumerator } from "../../../objects/dr
 import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/spec";
 import { BRIDGE_CUT_BELOW_TOP, BRIDGE_DECK_LIFT } from "../bridges/constants";
 import type { FreewayBridge } from "../bridges/types";
-import { riverQuay } from "../rivers/riverField";
+import { riverQuay } from "../water/rivers/field";
 import { biomeIdOf } from "../../../world/content/config";
 
 const GRASS_BIOME = { id: biomeIdOf(DOMAIN_CONFIGS.overworld, "grass") };
@@ -355,7 +355,7 @@ describe("getFreewayBridges", () => {
         if (vd.distanceToRiverCenter < river.halfWidth + river.bank && vd.height < Math.max(b.sy, b.ey)) overWater = true;
       }
       expect(overWater).toBe(true);
-      // Width factors run from ~0.75 (a jittered junction) down to a fizzle end, so the deck can be far shorter than a factor-1 channel.
+      // Width factors run from ~0.75 (a jittered junction) down to a climb's narrowing, so the deck can be far shorter than a factor-1 channel.
       expect(b.length).toBeGreaterThan(river.halfWidth * 0.5);
       // A viaduct along a river is one deck; the generator only builds chains that fit its window.
       expect(b.length).toBeLessThan(3000);

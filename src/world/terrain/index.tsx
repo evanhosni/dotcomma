@@ -478,7 +478,9 @@ export const TerrainRenderer = () => {
 
     const geom = chunk.plane.geometry;
     writeTerrainBuffers(geom, lod, result);
-    if (result.waterHeights && result.waterDepths && result.waterFlow) writeWaterBuffers(ensureWaterMesh(chunk).geometry, geom, lod, result.heights, result.waterHeights, result.waterDepths, result.waterFlow);
+    if (result.waterHeights && result.waterDepths && result.waterFlow && result.waterShallow && result.waterDeep) {
+      writeWaterBuffers(ensureWaterMesh(chunk).geometry, geom, lod, result.heights, result.waterHeights, result.waterDepths, result.waterFlow, result.waterShallow, result.waterDeep);
+    }
     else releaseWater(chunk);
 
     chunk.plane.material = opaqueMaterialFor(chunk, material);

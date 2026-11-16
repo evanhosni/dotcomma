@@ -33,23 +33,16 @@ export const RIVER_BED_FULL_INSET = RIVER_BED_FADE_INSET + RIVER_BED_BLEND_WIDTH
 
 /** Each biome's riverbed texture cross-fades into its neighbor's over at least this HALF width (real
  *  units) across a biome wall, whatever the biomes' own feathers: the bed is not its biome's ground,
- *  and beside the crisp city (a 1u half) the bed's sand met the snow's gravel on a hard line. */
-export const RIVER_BED_TEXTURE_HALF = 8;
+ *  and beside the crisp city (a 1u half) the bed's sand met the snow's gravel on a hard line. 8 still
+ *  read as a straight cut from above (water/DECISIONS.md); 40 is on the scale of the softest natural
+ *  wall (the lake's 45). */
+export const RIVER_BED_TEXTURE_HALF = 40;
 
-/** The riverbed paint yields to ROCK beneath it on steep banks: fully painted up to START, gone by END
- *  (slope from the world normal, degrees) — a mountainside rising out of a river keeps its rock
- *  instead of a band of gravel. */
-export const RIVER_BED_SLOPE_START_DEG = 30;
-export const RIVER_BED_SLOPE_END_DEG = 40;
-/** …on the BANKS: under the water (vUnderwaterDepth) the slope rule fades out over this depth (real
- *  units), so a steep channel wall is riverbed, the ground's texture fading into it at the waterline. */
+/** The riverbed paint yields to a biome's own ground on steep banks by its riverbed's `yieldSlope` (a
+ *  mountainside rising out of a river keeps its rock instead of a band of gravel) — on the BANKS only: under
+ *  the water (vUnderwaterDepth) the slope rule fades out over this depth (real units), so a steep channel
+ *  wall is riverbed, the ground's texture fading into it at the waterline. */
 export const RIVER_BED_UNDERWATER_FADE = 1.5;
-
-/** Whether a biome's ground is ROCK on steep banks, the only ground the bed yields to by slope (the
- *  shader's fade, the bed limit's marches): THE one rock predicate, utils/workers/biomeFlags.ts
- *  isRockBiome (a domed biome). Grass, dunes and snow stay under the bed — yielding, they cut into it
- *  in wedges and strips reaching the water. */
-export { isRockBiome as bedYieldsToSteepGround } from "../../utils/workers/biomeFlags";
 
 /** The riverBedDistance ATTRIBUTE's "no river" value. The pipeline reports Infinity out of a river's
  *  reach, but a vertex attribute must stay FINITE: a triangle with one Infinity vertex interpolates to

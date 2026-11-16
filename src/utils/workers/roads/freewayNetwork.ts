@@ -8,7 +8,7 @@
  * per cell pair) by the shortest path over walls with no city and no water on either
  * side. The path starts at a junction on the city's boundary, i.e. a corner of the belt
  * freeway, so it merges into the belt at the wall. Rivers have their own grid and cross
- * roads freely (rivers/riverNetwork.ts); bridges carry the roads over them (bridges/).
+ * roads freely (rivers/network.ts); bridges carry the roads over them (bridges/).
  */
 
 import Delaunator from "delaunator";
@@ -19,7 +19,8 @@ import { dropOldestHalf } from "../cellCache";
 import { domainConfig } from "../computeConfig";
 import { simplex2 } from "../noise";
 import type { BiomeContext, VoronoiCell, Zone } from "../types";
-import { biomeSiteAt } from "../voronoi";
+import { biomeSiteAt, getBiomeContext } from "../voronoi";
+import { isLakeBiome } from "../water/lakes/params";
 
 const NETWORK_RADIUS_CELLS = 18;
 /** Sources, runs and hops within this many cells of the window's border are not trusted (see getNetwork). */
@@ -97,7 +98,7 @@ interface NetGraph {
   walls: NetWall[];
   /** The city component (union-find root over city|city walls) of a site. */
   compOf: (site: number) => number;
-  /** 1 where a freeway may run: no city, no water and no prohibitRoads biome on either side. */
+  /** 1 where a freeway may run: no city and no lake on either side. */
   walkable: Uint8Array;
   /** Well inside the window. The Delaunay is distorted along the window's border, so a source or a
    *  run there decides differently than the window that has it near its center (roads would end at
@@ -184,7 +185,7 @@ const buildNetGraph = (cx: number, cz: number): NetGraph => {
     const za = sites[walls[wi].a].zone;
     const zb = sites[walls[wi].b].zone;
     walkable[wi] =
-      za.biome.id === CITY_BIOME_ID || zb.biome.id === CITY_BIOME_ID || za.biome.water || zb.biome.water || za.biome.prohibitRoads || zb.biome.prohibitRoads
+      za.biome.id === CITY_BIOME_ID || zb.biome.id === CITY_BIOME_ID || isLakeBiome(za.biome) || isLakeBiome(zb.biome)
         ? 0
         : 1;
   }
@@ -291,7 +292,12 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
     for (const r of fp) if (fq.has(r)) return true;
     return false;
   };
-  const heap: number[] = [];
+  // Lazy-deletion heap: every entry keeps the distance it was pushed with. Compared by the LIVE dist[],
+  // an entry whose junction was improved later shrank in place without sifting, the pops came out of
+  // order and the path found depended on how each window happened to index its junctions — two
+  // neighboring cells routed one city pair differently and drew a freeway in only one of them.
+  const heapNode: number[] = [];
+  const heapKey: number[] = [];
   const dist = new Float64Array(junctions.length);
   const prev = new Int32Array(junctions.length);
   // The wall each junction was last reached over (always the one wall between it and prev).
@@ -300,35 +306,46 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
   const reached = new Int32Array(junctions.length);
   const doneAt = new Int32Array(junctions.length);
   let epoch = 0;
-  const less = (a: number, b: number) => dist[a] < dist[b] || (dist[a] === dist[b] && (jx[a] < jx[b] || (jx[a] === jx[b] && jz[a] < jz[b])));
+  const less = (i: number, k: number) => {
+    const a = heapNode[i];
+    const b = heapNode[k];
+    return heapKey[i] < heapKey[k] || (heapKey[i] === heapKey[k] && (jx[a] < jx[b] || (jx[a] === jx[b] && jz[a] < jz[b])));
+  };
+  const swap = (i: number, k: number) => {
+    const n = heapNode[i];
+    heapNode[i] = heapNode[k];
+    heapNode[k] = n;
+    const d = heapKey[i];
+    heapKey[i] = heapKey[k];
+    heapKey[k] = d;
+  };
   const push = (v: number) => {
-    heap.push(v);
-    let i = heap.length - 1;
+    heapNode.push(v);
+    heapKey.push(dist[v]);
+    let i = heapNode.length - 1;
     while (i > 0) {
       const parentI = (i - 1) >> 1;
-      if (!less(heap[i], heap[parentI])) break;
-      const t = heap[i];
-      heap[i] = heap[parentI];
-      heap[parentI] = t;
+      if (!less(i, parentI)) break;
+      swap(i, parentI);
       i = parentI;
     }
   };
   const pop = (): number => {
-    const top = heap[0];
-    const last = heap.pop()!;
-    if (heap.length > 0) {
-      heap[0] = last;
+    const top = heapNode[0];
+    const lastNode = heapNode.pop()!;
+    const lastKey = heapKey.pop()!;
+    if (heapNode.length > 0) {
+      heapNode[0] = lastNode;
+      heapKey[0] = lastKey;
       let i = 0;
       for (;;) {
         const l = i * 2 + 1;
         const r = l + 1;
         let m = i;
-        if (l < heap.length && less(heap[l], heap[m])) m = l;
-        if (r < heap.length && less(heap[r], heap[m])) m = r;
+        if (l < heapNode.length && less(l, m)) m = l;
+        if (r < heapNode.length && less(r, m)) m = r;
         if (m === i) break;
-        const t = heap[i];
-        heap[i] = heap[m];
-        heap[m] = t;
+        swap(i, m);
         i = m;
       }
     }
@@ -365,7 +382,8 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
       }
       if (!routable.has(P) || !routable.has(Q)) continue;
       epoch++;
-      heap.length = 0;
+      heapNode.length = 0;
+      heapKey.length = 0;
       for (const i of compJunctions.get(P) ?? []) {
         dist[i] = 0;
         prev[i] = -1;
@@ -373,7 +391,7 @@ const routeCityPairs = (g: NetGraph, freewayWalls: Set<number>, debug: NetworkDe
         push(i);
       }
       let target = -1;
-      while (heap.length > 0) {
+      while (heapNode.length > 0) {
         const u = pop();
         if (doneAt[u] === epoch) continue;
         doneAt[u] = epoch;
@@ -554,8 +572,8 @@ const meanderFreewayQuery = (px0: number, pz0: number): void => {
  *  units; Infinity when there are none), and the dash phase and closest point of the nearest one. */
 export const nearestRun = { distance: Infinity, along: 0, x: 0, z: 0 };
 
-export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[]): void => {
-  nearestRun.distance = Infinity;
+export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[], out: typeof nearestRun = nearestRun): void => {
+  out.distance = Infinity;
   if (runs.length === 0) return;
   // A gentle meander, and a smooth minimum over the segments: rounded bends and hubs.
   meanderFreewayQuery(px0, pz0);
@@ -568,7 +586,7 @@ export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[]):
     // (smoothMin is the exact min there) nor the argmin, so skipping it is exact (+1e-6: rounding).
     const bx = Math.max(run.minX - px, 0, px - run.maxX);
     const bz = Math.max(run.minZ - pz, 0, pz - run.maxZ);
-    const lim = nearestRun.distance + FREEWAY_SMIN_K + 1e-6;
+    const lim = out.distance + FREEWAY_SMIN_K + 1e-6;
     if (lim > 0 && bx * bx + bz * bz > lim * lim) continue;
     const pts = run.pts;
     for (let i = 0; i + 3 < pts.length; i += 2) {
@@ -585,13 +603,22 @@ export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[]):
       const d = Math.hypot(px - cx, pz - cz);
       if (d < best) {
         best = d;
-        nearestRun.along = run.cum[i / 2] + t * Math.sqrt(lenSq) + run.phase;
-        nearestRun.x = cx;
-        nearestRun.z = cz;
+        out.along = run.cum[i / 2] + t * Math.sqrt(lenSq) + run.phase;
+        out.x = cx;
+        out.z = cz;
       }
-      nearestRun.distance = smoothMin(nearestRun.distance, d, FREEWAY_SMIN_K);
+      out.distance = smoothMin(out.distance, d, FREEWAY_SMIN_K);
     }
   }
+};
+
+/** The smooth-min distance (warped, real units) from a warped point to the freeway runs of its cell's
+ *  network — nearestFreewayRun's distance, as a pure query: the vertex in progress keeps its own
+ *  nearestRun (a pond is placed mid-vertex). */
+const runQuery = { distance: Infinity, along: 0, x: 0, z: 0 };
+export const freewayRunDistance = (x: number, z: number): number => {
+  nearestFreewayRun(x, z, networkOf(getBiomeContext({ x, z })).freeways, runQuery);
+  return runQuery.distance;
 };
 
 /** Every run segment within `reach` of (px0, pz0) — measured from the same meandered point as

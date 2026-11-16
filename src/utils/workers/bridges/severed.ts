@@ -6,11 +6,11 @@ import { distanceToSegment } from "../../math";
 import type { PointXZ } from "../../math/types";
 import { domainConfig } from "../computeConfig";
 import { warp, warpMax } from "../noise";
-import { riverFieldAt, riverSample } from "../rivers/riverField";
-import { riverWetReach } from "../rivers/constants";
-import { riverEdgePiece, riverPiecesNear, riversEnabled } from "../rivers/riverNetwork";
-import type { RiverEdge, RiverPiece } from "../rivers/types";
-import { riverEdgeNearRoads } from "../rivers/riverRoadLayer";
+import { riverFieldAt, riverSample } from "../water/rivers/field";
+import { riverWetReach } from "../water/rivers/constants";
+import { riverEdgePiece, riverPiecesNear, riversEnabled } from "../water/rivers/network";
+import type { RiverEdge, RiverPiece } from "../water/rivers/types";
+import { riverEdgeNearRoads } from "../water/rivers/roadLayer";
 import { zoneAtWarped } from "../voronoi";
 import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_MERGE, BRIDGE_WET_SAMPLE, DEFAULT_BRIDGE_PLACEMENT, runRiverYield } from "./constants";
 import { bridgeWithinEnds } from "./deckGeometry";
@@ -48,7 +48,7 @@ const SEVERED_RING_EDGE = 8;
  *   - one where the road ends in the water at a junction ("open") needs its dry end served (a T
  *     into the deck carrying the road it joins);
  *  except a city arterial that does not cross the river (it follows the shore, grazes it, or ends in
- *  it on its own bank): the quay road along the bank meets it and carries it on (riverNetwork's road
+ *  it on its own bank): the quay road along the bank meets it and carries it on (the rivers' road
  *  layer leaves the river there).
  *  Probes and tests. */
 export const getSeveredFreeways = (minX: number, minZ: number, maxX: number, maxZ: number): SeveredFreeway[] => {

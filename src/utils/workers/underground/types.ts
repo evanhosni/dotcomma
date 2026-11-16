@@ -57,8 +57,6 @@ export interface MouthPiece extends PieceBase {
   phase: number;
   /** The widest outline: r0 × (1 + MOUTH_RIM_AMP). */
   width: number;
-  /** Where the rock dressing stands this mouth's rocks (set after generation, on the bulged ground). */
-  spots: RockSpot[];
 }
 
 /** A short wide capsule off a path, cut flat at its floor (the path's at either end). */
@@ -158,14 +156,15 @@ export interface ManholeInfo {
   aside: DiscPose;
 }
 
+/** A sewer's way in (a cave's mouths are their MouthPieces). */
 export interface TunnelEntrance {
-  kind: "mouth" | "manhole";
+  kind: "manhole";
   id: string;
-  /** A mouth: the opening's floor point; a manhole: the shaft's center at the street. */
+  /** The shaft's center at the street. */
   x: number;
   y: number;
   z: number;
-  /** Unit direction INTO the tunnel (a mouth) or the ladder's face (a manhole). */
+  /** The ladder's face. */
   dirX: number;
   dirZ: number;
   radius: number;
@@ -211,18 +210,6 @@ export interface TunnelSystem {
   bounds: Bounds3;
   /** Sewers: the district the system's streets belong to (systems of one district are merged). */
   district?: string;
-  /** A spring cave's standing water (caves.ts planSpring and the finishes): drawn by the TERRAIN's water
-   *  sheet (springWater.ts), swum in through the chunk's liquid triangles like the sewers'. */
-  liquid?: SpringWater[];
-}
-
-/** One convex polygon of a spring cave's water, absolute, with the depth the water sheet draws it at
- *  and the flow of its surface (world/water: 0 on a pool, downhill through a hall). */
-export interface SpringWater {
-  points: [number, number, number][];
-  depth: number;
-  flowX: number;
-  flowZ: number;
 }
 
 export interface TunnelMesh {
@@ -275,10 +262,13 @@ export interface UndergroundChunk {
   centerZ: number;
   /** Every piece of air reaching the chunk (padded by FIELD_REACH): the player probe's field. */
   pieces: TunnelPiece[];
-  /** The entrances standing in this chunk. */
+  /** The manholes standing in this chunk. */
   entrances: TunnelEntrance[];
-  /** Every entrance of the chunk's systems (daylight, the far mouths). */
+  /** Every manhole of the chunk's systems (the probe's columns, daylight). */
   systemEntrances: TunnelEntrance[];
+  /** Every mouth of the chunk's systems: each lights the chunk; those whose footprint reaches it
+   *  (mouthFootprintCells, tunnelField.ts) gate its entrance fade and make the LOD1 sites. */
+  mouths: MouthPiece[];
   masks: SkirtMask[];
   /** Positions relative to (centerX, 0, centerZ). */
   mesh: TunnelMesh;
@@ -286,8 +276,6 @@ export interface UndergroundChunk {
   /** Sewers: the liquid surface, relative like the mesh. */
   liquid: { positions: Float32Array; indices: Uint32Array } | null;
   patch: EntrancePatch | null;
-  /** Per mouth whose footprint reaches this chunk, every dressing chunk ("minX,minZ") it spans. */
-  entranceMouths: { id: string; cells: string[] }[];
   doors: SewerDoor[];
   /** Sewers: the border caps, per neighbour chunk. */
   caps: TunnelCap[];

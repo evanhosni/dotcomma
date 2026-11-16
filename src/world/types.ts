@@ -48,6 +48,12 @@ export interface TerrainParams {
   defaultBlendWidth: number;
   /** Domain-level fallback for every zone's height blend. */
   defaultHeightBlendWidth: number;
+  /** Domain-level fallback for the smallest pond radius (real units; `pondMinRadius` on a biome or region). */
+  defaultPondMinRadius: number;
+  /** Domain-level fallbacks for how far land rises away from water and over how far (real units;
+   *  `additionalHeight`/`additionalHeightBlend` on a biome or region: utils/workers/water/valleys). */
+  defaultAdditionalHeight: number;
+  defaultAdditionalHeightBlend: number;
   roadNoise: TerrainNoiseParams;
   /** Fallback regional base noise for regions that set none. */
   baseNoise: TerrainNoiseParams;
@@ -72,6 +78,10 @@ export interface RiverbedMaterial {
   saturation?: number;
   /** Multiplied onto the (desaturated) texture; default [1, 1, 1]. */
   tint?: [number, number, number];
+  /** The bed YIELDS to the biome's own ground on steep banks: whole up to the first slope, gone by the
+   *  second (degrees; under the water the rule fades out). Unset: it never yields — grass, dunes and snow
+   *  cut into a bed in wedges and strips reaching the water wherever a bank steepens. */
+  yieldSlope?: [number, number];
 }
 
 /** A biome's height definition — evaluated by the ONE shared pipeline (vertexCompute.ts). */
@@ -80,16 +90,9 @@ export interface BiomeNoiseConfig {
   absNeg?: boolean;
   scale?: number;
   offset?: number;
-  /** A domed biome is ROCK: rivers build through it, its banks end a riverbed, caves open in it. */
   dome?: BiomeDomeConfig;
   /** Layers added linearly at every depth (a domed biome's foot keeps them). */
   detail?: TerrainNoiseParams[];
-}
-
-/** A water-filled biome (lakes, seas): the terrain bowls `depth` below the region base and the
- *  Water system fills it to the level of the base at the cell's site. */
-export interface BiomeWaterConfig {
-  depth: number;
 }
 
 /** THE CLIENT LOOK MODEL — what the one terrain material is assembled from, read off the content

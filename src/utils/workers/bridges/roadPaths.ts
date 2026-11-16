@@ -10,9 +10,9 @@ import { wallDrownedAt } from "../roads/cityWaterfront";
 import { domainConfig } from "../computeConfig";
 import { getNetwork } from "../roads/freewayNetwork";
 import { unwarp, warp, warpMax } from "../noise";
-import { riverFieldAt, riverSample, riverStraight, riverStraightNear } from "../rivers/riverField";
-import { RIVER_MEANDER_AMP } from "../rivers/constants";
-import type { RiverEdge, RiverPiece } from "../rivers/types";
+import { riverFieldAt, riverSample, riverStraight, riverStraightNear } from "../water/rivers/field";
+import { RIVER_MEANDER_AMP } from "../water/rivers/constants";
+import type { RiverEdge, RiverPiece } from "../water/rivers/types";
 import { getBiomeGrid, getZoneWalls, isCanonicalWall, zoneAtWarped } from "../voronoi";
 import { BRIDGE_ROAD_MARGIN, BRIDGE_WET_SAMPLE } from "./constants";
 import { mergeIntervals, segSegDistance } from "./polyline";
@@ -268,7 +268,7 @@ const footprintAt = (scan: WindowScan, p: RiverPiece, t: number): number => scan
  *  stretch — LANDED there when that is dry land (a belt corner on the bank), OPEN when it is in the
  *  water (a lone mouth's deck lands on the waterfront or the quay across). Uncut, a belt's wall at 30°
  *  to the river, carried on the bank, merges with the next wall crossing it into one V-shaped chain
- *  that drops as "along the shore" — and the run meeting them ends at the bank. The path is cut there; riverNetwork's road layer judges the same stretches from the edge alone. */
+ *  that drops as "along the shore" — and the run meeting them ends at the bank. The path is cut there; the rivers' road layer (rivers/roadLayer.ts) judges the same stretches from the edge alone. */
 const QUAY_ALONG_COS = Math.cos((35 * Math.PI) / 180);
 export const withoutCarriedStretches = (paths: RoadPath[]): RoadPath[] => {
   const rv = domainConfig!.river;
@@ -385,11 +385,11 @@ export const collectRoadPaths = (scan: WindowScan): RoadPath[] => {
   return paths;
 };
 
-/** While riverNetwork's road layer asks for an edge's roads, a loop's seam is chosen by the distance to
+/** While the rivers' road layer asks for an edge's roads, a loop's seam is chosen by the distance to
  *  that edge's own pieces: the per-vertex field would read the road layer being built. */
 let seamDryness: ((x: number, z: number) => number) | null = null;
 
-/** edgeRoadPaths for riverNetwork's road layer, which decides `pieces`: blind to the river field. */
+/** edgeRoadPaths for the rivers' road layer, which decides `pieces`: blind to the river field. */
 export const edgeRoadPathsUnbuilt = (e: RiverEdge, pieces: RiverPiece[]): RoadPath[] => {
   const outer = seamDryness;
   seamDryness = (x, z) => {

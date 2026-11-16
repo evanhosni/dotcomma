@@ -28,7 +28,7 @@ This file is the MAP: architecture, invariants and rules, loaded into every Clau
 |---|---|
 | height pipeline: blending, presence, one source of truth, flatten pads, voronoi caching, biome flags | [src/utils/workers/DECISIONS.md](src/utils/workers/DECISIONS.md) |
 | freeway wall network, city terrain | [src/utils/workers/roads/DECISIONS.md](src/utils/workers/roads/DECISIONS.md) |
-| rivers, lakes, shores, water, springs, the flow | [src/utils/workers/rivers/DECISIONS.md](src/utils/workers/rivers/DECISIONS.md) |
+| rivers, lakes, shores, water, the flow | [src/utils/workers/water/DECISIONS.md](src/utils/workers/water/DECISIONS.md) |
 | inter-city freeways, bridges, deck seams/mouths, lane ends, road fragments, block islands | [src/utils/workers/bridges/DECISIONS.md](src/utils/workers/bridges/DECISIONS.md) |
 | domains, navigation, config commit, scope-aware components, addresses | [src/world/domains/DECISIONS.md](src/world/domains/DECISIONS.md) |
 | terrain LOD cross-fade | [src/world/terrain/DECISIONS.md](src/world/terrain/DECISIONS.md) |
@@ -58,26 +58,28 @@ sewers, delete `<Sewers>` from the biome.
   <Terrain seed .../>          //   its global terrain knobs over world/defaults.ts
   <Material riverTexture/>     //   the default riverbed texture
   <Skybox/>                    //   the default sky
-  <PostProcessing/> <DayNightCycle/> <FastTravel/> <RiverSplashes/>
+  <PostProcessing/> <DayNightCycle/> <FastTravel/>
+  <Water><WaterfallBoulders/><WaterfallSplashes/></Water>   //   THE BASE of all water (mesh, material, falls, default colours)
   <CityRegion/> <DesertRegion/> <SnowRegion/> <OceanRegion/>   // VORONOI ORDER (floor(u × count))
 
 <Region id name>               // a group of biomes on one base terrain, under one base look and sky
   <Material shader textures/>  //   its BASE material — what a biome's own texture fades into at its edge
   <Noise params/>              //   its base relief
   <Skybox/>                    //   its sky, MIXED by position across region edges
-  <Rivers chance={0.35}/>      //   rivers under it; no <Rivers/> = none (they run on their own grid)
+  <Rivers chance={0.61}/>      //   rivers under it; no <Rivers/> = none
   <CityBiome/> <GrassBiome/>   // VORONOI ORDER
 
-<Biome id name joinable blendWidth>   // everything true of one voronoi zone, as its children
+<Biome id name joinable weight blendWidth>   // everything true of one voronoi zone, as its children (weight: its roll share)
   <Material shader textures riverbed/>        // its fragment shader
   <Noise params offset><Dome/><Detail/></Noise>   // its relief (none = bespoke height code: the city)
-  <Water depth={26}/>                          // a lake: bowl + filled surface (and no road along its walls)
+  <Lake depth={26}><SeaweedField/><WaterBubbles/></Lake>   // a BODY of water: bowl + level (no road along its walls); its PARTS inside
+  <Rivers chance={0}><Banks/></Rivers>         // overrides its region's prop by prop (0 = dry)
+  <Pond kind={POND} standalone={0.5}><Actor actor={BEEBLE_SPEC} density={3000}/></Pond>   // point water (also on a region); every body takes the same parts
   <Sewers><Rooms><Actor actor={BEEBLE_SPEC}/></Rooms></Sewers>   // a feature, its part, what it places
   <Caves><Rooms>…</Rooms></Caves>
-  <Snow/> <Rocks density={110}/> <RiverBanks/>  // what lies on it
+  <Snow/> <Rocks density={110}/>               // what lies on it
   <StreetLamps/> <RoadMarkers/> <TrafficLights/> <PowerLines/> <Bridges/>   // its dressing
-  <GrassField .../> <SeaweedField/>            // its foliage
-  <LakeBubbles/>                               // its particles
+  <GrassField .../>                            // its foliage
   <Actor actor={BUILDING_SPEC}/>               // what spawns on it, by density
   <Skybox/>                                    // an optional sky of its own
 </Biome>
@@ -103,7 +105,7 @@ sewers, delete `<Sewers>` from the biome.
   `utils/workers/biomeFlags.ts` is generic over it; each system exports its own accessors beside its
   component (`snowBiomeIds()` lives with `<Snow/>`), so deleting a system deletes every mention.
 
-**The hierarchy is also the FOLDER hierarchy** (`src/world/domains/<domain>/regions/<region>/biomes/<biome>/index.tsx`): biome-specific code in the biome's folder, region-specific in the region's (`index.tsx`, `shaders/base.glsl` = its BASE material), domain-specific in the domain's; only genuinely shared code lives above the domains. A REGION is partitioned by a voronoi grid above the biome grid (`regionGridSize` 3000 → biome `gridSize` 500). No edge, region or biome, is a hard boundary: height, material and sky cross-fade into the neighbor ("Blending"); rivers are the edges of their own grid and cross everything ("Rivers"). The overworld has four: **city** (city + grass on the default base, rivers 0.35), **desert** (dust + salt on their own simplex base, 0.15), **snow** (tundra + mountain on a slow perlin base, 0.55), **ocean** (lake biomes — bowls under a blended water level — on a near-flat base, 0.6).
+**The hierarchy is also the FOLDER hierarchy** (`src/world/domains/<domain>/regions/<region>/biomes/<biome>/index.tsx`): biome-specific code in the biome's folder, region-specific in the region's (`index.tsx`, `shaders/base.glsl` = its BASE material), domain-specific in the domain's; only genuinely shared code lives above the domains. A REGION is partitioned by a voronoi grid above the biome grid (`regionGridSize` 3000 → biome `gridSize` 500). No edge, region or biome, is a hard boundary: height, material and sky cross-fade into the neighbor ("Blending"); rivers are the edges of their own grid and cross everything ("Rivers"). The overworld has four: **city** (city + grass on the default base, rivers 0.61), **desert** (dust + oasis + salt on a simplex base, 0.052), **snow** (tundra + mountain on a slow perlin base, 0.95), **ocean** (lake biomes — bowls under a blended water level — on a near-flat base, 1).
 
 **The three game-object classes** (`src/objects/`; the ATTRIBUTE HIERARCHY is one file, `src/objects/types.ts`: `GameObjectAttributes` → `ActorAttributes` / `DressingAttributes` / `FoliageAttributes` → member attributes next to the member; a field lives at the highest level where two users share it): **ACTORS** have their own identity, state or interaction (creatures, buildings), each its own React component through the spawn lifecycle (`ActorPool`); a kind is ONE Three-free `ActorSpec` (`<actor>/spec.ts`), mounted as `<Actor actor={SPEC} …overrides/>` — in a biome the density field places it, inside a feature that feature does. **DRESSING** is mass stateless identical scenery (lamps, markers, rocks, snow, tunnels, particles) per 256u chunk with zero per-object components. **FOLIAGE** is vegetation at another order of magnitude (~32k instances per 64u chunk, placement streamed straight into GPU instance attributes, animation in the vertex shader). All three are placed off-thread and deterministically (spawn / dressing / foliage workers).
 
@@ -133,7 +135,7 @@ Rule of thumb: unique geometry, interaction or behavior → actor; many + identi
   - under `<Biome>`: the biome frag / a sky override
 
   `Terrain` is domain-only.
-- **Never a biome id or name.** Every biome difference a system keys on is a FEATURE it mounted — its resolved params land in `SerializedBiome.features` under the declaration's kind — or the biome's SHAPE (`isRockBiome`: a domed biome is rock). `utils/workers/biomeFlags.ts` is generic over that map (`biomeIdsWith(kind)`, `biomeFeature(id, kind)`, `featureMounts(kind)`, `isWaterRegion`), and each system exports its own typed accessors beside its component, so deleting a system deletes every mention of it. The bespoke city height branch is the one id the pipeline names, and `roadBearingBiomeIds()` is where it becomes a question everything downstream can ask. → workers/DECISIONS.md
+- **Never a biome id or name.** Every biome difference a system keys on is a FEATURE it mounted — its resolved params land in `SerializedBiome.features` under the declaration's kind — never its id or shape (the bed's slope yield is a riverbed param; `<Quays/>` is how water knows the city). `utils/workers/biomeFlags.ts` is generic over that map (`biomeIdsWith(kind)`, `biomeFeature(id, kind)`, `featureMounts(kind)`), and each system exports its own typed accessors beside its component, so deleting a system deletes every mention of it. The bespoke city height branch is the one id the pipeline names, and `roadBearingBiomeIds()` is where it becomes a question everything downstream can ask. → workers/DECISIONS.md
 - **Addresses: the URL is a place.** `/<region words>/<biome words>` is a BIJECTIVE encoding of cell coordinates (never a hash or a registry). FROZEN: the word lists (append-only), the scramble constant, the seed, the region/biome order, the grid sizes; `address.test.ts` pins the vectors. Debug: `window.__dotcomma.travelTo(x, z)` (`travelTo(x, z, y)` lands at `y` with the terrain gate open: into a tunnel). → domains/DECISIONS.md
 - **Blending: no boundary anywhere, ever.** Every zone wall cross-fades: heights on the CPU, the material per PIXEL, the sky by position.
   - The shader gets per-biome-slot SIGNED DISTANCES (`biomeSdf`), never a weight or a biome id; indicators combine by CRISPNESS PRECEDENCE (`combineZoneWeights`), never plain normalization; a biome fades into its region's BASE by `presence`; the material feather uses the SMALLER side's width; only LOD3–4 clamp the blend fields; widths resolve biome → region → domain default.
@@ -141,18 +143,19 @@ Rule of thumb: unique geometry, interaction or behavior → actor; many + identi
 
   → workers/DECISIONS.md
 - **Heights have a single source of truth:** `src/utils/workers/vertexCompute.ts` (`computeVertexData`, steps 0–14 in one order: VERTEX_JOURNEY.md). Every worker, the main thread (`world/terrain/vertexData.ts`) and the server run it. Biome heights come from the spec's `noise` (+ `detail` layers); bespoke biomes (city) have a branch in the pipeline. Never add a second height code path, and never read a height on a stepping thread (the ground's modifiers are sampled on a worker).
-- **Flatten-ground pads** (`flattenGround: true`): placement is FULLY DETERMINISTIC (`utils/workers/flattenPads.ts`), and both `applyFlattenPads` and spawn.worker consume it. Raw height is NOT a lower bound, because pads excavate, so any below-surface test must confirm with the padded height (`resolveEmbeddedSurface`). Far visual-only LODs skip pads. → workers/DECISIONS.md
+- **Flatten-ground pads** (`flattenGround: true`): placement is FULLY DETERMINISTIC (`utils/workers/flattenPads.ts`), and both `applyFlattenPads` and spawn.worker consume it. Raw height is NOT a lower bound, because pads excavate, so any below-surface test must confirm with the padded height (`resolveEmbeddedSurface`). Far visual LODs skip pads. → workers/DECISIONS.md
 - **Freeways live on the biome walls** (`getNetwork`, per cell, over a wide window, lazy via `networkOf(ctx)`). The city's BELT freeway is centered ON its wall, and runs start at the belt's wall junctions. → roads/DECISIONS.md, bridges/DECISIONS.md
-- **Rivers are the edges of their OWN voronoi grid** (`rivers/riverNetwork.ts`), a pure function of position, so every chunk, worker and the server agree.
+- **Rivers are the edges of their OWN voronoi grid** (`water/rivers/network.ts`), a pure function of position, so every chunk, worker and the server agree.
   - Nothing is cut for a city: the city ADAPTS (quays, waterfront belt). Where they conflict, the road wins: suppressed stretches end bluntly (the road layer keys on `roadBearingBiomeIds()`).
   - `riverFieldAt` runs FIRST in `computeVertexData`: building a river list evaluates terrain and clobbers the scratch.
-  - ROCK (`isRockBiome`) is built whatever its slope (waterfalls); a peak along the river is a level POOL (`riverPoolWiden`); half the rivers entering rock end in a SPRING CAVE (`underground/springs.ts`), whose water is the terrain's own sheet (step 14). `waterFlowX/Z` carries the downhill flow to the water shader. The bed paint ends at the first steep ROCK bank and never resumes (`capRiverBed`).
+  - A river CARVES a gorge through a mountain rising under its `<Rivers maxCarve>`, or across ANY gap ≤ its `shortGap` (by the edge's midpoint biome; a dropped edge too); walls ease back stepless, water under the LOWER bank; a longer gap between two waters is CLIMBED to a summit pond where a `<Pond summit>` rolls (`summits.ts`); else it ends (a pond where a `<Pond riverEnd>` rolls, else round). Outward, the bed paint ends where the shader first hides it (`yieldSlope`), for good (`capRiverBed`).
   - Physics does not know water.
 
-  → rivers/DECISIONS.md
-- **Lakes** are a biome with `water: { depth }`. The level is blended by a kernel. Land near water never sits below it (`shoreLift`). The water is a child mesh per terrain chunk, at render order `WATER_RENDER_ORDER` (10), writing no depth. → rivers/DECISIONS.md
+  → water/DECISIONS.md
+- **Water is one hierarchy**: `<Water>` (domain) is the base; `<Lake depth>` (biome), `<Rivers chance>`, `<Pond kind>` (region or biome) are BODIES on ONE base (`components/Water.tsx`), all taking the same PARTS (actors, `<Banks/>`, foliage, particles), placed by ONE zone rule (`water/parts/params.ts` `waterZoneOf`) where the body owns the vertex (`VertexResult.waterBody*`; a pond disc has ONE owner). Every knob is a prop, biome → region → `<Water defaults>` → default; the base names no body; water reads roads only via `water/utils.ts`. Step 4 is ONE composition, `resolveWater` (area → channel → walls → joins). Anything probing the world mid-vertex puts back the scratch it clobbers. → world/water/README.md
+- **Lakes** are a biome with a `<Lake depth>` (`lakeOf`). Water never sits above its land, nor land below it (`landDeficitAt`, `shoreLift`). The water is a child mesh per chunk (per-vertex body colours), `WATER_RENDER_ORDER` (10), no depth. → water/DECISIONS.md
 - **Bridges are DRESSING, computed geometrically.** A deck exists only where a road genuinely crosses a river, landed on dry road at both ends, continuous with it; deterministic per window; colliders are a trimesh of exactly the drawn ribbon; the terrain is cut under the DRAWN slab; a vertex fetches its cell's decks FIRST (enumerating them evaluates terrain). Keep `WORLD_CHUNK_SIZE` consistent between client and server. → bridges/DECISIONS.md
-- **Tunnels (caves, sewers) are WORLD content and an OVERLAY** (`world/underground/`, on the world's streaming chunks — not scenery standing on the ground, but a cut through it): their one height step is the cave MOUTH BULGE (`mouthBulge.ts`, step 10, from caves generated on the un-bulged ground). A cave ENTRANCE is ONE isosurface of ground and tunnel, drawn with the terrain's material fading into rock (`entrance.ts`, `tunnelRock.ts`); the terrain is cut per pixel there and at shafts (`terrainHoles.ts`). The player and every server NPC move by ONE rule set (`physics/tunnelRules.ts`) on a `TunnelSpace` each: heightfields are ignored in a tunnel's air and in a mouth's CUT, where the drawn entrance patch is the collider. Manholes and doors are the SERVER's state. Snow is ONE rule for the near sheet, the terrain's whitening and the wading; rocks a density field per biome plus every mouth's spots, plus the bare boulders of every waterfall and the odd rock in calm water (`rivers/waterfallRocks.ts`, ONE list the `rocks` enumerator draws and the splash enumerator bursts on). → underground/DECISIONS.md, rivers/DECISIONS.md
+- **Tunnels (caves, sewers) are WORLD content and an OVERLAY** (`world/underground/`, on the world's streaming chunks — not scenery standing on the ground, but a cut through it): their one height step is the cave MOUTH BULGE (`mouthBulge.ts`, step 10, from caves generated on the un-bulged ground). A cave ENTRANCE is ONE isosurface of ground and tunnel, drawn with the terrain's material fading into rock (`entrance.ts`, `tunnelRock.ts`); the terrain is cut per pixel there and at shafts (`terrainHoles.ts`). The player and every server NPC move by ONE rule set (`physics/tunnelRules.ts`) on a `TunnelSpace` each: heightfields are ignored in a tunnel's air and in a mouth's CUT, where the drawn entrance patch is the collider. Caves hold no water (only the sewers have a liquid). Manholes and doors are the SERVER's state. Snow is ONE rule for the near sheet, the terrain's whitening and the wading; rocks a density field per biome plus every mouth's spots, while every river's boulders are a part of `<Water>` (`<WaterfallBoulders/>`, drawn as rocks; the splashes burst on them). → underground/DECISIONS.md, water/DECISIONS.md
 - **City terrain** (`roads/cityTerrain.ts`):
   - Rotated staggered DISTRICTS, each holding a square block grid (not voronoi), with arterials on the district boundaries.
   - ONE normalized road field drives the shader bands, the curb dip and the spawn filters, and is the global "is a road here" test (mouth fitness, the sewers' on-street nodes). `cityConfig.roadWidth` (7, the half-width) must match the city shader's bands.
@@ -187,10 +190,10 @@ src/
     dressing/  DRESSING class: index.tsx = THE BASE (instanced assembly + useSolidDressing, on the
                          WORLD's chunk lifecycle); utils.ts = farthest  dressing/README.md
       enumerators.ts  DRESSING_ENUMERATORS (name → placement); catalog.ts = DRESSING_COLLIDER_SPECS; worker.ts
-      street-lamps/ road-markers/ traffic-lights/ power-lines/ bridges/ rocks/ snow-drift/ river-banks/
+      street-lamps/ road-markers/ traffic-lights/ power-lines/ bridges/ rocks/ snow-drift/ waterfall-boulders/
                          one folder each: index.tsx (declaration + driver) + spec.ts + its own art  README each
     particles/  THE particle base: index.tsx (createParticleDressing), chunk.ts, material.ts,
-                         + lake-bubbles/ river-splashes/  particles/README.md
+                         + water-bubbles/ waterfall-splashes/  particles/README.md
     doors/  THE hinged door (leaf geometry, swing, hover), shared by buildings and the sewers  doors/README.md
     sprite-lod/  far billboards (one instanced mesh per look), handed off by spawn-point id  sprite-lod/README.md
     foliage/  FOLIAGE class: index.tsx (pipeline + createFoliage), lod.ts (bands, taper),
@@ -203,8 +206,8 @@ src/
     VERTEX_JOURNEY.md  one vertex from chunk request to pixel, every step in order
     content/  THE TREE: index.ts (declare, content, the walker), config.ts (THE DomainConfig
                          assembler, Three-free — the server imports it), types.ts  content/README.md
-    components/  the declarations: Domain, Region, Biome, Terrain, Noise/Dome/Detail, Water, Rivers,
-                         Material, Actor (+ Skybox, in sky/)  components/README.md
+    components/  the declarations: Domain, Region, Biome, Terrain, Noise/Dome/Detail, Water (+ the body base), Lake, Rivers, Pond,
+                         Banks, Quays, Material, Actor (+ Skybox, in sky/)  components/README.md
     domains/  DOMAIN → REGION → BIOME content  domains/README.md
       index.ts  DOMAIN_TREES, DOMAIN_NODES, DOMAIN_CONFIGS, ACTOR_CATALOG — all read off the trees
       navigation.ts, reset.ts, utils.ts (active-domain accessors)
@@ -239,7 +242,7 @@ src/
                          geometry.ts (bakeVertexColor, mergeOrThrow — vertex-colored parts, shared by
                          buildings, doors and tunnels), warmPrograms, uploadOnFirstDraw, contentError,
                          spikeTrace, utils.ts (debugGlobal)  utils/README.md
-    workers/  THE HEIGHT PIPELINE (vertexCompute.ts + modules, rivers/ roads/ bridges/ underground/
+    workers/  THE HEIGHT PIPELINE (vertexCompute.ts + modules, water/ (lakes rivers ponds parts) roads/ bridges/ underground/
                          snow/ rocks/, biomeFlags.ts = the generic feature lookup) + the
                          terrain/spawn/foliage/dressing/underground worker threads  workers/README.md
 config/jest/  rendererStub.js — what jest maps a worker client to (tests read the tree, never run it)
@@ -274,7 +277,7 @@ CHANGES.md, SERVER_CHANGES.md  history logs
 - **Biome shaders**: each biome/region fragment shader becomes a named function; `combineBiomeMaterials` mixes them per pixel from the `vBiomeSdf0/1` / `vBiomePresence0/1` varyings (no biome id in the shader); the vertex shader is shared
 - **Geometry pooling**: `acquireGeometry()`/`releaseGeometry()` recycle BufferGeometry per LOD level
 - **Voronoi caching**: grids, triangulations, wall lists and sites are memoized (on grid identity / per cell); never rebuild the wall arrays per vertex. → workers/DECISIONS.md
-- **DomainConfig** (`world/content/config.ts`): the serializable config the workers and the server run on — regions and biomes (base noise, riverProbability, water, each biome's `features` map of resolved params, blend widths), the `<Terrain>` params, biome noise, flatten descriptors (from the `<Actor>` mounts), city config
+- **DomainConfig** (`world/content/config.ts`): the serializable config the workers and the server run on — regions and biomes (base noise, riverChance, water, each biome's `features` map of resolved params, blend widths), the `<Terrain>` params, biome noise, flatten descriptors (from the `<Actor>` mounts), city config
 
 ## Adding Content
 
@@ -284,9 +287,10 @@ Each flow's checklist lives in the README of the folder it touches; this table s
 |---|---|---|
 | a biome | 2 new (`index.tsx`, `shaders/fragment.glsl`) + 1 line in its region | [regions/README.md](src/world/domains/overworld/regions/README.md) |
 | a region | 2 new + its biomes + 1 line in the domain | same |
-| a lake-type biome | a `<Water depth>` in the biome | [water/README.md](src/world/water/README.md) |
+| a lake-type biome | a `<Lake depth>` in the biome (its parts inside it) | [water/README.md](src/world/water/README.md) |
+| a pond kind (pond, spring) / a part of a body | a Three-free spec in `overworld/water/spec.ts` + `<Pond kind chances>` / any child in a body (`zone` prop) | same |
 | a bespoke-height biome (like the city) | a biome with no `<Noise>` + a branch in the pipeline | [workers/README.md](src/utils/workers/README.md) |
-| rivers under a region | `<Rivers chance>` in it (none = no rivers there) | [rivers/DECISIONS.md](src/utils/workers/rivers/DECISIONS.md) |
+| rivers under a region or biome | `<Rivers chance>` in it (none in a region = none; a biome's overrides its region's, 0 = dry) | [water/DECISIONS.md](src/utils/workers/water/DECISIONS.md) |
 | a static prop | 1 new (`spec.ts`) + `<Actor actor={SPEC}/>` in a biome (+ the GLB) | [actors/README.md](src/objects/actors/README.md) |
 | an NPC | 2 new (`stateMachine.ts`, `spec.ts`) + `<Actor>` in a biome — mounting it IS cataloging it; nothing on the server | same, and [NPC_TRACKING.md](NPC_TRACKING.md) §6 |
 | an NPC with scene logic | + 1 component registered in `ACTOR_COMPONENTS` / `ActorComponentName`, named by `component` on the spec; `withModelActorWarmup` | [actors/README.md](src/objects/actors/README.md) |
@@ -309,7 +313,8 @@ Each flow's checklist lives in the README of the folder it touches; this table s
 | a domain (a separate page; today `home` and `404`) | 1 new `index.tsx` (its tree) + `DOMAIN_IDS` and `DOMAIN_TREES` entries + its path in `navigation.ts` | [domains/README.md](src/world/domains/README.md) |
 
 Rules no checklist can enforce:
-- **Adding a region or a biome MOVES THE MAP.** The region roll is `floor(u × count)` over the `<Region>` children and the biome roll over each region's `<Biome>` children: appending one re-rolls every cell of that grid and every address. Do it before anyone has linked to an address, or accept it knowingly.
+- **Adding a region or a biome MOVES THE MAP.** The region roll is `floor(u × count)` over the `<Region>` children and the biome roll a cumulative pick by `<Biome weight>` (default 1) over each region's `<Biome>` children: appending one re-rolls every cell of that grid and every address. Inserting one with a small weight in the middle moves only the cells it takes (oasis: 11% of the desert). Do it before anyone has linked to an address, or accept it knowingly.
+- **Two joinable biomes with the same `<Noise>` literal are ONE relief** (`zoneBlend.ts` `joinReliefs`): no wall between them fades it to the base.
 - **Pick the object class first** (see "The three game-object classes"): lamps built as actors cost 10–20 fps.
 - **A shared behavior goes in the class base**, never into one member; a new world-wide effect is applied from the bases only.
 - **A biome shared by two regions** is its folder duplicated under the second region with a new element name and the SAME `id`; its visual children render once per copy, and the shader fades it into the base of only the FIRST region listing it (`biomeSlotRegionsOf`).
@@ -367,6 +372,7 @@ Every overlay follows the stats overlay's green-on-black terminal look from `src
 - **Extend, don't duplicate**: every game object extends its CLASS BASE (`objects/actors/index.tsx`, `objects/dressing/index.tsx`, `objects/foliage/index.tsx`) plus the shared attribute types (`objects/types.ts`); actor variants spread a base descriptor
 - Feature-based directory structure — co-locate assets (shaders, textures) with their biome/feature
 - Prefer editing existing files over creating new ones
+- **The code comes first, never the world's numbers.** A refactor takes the cleanest design even when generation drifts (placements, layouts, censuses no longer bit-identical); never contort code to stay zero-diff. Numeric comparisons are diagnostics for accidental breakage only; what must hold is the LOOK (check before/after screenshots) and the invariants above. Still say so when a change moves the map (addresses, biome rolls).
 - Keep biome implementations self-contained; don't add cross-biome dependencies
 - Interfaces live in the nearest `types.ts` (world-level types in `src/world/types.ts`)
 

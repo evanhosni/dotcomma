@@ -12,6 +12,7 @@
 
 import type * as THREE from "three";
 import type { SpriteLodAttributes } from "./sprite-lod/types";
+import type { WaterZone } from "../utils/workers/water/types";
 
 /** All optional here — a class's descriptor/props type re-declares the ones it requires. */
 export interface GameObjectAttributes {
@@ -32,6 +33,9 @@ export interface GameObjectAttributes {
   /** Set for a <Spawn> inside a feature (world/features.ts): that feature's path, which places the
    *  instances (one per sewer side room…) instead of the density roll and its filters. */
   feature?: string;
+  /** Mounted in a body of water (<Lake>, <Rivers>, <Pond>): where in it the object stands — submerged, the
+   *  shallows or the bank (utils/workers/water/params.ts, the one zone rule). Unset = its class's default. */
+  zone?: WaterZone;
   heightRange?: [number, number];
   /** Degrees. */
   slopeRange?: [number, number];
@@ -89,7 +93,10 @@ export interface FoliageAttributes extends GameObjectAttributes {
   swaySpeed?: number;
   /** Two fields with the SAME seed and density land on identical points and grow through each other. */
   seed?: string;
-  /** true = grows ONLY under water (seaweed), each instance shortened to stay under the surface;
-   *  unset = never under water. */
-  underwater?: boolean;
+  /** In a body of water's SUBMERGED zone (water/README.md "Parts"): the shallowest water it grows in… */
+  submergedMinDepth?: number;
+  /** …how far under the surface a blade's tip stays (each is cut to the water over it)… */
+  tipClearance?: number;
+  /** …and the least share of its height a cut blade keeps (shorter, it is not placed). */
+  minCutScale?: number;
 }

@@ -4,16 +4,12 @@
  *
  *   IN:  { type: "INIT", config: DomainConfig }
  *   IN:  { type: "BUILD_UNDERGROUND", id, bounds: { minX, minZ, maxX, maxZ }, style: "cave" | "sewer", biomeId }
- *   IN:  { type: "CAVE_MOUTHS", id, area: { minX, minZ, maxX, maxZ } }
  *   OUT: { type: "INIT_DONE" }
  *   OUT: { type: "UNDERGROUND_RESULT", id, chunk: UndergroundChunk | null }   (typed arrays transferred)
- *   OUT: { type: "UNDERGROUND_RESULT", id, mouths: MouthPiece[] }
  */
 
-import { caveBiomeIds } from "./underground/params";
 import { buildUndergroundChunk } from "./underground/chunkMesh";
-import { caveMouthsNear } from "./underground/systems";
-import type { MouthPiece, UndergroundChunk } from "./underground/types";
+import type { UndergroundChunk } from "./underground/types";
 import { DomainConfig, initCompute } from "./vertexCompute";
 
 let initialized = false;
@@ -47,25 +43,6 @@ self.onmessage = (e: MessageEvent) => {
       }
     }
     (self as any).postMessage({ type: "UNDERGROUND_RESULT", id, chunk }, chunk ? transferables(chunk) : []);
-    return;
-  }
-
-  if (type === "CAVE_MOUTHS") {
-    let mouths: MouthPiece[] = [];
-    if (initialized) {
-      try {
-        const seen = new Set<string>();
-        for (const m of caveMouthsNear(caveBiomeIds(), e.data.area, 0)) {
-          if (seen.has(m.id)) continue;
-          seen.add(m.id);
-          mouths.push(m);
-        }
-      } catch (err) {
-        console.error("underground.worker: mouth fetch failed", err);
-        mouths = [];
-      }
-    }
-    (self as any).postMessage({ type: "UNDERGROUND_RESULT", id, mouths });
     return;
   }
 

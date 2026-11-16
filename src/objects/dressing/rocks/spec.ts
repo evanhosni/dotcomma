@@ -18,7 +18,7 @@ export const ROCK_SHADE_LIGHT = 0x8e8a84;
 export const ROCK_PLACEMENT: RockPlacementParams = { roadClear: 3 };
 
 /** One body per rock: exactly the drawn lump as a trimesh, under the rock's yaw and pitch. */
-const rockColliderBodies = (rock: RockPoint): ColliderBody[] => [
+export const rockColliderBodies = (rock: RockPoint): ColliderBody[] => [
   {
     x: rock.x,
     y: rock.y,

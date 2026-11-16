@@ -1,19 +1,15 @@
 /**
- * Surface nets over a field at VOXEL spacing, one BRICK at a time, crack-free across bricks and
- * chunks: a cell's vertex is keyed by its lattice cell and shared through `NetVertices`, and each
- * brick owns the lattice edges starting on its lower faces, so every edge of the world belongs to
- * exactly one brick and every vertex is computed once from the same field. Three-free.
+ * SURFACE NETS over the caves' field, one BRICK (16³ voxels) at a time: a vertex per cell the surface
+ * crosses (the mean of its edges' crossings), a quad per crossed grid edge joining the four cells around
+ * it, wound to face the air. A brick owns the edges whose lower end lies in it and samples one voxel
+ * below its lower faces for the cells there, so the bricks of a chunk (sharing their vertices through
+ * NetVertices) and two chunks either side of a border (computing the same cells from the same field)
+ * close without a crack. Three-free.
  */
 
 import { BRICK, VOXEL } from "./constants";
 import type { FieldFn } from "./tunnelField";
-
-/** What a settled sample reads: positive, and never interpolated (see meshBrick). */
-const ROCK_STAND_IN = 1;
-/** The vertex normal's central difference, in voxels. */
-const NORMAL_EPS = 0.5;
-/** Samples settled by the sound bound come in blocks of this many voxels (DECISIONS.md: 4 measured best). */
-const BLOCK = 4;
+import type { Bounds3 } from "./types";
 
 export interface NetsOutput {
   positions: number[];
@@ -21,243 +17,172 @@ export interface NetsOutput {
   indices: number[];
 }
 
-/** Cell → vertex index, shared by every brick of one mesh. Keys are numbers relative to the mesh's
- *  base cell (a string per lookup was a large share of a chunk): x and z within ±1024 cells of it,
- *  y within ±2^19 cells — 42 bits, exact in a double. */
+export interface BrickOptions {
+  /** The drawn ground: the field becomes min(air, ground − y), "air above the ground OR in the tunnel". */
+  ground?: (x: number, z: number) => number;
+  /** Whether a box is provably rock: blocks of samples (padded by a voxel) it settles are not sampled. */
+  rockBox?: (box: Bounds3) => boolean;
+}
+
+/** The voxels per brick side, and the samples per side: one below the brick and its upper face. */
+const CELLS = BRICK / VOXEL;
+const SIDE = CELLS + 2;
+/** Samples are settled in blocks of this many per side. */
+const BLOCK = 4;
+/** What a settled sample holds: rock. Every cell touching it is rock at all eight corners (the block was
+ *  proved rock a voxel past its samples), so the value is only ever sign-tested. */
+const SETTLED = 1;
+/** The gradient's step for a vertex's normal (half a voxel: the walls are shaded by it). */
+const NORMAL_STEP = 0.5;
+
+/** The nets' vertices of one chunk, shared by its bricks: a cell two bricks mesh is ONE vertex. */
 export class NetVertices {
-  readonly map = new Map<number, number>();
+  private readonly ids = new Map<number, number>();
+
+  /** The chunk's corner (any fixed point near it): cells are keyed relative to it. */
   constructor(
-    readonly baseCx: number,
-    readonly baseCz: number,
+    readonly originX: number,
+    readonly originZ: number,
   ) {}
-  key(cx: number, cy: number, cz: number): number {
-    return ((cx - this.baseCx + 1024) * 2048 + (cz - this.baseCz + 1024)) * 0x100000 + (cy + 0x80000);
+
+  private key(i: number, j: number, k: number): number {
+    return ((j + 32768) * 1024 + (i - Math.round(this.originX / VOXEL) + 256)) * 1024 + (k - Math.round(this.originZ / VOXEL) + 256);
+  }
+
+  get(i: number, j: number, k: number): number | undefined {
+    return this.ids.get(this.key(i, j, k));
+  }
+
+  set(i: number, j: number, k: number, id: number): void {
+    this.ids.set(this.key(i, j, k), id);
   }
 }
 
-const CORNERS: [number, number, number][] = [
-  [0, 0, 0],
-  [1, 0, 0],
-  [0, 1, 0],
-  [1, 1, 0],
-  [0, 0, 1],
-  [1, 0, 1],
-  [0, 1, 1],
-  [1, 1, 1],
-];
-/** The cube's 12 edges as corner index pairs. */
-const EDGES: [number, number][] = [
-  [0, 1],
-  [2, 3],
-  [4, 5],
-  [6, 7],
-  [0, 2],
-  [1, 3],
-  [4, 6],
-  [5, 7],
-  [0, 4],
-  [1, 5],
-  [2, 6],
-  [3, 7],
+// The cube's 12 edges as corner pairs; corner c has offsets (c & 1, (c >> 1) & 1, (c >> 2) & 1) in (x, y, z).
+const EDGES: readonly [number, number][] = [
+  [0, 1], [2, 3], [4, 5], [6, 7],
+  [0, 2], [1, 3], [4, 6], [5, 7],
+  [0, 4], [1, 5], [2, 6], [3, 7],
 ];
 
-const N = BRICK / VOXEL + 1;
-const BLOCKS = (N - 1) / BLOCK;
-const _blockRock = new Uint8Array(BLOCKS * BLOCKS * BLOCKS);
-const _sampleSkip = new Uint8Array(N * N * N);
+/** Meshes the brick with its lowest corner at (x0, y0, z0) into `out`. */
+export const meshBrick = (field: FieldFn, x0: number, y0: number, z0: number, shared: NetVertices, out: NetsOutput, options: BrickOptions = {}): void => {
+  const { ground, rockBox } = options;
+  const at = (i: number): number => (i - 1) * VOXEL;
+  const index = (i: number, j: number, k: number): number => (i * SIDE + k) * SIDE + j;
+  const values = new Float64Array(SIDE * SIDE * SIDE);
+  const settled = new Uint8Array(SIDE * SIDE * SIDE);
 
-/** One brick's state while it meshes. */
-interface Brick {
-  field: FieldFn;
-  shared: NetVertices;
-  out: NetsOutput;
-  samples: Float64Array;
-  sx: number;
-  sy: number;
-  sz: number;
-}
+  if (rockBox) {
+    for (let bi = 0; bi < SIDE; bi += BLOCK) {
+      for (let bk = 0; bk < SIDE; bk += BLOCK) {
+        for (let bj = 0; bj < SIDE; bj += BLOCK) {
+          const ei = Math.min(bi + BLOCK, SIDE) - 1;
+          const ek = Math.min(bk + BLOCK, SIDE) - 1;
+          const ej = Math.min(bj + BLOCK, SIDE) - 1;
+          const box: Bounds3 = {
+            minX: x0 + at(bi) - VOXEL,
+            minY: y0 + at(bj) - VOXEL,
+            minZ: z0 + at(bk) - VOXEL,
+            maxX: x0 + at(ei) + VOXEL,
+            maxY: y0 + at(ej) + VOXEL,
+            maxZ: z0 + at(ek) + VOXEL,
+          };
+          if (!rockBox(box)) continue;
+          for (let i = bi; i <= ei; i++) for (let k = bk; k <= ek; k++) for (let j = bj; j <= ej; j++) settled[index(i, j, k)] = 1;
+        }
+      }
+    }
+  }
 
-const _corner = new Float64Array(8);
+  // y innermost: the ground is read once per column.
+  for (let i = 0; i < SIDE; i++) {
+    const x = x0 + at(i);
+    for (let k = 0; k < SIDE; k++) {
+      const z = z0 + at(k);
+      const g = ground ? ground(x, z) : Infinity;
+      for (let j = 0; j < SIDE; j++) {
+        const n = index(i, j, k);
+        if (settled[n]) {
+          values[n] = SETTLED;
+          continue;
+        }
+        const y = y0 + at(j);
+        const v = field(x, y, z);
+        const above = g - y;
+        values[n] = above < v ? above : v;
+      }
+    }
+  }
 
-/** The vertex of lattice cell (cx, cy, cz) — the mean of its edge crossings — made from the brick's
- *  field if it is not known yet; −1 when the cell has no sign change. */
-const cellVertex = (b: Brick, cx: number, cy: number, cz: number): number => {
-  const key = b.shared.key(cx, cy, cz);
-  const known = b.shared.map.get(key);
-  if (known !== undefined) return known;
-  const { field, samples } = b;
-  const voxel = VOXEL;
-  // Inside the brick the samples are at hand; a neighbour's cell is read from the field itself.
-  const lx = cx - b.sx;
-  const ly = cy - b.sy;
-  const lz = cz - b.sz;
-  const local = lx >= 0 && lx < N - 1 && ly >= 0 && ly < N - 1 && lz >= 0 && lz < N - 1;
-  let min = Infinity;
-  let max = -Infinity;
-  for (let c = 0; c < 8; c++) {
-    const [dx, dy, dz] = CORNERS[c];
-    const v = local ? samples[(lx + dx) * N * N + (ly + dy) * N + (lz + dz)] : field((cx + dx) * voxel, (cy + dy) * voxel, (cz + dz) * voxel);
-    _corner[c] = v;
-    if (v < min) min = v;
-    if (v > max) max = v;
-  }
-  if (!(min < 0 && max >= 0)) {
-    b.shared.map.set(key, -1);
-    return -1;
-  }
-  let px = 0;
-  let py = 0;
-  let pz = 0;
-  let count = 0;
-  for (const [p, q] of EDGES) {
-    const vp = _corner[p];
-    const vq = _corner[q];
-    if ((vp < 0) === (vq < 0)) continue;
-    const t = vp / (vp - vq);
-    px += CORNERS[p][0] + (CORNERS[q][0] - CORNERS[p][0]) * t;
-    py += CORNERS[p][1] + (CORNERS[q][1] - CORNERS[p][1]) * t;
-    pz += CORNERS[p][2] + (CORNERS[q][2] - CORNERS[p][2]) * t;
-    count++;
-  }
-  const x = (cx + px / count) * voxel;
-  const y = (cy + py / count) * voxel;
-  const z = (cz + pz / count) * voxel;
-  // The normal faces the air: minus the gradient.
-  const eps = NORMAL_EPS * voxel;
-  let nx = field(x - eps, y, z) - field(x + eps, y, z);
-  let ny = field(x, y - eps, z) - field(x, y + eps, z);
-  let nz = field(x, y, z - eps) - field(x, y, z + eps);
-  const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-  if (len > 0) {
+  const full: FieldFn = ground
+    ? (x, y, z) => {
+        const v = field(x, y, z);
+        const above = ground(x, z) - y;
+        return above < v ? above : v;
+      }
+    : field;
+  const ci0 = Math.round(x0 / VOXEL) - 1;
+  const cj0 = Math.round(y0 / VOXEL) - 1;
+  const ck0 = Math.round(z0 / VOXEL) - 1;
+
+  /** The vertex of the cell whose lowest corner is sample (i, j, k). */
+  const vertexOf = (i: number, j: number, k: number): number => {
+    const known = shared.get(ci0 + i, cj0 + j, ck0 + k);
+    if (known !== undefined) return known;
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    let count = 0;
+    for (const [c0, c1] of EDGES) {
+      const v0 = values[index(i + (c0 & 1), j + ((c0 >> 1) & 1), k + ((c0 >> 2) & 1))];
+      const v1 = values[index(i + (c1 & 1), j + ((c1 >> 1) & 1), k + ((c1 >> 2) & 1))];
+      if (v0 < 0 === v1 < 0) continue;
+      const t = v0 / (v0 - v1);
+      sx += (c0 & 1) + ((c1 & 1) - (c0 & 1)) * t;
+      sy += ((c0 >> 1) & 1) + (((c1 >> 1) & 1) - ((c0 >> 1) & 1)) * t;
+      sz += ((c0 >> 2) & 1) + (((c1 >> 2) & 1) - ((c0 >> 2) & 1)) * t;
+      count++;
+    }
+    const x = x0 + at(i) + (sx / count) * VOXEL;
+    const y = y0 + at(j) + (sy / count) * VOXEL;
+    const z = z0 + at(k) + (sz / count) * VOXEL;
+    // The normal faces the air: down the field's gradient.
+    const h = NORMAL_STEP;
+    let nx = full(x - h, y, z) - full(x + h, y, z);
+    let ny = full(x, y - h, z) - full(x, y + h, z);
+    let nz = full(x, y, z - h) - full(x, y, z + h);
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
     nx /= len;
     ny /= len;
     nz /= len;
-  } else ny = 1;
-  const index = b.out.positions.length / 3;
-  b.out.positions.push(x, y, z);
-  b.out.normals.push(nx, ny, nz);
-  b.shared.map.set(key, index);
-  return index;
-};
-
-/** A box (world units) a caller can prove holds only rock (a positive field everywhere inside). */
-export type RockTest = (minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number) => boolean;
-
-/**
- * Meshes one brick whose min corner is at lattice cell (sx, sy, sz): samples its (BRICK/voxel + 1)³
- * lattice points, emits a quad for every owned edge with a sign change between the four cells around
- * it, wound to face the air. Returns false when the brick held no surface. `isRock`: a block of
- * samples whose box PADDED by a voxel is provably rock is not sampled — every cell touching one of its
- * samples then has rock at all eight corners, so the samples are only ever sign-tested and a positive
- * stand-in reads the same (the mesh does not change by a bit; the test pins it).
- */
-export const meshBrick = (field: FieldFn, sx: number, sy: number, sz: number, shared: NetVertices, out: NetsOutput, isRock?: RockTest): boolean => {
-  const voxel = VOXEL;
-  const blockRock = _blockRock;
-  const sampleSkip = _sampleSkip;
-  const samples = new Float64Array(N * N * N);
-  let anyAir = false;
-  let anyRock = false;
-  let skipping = false;
-  if (isRock) {
-    for (let bi = 0; bi < BLOCKS; bi++) {
-      for (let bj = 0; bj < BLOCKS; bj++) {
-        for (let bk = 0; bk < BLOCKS; bk++) {
-          const rock = isRock(
-            (sx + bi * BLOCK - 1) * voxel,
-            (sy + bj * BLOCK - 1) * voxel,
-            (sz + bk * BLOCK - 1) * voxel,
-            (sx + bi * BLOCK + BLOCK + 1) * voxel,
-            (sy + bj * BLOCK + BLOCK + 1) * voxel,
-            (sz + bk * BLOCK + BLOCK + 1) * voxel,
-          );
-          blockRock[(bi * BLOCKS + bj) * BLOCKS + bk] = rock ? 1 : 0;
-          if (rock) skipping = true;
-        }
-      }
-    }
-    if (skipping) {
-      // A sample on a block boundary belongs to both blocks: either settling it settles the sample.
-      const blockOf = (i: number, lo: boolean): number => (lo ? Math.floor((i - 1) / BLOCK) : Math.floor(i / BLOCK));
-      for (let i = 0; i < N; i++) {
-        const il = blockOf(i, true);
-        const ih = blockOf(i, false);
-        for (let j = 0; j < N; j++) {
-          const jl = blockOf(j, true);
-          const jh = blockOf(j, false);
-          for (let k = 0; k < N; k++) {
-            const kl = blockOf(k, true);
-            const kh = blockOf(k, false);
-            let skip = 0;
-            for (let a = il; a <= ih && !skip; a++) {
-              if (a < 0 || a >= BLOCKS) continue;
-              for (let b = jl; b <= jh && !skip; b++) {
-                if (b < 0 || b >= BLOCKS) continue;
-                for (let c = kl; c <= kh && !skip; c++) {
-                  if (c < 0 || c >= BLOCKS) continue;
-                  skip = blockRock[(a * BLOCKS + b) * BLOCKS + c];
-                }
-              }
-            }
-            sampleSkip[i * N * N + j * N + k] = skip;
-          }
-        }
-      }
-      anyRock = true;
-    }
-  }
-  // y innermost: a column's samples come one after another, so a field reading the ground per (x, z)
-  // (chunkMesh.ts) keeps the last column's value.
-  for (let i = 0; i < N; i++) {
-    const x = (sx + i) * voxel;
-    for (let k = 0; k < N; k++) {
-      const z = (sz + k) * voxel;
-      for (let j = 0; j < N; j++) {
-        const index = i * N * N + j * N + k;
-        if (skipping && sampleSkip[index]) {
-          samples[index] = ROCK_STAND_IN;
-          continue;
-        }
-        const v = field(x, (sy + j) * voxel, z);
-        samples[index] = v;
-        if (v < 0) anyAir = true;
-        else anyRock = true;
-      }
-    }
-  }
-  if (!anyAir || !anyRock) return false;
-  const brick: Brick = { field, shared, out, samples, sx, sy, sz };
-  let emitted = false;
-  const vertex = (cx: number, cy: number, cz: number): number => cellVertex(brick, cx, cy, cz);
-  const emit = (a: number, b: number, c: number, d: number, flip: boolean): void => {
-    if (a < 0 || b < 0 || c < 0 || d < 0) return;
-    if (flip) out.indices.push(a, d, c, a, c, b);
-    else out.indices.push(a, b, c, a, c, d);
-    emitted = true;
+    const id = out.positions.length / 3;
+    out.positions.push(x, y, z);
+    out.normals.push(nx, ny, nz);
+    shared.set(ci0 + i, cj0 + j, ck0 + k, id);
+    return id;
   };
-  const M = N - 1;
-  for (let i = 0; i < M; i++) {
-    for (let j = 0; j < M; j++) {
-      for (let k = 0; k < M; k++) {
-        const v0 = samples[i * N * N + j * N + k];
-        const air0 = v0 < 0;
-        // x-edge from (i, j, k) to (i+1, j, k): the cells around it vary in y then z.
-        if (air0 !== samples[(i + 1) * N * N + j * N + k] < 0) {
-          const cx = sx + i;
-          emit(vertex(cx, sy + j - 1, sz + k - 1), vertex(cx, sy + j, sz + k - 1), vertex(cx, sy + j, sz + k), vertex(cx, sy + j - 1, sz + k), air0);
-        }
-        // y-edge: cells vary in z then x.
-        if (air0 !== samples[i * N * N + (j + 1) * N + k] < 0) {
-          const cy = sy + j;
-          emit(vertex(sx + i - 1, cy, sz + k - 1), vertex(sx + i - 1, cy, sz + k), vertex(sx + i, cy, sz + k), vertex(sx + i, cy, sz + k - 1), air0);
-        }
-        // z-edge: cells vary in x then y.
-        if (air0 !== samples[i * N * N + j * N + k + 1] < 0) {
-          const cz = sz + k;
-          emit(vertex(sx + i - 1, sy + j - 1, cz), vertex(sx + i, sy + j - 1, cz), vertex(sx + i, sy + j, cz), vertex(sx + i - 1, sy + j, cz), air0);
-        }
+
+  /** A quad of four cells around a crossed edge, (q0 q1 q2 q3) counter-clockwise about the edge's axis;
+   *  reversed when the edge's lower end is the air, so it faces the air. */
+  const quad = (lowerAir: boolean, a: number, b: number, c: number, d: number): void => {
+    if (lowerAir) out.indices.push(a, d, c, a, c, b);
+    else out.indices.push(a, b, c, a, c, d);
+  };
+
+  // The owned edges: lower end at samples 1..CELLS on every axis.
+  for (let i = 1; i <= CELLS; i++) {
+    for (let k = 1; k <= CELLS; k++) {
+      for (let j = 1; j <= CELLS; j++) {
+        const v = values[index(i, j, k)];
+        const air = v < 0;
+        // Along x: the cells around it step in y, then z.
+        if (values[index(i + 1, j, k)] < 0 !== air) quad(air, vertexOf(i, j - 1, k - 1), vertexOf(i, j, k - 1), vertexOf(i, j, k), vertexOf(i, j - 1, k));
+        // Along y: in z, then x.
+        if (values[index(i, j + 1, k)] < 0 !== air) quad(air, vertexOf(i - 1, j, k - 1), vertexOf(i - 1, j, k), vertexOf(i, j, k), vertexOf(i, j, k - 1));
+        // Along z: in x, then y.
+        if (values[index(i, j, k + 1)] < 0 !== air) quad(air, vertexOf(i - 1, j - 1, k), vertexOf(i, j - 1, k), vertexOf(i, j, k), vertexOf(i - 1, j, k));
       }
     }
   }
-  return emitted;
 };

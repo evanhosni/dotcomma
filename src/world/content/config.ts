@@ -9,6 +9,11 @@ import type {
   SerializedRegion,
   TerrainNoiseParams,
 } from "../../utils/workers/types";
+import { POND_KIND, RIVERS, WATER } from "../../utils/workers/water/params";
+import type { RiversParams } from "../../utils/workers/water/rivers/params";
+import type { WaterBase, WaterBody, WaterParams } from "../../utils/workers/water/types";
+import { isWaterBody, waterBodyNodesOf, waterBodyOf, waterBodyParamsOf, waterPartsOf } from "../components/Water";
+import type { MaterialProps } from "../components/Material";
 import { DEFAULT_TERRAIN_PARAMS } from "../defaults";
 import type { TerrainParams } from "../types";
 import { childOfKind, childrenOfKind, readContent } from "./index";
@@ -29,8 +34,17 @@ export interface BiomeIdentity {
   id: number;
   name: string;
   joinable?: boolean;
+  /** Its share of its region's biome roll against its siblings' (default 1; all 1 = the plain
+   *  floor(roll × count)). Changing one MOVES THE MAP. */
+  weight?: number;
   blendWidth?: number;
   heightBlendWidth?: number;
+  /** The smallest pond radius here (real units); unset = its region's, then the domain's. */
+  pondMinRadius?: number;
+  /** How far land here rises above its water, and over how far from it (real units; utils/workers/water/valleys);
+   *  unset = its region's, then the domain's. */
+  additionalHeight?: number;
+  additionalHeightBlend?: number;
 }
 
 export interface RegionIdentity {
@@ -38,6 +52,9 @@ export interface RegionIdentity {
   name: string;
   blendWidth?: number;
   heightBlendWidth?: number;
+  pondMinRadius?: number;
+  additionalHeight?: number;
+  additionalHeightBlend?: number;
 }
 
 /** A biome's relief: its own `<Noise>` with any `<Dome>` and `<Detail>` layers mounted under it.
@@ -63,52 +80,84 @@ export interface NoiseProps extends Partial<Pick<BiomeNoiseConfig, "absNeg" | "s
 }
 
 /** Every feature mounted in a biome, by kind, with its own resolved params (its declaration's
- *  `read`, else `true`). Presence IS the fact — nothing reads a biome id or name. */
-const featuresOf = (biome: ContentNode<any>): Record<string, unknown> => {
+ *  `read`, a body of water's with the <Water> base's defaults for its kind; else `true`). Presence IS the
+ *  fact — nothing reads a biome id or name. */
+const featuresOf = (biome: ContentNode<any>, water: WaterBase | null): Record<string, unknown> => {
   const features: Record<string, unknown> = {};
   for (const child of biome.children) {
     if (STRUCTURAL_KINDS.has(child.kind)) continue;
     if (child.kind in features) reportContentError(`<${child.kind}> is mounted twice in biome "${biome.props.name}"`);
-    features[child.kind] = child.decl.read ? child.decl.read(child) : true;
+    features[child.kind] = isWaterBody(child) ? waterBodyParamsOf(child, water) : child.decl.read ? child.decl.read(child) : true;
   }
   return features;
 };
 
-/** Children of a biome that are not features of it: its look, its relief, what it spawns. */
-const STRUCTURAL_KINDS = new Set(["material", "noise", "actor", "skybox"]);
+/** Children of a biome that are not features of it: its look, its relief, what it spawns, and the
+ *  bodies of water a biome may mount several of (<Pond>: they list in its `waterBodies`). */
+const STRUCTURAL_KINDS = new Set(["material", "noise", "actor", "skybox", POND_KIND]);
 
-const serializeBiome = (biome: ContentNode<BiomeIdentity>): SerializedBiome => {
-  const { id, name, joinable = false, blendWidth, heightBlendWidth } = biome.props;
-  const features = featuresOf(biome);
-  const water = features.water as { depth: number } | undefined;
+const serializeBiome = (biome: ContentNode<BiomeIdentity>, region: ContentNode<any>, slots: ReadonlyMap<ContentNode<any>, number>, water: WaterBase | null): SerializedBiome => {
+  const { id, name, joinable = false, weight, blendWidth, heightBlendWidth, pondMinRadius, additionalHeight, additionalHeightBlend } = biome.props;
+  if (weight !== undefined && !(weight > 0)) reportContentError(`biome "${name}": a roll weight must be positive (got ${weight})`);
+  const bedYieldSlope = childOfKind<MaterialProps>(biome, "material")?.props.riverbed?.yieldSlope;
   return {
     id,
     name,
     joinable,
+    ...(weight === undefined ? {} : { weight }),
     blendWidth,
     heightBlendWidth,
-    water,
-    // Water is impassable ground, so no inter-city freeway may run along its walls. Derived, never
-    // declared: a `prohibitRoads` flag beside <Water> could only ever disagree with it.
-    prohibitRoads: !!water,
-    features,
+    ...(pondMinRadius === undefined ? {} : { pondMinRadius }),
+    ...(additionalHeight === undefined ? {} : { additionalHeight }),
+    ...(additionalHeightBlend === undefined ? {} : { additionalHeightBlend }),
+    ...(bedYieldSlope ? { bedYieldSlope } : {}),
+    features: featuresOf(biome, water),
+    waterBodies: waterBodyNodesOf(biome, region).map((n) => slots.get(n)!),
   };
 };
 
-const serializeRegion = (region: ContentNode<RegionIdentity>): SerializedRegion => {
-  const { id, name, blendWidth, heightBlendWidth } = region.props;
-  const rivers = childOfKind<{ chance?: number }>(region, "rivers");
+const serializeRegion = (region: ContentNode<RegionIdentity>, slots: ReadonlyMap<ContentNode<any>, number>, water: WaterBase | null): SerializedRegion => {
+  const { id, name, blendWidth, heightBlendWidth, pondMinRadius, additionalHeight, additionalHeightBlend } = region.props;
+  const rivers = childOfKind(region, RIVERS);
   return {
     id,
     name,
-    biomes: childrenOfKind<BiomeIdentity>(region, "biome").map(serializeBiome),
+    biomes: childrenOfKind<BiomeIdentity>(region, "biome").map((biome) => serializeBiome(biome, region, slots, water)),
     baseNoise: biomeNoiseOf(region)?.params,
     blendWidth,
     heightBlendWidth,
+    ...(pondMinRadius === undefined ? {} : { pondMinRadius }),
+    ...(additionalHeight === undefined ? {} : { additionalHeight }),
+    ...(additionalHeightBlend === undefined ? {} : { additionalHeightBlend }),
     // No <Rivers> in the region = no river under it (there is no domain-wide fallback: a river
     // exists because a region mounted one).
-    riverProbability: rivers ? rivers.props.chance ?? 1 : 0,
+    riverChance: rivers ? ((rivers.decl.read!(rivers) as RiversParams).chance ?? 1) : 0,
   };
+};
+
+/** Every body of water the regions mount, in tree order (each region's, then each of its biomes'), as
+ *  the one body base lists it (components/Water.tsx waterBodyOf), and each mount's slot. A vertex names
+ *  its water by an index into this list (VertexResult.waterBody). */
+const waterBodiesOf = (regions: readonly ContentNode<any>[], water: WaterBase | null): { bodies: WaterBody[]; slots: Map<ContentNode<any>, number> } => {
+  const bodies: WaterBody[] = [];
+  const slots = new Map<ContentNode<any>, number>();
+  const add = (node: ContentNode<any>, at: Pick<WaterBody, "regionId" | "biomeId">): void => {
+    slots.set(node, bodies.length);
+    bodies.push({ ...waterBodyOf(node, water), ...at });
+  };
+  for (const region of regions) {
+    for (const body of region.children.filter(isWaterBody)) add(body, { regionId: region.props.id });
+    for (const biome of childrenOfKind<BiomeIdentity>(region, "biome")) {
+      for (const body of biome.children.filter(isWaterBody)) add(body, { biomeId: biome.props.id });
+    }
+  }
+  return { bodies, slots };
+};
+
+/** The domain's <Water> base: its own params and its parts (null: it mounts none). */
+const waterBaseOf = (domain: ContentNode<any>): WaterBase | null => {
+  const water = childOfKind(domain, WATER);
+  return water ? { params: water.decl.read!(water) as WaterParams, parts: waterPartsOf(water) } : null;
 };
 
 /** One <Actor> mounted in a biome. `feature` is the dotted path of the feature that PLACES it
@@ -123,8 +172,9 @@ export interface ActorPlacement {
 /** A feature-placed kind lists SEPARATELY from the biome's own density placement of the same kind. */
 export const featureActorId = (actorId: string, feature: string): string => (feature ? `${actorId}@${feature}` : actorId);
 
-/** Every <Actor> under a biome, at any depth, in JSX order. */
-export const actorPlacementsOf = (biome: ContentNode<any>): ActorPlacement[] => {
+/** Every <Actor> under a biome, at any depth, in JSX order — and inside its region's bodies of water it
+ *  does not override (the region fold: components/Water.tsx waterBodyNodesOf). */
+export const actorPlacementsOf = (biome: ContentNode<any>, region: ContentNode<any> | null): ActorPlacement[] => {
   const out: ActorPlacement[] = [];
   const visit = (node: ContentNode<any>, feature: string): void => {
     for (const child of node.children) {
@@ -132,11 +182,13 @@ export const actorPlacementsOf = (biome: ContentNode<any>): ActorPlacement[] => 
         const mount = child.props as unknown as ActorMount;
         out.push({ id: featureActorId(mount.actor.id, feature), mount, feature });
       } else {
-        visit(child, feature ? `${feature}.${child.kind}` : child.kind);
+        const segment = child.decl.placesAs?.(child) ?? child.kind;
+        visit(child, feature ? `${feature}.${segment}` : segment);
       }
     }
   };
   visit(biome, "");
+  for (const body of waterBodyNodesOf(biome, region)) if (!biome.children.includes(body)) visit({ ...biome, children: [body] }, "");
   return out;
 };
 
@@ -144,7 +196,7 @@ export const actorPlacementsOf = (biome: ContentNode<any>): ActorPlacement[] => 
 const flattenDescriptorsOf = (regions: readonly ContentNode<any>[]): FlattenDescriptor[] => {
   const listings = regions.flatMap((region) =>
     childrenOfKind<BiomeIdentity>(region, "biome").flatMap((biome) =>
-      actorPlacementsOf(biome).map(
+      actorPlacementsOf(biome, region).map(
         ({ id, mount }) =>
           ({ ...mountAttributesOf(mount), id, biomeIds: [biome.props.id] }) as Record<string, unknown> & {
             id: string;
@@ -222,7 +274,9 @@ export const domainNodeOf = (tree: ReactNode): ContentNode<any> => {
 export const domainConfigOf = (domain: ContentNode<any>): DomainConfig => {
   const params = terrainParamsOf(domain);
   const regionNodes = childrenOfKind<RegionIdentity>(domain, "region");
-  const regions = regionNodes.map(serializeRegion);
+  const water = waterBaseOf(domain);
+  const { bodies: waterBodies, slots } = waterBodiesOf(regionNodes, water);
+  const regions = regionNodes.map((region) => serializeRegion(region, slots, water));
   assertDistinct(regions);
 
   const biomeNoiseConfigs: Record<number, BiomeNoiseConfig> = {};
@@ -241,10 +295,15 @@ export const domainConfigOf = (domain: ContentNode<any>): DomainConfig => {
     regionGridSize: params.regionGridSize,
     defaultBlendWidth: params.defaultBlendWidth,
     defaultHeightBlendWidth: params.defaultHeightBlendWidth,
+    defaultPondMinRadius: params.defaultPondMinRadius,
+    defaultAdditionalHeight: params.defaultAdditionalHeight,
+    defaultAdditionalHeightBlend: params.defaultAdditionalHeightBlend,
     roadNoiseParams: params.roadNoise,
     baseNoiseParams: params.baseNoise,
     river: params.river,
     biomeNoiseConfigs,
+    water,
+    waterBodies,
     cityConfig: params.cityConfig,
   };
 };

@@ -13,7 +13,6 @@ import { useChunkAssets, useChunkRegistry, useWorldChunks } from "../chunks";
 import type { ChunkViewProps } from "../chunks/types";
 import { ChunkColliders, useChunkColliders } from "../chunks/colliders";
 import { WORLD_CHUNK_SIZE, type ColliderPart } from "../chunks/types";
-import { mountFarMouths } from "./farMouths";
 import { applyCoverPose, buildChunkObject, chunkColliderBodies, COVER_SLIDE_SECONDS, createTunnelAssets, entranceMaterialOf, tunnelWarmTemplates, type CoverRuntime, type TunnelChunkObject } from "./meshes";
 import { driveUnderground, entranceFadeOf, isCellLoaded, registerChunk, unregisterChunk } from "./registry";
 import { isOpen, onToggle, toggleOpen } from "./toggles";
@@ -163,11 +162,9 @@ const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, colliderD
       entranceMaterialRef.current = entranceMaterialOf(base);
       cancelWarm = warmPrograms(scene, [meshTemplate(entranceMaterialRef.current)]);
     });
-    const unmountFar = mountFarMouths(scene);
     return () => {
       cancelled = true;
       cancelWarm();
-      unmountFar();
     };
   }, [style, scene]);
 
@@ -296,7 +293,7 @@ export const Caves = declare<CavesProps>({
   within: "biome",
   read: (node) => ({
     chance: node.props.chance ?? CAVE_CHANCE,
-    sideRooms: roomsOf(node, { trunkChance: ROOM_TRUNK_CHANCE, tipChance: ROOM_TIP_CHANCE }),
+    sideRooms: partOf(node, ROOMS, { trunkChance: ROOM_TRUNK_CHANCE, tipChance: ROOM_TIP_CHANCE }),
   }),
   Driver: () => <TunnelsDriver tunnel="cave" kind={CAVES} />,
 });
@@ -310,7 +307,7 @@ export const Sewers = declare<SewersProps>({
   within: "biome",
   read: (node) => ({
     chance: node.props.chance ?? SEWER_CHANCE,
-    sideRooms: roomsOf(node, { chance: SIDE_ROOM_CHANCE }),
+    sideRooms: partOf(node, ROOMS, { chance: SIDE_ROOM_CHANCE }),
   }),
   Driver: () => <TunnelsDriver tunnel="sewer" kind={SEWERS} />,
 });
@@ -327,8 +324,9 @@ export interface RoomsProps {
 /** SIDE ROOMS off the tunnels this is mounted in; an <Actor> inside stands one in each. */
 export const Rooms = declare<RoomsProps>({ kind: ROOMS, within: [CAVES, SEWERS] });
 
-/** A tunnel feature's <Rooms> child with its defaults, or null where none is mounted. */
-const roomsOf = <T extends object>(node: ContentNode<any>, defaults: T): T | null => {
-  const rooms = childOfKind<RoomsProps>(node, ROOMS);
-  return rooms ? { ...defaults, ...rooms.props } : null;
+
+/** A tunnel feature's part of `kind` with its defaults under its props, or null where none is mounted. */
+const partOf = <T extends object>(node: ContentNode<any>, kind: string, defaults: T): T | null => {
+  const part = childOfKind<Partial<T>>(node, kind);
+  return part ? { ...defaults, ...part.props } : null;
 };

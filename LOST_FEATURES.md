@@ -18,7 +18,7 @@ footprint test in `classifyRiverPieces`, and the `riversProhibitedSomewhere` gat
 **Why:** no biome has ever set it, so the rule never fired. Under the new presence rule a flag that
 nothing mounts is just dead weight, and this one cost a branch in the hot per-piece loop.
 
-**To get it back:** a `<NoRivers/>` declaration in the biome, read by `riverPieceRules.ts`. The old
+**To get it back:** a `<NoRivers/>` declaration in the biome, read by `rivers/pieceRules.ts`. The old
 probe ring is in git history (`riverPieceRules.ts`, before this refactor).
 
 ---

@@ -1,5 +1,4 @@
 import { resetDressingWorker } from "../../objects/dressing/worker";
-import { resetFarMouths } from "../underground/farMouths";
 import { resetUndergroundWorker } from "../underground/worker";
 import { resetFoliageWorker } from "../../objects/foliage/worker";
 import { resetSpawnWorker } from "../../objects/actors/spawning/worker";
@@ -19,7 +18,6 @@ export const resetDomainSystems = () => {
   resetFoliageWorker();
   resetDressingWorker();
   resetUndergroundWorker();
-  resetFarMouths();
   resetActiveDomain();
   resetPlace();
 };
