@@ -148,8 +148,10 @@ self.onmessage = (e: MessageEvent) => {
     const waterHeights = new Float32Array(count);
     const waterDepths = new Float32Array(count);
     const waterFlow = new Float32Array(count * 2);
-    const waterShallow = new Float32Array(count * 3);
-    const waterDeep = new Float32Array(count * 4);
+    // Each vertex's owning bodies, turned into colours only when the chunk has water (most have none).
+    const waterBody = new Int32Array(count);
+    const waterBodyShare = new Float64Array(count);
+    const waterBody2 = new Int32Array(count);
     const snowCover = snow ? new Float32Array(count) : null;
     let hasWater = false;
 
@@ -172,11 +174,17 @@ self.onmessage = (e: MessageEvent) => {
         waterDepths[i] = result.waterDepth;
         waterFlow[i * 2] = result.waterFlowX;
         waterFlow[i * 2 + 1] = result.waterFlowZ;
-        writeWaterColors(result.waterBody, result.waterBodyShare, result.waterBody2, waterShallow, waterDeep, i);
+        waterBody[i] = result.waterBody;
+        waterBodyShare[i] = result.waterBodyShare;
+        waterBody2[i] = result.waterBody2;
         if (result.waterDepth > 0) hasWater = true;
         if (snowCover) snowCover[i] = snowCoverOf(result);
       }
     }
+
+    const waterShallow = hasWater ? new Float32Array(count * 3) : null;
+    const waterDeep = hasWater ? new Float32Array(count * 4) : null;
+    if (waterShallow && waterDeep) for (let i = 0; i < count; i++) writeWaterColors(waterBody[i], waterBodyShare[i], waterBody2[i], waterShallow, waterDeep, i);
 
     const normals = gridNormals(localX, localY, heights, segments);
     const colliderHeights = needCollider ? columnMajorHeights(heights, n) : null;
@@ -193,7 +201,7 @@ self.onmessage = (e: MessageEvent) => {
       freewayAlong.buffer,
       normals.buffer,
     ];
-    if (hasWater) transfer.push(waterHeights.buffer, waterDepths.buffer, waterFlow.buffer, waterShallow.buffer, waterDeep.buffer);
+    if (waterShallow && waterDeep) transfer.push(waterHeights.buffer, waterDepths.buffer, waterFlow.buffer, waterShallow.buffer, waterDeep.buffer);
     if (colliderHeights) transfer.push(colliderHeights.buffer);
     if (snowDepths) transfer.push(snowDepths.buffer);
     (self as any).postMessage(
@@ -213,8 +221,8 @@ self.onmessage = (e: MessageEvent) => {
         waterHeights: hasWater ? waterHeights : null,
         waterDepths: hasWater ? waterDepths : null,
         waterFlow: hasWater ? waterFlow : null,
-        waterShallow: hasWater ? waterShallow : null,
-        waterDeep: hasWater ? waterDeep : null,
+        waterShallow,
+        waterDeep,
         snowDepths,
         colliderHeights,
       },

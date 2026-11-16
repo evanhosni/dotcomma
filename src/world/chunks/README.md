@@ -19,6 +19,10 @@ so none of them can miss a world-wide effect.
   - `useWorldChunks({ renderDistance, build })`: the camera-following lifecycle. `build(bounds)`
     returns an `Object3D` or `null`; render the returned ref as `<group ref={groupRef} />`. Chunks
     are dropped 1.3× past the render distance so borders don't thrash, and each fades in as a chunk.
+    Its task awaits the worker with up to `CHUNK_REQUESTS_IN_FLIGHT` (4) in flight, and is ranked by its
+    distance scaled to the feature's own range (`chunkRankWeight`): every chunk turns foreground work as it
+    enters its render distance, so a far-reaching feature (bridges 900u, rocks 1400u) is not starved by the
+    near ones at speed.
   - `useChunkRegistry(onRemove?)`: per-chunk side state, pruned lazily from your own frame loop
     (`forEachAlive`) and flushed on unmount — without that flush, external registrations (lamp
     heads in the glow grid) leaked as phantom lights across domain switches and HMR.

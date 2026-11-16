@@ -56,6 +56,7 @@ import { clearMouthTiles, mouthBulgeAt, mouthsNear, NO_MOUTHS } from "./undergro
 import { clearSewerGeometry } from "./underground/sewerMesh";
 import { clearSewerLayouts } from "./underground/sewers";
 import { clearTunnelCaches, generatingTunnels } from "./underground/systems";
+import type { PointXZ } from "../math/types";
 import type { BiomeContext, DomainConfig, SerializedRegion, VertexResult, Zone } from "./types";
 import { clearVoronoiCaches, getBiomeContext, cityWallsOf, distanceToWall } from "./voronoi";
 import {
@@ -288,18 +289,26 @@ export const groundUnderRoadAt = (x: number, z: number): number => {
 /** Past a river's footprint by this much (factor-1 units) its channel no longer pulls the ground down. */
 const GROUND_RIVER_MARGIN = 4;
 
-/** The grade of the inter-city run(s) near a world point, or NaN with none within reach of a deck's approach
- *  (a superset of where step 2 grades a road: the belt's drowned push only widens its distance, a smooth
- *  minimum lowers it by under FREEWAY_SMIN_K). */
+/** The grade of the inter-city run(s) near a world point (warped `w`, its context `c`), or NaN with none
+ *  within reach of a deck's approach (a superset of where step 2 grades a road: the belt's drowned push only
+ *  widens its distance, a smooth minimum lowers it by under FREEWAY_SMIN_K). The nearest run it measured is
+ *  left in `runFound` — exactly step 2's own search, which reuses it (`known` false: none measured). */
 const runQuery = { distance: Infinity, along: 0, x: 0, z: 0 };
-const runGradeNear = (x: number, z: number): number => {
-  const w = warp(x, z);
-  const c = getBiomeContext(w);
+const runFound = { known: false, distance: Infinity, along: 0, x: 0, z: 0 };
+const runGradeNear = (x: number, z: number, w: PointXZ, c: BiomeContext): number => {
+  runFound.known = false;
   if (roadBearingBiomeIds().includes(c.zone.biome.id) || isLakeBiome(c.zone.biome)) return NaN;
   nearestFreewayRun(w.x, w.z, networkOf(c).freeways, runQuery);
+  // (Copied before the grade's ground probes, which re-enter the pipeline.)
+  const { distance, along, x: rx, z: rz } = runQuery;
   const fw = domainConfig!.cityConfig.freewayWidth;
-  if (!(runQuery.distance < fw + APPROACH_WIDEN + APPROACH_SHOULDER + FREEWAY_SMIN_K)) return NaN;
-  return freewayGradeAt(w.x, w.z, x, z, c, true);
+  const grade = distance < fw + APPROACH_WIDEN + APPROACH_SHOULDER + FREEWAY_SMIN_K ? freewayGradeAt(w.x, w.z, x, z, c, true) : NaN;
+  runFound.known = true;
+  runFound.distance = distance;
+  runFound.along = along;
+  runFound.x = rx;
+  runFound.z = rz;
+  return grade;
 };
 
 /** One vertex of the full pipeline. `cutDecks` false (a terrain LOD whose LODLevel.cutsDecks is false)
@@ -317,20 +326,24 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
   const cellDecks = decksKnown && cutDecks ? decksAround(x, z) : NO_DECKS;
   const tunnelsKnown = decksKnown && generatingTunnels === 0;
   const mouths = tunnelsKnown ? mouthsNear(x, z) : NO_MOUTHS;
-  // …and the grade of an inter-city run in reach: its profile probes the road-free ground along the run.
-  const runGrade = probingGround === 0 && !farVisual ? runGradeNear(x, z) : NaN;
 
-  // Step 1: the road-noise warp — every grid, wall, road and river lives in warped space.
+  // Step 1: the road-noise warp — every grid, wall, road and river lives in warped space — and the biome
+  // cell (its zone carries the region). Neither is scratch: step 0's probes cannot clobber them.
   const currentVertex = warp(x, z);
   const cvx = currentVertex.x;
   const cvz = currentVertex.z;
-
-  // Step 2: the biome cell (its zone carries the region), then everything that CLOBBERS the wall-pass
-  // scratch, then the vertex's ONE wall pass. The river field comes first (building a cell's river
-  // list evaluates the terrain at river centerlines); off a road-bearing biome (whose height code lays
-  // its own roads), the nearest freeway (runs + the belt's outer half) and — only where step 5 will use
-  // it — its grade at the centerline.
   const ctx = getBiomeContext(currentVertex);
+
+  // …and step 0's last fetch, the grade of an inter-city run in reach: its profile probes the road-free
+  // ground along the run. The run it finds is step 2's nearest run (taken now: a later probe overwrites it).
+  const runGrade = probingGround === 0 && !farVisual ? runGradeNear(x, z, currentVertex, ctx) : NaN;
+  const runKnown = probingGround === 0 && !farVisual && runFound.known;
+  const { distance: runDistance, along: runAlong, x: runX, z: runZ } = runFound;
+
+  // Step 2: everything that CLOBBERS the wall-pass scratch, then the vertex's ONE wall pass. The river
+  // field comes first (building a cell's river list evaluates the terrain at river centerlines); off a
+  // road-bearing biome (whose height code lays its own roads), the nearest freeway (runs + the belt's outer
+  // half) and — only where step 5 will use it — its grade at the centerline.
   const own = ctx.zone;
   const ownRoads = roadBearingBiomeIds().includes(own.biome.id);
   const ownQuays = keepsOwnBanks(own.biome);
@@ -360,7 +373,15 @@ export function computeVertexData(x: number, z: number, cutDecks = true): Vertex
     // Runs never enter a water zone (the network forbids water walls); the belt's outer half DOES
     // ride over a lake neighbor, as a causeway on the city's grade above the water.
     if (isLakeBiome(own.biome)) nearestRun.distance = Infinity;
-    else nearestFreewayRun(cvx, cvz, farVisual || probingGround > 0 ? NO_RUNS : networkOf(ctx).freeways);
+    else if (runKnown) {
+      // Step 0's search (nearestFreewayRun leaves the point fields as they were when it finds no run).
+      nearestRun.distance = runDistance;
+      if (runDistance < Infinity) {
+        nearestRun.along = runAlong;
+        nearestRun.x = runX;
+        nearestRun.z = runZ;
+      }
+    } else nearestFreewayRun(cvx, cvz, farVisual || probingGround > 0 ? NO_RUNS : networkOf(ctx).freeways);
     // The belt as the city's own side measures it: off a wall the river drowns it is pushed away (the
     // waterfront carries it), so its outer half is never graded and dipped where the inner half is not.
     if (!ownQuays && !farDry && nearestCityWall.distance < FREEWAY_FIELD_REACH && (distanceToRiver - river.halfWidth - river.bank) * riverFactor < BELT_DROWN_READ) {

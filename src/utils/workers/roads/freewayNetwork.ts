@@ -600,7 +600,7 @@ export const nearestFreewayRun = (px0: number, pz0: number, runs: FreewayRun[], 
       else if (t > 1) t = 1;
       const cx = sx + dx * t;
       const cz = sz + dz * t;
-      const d = Math.hypot(px - cx, pz - cz);
+      const d = Math.sqrt((px - cx) * (px - cx) + (pz - cz) * (pz - cz));
       if (d < best) {
         best = d;
         out.along = run.cum[i / 2] + t * Math.sqrt(lenSq) + run.phase;
@@ -670,7 +670,7 @@ export const collectRunCandidates = (px0: number, pz0: number, runs: FreewayRun[
       else if (t > 1) t = 1;
       const cx = sx + dx * t;
       const cz = sz + dz * t;
-      const d = Math.hypot(px - cx, pz - cz);
+      const d = Math.sqrt((px - cx) * (px - cx) + (pz - cz) * (pz - cz));
       if (d > reach) continue;
       pushSegCandidate(run, run.cum[i / 2] + t * Math.sqrt(lenSq), d, cx, cz, t, sx, sz, pts[i + 2], pts[i + 3]);
     }

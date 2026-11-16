@@ -264,8 +264,15 @@ export const combineZoneWeights = (indicators: Float64Array, out: Float64Array):
 /** The SAME precedence for the material weights, from a vertex's biomeSdf and each slot's
  *  blend half (ascending = crisper first). The terrain shader is generated to mirror this
  *  (combineBiomeMaterials); foliage thins by it. Sums to 1. */
+/** The slots in crispness order (smallest half first), per halves array: sorted once, not per vertex. */
+const crispnessOrders = new WeakMap<readonly number[], number[]>();
+const crispnessOrder = (slotHalves: readonly number[]): number[] => {
+  let order = crispnessOrders.get(slotHalves);
+  if (!order) crispnessOrders.set(slotHalves, (order = slotHalves.map((_, i) => i).sort((a, b) => slotHalves[a] - slotHalves[b])));
+  return order;
+};
 export const combineSlotWeights = (sdf: ArrayLike<number>, slotHalves: readonly number[], out: number[] = []): number[] => {
-  const order = slotHalves.map((_, i) => i).sort((a, b) => slotHalves[a] - slotHalves[b]);
+  const order = crispnessOrder(slotHalves);
   for (let i = 0; i < slotHalves.length; i++) out[i] = 0;
   let remaining = 1;
   let total = 0;
@@ -304,6 +311,11 @@ export const biomesWeighWithin = (sdf: ArrayLike<number>, biomeIds: readonly num
 };
 
 export const biomeWeightOf = (sdf: ArrayLike<number>, biomeIds: readonly number[]): number => {
+  // A slot weighs nothing from sdf −1 down (its sstep01 is 0, whatever the normalization): with none of
+  // the wanted slots above it the answer is exactly 0 — the snow cover and the foliage ask this per vertex.
+  let any = false;
+  for (let s = 0; s < biomeSlotIds.length && !any; s++) any = sdf[s] > -1 && biomeIds.includes(biomeSlotIds[s]);
+  if (!any) return 0;
   const w = combineSlotWeights(sdf, biomeSlotBlendHalves, biomeWeightScratch);
   let want = 0;
   for (let s = 0; s < w.length; s++) if (biomeIds.includes(biomeSlotIds[s])) want += w[s];

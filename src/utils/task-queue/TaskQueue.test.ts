@@ -67,4 +67,26 @@ describe("TaskQueue priority", () => {
     await settle();
     expect(order).toEqual(["keep"]);
   });
+
+  test("a queue with concurrency runs that many awaiting tasks at once, nearest first", async () => {
+    setWorkFocus(0, 0);
+    const q = new TaskQueue({ concurrency: 2 });
+    const started: string[] = [];
+    const release: (() => void)[] = [];
+    const awaiting = (name: string) => () =>
+      new Promise<void>((resolve) => {
+        started.push(name);
+        release.push(resolve);
+      });
+    q.addTask(awaiting("far"), { at: { x: 300, z: 0 } });
+    q.addTask(awaiting("near"), { at: { x: 100, z: 0 } });
+    q.addTask(awaiting("mid"), { at: { x: 200, z: 0 } });
+    await settle();
+    expect(started).toEqual(["near", "mid"]);
+    release.shift()!();
+    await settle();
+    expect(started).toEqual(["near", "mid", "far"]);
+    release.forEach((r) => r());
+    await settle();
+  });
 });

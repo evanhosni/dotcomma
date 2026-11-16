@@ -2,7 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { WORLD_CHUNK_SIZE, type ChunkBounds, type ColliderBody } from "./types";
-import { TaskQueue } from "../../utils/task-queue/TaskQueue";
+import { BACKGROUND_RANK, TaskQueue } from "../../utils/task-queue/TaskQueue";
 import { freezeStaticSubtree } from "../../utils/utils";
 import { instancedTemplate, reportUnwarmedPrograms, warmPrograms } from "../../utils/warmPrograms";
 import { _curvature } from "../../vfx/curvature";
@@ -25,7 +25,19 @@ const UPDATE_INTERVAL_FRAMES = 31;
 // One budgeted queue across every streamed system, so a ring of fresh chunks can't stack mesh
 // assembly into one frame.
 // Weight 1.5: at equal distance a building or the ground comes first; beyond 400u a chunk is background.
-const chunkQueue = new TaskQueue({ weight: 1.5 });
+// CHUNK_REQUESTS_IN_FLIGHT: a chunk's task awaits its worker; one at a time, every feature's chunks (lamps,
+// markers, rocks, snow, particles, bridges, tunnels) waited out one round trip after another, the worker
+// idling between them (PERFORMANCE.md "Outrunning the generators again").
+const CHUNK_REQUESTS_IN_FLIGHT = 4;
+const CHUNK_QUEUE_WEIGHT = 1.5;
+const chunkQueue = new TaskQueue({ weight: CHUNK_QUEUE_WEIGHT, concurrency: CHUNK_REQUESTS_IN_FLIGHT });
+/** A chunk is foreground work (ranked under BACKGROUND_RANK) from the moment it enters its feature's render
+ *  distance, or from this close — whichever is farther. Ranked by plain distance, a far-reaching feature's
+ *  chunks (the bridges' 900u, the waterfalls' 1000u, the rocks' 1400u) sat in the background until 400u,
+ *  behind every near chunk and building: at 300u/s a bridge deck took ~2 s from range to built over the
+ *  mountains (PERFORMANCE.md "Outrunning the generators again"). */
+const FOREGROUND_REACH = BACKGROUND_RANK / CHUNK_QUEUE_WEIGHT;
+const chunkRankWeight = (renderDistance: number): number => Math.min(1, FOREGROUND_REACH / renderDistance);
 
 export const prepareChunkMaterial = (material: THREE.Material): void => {
   _curvature.patchMaterial(material);
@@ -234,7 +246,7 @@ export const useWorldChunks = ({
       groupRef.current.add(object);
       fades.add(object);
       entry.object = object;
-    }, { at: { x: centerX, z: centerZ } });
+    }, { at: { x: centerX, z: centerZ }, weight: chunkRankWeight(renderDistance) });
   };
 
   const dropFarChunks = (group: THREE.Group, camX: number, camZ: number): void => {

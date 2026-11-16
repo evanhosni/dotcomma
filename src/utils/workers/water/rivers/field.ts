@@ -274,7 +274,9 @@ const measure = (list: FieldList, qx: number, qz: number, discs = true): number 
     const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
     const px = list.sx[i] + dx * t;
     const pz = list.sz[i] + dz * t;
-    const d = Math.hypot(qx - px, qz - pz);
+    const ox = qx - px;
+    const oz = qz - pz;
+    const d = Math.sqrt(ox * ox + oz * oz);
     const w = list.w0[i] + (list.w1[i] - list.w0[i]) * t;
     const dn = d / w;
     if (dn < runDn[r]) runDn[r] = dn;
@@ -301,7 +303,9 @@ const measure = (list: FieldList, qx: number, qz: number, discs = true): number 
   if (discs) {
     for (let k = 0; k < list.discs.length; k++) {
       const disc = list.discs[k];
-      const d = Math.hypot(qx - disc.x, qz - disc.z);
+      const ox = qx - disc.x;
+      const oz = qz - disc.z;
+      const d = Math.sqrt(ox * ox + oz * oz);
       const w = d > 1e-9 ? discWidthToward(disc, (qx - disc.x) / d, (qz - disc.z) / d) : disc.width;
       const r = list.runs.length + k;
       runDn[r] = edgeDn[list.edges + k] = d / w;
@@ -671,7 +675,9 @@ export const farRiverFieldAt = (px: number, pz: number): void => {
     const len2 = dx * dx + dz * dz;
     const raw = len2 > 0 ? ((px - p[o]) * dx + (pz - p[o + 1]) * dz) / len2 : 0;
     const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
-    const d = Math.hypot(px - p[o] - dx * t, pz - p[o + 1] - dz * t);
+    const ox = px - p[o] - dx * t;
+    const oz = pz - p[o + 1] - dz * t;
+    const d = Math.sqrt(ox * ox + oz * oz);
     const w = p[o + 4] + (p[o + 5] - p[o + 4]) * t;
     if (d - keep * w < footprintGap) footprintGap = d - keep * w;
     if (d < nearest) {
@@ -700,7 +706,9 @@ const farGapAt = (px: number, pz: number): number => {
     const len2 = dx * dx + dz * dz;
     const raw = len2 > 0 ? ((px - p[o]) * dx + (pz - p[o + 1]) * dz) / len2 : 0;
     const t = raw < 0 ? 0 : raw > 1 ? 1 : raw;
-    const d = Math.hypot(px - p[o] - dx * t, pz - p[o + 1] - dz * t) - keep * (p[o + 4] + (p[o + 5] - p[o + 4]) * t);
+    const ox = px - p[o] - dx * t;
+    const oz = pz - p[o + 1] - dz * t;
+    const d = Math.sqrt(ox * ox + oz * oz) - keep * (p[o + 4] + (p[o + 5] - p[o + 4]) * t);
     if (d < footprintGap) footprintGap = d;
   }
   return footprintGap > outer ? Infinity : footprintGap;

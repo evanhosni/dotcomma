@@ -105,6 +105,8 @@ interface SiteWindow {
   floorZ: number[];
   floorIx: number[];
   floorIz: number[];
+  /** Each floor's landAround, attached on its first read in this window. */
+  floorLand: (Float64Array | undefined)[];
 }
 const windows = new CellCache<SiteWindow>(16384);
 const windowAt = (wx: number, wz: number): SiteWindow => {
@@ -162,7 +164,7 @@ const windowAt = (wx: number, wz: number): SiteWindow => {
     floorIz.push(floors[f + 1]);
   }
   const n = kernel.length / 5;
-  w = { n, x: new Float64Array(n), z: new Float64Array(n), height: new Float64Array(n), blend: new Float64Array(n), reach: new Float64Array(n), floorX, floorZ, floorIx, floorIz };
+  w = { n, x: new Float64Array(n), z: new Float64Array(n), height: new Float64Array(n), blend: new Float64Array(n), reach: new Float64Array(n), floorX, floorZ, floorIx, floorIz, floorLand: [] };
   for (let s = 0; s < n; s++) {
     w.x[s] = kernel[s * 5];
     w.z[s] = kernel[s * 5 + 1];
@@ -175,44 +177,58 @@ const windowAt = (wx: number, wz: number): SiteWindow => {
   return w;
 };
 
-/** A floor site's rising neighbours: per neighbour its position and 1 / (2 × its distance to the floor
- *  site), so the half-plane distance is ((p − F)² − (p − s)²) × that. Fixed per floor, whatever window asks. */
+/** A floor site's rising neighbours, NEAREST IT FIRST: per neighbour its position, 1 / (2 × its distance
+ *  to the floor site) — so the half-plane distance is ((p − F)² − (p − s)²) × that — and half that distance.
+ *  Fixed per floor, whatever window asks. */
+const LAND_STRIDE = 4;
 const floorLand = new CellCache<Float64Array>(4096);
 const landAround = (ix: number, iz: number): Float64Array => {
   let land = floorLand.get(ix, iz);
   if (land) return land;
   const floor = biomeSiteAt(ix, iz);
-  const out: number[] = [];
+  const out: [number, number, number][] = [];
   for (let i = -NEIGHBOUR_CELLS; i <= NEIGHBOUR_CELLS; i++) {
     for (let j = -NEIGHBOUR_CELLS; j <= NEIGHBOUR_CELLS; j++) {
       const s = biomeSiteAt(ix + i, iz + j);
       if (isFloor(s.zone)) continue;
-      out.push(s.x, s.z, 1 / (2 * Math.hypot(s.x - floor.x, s.z - floor.z)));
+      out.push([s.x, s.z, Math.hypot(s.x - floor.x, s.z - floor.z)]);
     }
   }
-  land = Float64Array.from(out);
+  out.sort((a, b) => a[2] - b[2]);
+  land = new Float64Array(out.length * LAND_STRIDE);
+  out.forEach(([x, z, gap], k) => land!.set([x, z, 1 / (2 * gap), gap / 2], k * LAND_STRIDE));
   floorLand.makeRoom();
   floorLand.set(ix, iz, land);
   return land;
 };
 
-/** The distance (warped units) from a point to the nearest floor territory in the window, up to `cap`. */
+/** Float slack on the half-plane bound below (warped units; the values it guards are ~1e-11 apart). */
+const HALF_PLANE_SLACK = 1e-6;
+/** The distance (warped units) from a point to the nearest floor territory in the window, up to `cap`.
+ *  A neighbour s's half-plane distance is (p − F)·û − |s − F| / 2 ≤ |p − F| − |s − F| / 2, so once the
+ *  neighbours (nearest the floor first) reach one whose half gap leaves no room over the largest found,
+ *  none after it can raise it; and no distance is under 0, so a 0 ends the search. */
 const floorDistance = (w: SiteWindow, px: number, pz: number, cap: number): number => {
   const territory = TERRITORY_CELLS * domainConfig!.gridSize;
   let best = cap;
   for (let s = 0; s < w.floorX.length; s++) {
     const dl2 = (px - w.floorX[s]) ** 2 + (pz - w.floorZ[s]) ** 2;
     if (dl2 >= (best + territory) ** 2) continue;
-    const land = landAround(w.floorIx[s], w.floorIz[s]);
+    const land = w.floorLand[s] ?? (w.floorLand[s] = landAround(w.floorIx[s], w.floorIz[s]));
+    const dl = Math.sqrt(dl2) + HALF_PLANE_SLACK;
     let d = 0;
-    for (let k = 0; k < land.length; k += 3) {
+    for (let k = 0; k < land.length; k += LAND_STRIDE) {
+      if (land[k + 3] >= dl - d) break;
       const h = (dl2 - (px - land[k]) ** 2 - (pz - land[k + 1]) ** 2) * land[k + 2];
       if (h > d) {
         d = h;
         if (d >= best) break;
       }
     }
-    if (d < best) best = d;
+    if (d < best) {
+      best = d;
+      if (best <= 0) return 0;
+    }
   }
   return best;
 };
