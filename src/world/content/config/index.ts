@@ -154,7 +154,14 @@ const flattenDescriptorsOf = (regions: readonly ContentNode<any>[]): FlattenDesc
     childrenOfKind<BiomeIdentity>(region, "biome").flatMap((biome) =>
       actorPlacementsOf(biome, region).map(
         ({ id, mount }) =>
-          ({ ...mountAttributesOf(mount), id, biomeIds: [biome.props.id] }) as Record<string, unknown> & {
+          ({
+            ...mountAttributesOf(mount),
+            id,
+            biomeIds: [biome.props.id],
+            // The plan's own attributes, kept whole beside the flattened ones: a worker regenerates a
+            // building's ground ring from them (generation/types.ts FlattenDescriptor.hull).
+            ...(mount.actor.component === "building" && mount.actor.hull ? { hull: mount.actor.hull } : {}),
+          }) as Record<string, unknown> & {
             id: string;
             biomeIds: number[];
           },
@@ -176,6 +183,7 @@ const flattenDescriptorsOf = (regions: readonly ContentNode<any>[]): FlattenDesc
         roadDistanceRange: a.roadDistanceRange as [number, number] | undefined,
         radius: (a.flattenRadius as number) ?? footprint * 0.45,
         skirt: (a.flattenSkirt as number) ?? footprint * 0.35,
+        ...(a.hull ? { hull: a.hull as FlattenDescriptor["hull"] } : {}),
       };
     });
 };

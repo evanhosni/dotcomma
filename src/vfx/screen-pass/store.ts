@@ -48,3 +48,17 @@ export const isCameraUnderwater = (): boolean => cameraWaterDepth > 0;
 
 /** Devmode's live mixes over every liquid's fog density and blur (vfx/registry.ts); 1 = as designed. */
 export const UNDERWATER_MIX = { fog: 1, blur: 1 };
+
+/** Live values: <PostProcessing scan> sets the strength, devmode's sliders drive all of them
+ *  (vfx/registry.ts). `grade` is how far the picture is pulled onto the phosphor palette, `contour` the
+ *  detected-contour brightness, `raster` the scanline depth. */
+export const SCAN = { strength: 0, grade: 0.82, contour: 0.9, raster: 0.22, vignette: 0.55 };
+
+export const isScanning = (): boolean => SCAN.strength > 0;
+
+/** Live values: <PostProcessing inspect> sets the strength, devmode's sliders drive all of them
+ *  (vfx/registry.ts). `dash` is 0 = solid outlines → 1 = fully dashed, `gridPx` the layout grid's cell in
+ *  screen pixels (0 = off), `pickRadius` how far from the crosshair the selection reaches, in screen heights. */
+export const INSPECT = { strength: 0, dash: 0.75, gridPx: 72, pickRadius: 0.22 };
+
+export const isInspecting = (): boolean => INSPECT.strength > 0;

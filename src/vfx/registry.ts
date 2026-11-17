@@ -1,7 +1,7 @@
 import { LAMP_GLOW_MIX } from "../lighting/lamp-glow";
 import { WATER_SWELL_MIX } from "../world/water/material";
 import { _curvature, _quantization } from "./material";
-import { DEEP_DREAM, DREAM, TRACE, UNDERWATER_MIX } from "./screen-pass/store";
+import { DEEP_DREAM, DREAM, INSPECT, SCAN, TRACE, UNDERWATER_MIX } from "./screen-pass/store";
 import { preloadDeepDream } from "./screen-pass/deep-dream/worker";
 import { getMainRenderFpsCap, setMainRenderFpsCap, getPixelation, setPixelation } from "./store";
 import type { VfxKnob } from "./types";
@@ -21,6 +21,14 @@ export const VFX_KNOBS: readonly VfxKnob[] = [
   { group: "screen", label: "deep dream", min: 0, max: 1, step: 0.01, get: () => DEEP_DREAM.strength, set: (v) => (DEEP_DREAM.strength = v) },
   { group: "screen", label: "trace", min: 0, max: 1, step: 0.01, get: () => TRACE.strength, set: (v) => (TRACE.strength = v) },
   { group: "screen", label: "trace stamp interval (s)", min: 0, max: 0.5, step: 0.01, get: () => TRACE.interval, set: (v) => (TRACE.interval = v) },
+  { group: "screen", label: "inspect", min: 0, max: 1, step: 0.01, get: () => INSPECT.strength, set: (v) => (INSPECT.strength = v) },
+  { group: "screen", label: "inspect dash", min: 0, max: 1, step: 0.01, get: () => INSPECT.dash, set: (v) => (INSPECT.dash = v) },
+  { group: "screen", label: "inspect grid (px)", min: 0, max: 200, step: 4, get: () => INSPECT.gridPx, set: (v) => (INSPECT.gridPx = v) },
+  { group: "screen", label: "scan", min: 0, max: 1, step: 0.01, get: () => SCAN.strength, set: (v) => (SCAN.strength = v) },
+  { group: "screen", label: "scan grade", min: 0, max: 1, step: 0.01, get: () => SCAN.grade, set: (v) => (SCAN.grade = v) },
+  { group: "screen", label: "scan contour", min: 0, max: 2, step: 0.05, get: () => SCAN.contour, set: (v) => (SCAN.contour = v) },
+  { group: "screen", label: "scan raster", min: 0, max: 1, step: 0.01, get: () => SCAN.raster, set: (v) => (SCAN.raster = v) },
+  { group: "screen", label: "scan vignette", min: 0, max: 1, step: 0.01, get: () => SCAN.vignette, set: (v) => (SCAN.vignette = v) },
   {
     group: "geometry",
     label: "quantization (u)",

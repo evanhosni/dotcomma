@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { _quantization, _curvature } from "./material";
 import { QuantizationGrowth } from "./types";
 import { setMainRenderFpsCap, setPixelation } from "./store";
-import { DREAM, DEEP_DREAM, TRACE } from "./screen-pass/store";
+import { DREAM, DEEP_DREAM, TRACE, SCAN, INSPECT } from "./screen-pass/store";
 import { preloadDeepDream } from "./screen-pass/deep-dream/worker";
 
 interface PostProcessingProps {
@@ -23,6 +23,10 @@ interface PostProcessingProps {
   deepDream?: number;
   /** The window trail (vfx/screen-pass/TracePass.ts), 0–1: how long the stamped copies persist. Unset/0 = off. */
   trace?: number;
+  /** MAV vision (vfx/screen-pass/ScanPass.ts): the phosphor grade and its detected contours, 0–1. Unset/0 = off. */
+  scan?: number;
+  /** Devtools vision (vfx/screen-pass/InspectPass.ts): element outlines, the selection and its rulers, 0–1. Unset/0 = off. */
+  inspect?: number;
 }
 
 export const PostProcessing = ({
@@ -35,6 +39,8 @@ export const PostProcessing = ({
   dream,
   deepDream,
   trace,
+  scan,
+  inspect,
 }: PostProcessingProps) => {
   // The uniforms are module-level and survive a domain switch — reset each on unmount, or a
   // quantized/curved/capped domain leaks its setting into the next one.
@@ -82,6 +88,20 @@ export const PostProcessing = ({
       TRACE.strength = 0;
     };
   }, [trace]);
+
+  useEffect(() => {
+    SCAN.strength = scan ?? 0;
+    return () => {
+      SCAN.strength = 0;
+    };
+  }, [scan]);
+
+  useEffect(() => {
+    INSPECT.strength = inspect ?? 0;
+    return () => {
+      INSPECT.strength = 0;
+    };
+  }, [inspect]);
 
   useEffect(() => {
     setPixelation(pixelationProp ?? 0);
