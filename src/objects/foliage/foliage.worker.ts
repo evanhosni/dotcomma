@@ -1,9 +1,8 @@
 import { generateBuildingPlan } from "../actors/building";
 import { ringPoints } from "../actors/building/utils";
 import { buildingSeedAt } from "../actors/building/spec";
-import { getActorSpec } from "../../world/domains";
 import { dropOldestHalf } from "../../generation/cache/utils";
-import { getFlattenPoints, padsApplyIn } from "../../generation/placement/flatten-pads";
+import { flattenDescriptorOf, getFlattenPoints, padsApplyIn } from "../../generation/placement/flatten-pads";
 import type { FoliageChunkParams } from "./worker";
 import { seedRand, smoothstep } from "../../utils/math";
 import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
@@ -36,15 +35,17 @@ const MAX_FOOTPRINT_REACH = 36;
 const ringCache = new Map<string, Float64Array | null>();
 
 const silhouetteOf = (descId: string, x: number, z: number): Float64Array | null => {
-  const spec = getActorSpec(descId);
-  if (!spec?.hull || spec.component !== "building") return null;
+  // The pad's own hull, carried on its descriptor: the actor catalog is behind the domain trees, and
+  // importing it here would pull them — and their worker clients — into this worker's bundle chunk.
+  const hull = flattenDescriptorOf(descId)?.hull;
+  if (!hull) return null;
   const seed = buildingSeedAt(x, z);
   const key = `${descId}|${seed}`;
   const cached = ringCache.get(key);
   if (cached !== undefined) return cached;
   if (ringCache.size > 4096) dropOldestHalf(ringCache);
   // lofts[0] is the door band (generatePlan's buildLofts); its bottom level is the ground ring.
-  const band = generateBuildingPlan(seed, spec.hull).lofts[0];
+  const band = generateBuildingPlan(seed, hull).lofts[0];
   const points = band ? ringPoints(band.rect, band.sides, band.levels[0], band.ringRotation) : [];
   const count = points.length;
   const ring = count >= 3 ? new Float64Array(count * 2) : null;

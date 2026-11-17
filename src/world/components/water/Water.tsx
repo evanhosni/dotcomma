@@ -28,7 +28,7 @@ export const Water = declare<WaterProps>({
   within: "domain",
   read: (node): WaterParams => {
     const { fallGrade, defaults } = node.props;
-    for (const [kind, params] of Object.entries(defaults ?? {})) {
+    for (const kind of Object.keys(defaults ?? {})) {
       if (!(WATER_BODY_KINDS as readonly string[]).includes(kind)) reportContentError(`<Water defaults>: "${kind}" is no body of water (${WATER_BODY_KINDS.join(", ")})`);
     }
     return { ...WATER_DEFAULTS, ...(fallGrade === undefined ? {} : { fallGrade }), ...readWaterColors(node.props), ...(defaults ? { defaults } : {}) };

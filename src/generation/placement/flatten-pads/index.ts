@@ -236,6 +236,13 @@ export const applyFlattenPads = (x: number, z: number, height: number): number =
   return height;
 };
 
+const descriptorsById = new Map<string, FlattenDescriptor>();
+
+/** A pad actor's descriptor by id. How a WORKER reaches a pad's own attributes (a building's `hull`)
+ *  from the config it was initialized with, instead of the actor catalog, which lives behind the
+ *  domain trees. */
+export const flattenDescriptorOf = (id: string): FlattenDescriptor | undefined => descriptorsById.get(id);
+
 /** Whether pads can shape a vertex in this biome (only biomes some flatten descriptor targets). */
 export const padsApplyIn = (biomeId: number): boolean =>
   !!domainConfig!.flattenDescriptors && domainConfig!.flattenDescriptors.length > 0 && (flattenBiomes === null || flattenBiomes.has(biomeId));
@@ -246,6 +253,8 @@ export const initFlattenPads = (config: DomainConfig): void => {
   flattenReach = 0;
   flattenSpacingPad = 0;
   flattenBiomes = new Set<number>();
+  descriptorsById.clear();
+  for (const d of config.flattenDescriptors ?? []) descriptorsById.set(d.id, d);
   for (const d of config.flattenDescriptors ?? []) {
     flattenReach = Math.max(flattenReach, d.radius + d.skirt);
     // Round-k spacing decisions depend on ≤ k×footprint neighborhoods.

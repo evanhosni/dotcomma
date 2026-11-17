@@ -3,6 +3,7 @@
  *  shapes its modules share. Three-free. */
 import type { PointXZ } from "../utils/math/types";
 import type { WaterBase, WaterBody } from "./water/types";
+import type { BuildingAttributes } from "../objects/actors/building/types";
 
 export interface TerrainNoiseParams {
   type: "simplex" | "perlin";
@@ -166,6 +167,10 @@ export interface FlattenDescriptor {
   roadDistanceRange?: [number, number];
   radius: number; // flat pad radius around the instance
   skirt: number; // blend ring width back to the raw terrain
+  /** A building pad's hull attributes, so a worker can regenerate its plan (the foliage worker's ground
+   *  silhouettes) from the config alone: reaching the actor catalog instead would pull every domain tree
+   *  — and the worker clients inside it — into the worker's own bundle chunk. */
+  hull?: BuildingAttributes;
 }
 
 export interface VertexResult {
