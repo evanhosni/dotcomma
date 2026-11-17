@@ -53,3 +53,13 @@ vec4 slopeBlendedSample(sampler2D tex, vec2 uv, float tri, vec3 worldPos, vec3 w
 float fakeSunLight(vec3 worldNormal) {
   return clamp(dot(normalize(worldNormal), normalize(vec3(0.35, 0.9, 0.2))), 0.0, 1.0);
 }
+
+/** THE ONE bed shade (a lake floor's frag, the river bed in the combined shader): the sand darkening and
+ *  cooling over 24u of water depth with a slow fbm ripple, so a channel runs into a lake with no pale
+ *  rectangle at the mouth. */
+vec3 bedShade(vec3 sand, vec3 worldPosWrapped, float underwaterDepth) {
+  float ripple = worldFbm(worldPosWrapped.xz, 0.03, 2);
+  float deep = smoothstep(0.0, 24.0, underwaterDepth);
+  vec3 tint = mix(vec3(0.95, 0.9, 0.8), vec3(0.3, 0.33, 0.36), deep);
+  return sand * tint * mix(0.85, 1.05, ripple);
+}

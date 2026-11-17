@@ -1,7 +1,8 @@
+import type { AnimationConfig } from "../../animation/types";
 import type { ActorAttributes } from "../types";
 import { BUILDING_HULL_KEYS } from "./building/spec";
 import type { BuildingAttributes } from "./building/types";
-import type { StateMachineConfig } from "./state/types";
+import type { MotionConfig, StateMachineConfig } from "./state/types";
 
 /**
  * The Three-free, React-free definition of an actor kind — one per kind in
@@ -24,7 +25,7 @@ export type BodyKind = "none" | "fixed" | "kinematic";
 /** "ground": the shared character resolver (gravity, slopes); "free": integrates its velocity, no gravity. */
 export type MovementKind = "ground" | "free";
 
-/** Which client member renders the kind (objects/actors/components.ts). */
+/** Which client member renders the kind (objects/actors/registry.ts). */
 export type ActorComponentName = "model" | "building";
 
 /** A GLTF actor's own knobs (ModelActor). */
@@ -32,8 +33,6 @@ export interface ModelAttributes {
   /** Public-URL GLTF path. */
   model: string;
   scale?: [number, number, number];
-  /** Default true; movers pass false. */
-  collidersNeverMove?: boolean;
   /** One trimesh over the whole model instead of per-node colliders. */
   wholeTrimesh?: boolean;
   excludeColliderNames?: string[];
@@ -43,6 +42,10 @@ export interface ModelAttributes {
 export interface ActorSimulationAttributes {
   /** Synced instances run it on the server and mirror its state here; local ones run it here. */
   stateMachine?: StateMachineConfig;
+  /** The machine's animation channel defaults and the procedural clips it can play. */
+  animation?: AnimationConfig;
+  /** The movement counterpart: speed and turn multipliers (simulated), drawn frame rate and yaw step (client). */
+  motion?: MotionConfig;
   body?: BodyKind;
   /** Kinematic body shape (default DEFAULT_COLLIDER). */
   collider?: ColliderSpec;

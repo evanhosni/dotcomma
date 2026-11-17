@@ -1,8 +1,8 @@
 import type * as THREE from "three";
-import type { SpriteDescriberName } from "./describers";
+import { SPRITE_DESCRIBERS } from "./registry";
 
 /** A kind's far tier (ActorAttributes.spriteLod): past the actor's own renderDistance it is drawn as an
- *  upright billboard out to this one, loaded and dropped by the same radius rule (spawning/radii.ts). */
+ *  upright billboard out to this one, loaded and dropped by the same radius rule (objects/actors/spawning/utils.ts). */
 export interface SpriteLodAttributes {
   renderDistance: number;
 }
@@ -22,7 +22,7 @@ export type SpriteDescriber = (attributes: Readonly<Record<string, unknown>>, x:
 /**
  * A member's far look (`ActorWarmupHooks.spriteLook`, a static on the member component). GLSL runs inside
  * the sprite base's MeshStandardMaterial (spriteMaterial.ts), which declares for it:
- *  - `spriteData[]` (vec4s; `spriteDatum(i)` reads float i) and the unpack helpers (layout.ts);
+ *  - `spriteData[]` (vec4s; `spriteDatum(i)` reads float i) and the unpack helpers (objects/sprite-lod/utils.ts);
  *  - fragment `main`: `spriteUv` (0..1 across and up the box), `spriteSize` (the box, u), `spriteUvPixel`
  *    (fwidth of spriteUv, taken before any discard).
  */
@@ -76,3 +76,7 @@ export interface SpriteChunkResult {
   failed: boolean;
   looks: SpriteChunkLook[];
 }
+
+export type SpriteDescriberName = keyof typeof SPRITE_DESCRIBERS;
+
+export type SpriteDetailListener = (id: string, visibility: number) => void;

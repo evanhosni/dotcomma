@@ -3,37 +3,33 @@ import type Rapier from "@dimforge/rapier3d-compat";
 import { CuboidCollider, RigidBody, TrimeshCollider, useRapier } from "@react-three/rapier";
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { hideCursor, showCursor } from "../../../utils/cursor/cursor";
+import { claimHover, releaseHover } from "../../../utils/cursor";
+import type { HoverTarget } from "../../../utils/cursor/types";
 import { TaskQueue } from "../../../utils/task-queue/TaskQueue";
-import { traceEvent, traceSpan } from "../../../utils/spikeTrace";
-import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
-import { meshTemplate, warmPrograms } from "../../../utils/warmPrograms";
+import { traceEvent, traceSpan } from "../../../utils/spike-trace";
+import { uploadOnFirstDraw } from "../../../utils/render/utils";
+import { meshTemplate, warmPrograms } from "../../../utils/render";
 import { framePhaseFromCoords } from "../../../utils/utils";
-import { useFullSpeedSlope } from "../../../physics/useFullSpeedSlope";
-import { useActorLifecycle, withinGate } from "../Actor";
-import {
-  beginBuildingInteriorBuild,
-  beginProceduralBuildingBuild,
-  peekBuildingInterior,
-  peekProceduralBuildingAssets,
-  ProceduralBuildingAssets,
-  releaseProceduralBuildingAssets,
-  retainProceduralBuildingAssets,
-} from "./buildingAssets";
-import { DEFAULT_EXTERIOR_MATERIAL, DEFAULT_INTERIOR_MATERIAL, DOOR_MATERIAL, updateWindowLightUniforms } from "./buildingMaterials";
-import { addFarDoor, FarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./farDoors";
-import type { RampCollider } from "./interiorGeometry";
-import { createProxyCollider, ProxyColliderHandle } from "./proxyCollider";
-import { BUILDING_SPRITE_LOOK } from "./buildingSpriteLook";
+import { useFullSpeedSlope } from "../../../physics/hooks";
+import { DOOR_OPEN_ANGLE } from "../../doors/constants";
+import { hoveredDoor, swingDoors } from "../../doors";
+import { useActorLifecycle } from "../hooks";
+import { withinGate } from "../utils";
+import { beginBuildingInteriorBuild, beginProceduralBuildingBuild, peekBuildingInterior, peekProceduralBuildingAssets, releaseProceduralBuildingAssets, retainProceduralBuildingAssets, addFarDoor, farDoorWarmTemplate, followFarDoorOrigin, removeFarDoor, setFarDoorAngle, setFarDoorFade } from "./store";
+import { ProceduralBuildingAssets, FarDoor, BuildingAttributes, BuildingMaterials, BuildingProps } from "./types";
+import { DEFAULT_EXTERIOR_MATERIAL, DEFAULT_INTERIOR_MATERIAL, DOOR_MATERIAL, updateWindowLightUniforms } from "./material";
+import type { RampCollider } from "./interior/types";
+import { createProxyCollider } from "./collider";
+import { ProxyColliderHandle } from "./collider/types";
+import { BUILDING_SPRITE_LOOK } from "./sprite/material";
 import { BUILDING_HULL_KEYS, buildingSeedAt, DOOR_INTERACT_REACH } from "./spec";
-import { BuildingAttributes, BuildingMaterials, BuildingProps } from "./types";
 
 const COLLIDER_DISTANCE = 120;
 const DISTANCE_CHECK_INTERVAL = 15; // frames
 const BUILDING_DESPAWN_DISTANCE_FACTOR = 1.1;
 /** Inside it the building's subtree is LIVE (matrices update, see the base's freezeMatrices): the real,
  *  clickable door leaves draw and the interior (once built) is shown. Beyond it the leaves are drawn by
- *  the one far-door InstancedMesh (farDoors.ts) and the interior is hidden — hidden, never discarded. */
+ *  the one far-door InstancedMesh (objects/actors/building/store.ts) and the interior is hidden — hidden, never discarded. */
 const LIVE_DISTANCE = 150;
 /** The first time the player comes this close, the interior mesh is built and mounted, and it (and
  *  its children) stay mounted until the building despawns. Well inside the collider range (120u), so
@@ -41,8 +37,6 @@ const LIVE_DISTANCE = 150;
 const INTERIOR_DISTANCE = 60;
 const DOOR_RAYCAST_DISTANCE = 30; // building distance under which the door raycast runs
 const DOOR_RAYCAST_INTERVAL_FRAMES = 3;
-const DOOR_OPEN_ANGLE = -1.9; // rad — swings outward
-const DOOR_SWING_RATE = 4;
 
 const DISTANCE_GATE_HYSTERESIS = 12;
 
@@ -87,60 +81,7 @@ const driveSharedBuildingState = (state: RootState): void => {
   followFarDoorOrigin(state.camera.position.x, state.camera.position.z);
 };
 
-const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
-const _sphere = new THREE.Sphere();
-const _hits: THREE.Intersection[] = [];
-
-/** The door leaf under the screen-center ray within DOOR_INTERACT_REACH, or −1. */
-const raycastHoveredDoor = (camera: THREE.Camera, doorMeshes: (THREE.Mesh | null)[]): number => {
-  let hover = -1;
-  _raycaster.setFromCamera(_center, camera);
-  _raycaster.far = DOOR_INTERACT_REACH;
-  for (let i = 0; i < doorMeshes.length; i++) {
-    const mesh = doorMeshes[i];
-    if (!mesh) continue;
-    const geo = mesh.geometry;
-    if (geo.boundingSphere === null) geo.computeBoundingSphere();
-    _sphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
-    if (!_raycaster.ray.intersectsSphere(_sphere)) continue;
-    _hits.length = 0;
-    if (_raycaster.intersectObject(mesh, false, _hits).length > 0) {
-      hover = i;
-      break;
-    }
-  }
-  _raycaster.far = Infinity;
-  return hover;
-};
-
-/** Eases every hinge toward its open/closed angle, mirrored onto its far-door instance. Returns
- *  whether any is still moving. */
-const swingDoors = (
-  hinges: (THREE.Group | null)[],
-  doorsOpen: boolean[],
-  farDoors: FarDoor[] | null,
-  delta: number,
-): boolean => {
-  let stillMoving = false;
-  for (let i = 0; i < hinges.length; i++) {
-    const hinge = hinges[i];
-    if (!hinge) continue;
-    const target = doorsOpen[i] ? DOOR_OPEN_ANGLE : 0;
-    const diff = target - hinge.rotation.y;
-    if (Math.abs(diff) < 1e-3) {
-      if (diff !== 0) hinge.rotation.y = target;
-    } else {
-      hinge.rotation.y += diff * Math.min(1, delta * DOOR_SWING_RATE);
-      stillMoving = true;
-    }
-    const far = farDoors?.[i];
-    if (far) setFarDoorAngle(far, hinge.rotation.y);
-  }
-  return stillMoving;
-};
-
-/** This building's doors as far-door instances (farDoors.ts), at their current swing. */
+/** This building's doors as far-door instances (objects/actors/building/store.ts), at their current swing. */
 const addFarDoorsOf = (
   scene: THREE.Scene,
   assets: ProceduralBuildingAssets,
@@ -230,6 +171,8 @@ export const Building = (props: BuildingProps) => {
   const doorMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
   const hingeRefs = useRef<(THREE.Group | null)[]>([]);
   const hoverDoorRef = useRef(-1);
+  /** Claimed while a door is hovered (utils/cursor): its click toggles that door. Set up below. */
+  const doorHoverRef = useRef<HoverTarget>({ distance: Infinity, growsCursor: true, onMouse: () => undefined });
   const doorsMovingRef = useRef(false);
 
   const doorsGroupRef = useRef<THREE.Group>(null);
@@ -292,19 +235,24 @@ export const Building = (props: BuildingProps) => {
       }
 
       if (doorRaycastFrameRef.current++ % DOOR_RAYCAST_INTERVAL_FRAMES === 0) {
+        const target = doorHoverRef.current;
         const hover =
-          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? raycastHoveredDoor(state.camera, doorMeshRefs.current) : -1;
+          ctx.distanceSq < DOOR_RAYCAST_DISTANCE * DOOR_RAYCAST_DISTANCE ? hoveredDoor(state.camera, doorMeshRefs.current, DOOR_INTERACT_REACH, target) : -1;
         if (hover !== hoverDoorRef.current) {
-          if (hover >= 0 && hoverDoorRef.current < 0) showCursor();
-          if (hover < 0 && hoverDoorRef.current >= 0) hideCursor();
+          if (hover >= 0) claimHover(target);
+          else releaseHover(target);
           hoverDoorRef.current = hover;
         }
       }
 
       // Skipped once settled: the asymptotic lerp otherwise writes rotation.y
-      // (Euler→quaternion trig) on every door of every building forever.
+      // (Euler→quaternion trig) on every door of every building forever. Each moved angle is
+      // mirrored onto the far-door instance.
       if (doorsMovingRef.current) {
-        doorsMovingRef.current = swingDoors(hingeRefs.current, doorsOpenRef.current, farDoorsRef.current, delta);
+        doorsMovingRef.current = swingDoors(hingeRefs.current, doorsOpenRef.current, delta, (i, angle) => {
+          const far = farDoorsRef.current?.[i];
+          if (far) setFarDoorAngle(far, angle);
+        });
       }
     },
   });
@@ -343,7 +291,7 @@ export const Building = (props: BuildingProps) => {
   }, [collidersActive]);
 
   // The sealed hull exists exactly when the real colliders don't (collider LOD,
-  // see proxyCollider.ts), so a building is never passable.
+  // see objects/actors/building/collider/index.ts), so a building is never passable.
   useEffect(() => {
     if (!assets || collidersActive) return;
     const handle = createProxyCollider({ world, rapier }, coordinates, assets.proxyHullVertices);
@@ -378,21 +326,17 @@ export const Building = (props: BuildingProps) => {
 
   // Local toggle is prediction; the server's broadcast confirms for everyone.
   useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (e.button !== 0) return;
+    doorHoverRef.current.onMouse = (e) => {
       const idx = hoverDoorRef.current;
-      if (idx < 0) return;
+      if (e.type !== "click" || e.button !== 0 || idx < 0) return;
       setDoorOpen(idx, !doorsOpenRef.current[idx]);
       sync?.interact(`door:${idx}`);
     };
-    window.addEventListener("click", handleClick);
-    return () => window.removeEventListener("click", handleClick);
   }, [sync, setDoorOpen]);
 
   useEffect(() => {
-    return () => {
-      if (hoverDoorRef.current >= 0) hideCursor();
-    };
+    const target = doorHoverRef.current;
+    return () => releaseHover(target);
   }, []);
 
   if (!assets) return null;
@@ -421,7 +365,7 @@ export const Building = (props: BuildingProps) => {
         </group>
       )}
 
-      {/* The real hinged leaves, inside LIVE_DISTANCE; farDoors.ts draws them beyond it. */}
+      {/* The real hinged leaves, inside LIVE_DISTANCE; objects/actors/building/store.ts draws them beyond it. */}
       <group ref={doorsGroupRef}>
         {assets.doors.map((d, i) => (
           <group key={`door-${i}`} position={d.position} rotation={[0, d.yaw, 0]}>
@@ -469,7 +413,7 @@ export const Building = (props: BuildingProps) => {
   );
 };
 
-/** Load-time program warm-up (utils/warmPrograms.ts): the shell, door and interior materials the
+/** Load-time program warm-up (utils/render/index.ts): the shell, door and interior materials the
  *  descriptor resolves, and the shared far-door mesh. */
 const BuildingWarmup = ({ descriptor }: { descriptor: { materials?: BuildingMaterials } }) => {
   const scene = useThree((state) => state.scene);

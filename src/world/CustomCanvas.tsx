@@ -1,19 +1,25 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
 import { useEffect, useMemo } from "react";
-import { useDevContext } from "../context/DevContext";
-import { GameContextProvider } from "../context/GameContext";
+import { useDevContext } from "../context/hooks";
+import { GameContextProvider } from "../context/GameContextProvider";
 import { StatsOverlay } from "../menus/overlay/StatsOverlay";
 import { Player } from "../player/Player";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
-import { LampGlowDriver } from "../lighting/lampGlow";
-import { GRAVITY } from "../physics/characterMovement";
-import { initCursor } from "../utils/cursor/cursor";
-import { traceSpan } from "../utils/spikeTrace";
-import { bindProgramCompiler } from "../utils/warmPrograms";
-import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
-import { isCameraUnderwater, UnderwaterPass } from "../vfx/underwater";
+import { LampGlowDriver } from "../lighting/lamp-glow/LampGlowDriver";
+import { GRAVITY } from "../physics/constants";
+import { initCursor } from "../utils/cursor";
+import { traceSpan } from "../utils/spike-trace";
+import { bindProgramCompiler } from "../utils/render";
+import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/store";
+import { UnderwaterPass } from "../vfx/screen-pass/UnderwaterPass";
+import { DeepDreamPass } from "../vfx/screen-pass/deep-dream/DeepDreamPass";
+import { DreamPass } from "../vfx/screen-pass/DreamPass";
+import { TracePass } from "../vfx/screen-pass/TracePass";
+import { ScreenPassChain } from "../vfx/screen-pass/ScreenPassChain";
+import { PixelationDriver } from "../vfx/PixelationDriver";
+import { debugGlobal } from "../utils/utils";
 
 /** Non-zero useFrame priorities disable R3F's auto-render, so this renders
  *  explicitly. The FPS-cap decision runs ONCE per tick at -10, before every
@@ -21,7 +27,7 @@ import { isCameraUnderwater, UnderwaterPass } from "../vfx/underwater";
 const SceneRender = () => {
   const { gl, scene, camera } = useThree();
   useEffect(() => {
-    (window as any).__game = { gl, scene, camera }; // console/debug access only
+    debugGlobal("__game", { gl, scene, camera });
     // A self-updating scene root FORCES updateMatrixWorld through every descendant each frame,
     // matrixWorldAutoUpdate = false included, which would defeat the actors' matrix freezing.
     // The root never moves (~364 → 218µs per scene update in the city).
@@ -33,17 +39,21 @@ const SceneRender = () => {
   useFrame(() => {
     shouldPresentThisFrame();
   }, -10);
-  const underwater = useMemo(() => new UnderwaterPass(), []);
+  // In order: the liquid sits between the camera and the world, the trace stamps what that shows, then the
+  // dreams paint over the result.
+  const passes = useMemo(
+    () => new ScreenPassChain([new UnderwaterPass(), new TracePass(), new DeepDreamPass(), new DreamPass()]),
+    [],
+  );
   useEffect(() => {
-    underwater.warm(gl);
-    return () => underwater.dispose();
-  }, [gl, underwater]);
+    passes.warm(gl);
+    return () => passes.dispose();
+  }, [gl, passes]);
   useFrame(({ clock }) => {
     if (!isMainRenderFrame()) return;
     // A spike INSIDE this span is GPU/driver work; outside it is main-thread JS.
     traceSpan("render", () => {
-      if (isCameraUnderwater()) underwater.render(gl, scene, camera, clock.elapsedTime);
-      else gl.render(scene, camera);
+      passes.render(gl, scene, camera, clock.elapsedTime);
     });
   }, 2);
   return null;
@@ -67,6 +77,7 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
     <>
       <SceneRender />
       <LampGlowDriver />
+      <PixelationDriver baseDpr={BASE_DPR} />
       <StatsOverlay />
       {/* interpolate={false} + timeStep="vary": no dynamic bodies; the fixed 1/60 accumulator
           drove kinematic bodies at 60/fps of their speed above 60fps (see CLAUDE.md). */}
@@ -84,6 +95,8 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
 // full-screen terrain shader for a quantized low-poly look. MAX_DPR is the one
 // knob to raise if the picture reads soft.
 const MAX_DPR = 1.5;
+/** What R3F resolves dpr={[1, MAX_DPR]} to; the pixelation divides it. */
+const BASE_DPR = typeof window === "undefined" ? 1 : Math.min(Math.max(1, window.devicePixelRatio), MAX_DPR);
 const GL_PROPS = { antialias: false, alpha: false, stencil: false, depth: true, powerPreference: "high-performance" as const };
 
 /** THE canvas — mounted ONCE for the life of the page; domains swap inside it (see CLAUDE.md). */

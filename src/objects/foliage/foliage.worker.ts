@@ -1,0 +1,541 @@
+import { generateBuildingPlan } from "../actors/building";
+import { ringPoints } from "../actors/building/utils";
+import { buildingSeedAt } from "../actors/building/spec";
+import { getActorSpec } from "../../world/domains";
+import { dropOldestHalf } from "../../generation/cache/utils";
+import { getFlattenPoints, padsApplyIn } from "../../generation/placement/flatten-pads";
+import type { FoliageChunkParams } from "./worker";
+import { seedRand, smoothstep } from "../../utils/math";
+import { RIVER_BED_BLEND_WIDTH, RIVER_BED_FULL_INSET } from "../../world/shaders/constants";
+import { DomainConfig, initCompute, computeVertexData, biomeFieldAt, biomeWeightOf, riverKeepOff } from "../../generation";
+import type { VertexResult } from "../../generation";
+import { domainConfig } from "../../generation/store";
+import { waterOwnedBy, waterZoneOf } from "../../generation/water/parts/params";
+import { insideCaveKeepOff, keepOffMouthsNear } from "../../generation/underground";
+import type { MouthPiece } from "../../generation/underground/types";
+
+/**
+ * Where the flatten-pad actors stand, as ground SILHOUETTES: a building's is its door band's ring (the
+ * prismatic ground section of the same seeded plan Building.tsx draws — a pad's flat radius is narrower
+ * than a canister's corners, and the proxy hull is fattened to contain the leaning floors above, which
+ * left a bare strip around every wall), any other pad actor's its flat radius. Foliage uses it
+ * to keep blades out of floors. Three-free.
+ */
+
+export interface Footprint {
+  x: number;
+  z: number;
+  /** Convex silhouette relative to (x, z), counter-clockwise x/z pairs; null = the disc of `radius`. */
+  ring: Float64Array | null;
+  radius: number;
+}
+
+/** The widest half-extent a building shell reaches from its origin (interior cap 16u × the 1.5 width scale, rect corners). */
+const MAX_FOOTPRINT_REACH = 36;
+
+const ringCache = new Map<string, Float64Array | null>();
+
+const silhouetteOf = (descId: string, x: number, z: number): Float64Array | null => {
+  const spec = getActorSpec(descId);
+  if (!spec?.hull || spec.component !== "building") return null;
+  const seed = buildingSeedAt(x, z);
+  const key = `${descId}|${seed}`;
+  const cached = ringCache.get(key);
+  if (cached !== undefined) return cached;
+  if (ringCache.size > 4096) dropOldestHalf(ringCache);
+  // lofts[0] is the door band (generatePlan's buildLofts); its bottom level is the ground ring.
+  const band = generateBuildingPlan(seed, spec.hull).lofts[0];
+  const points = band ? ringPoints(band.rect, band.sides, band.levels[0], band.ringRotation) : [];
+  const count = points.length;
+  const ring = count >= 3 ? new Float64Array(count * 2) : null;
+  if (ring) {
+    // ringPoints walks clockwise from above; insideFootprint wants counter-clockwise.
+    for (let i = 0; i < count; i++) {
+      const [px, pz] = points[count - 1 - i];
+      ring[i * 2] = px;
+      ring[i * 2 + 1] = pz;
+    }
+  }
+  ringCache.set(key, ring);
+  return ring;
+};
+
+/** Every pad actor whose silhouette may reach into the box. */
+export const footprintsNear = (minX: number, minZ: number, maxX: number, maxZ: number): Footprint[] =>
+  getFlattenPoints(minX - MAX_FOOTPRINT_REACH, minZ - MAX_FOOTPRINT_REACH, maxX + MAX_FOOTPRINT_REACH, maxZ + MAX_FOOTPRINT_REACH).map((p) => ({
+    x: p.x,
+    z: p.z,
+    ring: silhouetteOf(p.descId, p.x, p.z),
+    radius: p.radius,
+  }));
+
+/** Whether (x, z) lies within `margin` of the footprint. */
+export const insideFootprint = (f: Footprint, x: number, z: number, margin: number): boolean => {
+  const px = x - f.x;
+  const pz = z - f.z;
+  const ring = f.ring;
+  if (!ring) return px * px + pz * pz < (f.radius + margin) ** 2;
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) {
+    const ax = ring[i * 2];
+    const az = ring[i * 2 + 1];
+    const j = (i + 1) % n;
+    const ex = ring[j * 2] - ax;
+    const ez = ring[j * 2 + 1] - az;
+    // Counter-clockwise: the inside is to the LEFT of every edge.
+    if (ex * (pz - az) - ez * (px - ax) < -margin * Math.hypot(ex, ez)) return false;
+  }
+  return true;
+};
+
+/**
+ * Foliage placement worker (every plant type): coarse terrain grid + bilinear
+ * interpolation per instance.
+ *
+ *   IN:  { type: "INIT", config: DomainConfig }
+ *   IN:  { type: "GENERATE_FOLIAGE", id: number, chunkX: number, chunkZ: number, params: FoliageChunkParams, band: number }
+ *   OUT: { type: "INIT_DONE" }
+ *   OUT: { type: "FOLIAGE_RESULT", id, count, total, minY, maxY, offsets: Float32Array, instanceData: Float32Array }
+ *        (`count` = the band's prefix of the `total` placed blades)
+ */
+
+const GRID_STEP = 2; // world units between terrain samples
+// Same visibility floor as the terrain shader's per-biome branch.
+const MIN_BIOME_WEIGHT = 0.002;
+// 64u chunks at the grass field's 8M density place ~32k blades per chunk.
+const MAX_INSTANCES_PER_CHUNK = 65536;
+const INSTANCE_SINK = 0.15; // bury blade bases slightly to hide interpolation error
+// Plants thin out across the shader's bed fade (riverBedDistance, factor-1 units): none where the bed
+// fully covers the ground, full density where its fade ends — the bed stays bare and the blades thin
+// as the sand grows in.
+const RIVER_BED_PLANT_RAMP = RIVER_BED_BLEND_WIDTH;
+// Stored in place of an out-of-reach Infinity: a bilinear weight of 0 times Infinity is NaN.
+const RIVER_BED_FAR = 1e4;
+/** Blades stay this far outside a building's silhouette (their width and sway): inside one they grew
+ *  up through the floor. */
+const FOOTPRINT_MARGIN = 0.6;
+
+let initialized = false;
+
+/** A per-blade uniform in [0, 1) from the chunk seed and the blade's draw index — NOT a draw from
+ *  the PRNG stream (an extra draw would reshuffle every later blade of the chunk) and not from
+ *  phase/tint (the fade key is made of those; thinning by it would bias the LOD prefix). */
+const bladeHash = (seed: number, index: number): number => {
+  let h = Math.imul(seed ^ Math.imul(index + 1, 0x9e3779b1), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+};
+
+/** Fast deterministic PRNG — one seedrandom call per chunk, cheap draws per blade. */
+const mulberry32 = (a: number) => () => {
+  a |= 0;
+  a = (a + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+// Reused across chunks: a 32k-blade chunk needs ~2.5MB of scratch per request.
+const SCRATCH_OFFSETS = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
+const SCRATCH_BLADE_DATA = new Float32Array(MAX_INSTANCES_PER_CHUNK * 3);
+const SCRATCH_FADE_KEYS = new Float32Array(MAX_INSTANCES_PER_CHUNK);
+const SCRATCH_ORDER = new Uint32Array(MAX_INSTANCES_PER_CHUNK);
+
+// ~8 blades per bucket at 32k blades; keys are a well-mixed hash, so buckets stay small.
+const FADE_BUCKETS = 4096;
+const INSERTION_SORT_MAX = 64;
+const bucketCounts = new Uint32Array(FADE_BUCKETS);
+const bucketEnds = new Uint32Array(FADE_BUCKETS);
+
+const bucketOf = (key: number): number => Math.min(FADE_BUCKETS - 1, (key * FADE_BUCKETS) | 0);
+
+/**
+ * Writes the first `count` blades of the DESCENDING fade-key order into `out`, ties in
+ * placement order — exactly what a stable sort of all `placed` blades begins with, so any
+ * shorter band is a strict prefix of a longer one. O(placed + count): buckets below the
+ * cut are never ordered.
+ */
+const orderByFadeKey = (keys: Float32Array, placed: number, count: number, out: Uint32Array): void => {
+  if (count <= 0) return;
+  bucketCounts.fill(0);
+  for (let i = 0; i < placed; i++) bucketCounts[bucketOf(keys[i])]++;
+  let cut = 0;
+  let end = 0;
+  for (let b = FADE_BUCKETS - 1; b >= 0; b--) {
+    bucketEnds[b] = end; // segment START until the scatter below advances it to the end
+    end += bucketCounts[b];
+    if (end >= count) {
+      cut = b;
+      break;
+    }
+  }
+  for (let i = 0; i < placed; i++) {
+    const b = bucketOf(keys[i]);
+    if (b >= cut) out[bucketEnds[b]++] = i;
+  }
+  let start = 0;
+  for (let b = FADE_BUCKETS - 1; b >= cut && start < count; b--) {
+    const segEnd = bucketEnds[b];
+    if (segEnd - start <= INSERTION_SORT_MAX) {
+      // Stable: strict < keeps equal keys in placement order.
+      for (let j = start + 1; j < segEnd; j++) {
+        const v = out[j];
+        const kv = keys[v];
+        let k = j - 1;
+        while (k >= start && keys[out[k]] < kv) {
+          out[k + 1] = out[k];
+          k--;
+        }
+        out[k + 1] = v;
+      }
+    } else {
+      out.subarray(start, segEnd).sort((a, c) => keys[c] - keys[a] || a - c);
+    }
+    start = segEnd;
+  }
+};
+
+interface FoliageGrid {
+  gridNodes: number;
+  heights: Float32Array;
+  slopes: Float32Array;
+  biomeWeights: Float32Array;
+  roadDistances: Float32Array;
+  submerged: Float32Array; // 1 where the water surface sits above the ground (lake, river channel)
+  waterDepth: Float32Array; // how far the water surface stands above the ground (0 when dry)
+  riverBed: Float32Array; // riverBedDistance, capped at RIVER_BED_FAR
+  nearRiverBed: boolean; // some node inside the plant ramp: only then is it evaluated per blade
+  padBiome: boolean; // some node in a biome flatten pads (buildings) stand in: only then are footprints looked up
+}
+
+// A BAND upgrade of a held chunk re-runs placement (the RNG stream is the only way to reach
+// its blades) but not the ~1,100 terrain samples: the grid is kept here. 256 × ~22KB ≈ 5.6MB
+// covers every chunk a 500u field holds; a miss only costs the resample.
+const GRID_CACHE_MAX = 256;
+const gridCache = new Map<string, FoliageGrid>();
+
+/** The grid's per-node fields (slopes are derived from the heights). */
+const NODE_FIELDS = ["heights", "biomeWeights", "roadDistances", "submerged", "waterDepth", "riverBed"] as const;
+
+/** A cached neighbor's node shared with this chunk's node (gx, gz), or null: neighboring chunks share their
+ *  border row/column of nodes (the same world points — 128 of a 64u chunk's 1089 evaluations). */
+type Neighbors = [FoliageGrid | undefined, FoliageGrid | undefined, FoliageGrid | undefined, FoliageGrid | undefined];
+const sharedNode = (n: Neighbors, gx: number, gz: number, last: number): [FoliageGrid, number] | null => {
+  if (gx === 0 && n[0]) return [n[0], gz * (last + 1) + last];
+  if (gx === last && n[1]) return [n[1], gz * (last + 1)];
+  if (gz === 0 && n[2]) return [n[2], last * (last + 1) + gx];
+  if (gz === last && n[3]) return [n[3], gx];
+  return null;
+};
+
+/** What a node's blades are dithered by: a biome's material weight, or the share of the water a body owns. */
+type PlaceWeight = ((vd: VertexResult) => number) | undefined;
+
+const sampleGrid = (minX: number, minZ: number, size: number, weightOf: PlaceWeight, neighbors: Neighbors): FoliageGrid => {
+  const gridNodes = Math.floor(size / GRID_STEP) + 1;
+  const heights = new Float32Array(gridNodes * gridNodes);
+  const slopes = new Float32Array(gridNodes * gridNodes);
+  const biomeWeights = new Float32Array(gridNodes * gridNodes);
+  const roadDistances = new Float32Array(gridNodes * gridNodes);
+  const submerged = new Float32Array(gridNodes * gridNodes);
+  const waterDepth = new Float32Array(gridNodes * gridNodes);
+  const riverBed = new Float32Array(gridNodes * gridNodes);
+  const rampEnd = riverKeepOff() - RIVER_BED_FULL_INSET + RIVER_BED_PLANT_RAMP;
+  let nearRiverBed = false;
+  let padBiome = false;
+
+  const fields = { heights, biomeWeights, roadDistances, submerged, waterDepth, riverBed };
+  for (let gz = 0; gz < gridNodes; gz++) {
+    for (let gx = 0; gx < gridNodes; gx++) {
+      const i = gz * gridNodes + gx;
+      const shared = sharedNode(neighbors, gx, gz, gridNodes - 1);
+      if (shared) {
+        const [grid, j] = shared;
+        for (const f of NODE_FIELDS) fields[f][i] = grid[f][j];
+        if (riverBed[i] < rampEnd) nearRiverBed = true;
+        if (grid.padBiome) padBiome = true;
+        continue;
+      }
+      const vd = computeVertexData(minX + gx * GRID_STEP, minZ + gz * GRID_STEP);
+      heights[i] = vd.height;
+      biomeWeights[i] = weightOf ? weightOf(vd) : 1;
+      roadDistances[i] = vd.distanceToRoadCenter;
+      // Nor under a bridge deck: the ground there is cut just below the deck's top.
+      submerged[i] = (!Number.isNaN(vd.waterHeight) && vd.waterHeight > vd.height - 0.3) || vd.underDeck > 0 ? 1 : 0;
+      waterDepth[i] = vd.waterHeight > vd.height ? vd.waterHeight - vd.height : 0;
+      if (padsApplyIn(vd.biomeId)) padBiome = true;
+      riverBed[i] = Math.min(vd.riverBedDistance, RIVER_BED_FAR);
+      if (riverBed[i] < rampEnd) nearRiverBed = true;
+    }
+  }
+
+  for (let gz = 0; gz < gridNodes; gz++) {
+    for (let gx = 0; gx < gridNodes; gx++) {
+      const x0 = Math.max(gx - 1, 0);
+      const x1 = Math.min(gx + 1, gridNodes - 1);
+      const z0 = Math.max(gz - 1, 0);
+      const z1 = Math.min(gz + 1, gridNodes - 1);
+      const dhdx = (heights[gz * gridNodes + x1] - heights[gz * gridNodes + x0]) / ((x1 - x0) * GRID_STEP);
+      const dhdz = (heights[z1 * gridNodes + gx] - heights[z0 * gridNodes + gx]) / ((z1 - z0) * GRID_STEP);
+      slopes[gz * gridNodes + gx] = (Math.atan(Math.hypot(dhdx, dhdz)) * 180) / Math.PI;
+    }
+  }
+  return { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, waterDepth, riverBed, nearRiverBed, padBiome };
+};
+
+const takeCachedGrid = (key: string): FoliageGrid | undefined => {
+  const hit = gridCache.get(key);
+  if (hit) {
+    gridCache.delete(key); // re-insert = most recently used
+    gridCache.set(key, hit);
+  }
+  return hit;
+};
+
+const cacheGrid = (key: string, grid: FoliageGrid): void => {
+  if (gridCache.size >= GRID_CACHE_MAX) gridCache.delete(gridCache.keys().next().value!);
+  gridCache.set(key, grid);
+};
+
+const PROBE_SPOTS = [[0.5, 0.5], [0, 0], [1, 0], [0, 1], [1, 1]];
+/** Whether the placement weight shows at the chunk's center or corners: if not, there is nothing to place.
+ *  `weightAt` evaluates as little of the vertex as the weight reads. */
+const weightInChunk = (minX: number, minZ: number, size: number, weightAt: (x: number, z: number) => number): boolean => {
+  for (const [px, pz] of PROBE_SPOTS) if (weightAt(minX + px * size, minZ + pz * size) > MIN_BIOME_WEIGHT) return true;
+  return false;
+};
+
+/** The DomainConfig.waterBodies slot a plant's body names (−1: none matches). */
+const waterBodySlot = (ref: NonNullable<FoliageChunkParams["waterBody"]>): number =>
+  domainConfig?.waterBodies.findIndex((b) => b.id === ref.id && b.biomeId === ref.biomeId && b.regionId === ref.regionId) ?? -1;
+
+/** The first `count` placed blades in DESCENDING per-instance fade key (the shader's
+ *  fract(phase * 1.618 + tint * 12.9898)), copied out of the scratch: the main thread truncates
+ *  instanceCount to the blades whose fade hasn't zeroed. The LOD taper silently biases if this order
+ *  changes. */
+const packByFadeKey = (placed: number, count: number): { offsets: Float32Array; instanceData: Float32Array } => {
+  const offsets = SCRATCH_OFFSETS;
+  const instanceData = SCRATCH_BLADE_DATA;
+  const fadeKey = SCRATCH_FADE_KEYS;
+  for (let i = 0; i < placed; i++) {
+    const v = instanceData[i * 3] * 1.618 + instanceData[i * 3 + 2] * 12.9898;
+    fadeKey[i] = v - Math.floor(v);
+  }
+  const order = SCRATCH_ORDER;
+  orderByFadeKey(fadeKey, placed, count, order);
+  const outOffsets = new Float32Array(count * 3);
+  const outBladeData = new Float32Array(count * 3);
+  for (let k = 0; k < count; k++) {
+    const i = order[k];
+    outOffsets[k * 3] = offsets[i * 3];
+    outOffsets[k * 3 + 1] = offsets[i * 3 + 1];
+    outOffsets[k * 3 + 2] = offsets[i * 3 + 2];
+    outBladeData[k * 3] = instanceData[i * 3];
+    outBladeData[k * 3 + 1] = instanceData[i * 3 + 1];
+    outBladeData[k * 3 + 2] = instanceData[i * 3 + 2];
+  }
+  return { offsets: outOffsets, instanceData: outBladeData };
+};
+
+const EMPTY_RESULT = () => ({
+  count: 0,
+  total: 0,
+  minY: 0,
+  maxY: 0,
+  offsets: new Float32Array(0),
+  instanceData: new Float32Array(0),
+});
+
+/**
+ * Places the chunk and returns the first `ceil(total × band)` blades of the fade-key order
+ * (`count` of `total`). Placement always runs in full — `total`, minY/maxY and every blade's
+ * values are band-independent — so a band's blades are exactly the same-rank blades of any
+ * wider band: a strict prefix, which is what lets a chunk be widened without a pop.
+ */
+export const generateChunk = (chunkX: number, chunkZ: number, params: FoliageChunkParams, band = 1) => {
+  const size = params.chunkSize;
+  const minX = chunkX * size;
+  const minZ = chunkZ * size;
+
+  // Blades follow the terrain material's BIOME WEIGHT (the cross-fade), not the cell
+  // id: a hard stop on the cell line under a 300u texture fade would read as an edge. In a body of
+  // water they follow the share of the water it owns instead.
+  const biomeIds = params.biomeIds && params.biomeIds.length > 0 ? params.biomeIds : undefined;
+  const bodySlot = params.waterBody ? waterBodySlot(params.waterBody) : -1;
+  if (params.waterBody && bodySlot < 0) return EMPTY_RESULT();
+  const bodies = [bodySlot];
+  const weightOf: PlaceWeight = params.waterBody
+    ? (vd) => waterOwnedBy(bodies, vd.waterBody, vd.waterBodyShare, vd.waterBody2)
+    : biomeIds
+      ? (vd) => biomeWeightOf(vd.biomeSdf, biomeIds)
+      : undefined;
+  const hasBiomes = weightOf !== undefined;
+  const weightKey = params.waterBody ? `w${bodySlot}` : biomeIds ? biomeIds.join(",") : "";
+  const gridKey = `${size}|${weightKey}|${chunkX},${chunkZ}`;
+  let grid = takeCachedGrid(gridKey); // only non-empty chunks are cached: a hit skips the probe
+  if (!grid) {
+    // A biome plant's weight reads only the slot sdfs, the wall pass's output: off its biomes the probe used to
+    // build deck windows, river lists and flatten tiles for nothing (MEASURED: a 1500u mountain flight's probes
+    // 1392 → 18 ms, the same blades).
+    const weightAt = biomeIds ? (x: number, z: number) => biomeWeightOf(biomeFieldAt(x, z).biomeSdf, biomeIds) : weightOf ? (x: number, z: number) => weightOf(computeVertexData(x, z)) : undefined;
+    if (weightAt && !weightInChunk(minX, minZ, size, weightAt)) return EMPTY_RESULT();
+    // (Peeked, not touched: the neighbors' LRU order is theirs.)
+    const near = (dx: number, dz: number) => gridCache.get(`${size}|${weightKey}|${chunkX + dx},${chunkZ + dz}`);
+    grid = sampleGrid(minX, minZ, size, weightOf, [near(-1, 0), near(1, 0), near(0, -1), near(0, 1)]);
+    cacheGrid(gridKey, grid);
+  }
+  const { gridNodes, heights, slopes, biomeWeights, roadDistances, submerged, waterDepth, riverBed, nearRiverBed, padBiome } = grid;
+  const bedCovered = riverKeepOff() - RIVER_BED_FULL_INSET;
+  // In the water (its zone submerged or the shallows) or on dry ground (the bank, or no body at all).
+  const zone = params.zone;
+  const inWater = zone === "submerged" || zone === "shallows";
+  const footprints: Footprint[] = padBiome && !inWater ? footprintsNear(minX, minZ, minX + size, minZ + size) : [];
+  // Nothing grows in a cave mouth's keep-off (generation/underground/index.ts): the mouths whose keep-off reaches the chunk.
+  const caveMouths: MouthPiece[] = keepOffMouthsNear({ minX, minZ, maxX: minX + size, maxZ: minZ + size });
+
+  // One bilinear cell per blade, shared by every field it samples (the arithmetic is
+  // term-for-term the per-field version's, so the samples are bit-identical).
+  let i00 = 0;
+  let i01 = 0;
+  let tx = 0;
+  let tz = 0;
+  const setCell = (x: number, z: number): void => {
+    const fx = Math.min(Math.max((x - minX) / GRID_STEP, 0), gridNodes - 1);
+    const fz = Math.min(Math.max((z - minZ) / GRID_STEP, 0), gridNodes - 1);
+    const x0 = Math.min(Math.floor(fx), gridNodes - 2);
+    const z0 = Math.min(Math.floor(fz), gridNodes - 2);
+    tx = fx - x0;
+    tz = fz - z0;
+    i00 = z0 * gridNodes + x0;
+    i01 = (z0 + 1) * gridNodes + x0;
+  };
+  const bilinear = (arr: Float32Array): number =>
+    (arr[i00] * (1 - tx) + arr[i00 + 1] * tx) * (1 - tz) + (arr[i01] * (1 - tx) + arr[i01 + 1] * tx) * tz;
+
+  const targetCount = Math.min(Math.round((params.density * size * size) / 1_000_000), MAX_INSTANCES_PER_CHUNK);
+  const chunkSeed = Math.floor(seedRand(`grass_${params.seed}_${chunkX}_${chunkZ}`) * 2 ** 31);
+  const rand = mulberry32(chunkSeed);
+
+  const offsets = SCRATCH_OFFSETS;
+  const instanceData = SCRATCH_BLADE_DATA; // phase, scale, tint
+  let placed = 0;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (let i = 0; i < targetCount; i++) {
+    const x = minX + rand() * size;
+    const z = minZ + rand() * size;
+    const phase = rand() * Math.PI * 2;
+    let scale = 0.7 + rand() * 0.6;
+    const tint = rand();
+    setCell(x, z);
+
+    if (hasBiomes) {
+      // Density dithers down and blades shorten with the biome's fading weight.
+      const w = bilinear(biomeWeights);
+      if (w <= MIN_BIOME_WEIGHT) continue;
+      if (w < 1) {
+        if (rand() >= w) continue;
+        scale *= 0.6 + 0.4 * w;
+      }
+    }
+
+    const height = bilinear(heights);
+    if (params.heightRange) {
+      if (height < params.heightRange[0] || height > params.heightRange[1]) continue;
+    }
+    if (zone && waterZoneOf(bilinear(waterDepth)) !== zone) continue;
+    if (zone === "submerged") {
+      // Cut to the water over it, so no tip pokes out of the surface.
+      const depth = bilinear(waterDepth);
+      if (depth < params.submergedMinDepth) continue;
+      scale = Math.min(scale, (depth - params.tipClearance) / (params.bladeHeight ?? 1));
+      if (scale < params.minCutScale) continue;
+    } else if (!inWater && bilinear(submerged) > 0.25) {
+      continue;
+    }
+    if (params.roadDistanceRange) {
+      const road = bilinear(roadDistances);
+      if (road < params.roadDistanceRange[0] || road > params.roadDistanceRange[1]) continue;
+    }
+
+    if (params.slopeRange) {
+      // Soft edges: density dithers down and blades shorten across the blend band.
+      const slope = bilinear(slopes);
+      const [minSlope, maxSlope] = params.slopeRange;
+      const blend = Math.max(params.slopeBlend, 0.001);
+      let keep = 1 - smoothstep(maxSlope - blend, maxSlope, slope);
+      if (minSlope > 0) keep *= smoothstep(minSlope, minSlope + blend, slope);
+      if (keep <= 0) continue;
+      if (keep < 1) {
+        if (rand() >= keep) continue;
+        scale *= 0.6 + 0.4 * keep;
+      }
+    }
+
+    // LAST, after every filter that draws from `rand`: a blade it drops must not skip a draw, or
+    // every later blade of the chunk would reshuffle — the river only ever REMOVES blades.
+    if (nearRiverBed && !inWater) {
+      // The riverbed paint's own field and edge (the terrain shader's riverBlend).
+      const keep = smoothstep(bedCovered, bedCovered + RIVER_BED_PLANT_RAMP, bilinear(riverBed));
+      if (keep < 1) {
+        if (keep <= 0 || bladeHash(chunkSeed, i) >= keep) continue;
+        scale *= 0.6 + 0.4 * keep;
+      }
+    }
+    // After every rand() draw, like the river's: it only ever removes blades.
+    if (footprints.length > 0 && footprints.some((f) => insideFootprint(f, x, z, FOOTPRINT_MARGIN))) continue;
+    if (caveMouths.length > 0 && insideCaveKeepOff(caveMouths, x, z)) continue;
+
+    const y = height - INSTANCE_SINK;
+    offsets[placed * 3] = x;
+    offsets[placed * 3 + 1] = y;
+    offsets[placed * 3 + 2] = z;
+    instanceData[placed * 3] = phase;
+    instanceData[placed * 3 + 1] = scale;
+    instanceData[placed * 3 + 2] = tint;
+    placed++;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  const count = Math.min(placed, Math.ceil(placed * band));
+  const packed = packByFadeKey(placed, count);
+  return {
+    count,
+    total: placed,
+    // Over ALL placed blades, so the chunk's culling sphere doesn't change with its band.
+    minY: placed > 0 ? minY : 0,
+    maxY: placed > 0 ? maxY : 0,
+    offsets: packed.offsets,
+    instanceData: packed.instanceData,
+  };
+};
+
+self.onmessage = (e: MessageEvent) => {
+  const { type } = e.data;
+
+  if (type === "INIT") {
+    initCompute(e.data.config as DomainConfig);
+    initialized = true;
+    (self as any).postMessage({ type: "INIT_DONE" });
+    return;
+  }
+
+  if (type === "GENERATE_FOLIAGE") {
+    const { id, chunkX, chunkZ, params, band } = e.data;
+    if (!initialized) {
+      (self as any).postMessage({ type: "FOLIAGE_RESULT", id, ...EMPTY_RESULT() });
+      return;
+    }
+
+    const result = generateChunk(chunkX, chunkZ, params, band);
+    (self as any).postMessage({ type: "FOLIAGE_RESULT", id, ...result }, [
+      result.offsets.buffer,
+      result.instanceData.buffer,
+    ]);
+    return;
+  }
+};

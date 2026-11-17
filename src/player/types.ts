@@ -1,0 +1,35 @@
+import type { Character, CharacterStepResult } from "../physics/types";
+import type { CameraWaterColors } from "../vfx/screen-pass/types";
+
+export interface GroundSafetyNets {
+  /** Stuck escape: a capsule slightly embedded (under the backstop tolerance, e.g. after a LOD swap)
+   *  makes every sweep return ~zero. Signal = sustained input with ~no movement; confirmed against the
+   *  analytic height so a wall push never triggers it. Call after every walking step. */
+  escapeIfStuck(step: CharacterStepResult, from: { x: number; z: number }, character: Character): void;
+  /** Authoritative anti-tunneling backstop, every GROUND_CHECK_INTERVAL frames (skipped mid fall reset). */
+  runBackstop(at: { x: number; y: number; z: number }, character: Character): void;
+  /** Fell out of the world: drop back in above the ground here. */
+  respawnIfFallen(at: { x: number; y: number; z: number }, character: Character): void;
+}
+
+export interface InputState {
+  forward: boolean;
+  backward: boolean;
+  left: boolean;
+  right: boolean;
+  sprint: boolean;
+  jump: boolean;
+  /** Descend in noclip. */
+  descend: boolean;
+}
+
+export interface WaterProbe {
+  /** Starts a sample at (x, z) every PROBE_INTERVAL_FRAMES (one in flight at a time). */
+  sample(x: number, z: number): void;
+  /** The last sampled water surface over a point at height `y`, or NaN where no water stands above the
+   *  ground or the point is under its bed (a tunnel under a river is not in it). */
+  surfaceOver(y: number): number;
+  /** The colours of the last sampled water, its owning bodies' blended as the sheet draws them there. */
+  colors(): CameraWaterColors;
+  clear(): void;
+}

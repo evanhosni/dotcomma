@@ -1,19 +1,8 @@
 import type { PointXZ } from "../math/types";
+import { BACKGROUND_RANK } from "./constants";
+import type { TaskQueueOptions, TaskOptions } from "./types";
 
 type Task = () => Promise<void>;
-
-export interface TaskQueueOptions {
-  /** Multiplies a task's distance to the focus: below 1 is more urgent, above 1 less. Default 1. */
-  weight?: number;
-  /** Added to every task's rank. BACKGROUND_RANK makes the whole queue background work. Default 0. */
-  bias?: number;
-}
-
-export interface TaskOptions {
-  /** Where in the world the work is for. The task is ranked by its distance from here to the focus
-   *  (the camera), re-measured every time a task is picked. Without it the rank is the queue's bias. */
-  at?: PointXZ;
-}
 
 /**
  * Every TaskQueue shares ONE frame budget: all queues together run at most ~FRAME_BUDGET_MS of
@@ -24,8 +13,8 @@ export interface TaskOptions {
  *
  * PRIORITY: every task has a RANK = (distance from its `at` to the focus) × the queue's weight + the
  * queue's bias, and the lowest rank in any queue runs next. Ranks are re-measured at every pick, so
- * work the player has driven past falls behind the work in front of them. A queue still runs one
- * task at a time (a task may await a worker), but picks any of its tasks, not just the oldest; equal
+ * work the player has driven past falls behind the work in front of them. A queue runs one task at a
+ * time (a task may await a worker) unless its `concurrency` says more, and picks any of its tasks, not just the oldest; equal
  * ranks keep insertion order, and between queues the one that has used the least time wins a tie.
  * A queue awaiting a worker does not hold up the others.
  *
@@ -40,9 +29,6 @@ const SLOW_FRAME_SHARE = 0.2;
 const MAX_FRAME_BUDGET_MS = 50;
 /** A hidden tab gets no animation frames; this timer stands in for them. */
 const HIDDEN_FRAME_FALLBACK_MS = 250;
-
-/** Ranks above this are background: a building beyond 600u, a dressing chunk beyond 400u (weight 1.5). */
-export const BACKGROUND_RANK = 600;
 /** Below 40fps. */
 const STRUGGLING_FRAME_MS = 25;
 const STRUGGLING_BACKGROUND_SHARE = 0.25;
@@ -207,27 +193,30 @@ interface QueuedTask {
   id: string;
   task: Task;
   at: PointXZ | undefined;
+  weight: number;
   rank: number;
   rankEpoch: number;
 }
 
 export class TaskQueue {
   private queue: QueuedTask[] = [];
-  private running = false;
+  private running = 0;
   private taskIdCounter = 0;
   private readonly weight: number;
   private readonly bias: number;
+  private readonly concurrency: number;
   /** @internal Time charged to this queue — the tie-break between equal ranks. */
   usedMs = 0;
 
-  constructor({ weight = 1, bias = 0 }: TaskQueueOptions = {}) {
+  constructor({ weight = 1, bias = 0, concurrency = 1 }: TaskQueueOptions = {}) {
     this.weight = weight;
     this.bias = bias;
+    this.concurrency = concurrency;
   }
 
-  public addTask(task: Task, { at }: TaskOptions = {}): string {
+  public addTask(task: Task, { at, weight = 1 }: TaskOptions = {}): string {
     const taskId = `task-${this.taskIdCounter++}`;
-    this.queue.push({ id: taskId, task, at, rank: 0, rankEpoch: -1 });
+    this.queue.push({ id: taskId, task, at, weight, rank: 0, rankEpoch: -1 });
     if (!active.has(this)) {
       // A queue waking up joins at the others' level, not with credit for the time it sat idle.
       let floor = Infinity;
@@ -243,13 +232,13 @@ export class TaskQueue {
   public removeTask(taskId: string): boolean {
     const index = this.queue.findIndex((item) => item.id === taskId);
     if (index >= 0) this.queue.splice(index, 1);
-    if (this.queue.length === 0 && !this.running) active.delete(this);
+    if (this.queue.length === 0 && this.running === 0) active.delete(this);
     return index >= 0;
   }
 
   /** @internal The scheduler's view; callers use addTask/removeTask. */
   get ready(): boolean {
-    return !this.running && this.queue.length > 0;
+    return this.running < this.concurrency && this.queue.length > 0;
   }
 
   /** @internal The lowest-ranked task; the first of equals, so unpositioned queues stay FIFO. */
@@ -261,7 +250,7 @@ export class TaskQueue {
       if (item.rankEpoch !== rankEpoch) {
         item.rankEpoch = rankEpoch;
         item.rank = item.at
-          ? Math.hypot(item.at.x - focusX, item.at.z - focusZ) * this.weight + this.bias
+          ? Math.hypot(item.at.x - focusX, item.at.z - focusZ) * this.weight * item.weight + this.bias
           : this.bias;
       }
       if (item.rank < rank) {
@@ -275,7 +264,7 @@ export class TaskQueue {
   /** @internal Starts a task; the budget is charged for its synchronous part now, the rest when it settles. */
   runAt(index: number): void {
     const { task } = this.queue.splice(index, 1)[0];
-    this.running = true;
+    this.running++;
     inFlight++;
     if (boundaryTimer === null) boundaryTimer = setTimeout(onBoundary, 0);
     const start = now();
@@ -289,9 +278,9 @@ export class TaskQueue {
     charge(this, syncEnd - start);
     const settle = () => {
       charge(this, now() - Math.max(syncEnd, lastBoundary));
-      this.running = false;
+      this.running--;
       inFlight--;
-      if (this.queue.length === 0) active.delete(this);
+      if (this.queue.length === 0 && this.running === 0) active.delete(this);
       if (usedThisFrame < budget) drain();
       else armFrame();
     };

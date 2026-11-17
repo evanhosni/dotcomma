@@ -1,19 +1,17 @@
 import * as THREE from "three";
-import {
-  BRIDGE_PIER_SIZE,
-  BRIDGES_SPEC,
-  bridgePierColumns,
-  bridgeRibbon,
-  type BridgePierColumn,
-  type BridgeRibbonBuffers,
-} from "./bridgeSpec";
-import { finalizeInstancedChunk, type SolidDressingProps, useDressingAssets, useSolidDressing } from "../Dressing";
-import type { DressingBounds } from "../types";
-import type { FreewayBridge } from "../../../utils/workers/vertexCompute";
-import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
-import { instancedTemplate, meshTemplate } from "../../../utils/warmPrograms";
+import { BRIDGE_PIER_SIZE, BRIDGES, BRIDGES_SPEC, bridgePierColumns, bridgeRibbon } from "./spec";
+import type { BridgePierColumn, BridgeRibbonBuffers } from "./spec";
+import { finalizeInstancedChunk } from "../geometry";
+import type { SolidDressingProps, ChunkBounds } from "../types";
+import { useChunkAssets, useSolidDressing } from "../hooks";
+import type { FreewayBridge } from "../../../generation";
+import { uploadOnFirstDraw } from "../../../utils/render/utils";
+import { instancedTemplate, meshTemplate } from "../../../utils/render";
 import { WORLD_WRAP } from "../../../world/shaders/constants";
-import { createDeckMaterial } from "./deckMaterial";
+import { createDeckMaterial } from "./material";
+import { declare } from "../../../world/content";
+import { featureMounts } from "../../../generation/registry";
+import { farthest } from "../utils";
 
 const DEFAULT_RENDER_DISTANCE = 900;
 /** Deck chords are one body each (~6u), so the walkable deck is solid only near the player. */
@@ -21,7 +19,7 @@ const DEFAULT_COLLIDER_DISTANCE = 140;
 
 /** ONE merged ribbon mesh for every deck of the chunk, stored relative to a float64 chunk origin
  *  (CLAUDE.md → Coordinate Precision). */
-const buildDeckRibbonMesh = (decks: FreewayBridge[], bounds: DressingBounds, material: THREE.Material): THREE.Mesh => {
+const buildDeckRibbonMesh = (decks: FreewayBridge[], bounds: ChunkBounds, material: THREE.Material): THREE.Mesh => {
   const ox = (bounds.minX + bounds.maxX) / 2;
   const oz = (bounds.minZ + bounds.maxZ) / 2;
   const oy = decks.reduce((sum, b) => sum + b.sy, 0) / decks.length;
@@ -73,18 +71,24 @@ const buildPierMesh = (columns: BridgePierColumn[], geometry: THREE.BufferGeomet
  *  in bridgeSpec.ts only — the terrain cut and the server read it).
  *  Per chunk: ONE merged ribbon mesh for every deck, one instanced mesh of pier columns, and the
  *  deck chords' pitched colliders. */
-export const Bridges = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
-  const assets = useDressingAssets(() => ({
+export const Bridges = declare<SolidDressingProps>({
+  kind: BRIDGES,
+  within: "biome",
+  read: (node) => ({ ...node.props }),
+  Driver: () => <BridgesDriver />,
+});
+
+const BridgesDriver = () => {
+  const mounts = featureMounts<SolidDressingProps>(BRIDGES);
+  const assets = useChunkAssets(() => ({
     deckMaterial: createDeckMaterial(),
     pierMaterial: new THREE.MeshStandardMaterial({ color: 0x7c7c78, roughness: 0.95, metalness: 0 }),
     pierGeometry: new THREE.BoxGeometry(1, 1, 1),
   }), (a) => [meshTemplate(a.deckMaterial), instancedTemplate(a.pierMaterial)]);
 
   const { content } = useSolidDressing(BRIDGES_SPEC, {
-    renderDistance,
-    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
-    colliderDistance,
-    defaultColliderDistance: DEFAULT_COLLIDER_DISTANCE,
+    renderDistance: farthest(mounts, "renderDistance", DEFAULT_RENDER_DISTANCE),
+    colliderDistance: farthest(mounts, "colliderDistance", DEFAULT_COLLIDER_DISTANCE),
     build: (decks, _bodies, bounds) => {
       const group = new THREE.Group();
       group.add(buildDeckRibbonMesh(decks, bounds, assets.deckMaterial));

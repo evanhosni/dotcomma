@@ -1,19 +1,21 @@
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import {
-  LAMP_COLOR_GREEN,
-  LAMP_COLOR_RED,
-  LAMP_COLOR_YELLOW,
-  type LampHead,
-  registerLampHeads,
-  setLampHeadColor,
-} from "../../../lighting/lampGlow";
-import { instancedTemplate } from "../../../utils/warmPrograms";
-import { type ChunkWithPoints, instancedFromPoints, type SolidDressingProps, useDressingAssets, useSolidDressing, yawFromDir } from "../Dressing";
-import { SIGNAL_ARM_LENGTH, SIGNAL_PARTS, SIGNAL_POLE_HEIGHT, TRAFFIC_LIGHTS_SPEC } from "./signalSpec";
+import { LAMP_COLOR_GREEN, LAMP_COLOR_RED, LAMP_COLOR_YELLOW } from "../../../lighting/lamp-glow/enums";
+import { type LampHead } from "../../../lighting/lamp-glow/types";
+import { registerLampHeads, setLampHeadColor } from "../../../lighting/lamp-glow";
+import { instancedTemplate } from "../../../utils/render";
+import { type ChunkWithPoints, useChunkAssets, useSolidDressing, yawFromDir } from "../hooks";
+import { instancedFromPoints } from "../geometry";
+import { type SolidDressingProps } from "../types";
+import { CHUNK_COLLIDER_DISTANCE } from "../../../world/chunks/constants";
+import { SIGNAL_ARM_LENGTH, SIGNAL_PARTS, SIGNAL_POLE_HEIGHT, TRAFFIC_LIGHTS, TRAFFIC_LIGHTS_SPEC } from "./spec";
+import { declare } from "../../../world/content";
+import { featureMounts } from "../../../generation/registry";
+import { farthest } from "../utils";
 
 const DEFAULT_RENDER_DISTANCE = 340;
+const DEFAULT_COLLIDER_DISTANCE = CHUNK_COLLIDER_DISTANCE;
 const LAMP_OFFSET = SIGNAL_ARM_LENGTH + 0.26; // lamps proud of the head's front face
 const LAMPS_PER_SIGNAL = 3;
 /** Lamp `l` (0 = top)'s center above the pole base: 0.6 under the pole top, 0.65 apart. */
@@ -116,8 +118,16 @@ const stepSignalChunk = (chunk: SignalChunk, delta: number): void => {
 };
 
 /** Placement (the signal `chance`) lives in signalSpec.ts only (the server builds the colliders from it). */
-export const TrafficLights = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
-  const assets = useDressingAssets(() => ({
+export const TrafficLights = declare<SolidDressingProps>({
+  kind: TRAFFIC_LIGHTS,
+  within: "biome",
+  read: (node) => ({ ...node.props }),
+  Driver: () => <TrafficLightsDriver />,
+});
+
+const TrafficLightsDriver = () => {
+  const mounts = featureMounts<SolidDressingProps>(TRAFFIC_LIGHTS);
+  const assets = useChunkAssets(() => ({
     bodyGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.5, 0.4, 0.5).translate(0, 0.2, 0), // base
       new THREE.BoxGeometry(0.2, SIGNAL_POLE_HEIGHT, 0.2).translate(0, SIGNAL_POLE_HEIGHT / 2, 0), // pole
@@ -139,9 +149,8 @@ export const TrafficLights = ({ renderDistance, colliderDistance }: SolidDressin
   }), (a) => [instancedTemplate(a.bodyMaterial), instancedTemplate(a.lampMaterial, { instanceColor: true })]);
 
   const { registry, content } = useSolidDressing<"trafficLights", SignalChunk>(TRAFFIC_LIGHTS_SPEC, {
-    renderDistance,
-    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
-    colliderDistance,
+    renderDistance: farthest(mounts, "renderDistance", DEFAULT_RENDER_DISTANCE),
+    colliderDistance: farthest(mounts, "colliderDistance", DEFAULT_COLLIDER_DISTANCE),
     onRemove: (chunk) => chunk.releaseHeads(),
     build: (points) => {
       const bodyMesh = instancedFromPoints(assets.bodyGeometry, assets.bodyMaterial, points, (p) => ({

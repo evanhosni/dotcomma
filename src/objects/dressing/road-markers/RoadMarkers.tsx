@@ -1,7 +1,11 @@
 import * as THREE from "three";
-import { instancedFromPoints, useDressingAssets, useDressingChunks, useDressingDefault, yawFromDir } from "../Dressing";
+import { instancedFromPoints } from "../geometry";
+import { useChunkAssets, useWorldChunks, yawFromDir } from "../hooks";
 import { DressingAttributes } from "../../types";
-import { enumerateDressing } from "../dressingWorker";
+import { enumerateDressing } from "../worker";
+import { declare } from "../../../world/content";
+import { featureMounts } from "../../../generation/registry";
+import { farthest } from "../utils";
 
 const DEFAULT_RENDER_DISTANCE = 340;
 const MARKER_HEIGHT = 0.16;
@@ -11,15 +15,24 @@ export interface RoadMarkersProps extends DressingAttributes {
   freewaySpacing?: number;
 }
 
-/** Studs instead of a painted centerline — paint shimmered against the quantized terrain. */
-export const RoadMarkers = ({
-  renderDistance,
-  streetSpacing = 9,
-  freewaySpacing = 11,
-}: RoadMarkersProps) => {
-  const resolvedDistance = useDressingDefault("renderDistance", renderDistance, DEFAULT_RENDER_DISTANCE);
+export const ROAD_MARKERS = "roadMarkers";
 
-  const assets = useDressingAssets(() => {
+/** Raised studs down the middle of the roads of the biome this is mounted in, and of the runs
+ *  leaving it — instead of a painted centerline, which shimmered against the quantized terrain. */
+export const RoadMarkers = declare<RoadMarkersProps>({
+  kind: ROAD_MARKERS,
+  within: "biome",
+  read: (node) => ({ ...node.props }),
+  Driver: () => <RoadMarkersDriver />,
+});
+
+const RoadMarkersDriver = () => {
+  const mounts = featureMounts<RoadMarkersProps>(ROAD_MARKERS);
+  const resolvedDistance = farthest(mounts, "renderDistance", DEFAULT_RENDER_DISTANCE);
+  const streetSpacing = mounts[0]?.params.streetSpacing ?? 9;
+  const freewaySpacing = mounts[0]?.params.freewaySpacing ?? 11;
+
+  const assets = useChunkAssets(() => {
     // Top face pulled inward → a low frustum "turtle" (unlit, so no normal recompute).
     const geometry = new THREE.BoxGeometry(0.6, MARKER_HEIGHT, 0.38);
     const pos = geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -33,7 +46,7 @@ export const RoadMarkers = ({
     return { geometry, material: new THREE.MeshBasicMaterial({ color: "#c9a83e" }) };
   });
 
-  const groupRef = useDressingChunks({
+  const groupRef = useWorldChunks({
     renderDistance: resolvedDistance,
     build: async (bounds) => {
       const points = await enumerateDressing("roadMarkers", bounds, { streetSpacing, freewaySpacing });

@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import { fontOfSize } from "../../../menus/overlay/styles";
+import { fontOfSize } from "../../../menus/overlay/utils";
 
 const TEX_W = 1024;
 const TEX_H = 256;

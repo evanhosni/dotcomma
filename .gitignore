@@ -10,6 +10,7 @@
 # production
 /build
 /server/dist
+/server/dist-test
 
 # env — .env.development is committed (dev-only, no secrets); everything else is local
 .env
