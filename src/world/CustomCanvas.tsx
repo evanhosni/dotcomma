@@ -17,6 +17,8 @@ import { UnderwaterPass } from "../vfx/screen-pass/UnderwaterPass";
 import { DeepDreamPass } from "../vfx/screen-pass/deep-dream/DeepDreamPass";
 import { DreamPass } from "../vfx/screen-pass/DreamPass";
 import { TracePass } from "../vfx/screen-pass/TracePass";
+import { ScanPass } from "../vfx/screen-pass/ScanPass";
+import { InspectPass } from "../vfx/screen-pass/InspectPass";
 import { ScreenPassChain } from "../vfx/screen-pass/ScreenPassChain";
 import { PixelationDriver } from "../vfx/PixelationDriver";
 import { debugGlobal } from "../utils/utils";
@@ -39,10 +41,10 @@ const SceneRender = () => {
   useFrame(() => {
     shouldPresentThisFrame();
   }, -10);
-  // In order: the liquid sits between the camera and the world, the trace stamps what that shows, then the
-  // dreams paint over the result.
+  // In order: the liquid sits between the camera and the world, the scan GRADES what that shows, the
+  // inspector draws its overlay over the grade, the trace stamps the result, then the dreams paint over it.
   const passes = useMemo(
-    () => new ScreenPassChain([new UnderwaterPass(), new TracePass(), new DeepDreamPass(), new DreamPass()]),
+    () => new ScreenPassChain([new UnderwaterPass(), new ScanPass(), new InspectPass(), new TracePass(), new DeepDreamPass(), new DreamPass()]),
     [],
   );
   useEffect(() => {
