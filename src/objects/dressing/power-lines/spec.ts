@@ -3,7 +3,7 @@ import { yawFromDir, type ColliderPart, type DressingColliderSpec } from "../typ
 /** The feature's kind. */
 export const POWER_LINES = "powerLines";
 
-// Three-free: the art (PowerLines.tsx) and the client + SERVER colliders (physics/obstacles.ts)
+// Three-free: the art (PowerLines.tsx) and the client + SERVER colliders (server/src/game/physics/bodies/index.ts)
 // are all built from these numbers.
 
 export const UTILITY_POLE_HEIGHT = 11;

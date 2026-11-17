@@ -1,4 +1,3 @@
-import { _material } from "../../utils/material";
 import { declare } from "../content";
 import type { MaterialData, RiverbedMaterial } from "../types";
 
@@ -23,24 +22,3 @@ export interface MaterialProps {
  *  biome's own fragment shader. Renders nothing — the terrain is one material, assembled from
  *  every one of these (world/terrain/material.ts). */
 export const Material = declare<MaterialProps>({ kind: "material", within: ["domain", "region", "biome"] });
-
-const BUILDERS = new WeakMap<object, () => Promise<MaterialData>>();
-
-/** "#rrggbb" → a fragment shader painting it. */
-const flatColorShader = (hex: string): string => {
-  const channel = (i: number) => (parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255).toFixed(4);
-  return `void main() { gl_FragColor = vec4(${channel(0)}, ${channel(1)}, ${channel(2)}, 1.0); }`;
-};
-
-/** A <Material>'s builder: its own `getMaterial`, else one assembled from its shader + textures or its
- *  color (memoized per props object, which is stable while its element is). */
-export const materialBuilderOf = (props: MaterialProps): (() => Promise<MaterialData>) | undefined => {
-  if (props.getMaterial) return props.getMaterial;
-  const shader = props.shader ?? (props.color && flatColorShader(props.color));
-  if (shader === undefined) return undefined;
-  const cached = BUILDERS.get(props);
-  if (cached) return cached;
-  const builder = _material.fromShader(shader, props.textures ?? {});
-  BUILDERS.set(props, builder);
-  return builder;
-};

@@ -1,12 +1,12 @@
+import type { RectXZ } from "../../utils/math/types";
+
 /**
  * THE WORLD'S STREAMING CHUNK GRID, as data. Fixed 256u cells the camera drags a window over —
  * what the dressing, the tunnels and anything else streamed by position is built in. (Terrain has
- * its own chunks, sized per LOD level: world/terrain/lodConfig.ts. These are not those.)
+ * its own chunks, sized per LOD level: world/terrain/lod/constants.ts. These are not those.)
  *
  * NO Three/React here — the SERVER imports this to build the same colliders.
  */
-
-import type { RectXZ } from "../../utils/math/types";
 
 /** A box in instance-local space (+X along the arm, y up); `x`/`y`/`z` are the box center (z defaults to 0)
  *  and `yaw` turns it about the local y axis (a bridge parapet segment runs along its wall, not its chord). */
@@ -37,7 +37,7 @@ export interface ColliderMesh {
 export interface ColliderBody {
   /** Unique among the feature's bodies; default `${x}_${z}`. A feature whose bodies can share a position
    *  (a tunnel's columns: two neighbouring chunks each own a column centred at the same x, z) must set it,
-   *  or the client builds one of them and drops the other (chunks/colliders.tsx reports it). */
+   *  or the client builds one of them and drops the other (world/chunks/hooks.ts reports it). */
   key?: string;
   x: number;
   y: number;
@@ -58,8 +58,15 @@ export interface ChunkViewProps {
 /** A chunk's horizontal rectangle (the shared RectXZ). */
 export type ChunkBounds = RectXZ;
 
-/** rotateY(θ) maps +X to (cosθ, 0, −sinθ) — the yaw aligning local +X with a direction. */
-export const yawFromDir = (dirX: number, dirZ: number): number => Math.atan2(-dirZ, dirX);
-
-/** Client and server MUST chunk identically: belt-freeway coverage depends on the query center's wall set. */
-export const WORLD_CHUNK_SIZE = 256;
+/** A mounted collider body: a chunk's ColliderBody (types.ts) keyed for React. */
+export interface LiveColliderBody {
+  /** The body's own key, or `${x}_${z}` (types.ts ColliderBody). */
+  key: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  parts?: ColliderPart[];
+  mesh?: ColliderMesh;
+}

@@ -1,3 +1,5 @@
+
+
 /** Three-free: building specs, which the server imports, name a handle. */
 
 /** Drawn on both faces of every door leaf, on the side away from the hinge. */
@@ -13,3 +15,8 @@ export interface DoorLeafBox {
   size: [number, number, number];
   color: number;
 }
+
+/** How a leaf meets its opening: OVERLAPPING the jambs and header on its face (a closed door shows no
+ *  gap; the buildings'), or INSIDE the opening with LEAF_CLEARANCE all round (the sewers': the frame is
+ *  the opening's own jambs, so the leaf must fit between them). */
+export type DoorFit = "overlap" | "inside";

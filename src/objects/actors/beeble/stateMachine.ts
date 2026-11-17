@@ -1,5 +1,4 @@
-import { angleDiffAbs, lerpAngle } from "../state/motion";
-import { custom, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/triggers";
+import { angleDiffAbs, lerpAngle, custom, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/utils";
 import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
 import { HEAD_YAW_INPUT } from "./animations";
 

@@ -1,35 +1,15 @@
-import { useSyncExternalStore } from "react";
-import type * as THREE from "three";
-import { onServerMessage } from "../connection";
-import { PosePlayback } from "../entities/posePlayback";
-import { pushSnapshot, type Snapshot } from "../entities/interpolation";
-import type { PuppetTarget } from "../entities/useSyncedEntity";
-import type { PlayerSnapshot, ServerMoveMessage } from "../protocol";
-import type { PointXZ } from "../../utils/math/types";
-
 /**
  * Module state mutated per frame; React only sees the ROSTER through a version
  * counter, so a move re-renders nothing. Each player's moves are a server-stamped
  * snapshot track, played back by the entities' sampler (RemotePlayers.tsx).
  */
-
-export interface RemotePlayer {
-  id: string;
-  color: string;
-  snapshots: Snapshot[];
-  playback: PosePlayback;
-  /** The sampled pose (capsule CENTER); `valid` once the first sample landed. */
-  pose: PuppetTarget;
-  /** Where it is drawn (capsule CENTER): what local systems read (an NPC's nearest player). */
-  x: number;
-  y: number;
-  z: number;
-  /** Displayed facing, eased toward the sampled one. */
-  displayYaw: number;
-  object: THREE.Object3D | null;
-  /** Where its last snow stamp was laid (RemotePlayers.tsx, snow-drift/trail.ts). */
-  lastStamp: PointXZ;
-}
+import { useSyncExternalStore } from "react";
+import { onServerMessage } from "..";
+import { PosePlayback } from "../entities/posePlayback";
+import { pushSnapshot } from "../entities/utils";
+import type { Snapshot } from "../entities/types";
+import type { PlayerSnapshot, ServerMoveMessage } from "../protocol/types";
+import type { RemotePlayer } from "./types";
 
 const players = new Map<string, RemotePlayer>();
 let rosterVersion = 0;

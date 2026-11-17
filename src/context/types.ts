@@ -20,7 +20,7 @@ export type DevToggleFlag = (typeof DEV_TOGGLES)[number]["flag"];
 export type DevToggleFlags = Record<DevToggleFlag, boolean>;
 
 export type DevContextType = DevToggleFlags & {
-  /** The saved setting (save/: settings.devmode), synced with the URL's `?devmode=true` (DevContext.tsx). */
+  /** The saved setting (save/: settings.devmode), synced with the URL's `?devmode=true` (context/DevContextProvider.tsx). */
   devMode: boolean;
   /** Saves devmode on/off; the URL follows. */
   setDevMode: (on: boolean) => void;

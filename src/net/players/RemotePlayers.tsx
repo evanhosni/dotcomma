@@ -1,16 +1,17 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { prepareActorMaterial } from "../../objects/actors";
+import { prepareActorMaterial } from "../../objects/actors/material";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../player/spec";
-import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/trail";
+import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/store";
 import { wrapAngle } from "../../utils/math";
-import { getRemotePlayers, useRosterVersion, type RemotePlayer } from "./store";
+import { getRemotePlayers, useRosterVersion } from "./store";
+import { type RemotePlayer } from "./types";
 
 /**
  * Remote players as capsules, ALL driven from ONE useFrame that mutates Object3Ds;
  * React only sees the roster. Positions are played back on the SERVER clock by the
- * entities' snapshot sampler (net/entities/interpolation.ts: a relocation snaps);
+ * entities' snapshot sampler (net/entities/utils.ts: a relocation snaps);
  * only the facing is eased on top, so a 7° turn step never pops.
  */
 

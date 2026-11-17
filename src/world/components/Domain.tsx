@@ -1,22 +1,24 @@
 import { useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import * as THREE from "three";
-import { useGameContext } from "../../context/GameContext";
+import { useGameContext } from "../../context/hooks";
 import { ActorPool } from "../../objects/actors/spawning/ActorPool";
 import { mergeActorListings } from "../../objects/actors/spec";
 import type { AnyActorDescriptor } from "../../objects/actors/spawning/types";
 import { childOfKind, childrenOfKind, declare, driversIn, nodeOf } from "../content";
-import { actorPlacementsOf, domainConfigOf, terrainParamsOf, type BiomeIdentity, type RegionIdentity } from "../content/config";
+import { actorPlacementsOf, domainConfigOf, terrainParamsOf } from "../content/config";
+import type { BiomeIdentity, RegionIdentity } from "../content/config/types";
 import type { ContentNode } from "../content/types";
 import { DEFAULT_RIVER_TEXTURE, DEFAULT_SCENE_BACKGROUND } from "../defaults";
-import { setActiveDomain } from "../domains/utils";
-import { PlaceTracker } from "../place";
-import { SkyboxSystem, skyboxesOf } from "../sky/Skybox";
-import { TerrainRenderer } from "../terrain";
+import { setActiveDomain } from "../domains/store";
+import { PlaceTracker } from "../place/PlaceTracker";
+import { SkyboxSystem } from "../sky/SkyboxSystem";
+import { skyboxesOf } from "../sky/utils";
+import { TerrainRenderer } from "../terrain/TerrainRenderer";
 import type { Biome, Region } from "../types";
-import { materialBuilderOf, type MaterialProps } from "./Material";
-import { descriptorOfMount } from "./Actor";
-import { DomainReadyContext } from "./context";
+import { materialBuilderOf, descriptorOfMount } from "./utils";
+import type { MaterialProps } from "./Material";
 
 export interface DomainProps {
   /** FEET position, stood on exactly (no drop, no multiplayer spread: it was placed by hand). Unset = the default sky drop (or
@@ -26,7 +28,7 @@ export interface DomainProps {
 }
 
 /** The LOOK half of the tree: what the one terrain material is assembled from. The generation half
- *  is the DomainConfig (world/content/config.ts); both come off the same children. */
+ *  is the DomainConfig (world/content/config/index.ts); both come off the same children. */
 const lookOf = (domain: ContentNode<any>): { regions: Region[]; riverTexture: string } => {
   const biomeLook = (node: ContentNode<BiomeIdentity>): Biome => {
     const material = childOfKind<MaterialProps>(node, "material");
@@ -72,7 +74,7 @@ const actorsOf = (domain: ContentNode<any>): AnyActorDescriptor[] =>
 export const Domain = declare<DomainProps>({
   kind: "domain",
   within: null,
-  View: ({ playerSpawn, children }) => {
+  View: ({ playerSpawn, children }): JSX.Element => {
     const [ready, setReady] = useState(false);
     const { scene } = useThree();
     const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
@@ -115,7 +117,7 @@ export const Domain = declare<DomainProps>({
     }, [setPlayerSpawn, setTerrainLoaded, setProgress, playerSpawn?.[0], playerSpawn?.[1], playerSpawn?.[2]]);
 
     return (
-      <DomainReadyContext.Provider value={ready}>
+      <>
         {children}
         {ready && (
           <>
@@ -128,7 +130,7 @@ export const Domain = declare<DomainProps>({
             ))}
           </>
         )}
-      </DomainReadyContext.Provider>
+      </>
     );
   },
 });

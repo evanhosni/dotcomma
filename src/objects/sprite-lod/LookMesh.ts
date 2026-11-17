@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { spriteDetailOf } from "./detail";
+import { spriteDetailOf } from "./store";
 import {
   INSTANCE_BORN,
   INSTANCE_DATA,
@@ -9,7 +9,7 @@ import {
   INSTANCE_OFFSET,
   INSTANCE_SIZE,
   SPRITE_DATA_FLOATS,
-} from "./layout";
+} from "./constants";
 import { createSpriteMaterial } from "./material";
 import type { SpriteChunkLook, SpriteLook } from "./types";
 

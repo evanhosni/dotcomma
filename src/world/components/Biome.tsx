@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { declare } from "../content";
-import type { BiomeIdentity } from "../content/config";
+import type { BiomeIdentity } from "../content/config/types";
 import { BiomeContext } from "./context";
 
 export interface BiomeProps extends BiomeIdentity {

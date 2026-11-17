@@ -12,12 +12,12 @@
 
 import type * as THREE from "three";
 import type { SpriteLodAttributes } from "./sprite-lod/types";
-import type { WaterZone } from "../utils/workers/water/types";
+import type { WaterZone } from "../generation/water/types";
 
 /** All optional here — a class's descriptor/props type re-declares the ones it requires. */
 export interface GameObjectAttributes {
   renderDistance?: number;
-  /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (ModelActor.tsx), a
+  /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (objects/actors/model/ModelActor.tsx), a
    *  building to 120u (Building.tsx); dressing to CHUNK_COLLIDER_DISTANCE (bridges 140u); foliage has
    *  no colliders. */
   colliderDistance?: number;
@@ -34,7 +34,7 @@ export interface GameObjectAttributes {
    *  instances (one per sewer side room…) instead of the density roll and its filters. */
   feature?: string;
   /** Mounted in a body of water (<Lake>, <Rivers>, <Pond>): where in it the object stands — submerged, the
-   *  shallows or the bank (utils/workers/water/params.ts, the one zone rule). Unset = its class's default. */
+   *  shallows or the bank (generation/water/params.ts, the one zone rule). Unset = its class's default. */
   zone?: WaterZone;
   heightRange?: [number, number];
   /** Degrees. */
@@ -63,7 +63,7 @@ export interface ActorAttributes extends GameObjectAttributes {
   frustumPadding?: number;
   /** true = always grow the cursor on hover, false = never, unset = from triggers. */
   cursorOverride?: boolean;
-  /** The terrain flattens a pad under every instance; placement becomes deterministic (vertexCompute.ts flatten engine). */
+  /** The terrain flattens a pad under every instance; placement becomes deterministic (generation/index.ts flatten engine). */
   flattenGround?: boolean;
   /** Default footprint * 0.45. */
   flattenRadius?: number;

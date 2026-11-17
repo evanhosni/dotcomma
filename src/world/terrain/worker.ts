@@ -1,10 +1,10 @@
-import { createWorkerClient } from "../../utils/workers/workerClient";
-import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
-import type { LODLevel } from "./lodConfig";
+import { createWorkerClient } from "../../utils/worker-client";
+import { getActiveDomainConfig, whenDomainReady } from "../domains/store";
+import type { LODLevel } from "./lod/types";
 
-// Worker clients for terrain.worker.ts (heights, blend fields, normals, water, snow and collider heights per chunk).
+// Worker clients for world/terrain/terrain.worker.ts (heights, blend fields, normals, water, snow and collider heights per chunk).
 
-/** One chunk's buffers, per main-grid vertex (the skirt is filled on the main thread, chunkGeometry.ts). */
+/** One chunk's buffers, per main-grid vertex (the skirt is filled on the main thread, world/terrain/chunk/geometry.ts). */
 export interface ChunkBuildResult {
   heights: Float32Array;
   /** count × slots, interleaved per vertex (world/terrain/material.ts owns the slot → biome mapping). */
@@ -48,7 +48,7 @@ export const TERRAIN_WORKER_COUNT = Math.max(
 
 const createTerrainClient = () =>
   createWorkerClient({
-    create: () => new Worker(new URL("../../utils/workers/terrain.worker.ts", import.meta.url), { type: "module" }),
+    create: () => new Worker(new URL("./terrain.worker.ts", import.meta.url), { type: "module" }),
     init: async () => {
       await whenDomainReady();
       return { config: getActiveDomainConfig() };

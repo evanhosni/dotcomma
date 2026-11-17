@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { uploadOnFirstDraw } from "../../../utils/uploadOnFirstDraw";
-import type { RockPoint } from "../../../utils/workers/vertexCompute";
+import { uploadOnFirstDraw } from "../../../utils/render/utils";
+import type { RockPoint } from "../../../generation";
 import type { ChunkBounds } from "../types";
 import { ROCK_SHAPES } from "./shapes";
 

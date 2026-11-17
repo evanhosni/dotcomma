@@ -1,8 +1,43 @@
-import type * as THREE from "three";
 import type { MutableRefObject } from "react";
-import type { AnimationChannel, AnimationSpec } from "../../../animation";
+import type { AnimationChannel } from "../../../animation/AnimationChannel";
+import type { AnimationSpec, AnimationChannelOptions } from "../../../animation/types";
 import type { Input } from "./input";
 import type { Motion } from "./motion";
+import { MOUSE_ONE_SHOT_FLAGS } from "./enums";
+import { RootState } from "@react-three/fiber";
+import type { SyncHandle } from "../../../net/entities/types";
+import * as THREE from "three";
+
+export interface MotionOutput {
+  vx: number;
+  vy: number | null;
+  vz: number;
+  yaw: number;
+}
+
+/** THREE.Vector3 on the client, a plain object on the server. */
+export interface Vec3Like {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** The simulated knobs (server and local alike): they change where the actor actually goes. */
+export interface MotionParams {
+  /** Multiplies every velocity a behavior asks for. */
+  speed: number;
+  /** Multiplies every turn step (`turnTo`, `turnToward`). */
+  turnSpeed: number;
+}
+
+/** An actor's motion knobs, the movement counterpart of AnimationConfig. */
+export interface MotionConfig extends Partial<MotionParams> {
+  /** Stop-motion: the DRAWN position and yaw update this many times a second; the body moves smoothly. Client-only. */
+  frameRate?: number;
+  /** Degrees: the DRAWN yaw is rounded to a multiple of it relative to the camera's line of sight, so the
+   *  viewer always sees it at an exact step (its real yaw is untouched). Client-only. */
+  rotationStep?: number;
+}
 
 // A config is plain data + functions with NO Three.js at runtime — it runs on the server as-is.
 
@@ -65,4 +100,49 @@ export interface StateMachineConfig {
   states: StateDef[];
   /** Only for triggers a transition names by id; transitions may hold the trigger objects directly. */
   triggers?: TriggerDef[];
+}
+
+export type MouseFlag = (typeof MOUSE_ONE_SHOT_FLAGS)[number];
+
+export interface ResolvedTransition {
+  trigger: TriggerDef;
+  target: string;
+  guard?: TransitionDef["guard"];
+}
+
+export interface ConfigMaps {
+  stateMap: Map<string, StateDef>;
+  /** Per state id, its transitions with the trigger resolved (an unresolvable one is dropped). */
+  transitionsOf: Map<string, ResolvedTransition[]>;
+  /** Every trigger the machine can fire, listed or collected from its transitions. */
+  triggers: TriggerDef[];
+}
+
+export interface RunnerOptions {
+  animation?: AnimationChannelOptions;
+  motion?: Partial<MotionParams>;
+}
+
+export interface StateMachineHandle {
+  readonly currentStateId: string;
+  forceTransition: (stateId: string) => void;
+  blackboard: Record<string, any>;
+  motion: Motion;
+  animation: AnimationChannel;
+  input: Input;
+  /** Called from the owner's actor `onFrame` — never a useFrame of its own. */
+  tick: (state: RootState, delta: number, sync: SyncHandle | null) => void;
+}
+
+export interface UseMouseEventsOptions {
+  /** Farthest ray distance (eye → hit) any input registers from — the actor's `interactReach`. */
+  reach: number;
+  shouldGrowCursor?: boolean;
+  /** Per-instance seed (hash of spawn coords) so batch-mounted actors don't all raycast on the same frame. */
+  framePhase?: number;
+}
+
+export interface MouseEventsHandle {
+  /** `distanceSq` is the actor base's 2D squared distance — a lower bound on the 3D one. */
+  tick: (camera: THREE.Camera, distanceSq: number, sync: SyncHandle | null) => void;
 }

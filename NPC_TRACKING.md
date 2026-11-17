@@ -17,7 +17,7 @@ plus a spec; the actor class does the rest, on both sides.
  CLIENT (each tab)                         SERVER (one, authoritative)
  ─────────────────────────────────         ─────────────────────────────────────────
  ActorPool spawns a beeble at a             EntityManager keeps one record per
- deterministic point  ─────register───►     registered entity (entities/manager.ts)
+ deterministic point  ─────register───►     registered entity (server/src/game/entities/EntityManager.ts)
                                             │
                                             ├─ looks the kind up in the ACTOR CATALOG
                                             │  (derived from the biome specs — the
@@ -28,14 +28,14 @@ plus a spec; the actor class does the rest, on both sides.
                                             │
                                             ├─ the machine writes ctx.motion (velocity,
                                             │  facing) and ctx.animation (clip); the
-                                            │  body (physics/npcBody.ts) resolves the
+                                            │  body (server/src/game/physics/bodies/index.ts) resolves the
                                             │  motion on the server physics world:
                                             │  terrain, buildings, lamp posts, other
                                             │  players (Rapier + the shared character
                                             │  resolver) — or integrates it freely for
                                             │  a flyer
                                             │
- entityStore keeps the last snapshots ◄──── publishes changed fields: a stamped
+ entity store keeps the last snapshots ◄─── publishes changed fields: a stamped
  per entity                                 SNAPSHOT {st, x, y, z, vx, vy, vz, ry},
                                             the animation channel state, the machine
  Actor base draws the beeble 200ms behind   state id, replicated state
@@ -50,7 +50,7 @@ plus a spec; the actor class does the rest, on both sides.
 Spawn points are deterministic (seeded from world coordinates), so every
 client computes the same beeble at the same spot with the same id (something
 like `123_456_beeble`). When a client mounts a beeble, the actor base
-(`src/objects/actors/index.tsx` → `useSyncedEntity`) sends
+(`src/objects/actors/hooks.ts` → `useSyncedEntity`) sends
 `entity:register {id, kind, x, y, z}`. The first registration creates the
 server record and starts the machine; later registrations from other clients
 just add themselves as listeners and receive the full current record. When the
@@ -65,8 +65,8 @@ terrain (the same height function the client uses, bit-identical).
 The ACTOR CATALOG is every actor kind the domains' biomes place that the server
 has something to simulate for (a state machine, a moving body, a hull), by spec
 id. It is derived, not written: `ACTOR_CATALOG` in `src/world/domains/index.ts`
-(`actorCatalogOf` in `src/objects/actors/catalog.ts`) collects it from every
-domain's region list, so the city biome listing `{ actor: BEEBLE_SPEC }` is what
+(`actorCatalogOf` in `src/objects/actors/registry.ts`) collects it from every
+domain's tree, so the city biome mounting `<Actor actor={BEEBLE_SPEC}/>` is what
 puts the beeble in it.
 
 `BEEBLE_SPEC` is `src/objects/actors/beeble/spec.ts`: the state machine plus
@@ -77,15 +77,15 @@ server copy of the behavior, and no server file names the beeble.
 
 Each tick (100ms), for every beeble:
 
-1. The machine ticks (`state/runner.ts`, the Three-free core). It sees the
+1. The machine ticks (`objects/actors/state/StateMachineRunner.ts`, the Three-free core). It sees the
    nearest player's position and distance, its own position, and its
    blackboard.
 2. The machine's OUTPUTS are read: `ctx.motion` (horizontal velocity, a
    driven vertical velocity or "gravity", the facing) and `ctx.animation`
    (which clip, loop, speed, paused).
-3. The body (`server/src/game/physics/npcBody.ts`) applies the motion. A
+3. The body (`server/src/game/physics/bodies/index.ts`) applies the motion. A
    `movement: "ground"` NPC is a `GroundBody`: the shared character resolver
-   (`src/physics/characterMovement.ts`), which is the local player's exact
+   (`src/physics/index.ts`), which is the local player's exact
    movement code — slopes, sliding, gravity, autostep, collisions against
    terrain heightfields, building hulls, lamp and signal poles, and the other
    players' capsules. A `movement: "free"` NPC is a `FreeBody`: its velocity
@@ -93,7 +93,7 @@ Each tick (100ms), for every beeble:
 4. The body reports where it actually ended up and its actual velocity (a
    beeble walking into a wall publishes velocity 0 even while its machine says
    "walking").
-5. `publishTick` (`entities/publish.ts`) compares that to what clients last
+5. `publishTick` (`server/src/game/entities/utils.ts`) compares that to what clients last
    saw and sends only the changes — a stamped snapshot for any positional
    change, the whole animation state when the channel changed, the state id.
 
@@ -107,11 +107,11 @@ doesn't move. A free body holds nothing.
 
 Every positional update carries `st`, the server time of the tick that
 produced it. The client keeps the last few of these snapshots per entity
-(`src/net/entities/entityStore.ts`).
+(`src/net/entities/store.ts`).
 
 Each frame, the actor base asks: "where was this beeble at
 `serverTime − 200ms`?" and interpolates between the two snapshots on either
-side of that moment (`src/net/entities/interpolation.ts`, driven by
+side of that moment (`src/net/entities/utils.ts`, driven by
 `posePlayback.ts`). Because every client asks the same question of the same
 data on the same clock, they all draw the same frame of the same track. It
 does not matter when a message arrived, whether the browser hitched, or
@@ -138,7 +138,7 @@ body reaches the spot the server stopped it — on every client — and a pause
 or a speed change lands in phase too.
 
 The client still has a Rapier capsule for each beeble, parked at the drawn
-pose every frame (`kinematicMover.tsx`), so the local player collides with
+pose every frame (`objects/actors/model/hooks.ts`), so the local player collides with
 NPCs. It is not used to move anything.
 
 State-keyed visuals (head tracking) run on the client: `ModelActor`'s state machine mirrors the server's current state id and
@@ -227,7 +227,7 @@ export const BEEBLE_SM: StateMachineConfig = {
 ```
 
 **Triggers** are named conditions evaluated every tick. Built-ins in
-`state/triggers.ts`: `playerWithinRange(r)`, `playerOutsideRange(r)`,
+`objects/actors/state/utils.ts`: `playerWithinRange(r)`, `playerOutsideRange(r)`,
 `afterDelay(seconds)`, `randomInterval(id, min, max)`, `blackboardFlag(key)`,
 `onMouseLeftClick()` and the other mouse triggers, and `custom(id, fn)` for
 anything else. The beeble's "I can see the player" is a custom trigger:
@@ -305,10 +305,10 @@ closest, so no client is special), `ctx.delta` (seconds since last tick),
      footprint: 5, density: 200, clustering: 0, renderDistance: 200, priority: 80,
    };
    ```
-3. **Place it** — one line in a biome spec's `actors`
-   (`src/world/domains/overworld/regions/<region>/biomes/<biome>/spec.ts`):
-   `{ actor: X_SPEC }` — it spawns in exactly the biomes that list it (mount overrides go on the same object),
-   and placing it is what puts it in the server's actor catalog.
+3. **Place it** — one `<Actor actor={X_SPEC}/>` in a biome's component
+   (`src/world/domains/overworld/regions/<region>/biomes/<biome>/<Name>Biome.tsx`)
+   — it spawns in exactly the biomes that mount it (mount overrides are its props),
+   and mounting it is what puts it in the server's actor catalog.
    No component and no descriptor file: the client builds the descriptor from
    the spec, and `ModelActor` wires the state machine, the mouse events, the
    capsule and the animation for every actor whose spec has a `stateMachine`.
@@ -322,13 +322,13 @@ scene logic".
 
 ### Testing it without a browser
 
-`server/test/entities.test.ts` runs the real beeble machine on a real physics
+`server/tests/entities.test.ts` runs the real beeble machine on a real physics
 world: register the NPC, tick the manager, assert on `e.x/e.z/e.sm/e.anim`.
 The "free" test there shows a flyer kind injected through the manager's
 `specs` option. Copy one of those tests for a new NPC. `npm run physics:demo`
 in `server/` drops a capsule on real terrain and walks slopes if you change
-movement rules. `src/objects/actors/state/{motion,animation}.test.ts` cover
-the two output channels.
+movement rules. `src/objects/actors/state/tests/motion.test.ts` and
+`src/animation/tests/index.test.ts` cover the two output channels.
 
 ---
 
@@ -338,22 +338,22 @@ the two output channels.
 |---|---|
 | beeble behavior (THE file to edit) | `src/objects/actors/beeble/stateMachine.ts` |
 | beeble spec (behavior + body + model + spawn knobs) | `src/objects/actors/beeble/spec.ts` |
-| where the beeble is placed | `actors` of `src/world/domains/overworld/regions/city/biomes/city/spec.ts` |
-| the actor catalog (kinds the server simulates, derived from the biome specs) | `ACTOR_CATALOG` in `src/world/domains/index.ts` (`actorCatalogOf`: `src/objects/actors/catalog.ts`) |
+| where the beeble is placed | its `<Actor>` in `src/world/domains/overworld/regions/city/biomes/city/CityBiome.tsx` (and the other biomes that mount it) |
+| the actor catalog (kinds the server simulates, derived from the biome specs) | `ACTOR_CATALOG` in `src/world/domains/index.ts` (`actorCatalogOf`: `src/objects/actors/registry.ts`) |
 | spec type, body/movement kinds | `src/objects/actors/spec.ts` |
-| state machine core (runs on both sides) | `src/objects/actors/state/runner.ts`, `triggers.ts`, `types.ts` |
-| motion + animation output channels, input reads | `src/objects/actors/state/motion.ts`, `animation.ts`, `input.ts` |
-| movement rules (player AND every NPC) | `src/physics/characterMovement.ts` |
-| server: tick orchestration, registration, input | `server/src/game/entities/manager.ts` |
-| server: what gets sent | `server/src/game/entities/publish.ts` |
-| server: an NPC's body (ground / free) | `server/src/game/physics/npcBody.ts`, `groundBody.ts`, `freeBody.ts` |
-| server: the physics world, terrain, obstacles, hulls | `server/src/game/physics/physicsWorld.ts`, `chunks.ts`, `terrain.ts`, `obstacles.ts`, `buildings.ts` |
-| server: the world it simulates on | `src/world/domains/overworld/config.ts` (via `world/domains/index.ts`) |
-| client: snapshot buffer | `src/net/entities/entityStore.ts` |
-| client: interpolation (unit-tested) + per-actor playback | `src/net/entities/interpolation.ts`, `posePlayback.ts` |
-| client: draws the pose / registers | `src/objects/actors/index.tsx` (`useSyncedEntity`) |
-| client: behavior wiring, animation, collision capsule | `src/objects/actors/ModelActor.tsx`, `src/animation/`, `kinematicMover.tsx` |
-| wire format (ONE copy, the server imports it) | `src/net/protocol.ts` |
+| state machine core (runs on both sides) | `src/objects/actors/state/StateMachineRunner.ts`, `utils.ts` (triggers), `types.ts` |
+| motion + animation output channels, input reads | `src/objects/actors/state/motion.ts`, `src/animation/AnimationChannel.ts`, `src/objects/actors/state/input.ts` |
+| movement rules (player AND every NPC) | `src/physics/index.ts` |
+| server: tick orchestration, registration, input | `server/src/game/entities/EntityManager.ts` |
+| server: what gets sent | `server/src/game/entities/utils.ts` |
+| server: an NPC's body (ground / free) | `server/src/game/physics/bodies/index.ts` (`createNpcBody`), `GroundBody.ts`, `FreeBody.ts` |
+| server: the physics world, terrain, obstacles, hulls | `server/src/game/physics/physicsWorld.ts`, `ChunkStore.ts`, `utils.ts` (terrain and obstacle samplers), `bodies/index.ts` (obstacle bodies, hulls) |
+| server: the world it simulates on | `src/world/content/config/index.ts` (via `world/domains/index.ts`) |
+| client: snapshot buffer | `src/net/entities/store.ts` |
+| client: interpolation (unit-tested) + per-actor playback | `src/net/entities/utils.ts`, `posePlayback.ts` |
+| client: draws the pose / registers | `src/objects/actors/hooks.ts` (`useSyncedEntity`) |
+| client: behavior wiring, animation, collision capsule | `src/objects/actors/model/ModelActor.tsx`, `src/animation/`, `objects/actors/model/hooks.ts` |
+| wire format (ONE copy, the server imports it) | `src/net/protocol/types.ts` |
 
 ## 8. Debugging
 
@@ -367,7 +367,7 @@ the two output channels.
   with its server state and position.
 - `[domain] the JSX commit and the shared config … differ in: …` in the
   browser console means the ground the client commits differs from the
-  domain's shared `config.ts` (built from the same region/biome specs) — the
+  domain's shared `world/content/config/index.ts` (built from the same region/biome specs) — the
   server would stand NPCs on different ground. Fix the spec or the config.
 - Remember: dotcomma.io runs the last deployed release. Uncommitted work only
   exists at `localhost:3000` (`npm run dev`).

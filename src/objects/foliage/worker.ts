@@ -1,11 +1,11 @@
-/** Typed wrappers over the ONE foliage worker (utils/workers/foliage.worker.ts), shared by every field. */
+/** Typed wrappers over the ONE foliage worker (objects/foliage/foliage.worker.ts), shared by every field. */
 
-import { DomainConfig } from "../../utils/workers/vertexCompute";
-import type { WaterZone } from "../../utils/workers/water/types";
-import type { WaterBodyRef } from "../../world/components/context";
-import { createWorkerClient } from "../../utils/workers/workerClient";
+import { DomainConfig } from "../../generation";
+import type { WaterZone } from "../../generation/water/types";
+import type { WaterBodyRef } from "../../world/components/water/types";
+import { createWorkerClient } from "../../utils/worker-client";
 
-/** One chunk request (utils/workers/foliage.worker.ts reads this type too). */
+/** One chunk request (objects/foliage/foliage.worker.ts reads this type too). */
 export interface FoliageChunkParams {
   seed: string;
   chunkSize: number;
@@ -22,7 +22,7 @@ export interface FoliageChunkParams {
   /** Mounted in a body of water (<Lake>, <Rivers>, <Pond>): placed by the share of the water there that
    *  body owns (VertexResult.waterBody) instead of by a biome's weight. */
   waterBody?: WaterBodyRef;
-  /** Where it grows by the water over the ground (the one zone rule, water/params.ts): submerged blades
+  /** Where it grows by the water over the ground (the one zone rule, generation/water/params.ts): submerged blades
    *  are cut to the depth (`bladeHeight` tall uncut); unset = dry ground only. */
   zone?: WaterZone;
   bladeHeight?: number;
@@ -46,7 +46,7 @@ export interface FoliageChunkResult {
 let configForNextBoot: DomainConfig | null = null;
 
 const client = createWorkerClient({
-  create: () => new Worker(new URL("../../utils/workers/foliage.worker.ts", import.meta.url), { type: "module" }),
+  create: () => new Worker(new URL("./foliage.worker.ts", import.meta.url), { type: "module" }),
   init: () => ({ config: configForNextBoot }),
   resultType: "FOLIAGE_RESULT",
 });

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { backup } from "node:sqlite";
-import { openDatabase, resolveDatabasePath } from "../data/db.js";
-import { getSchemaVersion, MIGRATIONS, pendingMigrations, runMigrations } from "../data/migrations.js";
+import { openDatabase, resolveDatabasePath, getSchemaVersion, pendingMigrations, runMigrations } from "../data/index.js";
+import { MIGRATIONS } from "../data/registry.js";
 
 /**
  * `npm run db:migrate [--dry-run] [--no-backup]`. Run BEFORE deploying code that

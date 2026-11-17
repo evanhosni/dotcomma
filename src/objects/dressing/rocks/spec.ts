@@ -1,8 +1,8 @@
-import type { RockPlacementParams, RockPoint } from "../../../utils/workers/vertexCompute";
+import type { RockPlacementParams, RockPoint } from "../../../generation";
 import type { ColliderBody, DressingColliderSpec } from "../types";
 import { ROCK_SHAPES, rockLumpVertices } from "./shapes";
 
-// Three-free: the rock art (Rocks.tsx), the client colliders AND the server's (physics/obstacles.ts)
+// Three-free: the rock art (Rocks.tsx), the client colliders AND the server's (server/src/game/physics/bodies/index.ts)
 // are built from these, so a rock is solid exactly where it is drawn on both.
 
 /** Drawn as one merged mesh per chunk out to here; a lump is solid only near the player. */
@@ -14,7 +14,7 @@ export const ROCK_SHADE_DARK = 0x5a5753;
 export const ROCK_SHADE_LIGHT = 0x8e8a84;
 
 /** The fields themselves come from the biomes that mount <Rocks/>, each with its own props
- *  (rocks/params.ts). Only what is true of every field is here. */
+ *  (generation/rocks/params.ts). Only what is true of every field is here. */
 export const ROCK_PLACEMENT: RockPlacementParams = { roadClear: 3 };
 
 /** One body per rock: exactly the drawn lump as a trimesh, under the rock's yaw and pitch. */

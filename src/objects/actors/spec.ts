@@ -1,9 +1,8 @@
-import type { AnimationConfig } from "../../animation";
+import type { AnimationConfig } from "../../animation/types";
 import type { ActorAttributes } from "../types";
 import { BUILDING_HULL_KEYS } from "./building/spec";
 import type { BuildingAttributes } from "./building/types";
-import type { MotionConfig } from "./state/motion";
-import type { StateMachineConfig } from "./state/types";
+import type { MotionConfig, StateMachineConfig } from "./state/types";
 
 /**
  * The Three-free, React-free definition of an actor kind — one per kind in
@@ -26,7 +25,7 @@ export type BodyKind = "none" | "fixed" | "kinematic";
 /** "ground": the shared character resolver (gravity, slopes); "free": integrates its velocity, no gravity. */
 export type MovementKind = "ground" | "free";
 
-/** Which client member renders the kind (objects/actors/components.ts). */
+/** Which client member renders the kind (objects/actors/registry.ts). */
 export type ActorComponentName = "model" | "building";
 
 /** A GLTF actor's own knobs (ModelActor). */

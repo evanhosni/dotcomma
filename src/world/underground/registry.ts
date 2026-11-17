@@ -1,19 +1,22 @@
 import type { RootState } from "@react-three/fiber";
 import { smoothstep } from "../../utils/math";
-import { DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_BAND, SHAFT_HOLE_INSET } from "../../utils/workers/underground/constants";
-import { mouthCutCeiling, mouthFootprintCells, mouthFootprintRadius, mouthLightY } from "../../utils/workers/underground/tunnelField";
-import { TunnelSpace } from "../../utils/workers/underground/tunnelSpace";
-import type { MouthPiece, SkirtMask, UndergroundChunk } from "../../utils/workers/underground/types";
-import { LOD_FADE_SECONDS } from "../terrain/lodSwaps";
-import { lod1ShareAt } from "../terrain";
-import { setLod1Sites } from "../terrain/lodQuadtree";
-import { MAX_TERRAIN_HOLES, MAX_TUNNEL_MASKS, setTerrainHoles, type TerrainHole, type TunnelMask } from "../shaders/terrainHoles";
-import { WORLD_CHUNK_SIZE } from "../chunks/types";
-import { isOpen, onToggle } from "./toggles";
+import { DAYLIGHT_MANHOLE_FAR, DAYLIGHT_MANHOLE_NEAR, DAYLIGHT_MOUTH_FAR, DAYLIGHT_MOUTH_NEAR, FOOTPRINT_BAND } from "../../generation/underground/constants";
+import { SHAFT_HOLE_INSET } from "../../generation/underground/sewers/constants";
+import { mouthCutCeiling, mouthFootprintCells, mouthFootprintRadius, mouthLightY } from "../../generation/underground/field";
+import { TunnelSpace } from "../../generation/underground/field/TunnelSpace";
+import type { MouthPiece, SkirtMask, UndergroundChunk } from "../../generation/underground/types";
+import { LOD_FADE_SECONDS } from "../terrain/lod-swaps/constants";
+import { lod1ShareAt } from "../terrain/store";
+import { setLod1Sites } from "../terrain/lod";
+import { MAX_TERRAIN_HOLES, MAX_TUNNEL_MASKS } from "../shaders/terrain-holes/constants";
+import { setTerrainHoles } from "../shaders/terrain-holes/store";
+import { type TerrainHole, type TunnelMask } from "../shaders/terrain-holes/types";
+import { WORLD_CHUNK_SIZE } from "../chunks/constants";
+import { isOpen, onToggle } from "./store";
 
 /**
  * THE UNDERGROUND REGISTRY (main thread): every loaded tunnel chunk in THE player's TunnelSpace
- * (utils/workers/underground/tunnelSpace.ts: the probe, the floor, the manhole columns, the liquid —
+ * (generation/underground/field/TunnelSpace.ts: the probe, the floor, the manhole columns, the liquid —
  * the same answers the server's NPCs move by), plus the client's own: the skirt masks, the mouths, and
  * the ONE per-frame driver every mounted tunnel feature calls (it runs once per frame whoever calls
  * first): the terrain's openings, the LOD1 sites and the entrance fades.
@@ -111,7 +114,7 @@ export const unregisterChunk = (chunk: UndergroundChunk): void => {
 onToggle(() => playerTunnels.invalidateFields());
 
 /** The daylight reaching a point in a tunnel from the loaded openings — the mesher's rule for its
- *  vertices (underground/assembly.ts daylightAt) without the ground term: full within a mouth's or a
+ *  vertices (generation/underground/chunks/utils.ts daylightAt) without the ground term: full within a mouth's or a
  *  manhole's near reach of its light point, gone by its far one. What the player's personal light judges
  *  the dark by. 1 when nothing is loaded (above ground, as far as the tunnels know). */
 export const entranceDaylightAt = (x: number, y: number, z: number): number => {

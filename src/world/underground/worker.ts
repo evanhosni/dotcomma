@@ -1,13 +1,13 @@
-/** The client of the tunnel worker (utils/workers/underground.worker.ts): its own thread, so a chunk's
+/** The client of the tunnel worker (world/underground/underground.worker.ts): its own thread, so a chunk's
  *  100–400ms never blocks the dressing worker's enumerations. A client file is only typed wrappers. */
 
-import type { TunnelStyle, UndergroundChunk } from "../../utils/workers/underground/types";
-import { createWorkerClient } from "../../utils/workers/workerClient";
-import { getActiveDomainConfig, whenDomainReady } from "../domains/utils";
+import type { TunnelStyle, UndergroundChunk } from "../../generation/underground/types";
+import { createWorkerClient } from "../../utils/worker-client";
+import { getActiveDomainConfig, whenDomainReady } from "../domains/store";
 import type { ChunkBounds } from "../chunks/types";
 
 const client = createWorkerClient({
-  create: () => new Worker(new URL("../../utils/workers/underground.worker.ts", import.meta.url), { type: "module" }),
+  create: () => new Worker(new URL("./underground.worker.ts", import.meta.url), { type: "module" }),
   init: async () => {
     await whenDomainReady();
     return { config: getActiveDomainConfig() };

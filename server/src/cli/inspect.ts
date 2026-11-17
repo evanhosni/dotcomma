@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { openDatabase, resolveDatabasePath } from "../data/db.js";
-import { getSchemaVersion, MIGRATIONS } from "../data/migrations.js";
+import { openDatabase, resolveDatabasePath, getSchemaVersion } from "../data/index.js";
+import { MIGRATIONS } from "../data/registry.js";
 
 /** `npm run db:inspect [-- --id <identity>] [-- --limit N]` — read-only. */
 const argv = process.argv.slice(2);
@@ -27,8 +27,8 @@ if (version !== MIGRATIONS.length) {
   process.exit(0);
 }
 
-// players.ts asserts a current schema at import — hence dynamic, after the check.
-const { countPlayers, findPlayer, listPlayers } = await import("../data/players.js");
+// server/src/data/store.ts asserts a current schema at import — hence dynamic, after the check.
+const { countPlayers, findPlayer, listPlayers } = await import("../data/store.js");
 const fmt = (ms: number) => new Date(ms).toISOString();
 
 if (wantId) {

@@ -1,20 +1,20 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL, SUN_DIRECTION } from "../../lighting/dayNight";
-import { ditherGLSL, SCREEN_DOOR_GLSL } from "../../vfx/dither";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../shaders/chunkProjection";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/day-night/material";
+import { SUN_DIRECTION } from "../../lighting/day-night/constants";
+import { ditherGLSL, SCREEN_DOOR_GLSL } from "../../vfx/material";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "../shaders/material";
 import commonShader from "../shaders/common.glsl";
-import { glslFloat, WORLD_WRAP } from "../shaders/constants";
-import { FAR_FADE_DEFINE, FAR_FADE_GLSL, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS } from "../shaders/farFade";
-import { LOD_FADE_GLSL, LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { FADE_OPAQUE_HI } from "../terrain/lodSwaps";
+import { glslFloat } from "../shaders/utils";
+import { WORLD_WRAP } from "../shaders/constants";
+import { FADE_OPAQUE_HI } from "../terrain/lod-swaps/constants";
 
 /**
  * THE water sheet's material (CLAUDE.md "Lakes", "Rivers"): one shared ShaderMaterial on one clock for
- * every chunk's water mesh (world/terrain/chunkObjects.ts). Per vertex it reads `waterDepth`, `waterFlow`
+ * every chunk's water mesh (world/terrain/chunk/utils.ts). Per vertex it reads `waterDepth`, `waterFlow`
  * (x/z) and the owning body's colours (`waterShallow`; `waterDeep`: RGB + the depth it is whole from — a
  * spring's tint is an attribute, never a program of its own): swells beat faster and higher with the flow, the surface noise drifts on still water
  * and is ADVECTED along a river, a steep sheet (a fall) whitens and streaks. The LOD cross-fade and the far
- * fade dither it like the ground under it (uLodFade is written per mesh by chunkObjects.ts syncChunkUniforms).
+ * fade dither it like the ground under it (uLodFade is written per mesh by world/terrain/chunk/utils.ts syncChunkUniforms).
  */
 
 /** Swell wavelengths: each divides WORLD_WRAP, so the phase survives the wrap. */
@@ -196,7 +196,7 @@ void main() {
 
 /** The one clock every water mesh reads (advanced by the terrain renderer, tickWater). */
 const WATER_CLOCK = { value: 0 };
-/** Devmode's live mix of the swell height (vfx/tuning.ts); 1 = as designed. */
+/** Devmode's live mix of the swell height (vfx/registry.ts); 1 = as designed. */
 export const WATER_SWELL_MIX = { value: 1 };
 export const tickWater = (elapsedSeconds: number): void => {
   WATER_CLOCK.value = elapsedSeconds;

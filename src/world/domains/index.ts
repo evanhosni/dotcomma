@@ -1,11 +1,11 @@
-import { actorCatalogOf } from "../../objects/actors/catalog";
+import { actorCatalogOf } from "../../objects/actors/registry";
 import type { ActorSpec } from "../../objects/actors/spec";
 import { domainConfigOf, domainNodeOf } from "../content/config";
 import type { ContentNode } from "../content/types";
-import type { DomainConfig } from "../../utils/workers/types";
-import { NotFoundDomain } from "./404";
-import { HomeDomain } from "./home";
-import { OverworldDomain } from "./overworld";
+import type { DomainConfig } from "../../generation/types";
+import { NotFoundDomain } from "./404/NotFoundDomain";
+import { HomeDomain } from "./home/HomeDomain";
+import { OverworldDomain } from "./overworld/OverworldDomain";
 import type { DomainId } from "./types";
 
 /**

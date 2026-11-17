@@ -1,16 +1,14 @@
 import * as THREE from "three";
-import { _material } from "../../utils/material";
+import { _material } from "../../utils/render/material";
 import { getAllBiomes } from "../../utils/utils";
-import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../utils/workers/vertexCompute";
-import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/utils";
-import { combineBiomeMaterials } from "../shaders/combineBiomeMaterials";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, CHUNK_PROJECTION_VARYINGS } from "../shaders/chunkProjection";
-import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
-import { LOD_FADE_DEFINE, LOD_FADE_UNIFORM } from "../shaders/lodFade";
-import { FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, WIREFRAME_DEFINE } from "../shaders/farFade";
-import { ENTRANCE_PATCH_DEFINE, TERRAIN_HOLES_DEFINE } from "../shaders/terrainHoles";
-import { BLEND_FIELDS_CLAMPED_UNIFORM } from "../shaders/lodBlur";
-import { FADE_OPAQUE_HI } from "./lodSwaps";
+import { biomeSlotBlendHalvesOf, biomeSlotRegionsOf, biomeSlotsOf, riverbedSlotHalvesOf } from "../../generation";
+import { getActiveDomainConfig, getActiveRegions, getRiverTexture, getTerrainParams, whenDomainReady } from "../domains/store";
+import { combineBiomeMaterials } from "../shaders/biome-materials";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, CHUNK_PROJECTION_VARYINGS, LOD_FADE_DEFINE, LOD_FADE_UNIFORM, FAR_FADE_DEFINE, FAR_FADE_UNIFORM, FAR_FADE_UNIFORMS, WIREFRAME_DEFINE, BLEND_FIELDS_CLAMPED_UNIFORM } from "../shaders/material";
+import { glslFloat } from "../shaders/utils";
+import { TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../shaders/constants";
+import { ENTRANCE_PATCH_DEFINE, TERRAIN_HOLES_DEFINE } from "../shaders/terrain-holes/material";
+import { FADE_OPAQUE_HI } from "./lod-swaps/constants";
 import terrainVertexBody from "../shaders/vertex.glsl";
 
 // The raw .glsl asset can't import the shared chunks, so the chunk projection is prepended here.
@@ -96,8 +94,8 @@ export const getMaterial = async () => {
 };
 
 /** The same program source with extra defines: every uniform object is SHARED with the base, except the
- *  per-mesh ones — the chunk's clamp flag (lodBlur.ts), its own per variant because each variant is its own
- *  program, whose uploaded value only the meshes drawing it may change (chunkObjects.ts syncChunkUniforms). */
+ *  per-mesh ones — the chunk's clamp flag (world/shaders/material.ts), its own per variant because each variant is its own
+ *  program, whose uploaded value only the meshes drawing it may change (world/terrain/chunk/utils.ts syncChunkUniforms). */
 const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, string>, uniforms: Record<string, THREE.IUniform> = {}): THREE.ShaderMaterial =>
   new THREE.ShaderMaterial({
     uniforms: { ...base.uniforms, [BLEND_FIELDS_CLAMPED_UNIFORM]: { value: 0 }, ...uniforms },
@@ -108,13 +106,13 @@ const terrainVariant = (base: THREE.ShaderMaterial, defines: Record<string, stri
     wireframe: base.wireframe,
   });
 
-/** The terrain's ONE `discard` program: the LOD cross-fade's dither (lodSwaps.ts), the far fade and the
+/** The terrain's ONE `discard` program: the LOD cross-fade's dither (world/terrain/lod-swaps/LodSwapper.ts), the far fade and the
  *  tunnel openings. Drawn by every chunk mid-fade, and by the settled chunks that reach the far fade
- *  (lodConfig.ts chunkReachesFarFade), touch an opening (terrainHoles.ts) or draw while the player is
+ *  (world/terrain/lod/constants.ts chunkReachesFarFade), touch an opening (world/shaders/terrain-holes/store.ts) or draw while the player is
  *  underground (no skirts: a uniform) — a settled chunk's dither range is [0, FADE_OPAQUE_HI), which keeps
  *  every pixel. One program, not one per combination: Firefox links each on the main thread (~0.6s per
  *  terrain program, PERFORMANCE.md). The near terrain keeps the base program and its early depth test.
- *  Every uniform object is SHARED with the base except the per-mesh ones (chunkObjects.ts syncChunkUniforms). */
+ *  Every uniform object is SHARED with the base except the per-mesh ones (world/terrain/chunk/utils.ts syncChunkUniforms). */
 export const createDiscardMaterial = (base: THREE.ShaderMaterial): THREE.ShaderMaterial =>
   terrainVariant(base, { [LOD_FADE_DEFINE]: "", [FAR_FADE_DEFINE]: "", [TERRAIN_HOLES_DEFINE]: "" }, { [LOD_FADE_UNIFORM]: { value: new THREE.Vector2(0, FADE_OPAQUE_HI) } });
 
@@ -146,4 +144,3 @@ export const resetTerrainMaterial = (): void => {
     resolveReady = resolve;
   });
 };
-

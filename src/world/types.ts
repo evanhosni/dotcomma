@@ -1,4 +1,4 @@
-import type { BiomeDomeConfig, TerrainNoiseParams } from "../utils/workers/types";
+import type { BiomeDomeConfig, TerrainNoiseParams } from "../generation/types";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
@@ -84,7 +84,7 @@ export interface RiverbedMaterial {
   yieldSlope?: [number, number];
 }
 
-/** A biome's height definition — evaluated by the ONE shared pipeline (vertexCompute.ts). */
+/** A biome's height definition — evaluated by the ONE shared pipeline (generation/index.ts). */
 export interface BiomeNoiseConfig {
   params: TerrainNoiseParams;
   absNeg?: boolean;
@@ -97,7 +97,7 @@ export interface BiomeNoiseConfig {
 
 /** THE CLIENT LOOK MODEL — what the one terrain material is assembled from, read off the content
  *  tree at the commit (world/components/Domain.tsx). Everything the GENERATION side needs is the
- *  DomainConfig instead (world/content/config.ts), which the server shares. */
+ *  DomainConfig instead (world/content/config/index.ts), which the server shares. */
 export interface Biome {
   id: number;
   name: string;

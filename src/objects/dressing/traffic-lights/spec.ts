@@ -3,7 +3,7 @@ import { yawFromDir, type ColliderPart, type DressingColliderSpec } from "../typ
 /** The feature's kind (also its glow-head owner id). */
 export const TRAFFIC_LIGHTS = "trafficLights";
 
-// Three-free: the art (TrafficLights.tsx) and the client + SERVER colliders (physics/obstacles.ts)
+// Three-free: the art (TrafficLights.tsx) and the client + SERVER colliders (server/src/game/physics/bodies/index.ts)
 // are all built from these numbers.
 
 export const SIGNAL_POLE_HEIGHT = 7.6;

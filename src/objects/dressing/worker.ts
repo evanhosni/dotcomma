@@ -1,17 +1,16 @@
-/** The client of the ONE dressing worker (utils/workers/dressing.worker.ts). */
+import type { MovementModifiers, SurfaceFetch } from "../../physics/movement-modifiers/types";
+import type { CitySitePoint, PlaceInfo, VertexResult } from "../../generation";
+import { createWorkerClient } from "../../utils/worker-client";
+import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/store";
+import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint, ChunkBounds } from "./types";
 
-import type { MovementModifiers, SurfaceFetch } from "../../physics/movementModifiers";
-import type { CitySitePoint, PlaceInfo, VertexResult } from "../../utils/workers/vertexCompute";
-import { createWorkerClient } from "../../utils/workers/workerClient";
-import { getActiveDomainConfig, whenDomainReady } from "../../world/domains/utils";
-import type { DressingEnumeratorName, EnumeratorArgs, EnumeratorPoint } from "./enumerators";
-import type { ChunkBounds } from "./types";
+/** The client of the ONE dressing worker (objects/dressing/dressing.worker.ts). */
 
 export type { CitySitePoint, PlaceInfo };
 
 const client = createWorkerClient({
   create: () =>
-    new Worker(new URL("../../utils/workers/dressing.worker.ts", import.meta.url), { type: "module" }),
+    new Worker(new URL("./dressing.worker.ts", import.meta.url), { type: "module" }),
   init: async () => {
     await whenDomainReady();
     return { config: getActiveDomainConfig() };
@@ -25,7 +24,7 @@ export const resetDressingWorker = client.reset;
 const request = (message: Record<string, unknown>): Promise<any[]> =>
   client.request<{ points: any[] }>(message).then((r) => r.points);
 
-/** Run the named enumerator (objects/dressing/enumerators.ts) over one chunk, off-thread. */
+/** Run the named enumerator (objects/dressing/registry.ts) over one chunk, off-thread. */
 export const enumerateDressing = <K extends DressingEnumeratorName>(
   name: K,
   bounds: ChunkBounds,
@@ -45,7 +44,7 @@ export const getVertexSample = async (x: number, z: number, options: { raw?: boo
   return (points[0] as Omit<VertexResult, "biomeSdf">) ?? null;
 };
 
-/** The movement modifiers at a world point (physics/movementModifiers.ts: the snow's drag and
+/** The movement modifiers at a world point (physics/movement-modifiers/index.ts: the snow's drag and
  *  traction), for a capsule's surface sampler (`createSurfaceSampler`). null until the worker is up —
  *  neutral ground. */
 export const fetchSurfaceModifiers: SurfaceFetch = (x, z, feetY, answer) => {
@@ -56,7 +55,7 @@ export const fetchSurfaceModifiers: SurfaceFetch = (x, z, feetY, answer) => {
 };
 
 /** Where a world point is (region/biome, sky weights, address cell) and the ground there
- *  (utils/workers/ground.ts) — world/place.ts polls it for the player. null until the worker is up. */
+ *  (generation/index.ts) — world/place.ts polls it for the player. null until the worker is up. */
 export const getPlaceInfo = async (x: number, z: number): Promise<(PlaceInfo & { ground: string }) | null> => {
   const points = await request({ type: "PLACE_INFO", x, z });
   return (points[0] as PlaceInfo & { ground: string }) ?? null;

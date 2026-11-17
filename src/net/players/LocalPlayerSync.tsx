@@ -1,14 +1,14 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { useGameContext } from "../../context/GameContext";
+import { useGameContext } from "../../context/hooks";
 import { wrapAngle } from "../../utils/math";
-import { onServerMessage, send } from "../connection";
-import { PUBLISH_INTERVAL_MS } from "../entities/interpolation";
+import { onServerMessage, send } from "..";
+import { PUBLISH_INTERVAL_MS } from "../entities/constants";
 
 /**
  * Publishes the local player's movement: every PUBLISH_INTERVAL_MS while moving (the entity cadence:
- * receivers sample the server-stamped track like an entity's, net/entities/interpolation.ts, and a
+ * receivers sample the server-stamped track like an entity's, net/entities/utils.ts, and a
  * moving track that goes quiet for longer only extrapolates MAX_EXTRAPOLATION_MS, then holds), plus at
  * once on a start / stop / velocity or yaw change / relocation / re-init. Nothing while standing still.
  * useFrame priority -2: after the Player (-3) has written this frame's position.

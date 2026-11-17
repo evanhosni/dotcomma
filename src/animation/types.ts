@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import * as THREE from "three";
 
 export type AnimationLoop = "repeat" | "once" | "pingpong";
 
@@ -78,4 +78,11 @@ export interface AnimationChannelOptions {
   defaults?: Partial<AnimationParams>;
   /** Lets reversal and seeking clamp one-shots and start reversed clips at their end. */
   durations?: ClipDurations;
+}
+
+export interface AnimationTarget {
+  mixer: THREE.AnimationMixer | null;
+  animations: THREE.AnimationClip[];
+  /** Bound lazily by clip name; they live on the (pooled) model, so a reused one keeps them. */
+  actions: Map<string, THREE.AnimationAction>;
 }

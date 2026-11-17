@@ -1,24 +1,24 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Physics } from "@react-three/rapier";
 import { useEffect, useMemo } from "react";
-import { useDevContext } from "../context/DevContext";
-import { GameContextProvider } from "../context/GameContext";
+import { useDevContext } from "../context/hooks";
+import { GameContextProvider } from "../context/GameContextProvider";
 import { StatsOverlay } from "../menus/overlay/StatsOverlay";
 import { Player } from "../player/Player";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
-import { LampGlowDriver } from "../lighting/lampGlow";
-import { GRAVITY } from "../physics/characterMovement";
+import { LampGlowDriver } from "../lighting/lamp-glow/LampGlowDriver";
+import { GRAVITY } from "../physics/constants";
 import { initCursor } from "../utils/cursor";
-import { traceSpan } from "../utils/spikeTrace";
-import { bindProgramCompiler } from "../utils/warmPrograms";
-import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/frameCap";
-import { UnderwaterPass } from "../vfx/underwater";
-import { DeepDreamPass } from "../vfx/deep-dream";
-import { DreamPass } from "../vfx/dream";
-import { TracePass } from "../vfx/trace";
-import { ScreenPassChain } from "../vfx/screenPass";
-import { PixelationDriver } from "../vfx/PostProcessing";
+import { traceSpan } from "../utils/spike-trace";
+import { bindProgramCompiler } from "../utils/render";
+import { shouldPresentThisFrame, isMainRenderFrame } from "../vfx/store";
+import { UnderwaterPass } from "../vfx/screen-pass/UnderwaterPass";
+import { DeepDreamPass } from "../vfx/screen-pass/deep-dream/DeepDreamPass";
+import { DreamPass } from "../vfx/screen-pass/DreamPass";
+import { TracePass } from "../vfx/screen-pass/TracePass";
+import { ScreenPassChain } from "../vfx/screen-pass/ScreenPassChain";
+import { PixelationDriver } from "../vfx/PixelationDriver";
 import { debugGlobal } from "../utils/utils";
 
 /** Non-zero useFrame priorities disable R3F's auto-render, so this renders

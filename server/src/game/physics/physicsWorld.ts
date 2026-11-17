@@ -1,19 +1,3 @@
-import * as RAPIER from "@dimforge/rapier3d-compat";
-import type { DomainId } from "../../../../src/net/protocol";
-import { GRAVITY, markTerrainCollider } from "../../../../src/physics/characterMovement";
-import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
-import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
-import { DOMAIN_CONFIGS } from "../../../../src/world/domains";
-import { TICK_SECONDS } from "../tick.js";
-import { ChunkGenerator } from "./chunkGenerator.js";
-import { ChunkStore, JobQueue, type ChunkBuilder } from "./chunks.js";
-import { enumerateObstacles, type ObstaclePoint } from "./obstaclePoints.js";
-import { createObstacleBodies } from "./obstacles.js";
-import { chunkCenter, chunkIndex, sampleChunkRow, TERRAIN_CHUNK_SIZE, TERRAIN_ROWS, TERRAIN_SEGMENTS } from "./terrain.js";
-import { sampleTunnelChunk, type TunnelPart } from "./tunnels.js";
-import { tunnelColliderBodies } from "../../../../src/utils/workers/underground/colliderBodies";
-import { TunnelSpace } from "../../../../src/utils/workers/underground/tunnelSpace";
-
 /**
  * Headless Rapier (the client's package, bundled from the root install) stepped at the
  * entity tick: the world, the budgeted JobQueue, and two refcounted ChunkStores —
@@ -25,19 +9,30 @@ import { TunnelSpace } from "../../../../src/utils/workers/underground/tunnelSpa
  * and the queue only makes their bodies; without one (tests, tools) everything is built in
  * place under workFor(), terrain row by row across ticks.
  */
-
-export interface PhysicsWorldOptions {
-  /** URL of chunkGenerator.worker (.ts under tsx, .js in the bundle). */
-  chunkGeneratorWorker?: URL;
-}
-
-export const PHYSICS_DOMAIN: DomainId = "overworld";
+import * as RAPIER from "@dimforge/rapier3d-compat";
+import type { DomainId } from "../../../../src/net/protocol/types";
+import { GRAVITY } from "../../../../src/physics/constants";
+import { markTerrainCollider } from "../../../../src/physics";
+import type { MovementModifiers } from "../../../../src/physics/movement-modifiers/types";
+import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/generation";
+import { DOMAIN_CONFIGS } from "../../../../src/world/domains";
+import { TICK_SECONDS } from "../constants.js";
+import { ChunkGenerator } from "./chunkGenerator.js";
+import { ChunkStore } from "./ChunkStore.js";
+import { JobQueue } from "./JobQueue.js";
+import type { ChunkBuilder, ObstaclePoint, TunnelPart } from "./types.js";
+import { enumerateObstacles, chunkCenter, chunkIndex, sampleChunkRow, sampleTunnelChunk } from "./utils.js";
+import { createObstacleBodies } from "./bodies/index.js";
+import { TERRAIN_CHUNK_SIZE, TERRAIN_ROWS, TERRAIN_SEGMENTS } from "./constants.js";
+import { tunnelColliderBodies } from "../../../../src/generation/underground/chunks/spec";
+import { TunnelSpace } from "../../../../src/generation/underground/field/TunnelSpace";
+import { PHYSICS_DOMAIN, DEFAULT_WORK_BUDGET_MS } from "./constants";
+import type { PhysicsWorldOptions } from "./types";
 
 interface TunnelChunk {
   parts: TunnelPart[];
   bodies: RAPIER.RigidBody[];
 }
-export const DEFAULT_WORK_BUDGET_MS = 8;
 
 let rapierReady: Promise<void> | null = null;
 /** The compat build embeds the WASM — no flags, no fetch. */
@@ -48,7 +43,7 @@ export class PhysicsWorld {
   readonly jobs = new JobQueue();
   readonly terrain: ChunkStore<RAPIER.RigidBody, Float32Array>;
   readonly dressing: ChunkStore<RAPIER.RigidBody[], ObstaclePoint[]>;
-  /** The caves and sewers around every NPC, and the space its tunnel rules read (physics/tunnelRules.ts). */
+  /** The caves and sewers around every NPC, and the space its tunnel rules read (physics/tunnel-rules/index.ts). */
   readonly tunnels: ChunkStore<TunnelChunk, TunnelPart[]>;
   readonly tunnelSpace: TunnelSpace;
   /** The open manholes and doors of this domain (World.toggleTunnel). */
@@ -193,7 +188,7 @@ export class PhysicsWorld {
     const desc = RAPIER.ColliderDesc.heightfield(TERRAIN_SEGMENTS, TERRAIN_SEGMENTS, heights, { x: TERRAIN_CHUNK_SIZE, y: 1, z: TERRAIN_CHUNK_SIZE });
     // Desc before body: a failure can't leave an empty body.
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(chunkCenter(gx), 0, chunkCenter(gz)));
-    // Tagged as the client's are (world/terrain/chunkObjects.ts): a step with `ignoreTerrain` (a tunnel) leaves it out.
+    // Tagged as the client's are (world/terrain/chunk/utils.ts): a step with `ignoreTerrain` (a tunnel) leaves it out.
     markTerrainCollider(this.world.createCollider(desc, body));
     this.queriesDirty = true;
     return body;

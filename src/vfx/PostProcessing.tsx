@@ -1,47 +1,27 @@
-import { useThree } from "@react-three/fiber";
-import { useEffect, useSyncExternalStore } from "react";
-import { _quantization, QuantizationGrowth } from "./quantization";
-import { _curvature } from "./curvature";
-import { setMainRenderFpsCap } from "./frameCap";
-import { DREAM } from "./dream";
-import { DEEP_DREAM } from "./deep-dream";
-import { TRACE } from "./trace";
-
-/** Screen pixels per rendered pixel (≤ 1 = off). Drawn by lowering the canvas's pixel ratio and letting the
- *  browser upscale with hard edges (PixelationDriver): a post-process pass fought CustomCanvas's own render
- *  loop (every frame drawn twice, every program relinked, ~2 fps) and cost fill rate instead of saving it. */
-let pixelation = 0;
-const pixelationListeners = new Set<() => void>();
-const subscribePixelation = (fn: () => void): (() => void) => {
-  pixelationListeners.add(fn);
-  return () => {
-    pixelationListeners.delete(fn);
-  };
-};
-export const getPixelation = (): number => pixelation;
-/** The domain's prop sets it on mount, devmode live (vfx/tuning.ts). */
-export const setPixelation = (granularity: number): void => {
-  pixelation = granularity;
-  pixelationListeners.forEach((fn) => fn());
-};
+import { useEffect } from "react";
+import { _quantization, _curvature } from "./material";
+import { QuantizationGrowth } from "./types";
+import { setMainRenderFpsCap, setPixelation } from "./store";
+import { DREAM, DEEP_DREAM, TRACE } from "./screen-pass/store";
+import { preloadDeepDream } from "./screen-pass/deep-dream/worker";
 
 interface PostProcessingProps {
   pixelation?: number;
   quantization?: number;
-  /** The farther a vertex, the coarser it snaps (vfx/quantization.ts): nothing inside `start`, then
+  /** The farther a vertex, the coarser it snaps (vfx/material.ts): nothing inside `start`, then
    *  size × (km past start)^power. Unset = the base grid everywhere. */
   quantizationGrowth?: QuantizationGrowth;
-  /** Illusory planet radius in world units (vfx/curvature.ts); 20000 drops 20u at 1000u out. Unset/0 = flat. */
+  /** Illusory planet radius in world units (vfx/material.ts); 20000 drops 20u at 1000u out. Unset/0 = flat. */
   curvature?: number;
   /** Flat zone around the player (default 100) — every interaction reach must sit inside it. */
   curvatureStart?: number;
-  /** Presented frames only; the rAF loop keeps display rate (vfx/frameCap.ts). Unset/0 = uncapped. */
+  /** Presented frames only; the rAF loop keeps display rate (vfx/store.ts). Unset/0 = uncapped. */
   fpsCap?: number;
-  /** The shader imitation of a dream (vfx/dream.ts), 0–1: no network, nearly free. Unset/0 = off. */
+  /** The shader imitation of a dream (vfx/screen-pass/DreamPass.ts), 0–1: no network, nearly free. Unset/0 = off. */
   dream?: number;
-  /** Real DeepDream (MobileNet on a worker, vfx/deep-dream/) shown at this strength, 0–1. Unset/0 = off. */
+  /** Real DeepDream (MobileNet on a worker, vfx/screen-pass/deep-dream/) shown at this strength, 0–1. Unset/0 = off. */
   deepDream?: number;
-  /** The window trail (vfx/trace.ts), 0–1: how long the stamped copies persist. Unset/0 = off. */
+  /** The window trail (vfx/screen-pass/TracePass.ts), 0–1: how long the stamped copies persist. Unset/0 = off. */
   trace?: number;
 }
 
@@ -90,6 +70,7 @@ export const PostProcessing = ({
 
   useEffect(() => {
     DEEP_DREAM.strength = deepDream ?? 0;
+    if (deepDream) preloadDeepDream();
     return () => {
       DEEP_DREAM.strength = 0;
     };
@@ -107,18 +88,5 @@ export const PostProcessing = ({
     return () => setPixelation(0);
   }, [pixelationProp]);
 
-  return null;
-};
-
-/** Applies the pixelation to the ONE canvas (mounted by CustomCanvas, so it outlives every domain). */
-export const PixelationDriver = ({ baseDpr }: { baseDpr: number }) => {
-  const setDpr = useThree((state) => state.setDpr);
-  const canvas = useThree((state) => state.gl.domElement);
-  const granularity = useSyncExternalStore(subscribePixelation, getPixelation);
-  useEffect(() => {
-    const on = granularity > 1;
-    setDpr(on ? baseDpr / granularity : baseDpr);
-    canvas.style.imageRendering = on ? "pixelated" : "";
-  }, [granularity, baseDpr, setDpr, canvas]);
   return null;
 };

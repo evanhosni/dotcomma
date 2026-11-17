@@ -1,10 +1,11 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/dayNight";
-import { _material } from "../../../utils/material";
-import { ditherGLSL } from "../../../vfx/dither";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/chunkProjection";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/day-night/material";
+import { _material } from "../../../utils/render/material";
+import { ditherGLSL } from "../../../vfx/material";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/material";
 import commonShader from "../../../world/shaders/common.glsl";
-import { glslFloat, TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../../../world/shaders/constants";
+import { glslFloat } from "../../../world/shaders/utils";
+import { TERRAIN_TEXTURE_TILE, WORLD_WRAP } from "../../../world/shaders/constants";
 import { ROCK_SHADE_DARK, ROCK_SHADE_LIGHT } from "./spec";
 
 /** The rock look (rocks/ and waterfall-boulders/ both draw with it): the mountain wall's rock under the

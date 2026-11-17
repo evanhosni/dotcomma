@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { FONT, HUD_COLOR, HUD_Z_INDEX } from "../../../menus/overlay/styles";
+import { FONT, HUD_COLOR, HUD_Z_INDEX } from "../../../menus/overlay/constants";
 
 /** "- click to enter -" over a full-page click trap until the pointer first locks; then the player walks
  *  up to the CRT (home/crt), and clicking it enters the overworld. */

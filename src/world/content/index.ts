@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
-import { reportContentError } from "../../utils/contentError";
-import type { ContentComponent, ContentDeclaration, ContentNode } from "./types";
+import { reportContentError } from "../../utils/utils";
+import type { ContentComponent, ContentDeclaration, ContentNode, MountedDriver } from "./types";
 
 export type { ContentComponent, ContentDeclaration, ContentNode } from "./types";
 
@@ -125,17 +125,6 @@ export const nodeOf = <P extends object>(decl: ContentDeclaration<P>, props: P, 
   return node;
 };
 
-/** Every node of a kind in a subtree, at any depth, in JSX order. */
-export const nodesOfKind = (nodes: readonly ContentNode<any>[], kind: string): ContentNode[] => {
-  const out: ContentNode[] = [];
-  const visit = (n: ContentNode<any>): void => {
-    if (n.kind === kind) out.push(n);
-    n.children.forEach(visit);
-  };
-  nodes.forEach(visit);
-  return out;
-};
-
 /** The one child of a kind, or null where it is not mounted. */
 export const childOfKind = <P = Record<string, unknown>>(node: ContentNode<any>, kind: string): ContentNode<P> | null =>
   (node.children.find((c) => c.kind === kind) as ContentNode<P> | undefined) ?? null;
@@ -143,11 +132,6 @@ export const childOfKind = <P = Record<string, unknown>>(node: ContentNode<any>,
 /** Every child of a kind, in JSX order. */
 export const childrenOfKind = <P = Record<string, unknown>>(node: ContentNode<any>, kind: string): ContentNode<P>[] =>
   node.children.filter((c) => c.kind === kind) as ContentNode<P>[];
-
-export interface MountedDriver {
-  kind: string;
-  Driver: () => ReactElement | null;
-}
 
 /** The DRIVERS of every kind mounted in a subtree, one per kind, in first-seen order: <Domain>
  *  mounts exactly these, so a system exists because something declared it and for no other reason. */

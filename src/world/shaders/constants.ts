@@ -1,5 +1,4 @@
 // Reach the raw .glsl assets as #defines (world/terrain/material.ts).
-
 /** vWorldPosWrapped wrap period: a common multiple of every world-space period
  *  downstream (26.25u tile ×160, 75u sidewalk ×56, 200u fbm ×21) and both
  *  quantization grids (0.025, 0.2). A new world-space period must divide it. */
@@ -8,15 +7,13 @@ export const WORLD_WRAP = 4200;
 /** World units per repeat of a terrain texture (`vWorldUv`, the TEXTURE_TILE define); divides WORLD_WRAP. */
 export const TERRAIN_TEXTURE_TILE = 26.25;
 
-/** The terrain's LOD blur (world/shaders/lodBlur.ts): a paint edge softens over this share of the vertex
+/** The terrain's LOD blur (world/shaders/material.ts): a paint edge softens over this share of the vertex
  *  spacing of the LOD ring the camera distance has reached. 0 = every edge crisp at every distance. */
 export const MATERIAL_LOD_BLUR = 0.5;
 
-export const glslFloat = (v: number): string => (Number.isInteger(v) ? `${v}.0` : `${v}`);
-
 /** The freeway CORRIDOR off the city, in the road field's normalized street units: the terrain shader
  *  paints the city's own road frag fully out to the curb strip's outer edge (INNER) and fades it out by
- *  OUTER, and the road-fragment pass (utils/workers/roads/roadFragments.ts) counts that corridor as land. */
+ *  OUTER, and the road-fragment pass (generation/roads/fragments/index.ts) counts that corridor as land. */
 export const FREEWAY_CORRIDOR_INNER = 8;
 export const FREEWAY_CORRIDOR_OUTER = 9.5;
 
@@ -34,7 +31,7 @@ export const RIVER_BED_FULL_INSET = RIVER_BED_FADE_INSET + RIVER_BED_BLEND_WIDTH
 /** Each biome's riverbed texture cross-fades into its neighbor's over at least this HALF width (real
  *  units) across a biome wall, whatever the biomes' own feathers: the bed is not its biome's ground,
  *  and beside the crisp city (a 1u half) the bed's sand met the snow's gravel on a hard line. 8 still
- *  read as a straight cut from above (water/DECISIONS.md); 40 is on the scale of the softest natural
+ *  read as a straight cut from above (generation/water/DECISIONS.md); 40 is on the scale of the softest natural
  *  wall (the lake's 45). */
 export const RIVER_BED_TEXTURE_HALF = 40;
 
@@ -52,7 +49,7 @@ export const RIVER_BED_UNDERWATER_FADE = 1.5;
  *  triangle mixing it with any in-field distance never crosses the paint reach. */
 export const RIVER_BED_FAR = 1e4;
 
-/** The ground dithers out over this last share of the camera's far distance (world/shaders/farFade.ts): six times
+/** The ground dithers out over this last share of the camera's far distance (world/shaders/material.ts): six times
  *  the building sprites' share, at Evan's request, for a gradual horizon (eased, so still ~90% solid at 3km). Here,
- *  not there: lodConfig.ts gates its chunks on it, and the server imports lodConfig (Three-free). */
+ *  not there: world/terrain/lod/constants.ts gates its chunks on it, and the server imports lodConfig (Three-free). */
 export const FAR_FADE_FRACTION = 0.72;

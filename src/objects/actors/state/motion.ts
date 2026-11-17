@@ -1,3 +1,7 @@
+import type { MotionOutput, MotionParams, Vec3Like } from "./types";
+import { createMotionOutput, stepAngle, angleDiffAbs } from "./utils";
+import { DEFAULT_MOTION_PARAMS } from "./defaults";
+
 /**
  * How a state machine moves and turns its actor: a behavior describes what it
  * wants through `ctx.motion` and the framework applies it (the server's character
@@ -8,60 +12,6 @@
  * three.js `rotation.y`: local +Z faces the view direction, so a heading θ moves
  * along (sin θ, cos θ) — the same convention as facing.
  */
-
-export interface MotionOutput {
-  vx: number;
-  vy: number | null;
-  vz: number;
-  yaw: number;
-}
-
-/** THREE.Vector3 on the client, a plain object on the server. */
-export interface Vec3Like {
-  x: number;
-  y: number;
-  z: number;
-}
-
-export const createMotionOutput = (): MotionOutput => ({ vx: 0, vy: null, vz: 0, yaw: 0 });
-
-/** The simulated knobs (server and local alike): they change where the actor actually goes. */
-export interface MotionParams {
-  /** Multiplies every velocity a behavior asks for. */
-  speed: number;
-  /** Multiplies every turn step (`turnTo`, `turnToward`). */
-  turnSpeed: number;
-}
-
-export const DEFAULT_MOTION_PARAMS: MotionParams = { speed: 1, turnSpeed: 1 };
-
-/** An actor's motion knobs, the movement counterpart of AnimationConfig. */
-export interface MotionConfig extends Partial<MotionParams> {
-  /** Stop-motion: the DRAWN position and yaw update this many times a second; the body moves smoothly. Client-only. */
-  frameRate?: number;
-  /** Degrees: the DRAWN yaw is rounded to a multiple of it relative to the camera's line of sight, so the
-   *  viewer always sees it at an exact step (its real yaw is untouched). Client-only. */
-  rotationStep?: number;
-}
-
-/** Wrap to (−π, π]. */
-export const wrapAngle = (a: number): number => {
-  let d = a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d <= -Math.PI) d += Math.PI * 2;
-  return d;
-};
-
-export const angleDiffAbs = (a: number, b: number): number => Math.abs(wrapAngle(b - a));
-
-/** Shortest-arc interpolation; `t` clamped to [0, 1]. */
-export const lerpAngle = (a: number, b: number, t: number): number => a + wrapAngle(b - a) * Math.min(Math.max(t, 0), 1);
-
-/** Step from `a` toward `b` by at most `maxStep` radians along the shortest arc. */
-export const stepAngle = (a: number, b: number, maxStep: number): number => {
-  const d = wrapAngle(b - a);
-  return Math.abs(d) <= maxStep ? b : a + Math.sign(d) * maxStep;
-};
 
 export class Motion {
   /** Read by the mover/publisher: what the behavior asked for, scaled by the params (zero while paused). */

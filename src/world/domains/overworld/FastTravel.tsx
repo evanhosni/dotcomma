@@ -1,15 +1,16 @@
 import { useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
-import { useGameContext } from "../../../context/GameContext";
-import { prefetchTerrainAround } from "../../terrain/buildRequests";
-import { ensureVertexCompute, getVertexData, getVertexSample } from "../../terrain/vertexData";
+import { useGameContext } from "../../../context/hooks";
+import { prefetchTerrainAround } from "../../terrain/build-requests";
+import { ensureVertexCompute, getVertexData, getVertexSample } from "../../terrain/utils";
 import { replaceAddressPath, takePendingAddress } from "../navigation";
-import { type Address, addressOfPosition, pathForPlace, resolveAddress } from "./address";
+import { type Address } from "./address/types";
+import { addressOfPosition, pathForPlace, resolveAddress } from "./address";
 import { debugGlobal } from "../../../utils/utils";
-import { onPlaceChange } from "../../place";
+import { onPlaceChange } from "../../place/store";
 
 /** Entering the overworld starts this far above the landing site: the player falls while the ground loads
- *  (~10s at TERMINAL_VELOCITY, physics/characterMovement.ts). */
+ *  (~10s at TERMINAL_VELOCITY, physics/index.ts). */
 const ENTRY_DROP_HEIGHT = 1500;
 
 /**

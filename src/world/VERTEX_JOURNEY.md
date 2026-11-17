@@ -2,7 +2,7 @@
 
 This page follows one terrain vertex from the chunk request to the final pixel. Heights and blend
 fields are computed on the CPU by ONE function, `computeVertexData` in
-[`utils/workers/vertexCompute.ts`](../utils/workers/vertexCompute.ts). The material is mixed per
+[`generation/index.ts`](../generation/index.ts). The material is mixed per
 pixel on the GPU from what that function returns. Order matters in both halves: a later step
 overwrites what an earlier one wrote, so the table in [Summary](#summary) is the short answer to
 "what wins".
@@ -11,17 +11,17 @@ Everything below is in execution order. File links are relative to this folder.
 
 ## 1. Entry: who asks, and which variant runs
 
-[`terrain/index.tsx`](terrain/index.tsx) builds a chunk by posting `BUILD_CHUNK` (through [`terrain/buildRequests.ts`](terrain/buildRequests.ts))
-to [`utils/workers/terrain.worker.ts`](../utils/workers/terrain.worker.ts) with the chunk's LOD flags
-from [`terrain/lodConfig.ts`](terrain/lodConfig.ts). The worker walks the `(segments + 1)²` grid
+[`world/terrain/TerrainRenderer.tsx`](terrain/TerrainRenderer.tsx) builds a chunk by posting `BUILD_CHUNK` (through [`world/terrain/build-requests/index.ts`](terrain/build-requests/index.ts))
+to [`world/terrain/terrain.worker.ts`](terrain/terrain.worker.ts) with the chunk's LOD flags
+from [`world/terrain/lod/constants.ts`](terrain/lod/constants.ts). The worker walks the `(segments + 1)²` grid
 (local x/z are `Math.fround`ed so heights match the float32 positions) and calls one of three
 variants per vertex:
 
 | variant | used by | what it skips |
 |---|---|---|
-| `computeVertexData` | LOD1–2 (they have colliders), the spawn, foliage and dressing workers, the main thread's padded lookups ([`terrain/vertexData.ts`](terrain/vertexData.ts) `getVertexData`, the dressing worker's `getVertexSample`), the server's heightfields and bodies ([`server/src/game/physics/terrain.ts`](../../server/src/game/physics/terrain.ts), `groundBody.ts`, `freeBody.ts`) | nothing |
+| `computeVertexData` | LOD1–2 (they have colliders), the spawn, foliage and dressing workers, the main thread's padded lookups ([`world/terrain/utils.ts`](terrain/utils.ts) `getVertexData`, the dressing worker's `getVertexSample`), the server's heightfields and bodies ([`server/src/game/physics/utils.ts`](../../server/src/game/physics/utils.ts), `server/src/game/physics/bodies/GroundBody.ts`, `server/src/game/physics/bodies/FreeBody.ts`) | nothing |
 | `computeVertexDataFar(x, z, rivers)` | visual-only LODs (`!hasCollider`: LOD3–4) | flatten pads, bridge decks, road fragments, block islands, the cave mouth bulge, the inter-city freeway RUNS (the belt stays); with `rivers = false` (`carvesRivers: false`, LOD4) the coarse FAR field instead of the river field (`farRiverFieldAt`: the walls and the valleys' gap from the raw pieces and their ponds): no channel, river water, bed paint or quay |
-| `computeVertexDataRaw` ([`flattenPads.ts`](../utils/workers/flattenPads.ts)) | pad candidates, the road-fragment and block-island flood fills, sparse scans, the splash and bubble emitters, the Player's water probe (`getVertexSample` raw, on the dressing worker) | flatten pads, bridge decks, road fragments, block islands, the mouth bulge |
+| `computeVertexDataRaw` ([`generation/placement/flatten-pads/index.ts`](../generation/placement/flatten-pads/index.ts)) | pad candidates, the road-fragment and block-island flood fills, sparse scans, the splash and bubble emitters, the Player's water probe (`getVertexSample` raw, on the dressing worker) | flatten pads, bridge decks, road fragments, block islands, the mouth bulge |
 
 `computeVertexDataFar` is `computeVertexDataRaw` with two flags set (`farVisual`, `farDry`), so
 every "raw" skip below applies to it too. Before the loop the worker calls
@@ -35,60 +35,60 @@ name what each step consumes, what it produces, and what earlier result it repla
 
 ### Step 0: the decks and the cave mouths in reach
 
-- **Code:** `decksAround` ([`bridges/deckGround.ts`](../utils/workers/bridges/deckGround.ts)) and
-  `mouthsNear` ([`underground/mouthBulge.ts`](../utils/workers/underground/mouthBulge.ts)).
+- **Code:** `decksAround` ([`generation/bridges/ground/index.ts`](../generation/bridges/ground/index.ts)) and
+  `mouthsNear` ([`generation/underground/index.ts`](../generation/underground/index.ts)).
 - **Reads:** the vertex's 256u cell of decks (cached per cell; filling the cache enumerates the
   bridges there, `getFreewayBridgesNear`, which evaluates the terrain many times) and its 128u tile of
   cave mouths (cached per tile, the last tile remembered; a cold tile generates the caves in reach,
   which evaluates the terrain too).
 - **Writes:** `cellDecks`, used in step 11; `cellMouths`, used in step 10.
 - **Skipped:** on the raw and far paths, and while bridges are being enumerated (`decksKnown` false);
-  the mouths also while a cave or sewer is being generated (`generatingTunnels`, systems.ts), so no mouth depends
+  the mouths also while a cave or sewer is being generated (`generatingTunnels`, generation/underground/index.ts), so no mouth depends
   on its own bulge and no seed moves.
 - It runs FIRST because enumerating decks or generating a cave clobbers every scratch buffer the later
   steps fill.
 
 ### Step 1: the road warp
 
-- **Code:** `warp` ([`noise.ts`](../utils/workers/noise.ts)).
+- **Code:** `warp` ([`generation/utils.ts`](../generation/utils.ts)).
 - **Reads:** world `(x, z)`.
 - **Writes:** the warped point `(cvx, cvz)`. Every grid, wall, road and river is laid out in warped
   space. The noise heights further down are still sampled at world `(x, z)`.
 
 ### Steps 2–3: grids, then the work that clobbers the scratch
 
-1. **The biome cell and its zone.** `getBiomeContext` ([`voronoi.ts`](../utils/workers/voronoi.ts))
+1. **The biome cell and its zone.** `getBiomeContext` ([`generation/zones/index.ts`](../generation/zones/index.ts))
    returns the 5×5 biome-grid window, the nearest cell's ZONE, and the zone walls (`getZoneWalls`,
    the Delaunay duals of the window; each wall is listed twice, endpoint-swapped). The region is NOT
    looked up per vertex. Each biome cell took its region from the region-grid cell nearest the
    cell's SITE (`zoneOfRawSite`: `getRegionGrid` → `nearestCell`, then a seeded biome roll from that
    region's list). A zone is a (region, biome) pair.
 2. **The river field**, before anything else: a cold tile's piece list or a bed limit's march evaluates
-   whole terrain points. `riverFieldAt` ([`water/rivers/field.ts`](../utils/workers/water/rivers/field.ts))
+   whole terrain points. `riverFieldAt` ([`generation/water/rivers/field/index.ts`](../generation/water/rivers/field/index.ts))
    writes `riverSample`: distance in factor-1 units, the width factor, the water surface, the FLOW
    (each piece's downhill direction × its strength, cross-faded over a joint — step 8 carries it to the
    water mesh), and the centerline's signed distance to a water wall and the lake level there (step 8's
    merge). It is measured from a meandered point; within one edge a plain minimum over its pieces,
    across edges a smooth minimum (confluences fillet). The factor and surface come from each run's
    PLAINLY nearest piece, weighted across runs by the smooth-min weights. A tile's piece list (per 256u
-   of warped space) holds each edge's joint surfaces ([`water/rivers/surface.ts`](../utils/workers/water/rivers/surface.ts)
+   of warped space) holds each edge's joint surfaces ([`generation/water/rivers/network/index.ts`](../generation/water/rivers/network/index.ts)
    `edgeSurfaces`): the lowest ground across the joint less 2.5, eased onto a lake beside it, capped under every
    run and belt that shadows the river; a GORGE's water straight and downhill between its two waters,
    and one water at a junction where rivers go on. Off a biome keeping its own banks (`<Quays/>`) it also
    writes the BED LIMIT (`bedLimit`): how far out the bed reaches before the shader would first hide it
    on a bank whose riverbed yields (`yieldSlope`), from marches per station and round every pond, met by a
-   weighted soft minimum ([`water/rivers/bedLimit.ts`](../utils/workers/water/rivers/bedLimit.ts); each
+   weighted soft minimum ([`generation/water/rivers/bed-limit/index.ts`](../generation/water/rivers/bed-limit/index.ts); each
    march evaluates whole vertices, only near a yielding biome). It also lists every wall in reach, with
    its body (`walls`). Then, off the city, the nearest city wall is
    measured (pure geometry). Far-dry vertices call `noRiverSample`.
 3. **The nearest freeway, off the city only.** `nearestFreewayRun` finds the inter-city runs
-   ([`roads/freewayNetwork.ts`](../utils/workers/roads/freewayNetwork.ts)); it is skipped in a water
+   ([`generation/roads/freeways/network/index.ts`](../generation/roads/freeways/network/index.ts)); it is skipped in a water
    zone and on far LODs. `findNearestCityWall` finds the belt seen from outside. Together they give
    `roadReal`, a smooth minimum of the two. Near a river the belt's distance is the city's own measure
    (`drownedBeltDistance`): off a wall the river drowns it is pushed away as on the city's side.
 4. **The road grade**, only where step 9 will use it (`roadReal < freewayWidth + FREEWAY_GRADE_RAMP`,
    or out to its widened approach shoulder in a cell with decks and while decks are enumerated).
-   `freewayGradeAt` ([`roads/freewayGrade.ts`](../utils/workers/roads/freewayGrade.ts)) samples the
+   `freewayGradeAt` ([`generation/roads/freeways/index.ts`](../generation/roads/freeways/index.ts)) samples the
    centerline terrain every 8u with that point's OWN wall pass (`terrainOnlyAt`), smooths it along
    runs, and blends it over the nearby segments.
 
@@ -97,7 +97,7 @@ same scratch buffers.
 
 ### Step 4: the wall pass
 
-`accumulateWallFields` ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)) runs one loop over the zone walls:
+`accumulateWallFields` ([`generation/zones/blend/index.ts`](../generation/zones/blend/index.ts)) runs one loop over the zone walls:
 - **Height indicator per zone:** `smoothstep(-h_b, +h_a, s)` across each wall, from each side's
   `heightHalf`. The own zone takes the MIN over its walls, foreign zones the MAX. Within one own
   `heightHalf` of its edge, the own MIN is floored by the foreign MAX read at `d − 2δ` (the edge
@@ -121,26 +121,26 @@ same scratch buffers.
   - **A noise biome:** `biomeNoiseHeight × presence`. Presence is `sstep01(zoneMinDist /
     heightPresenceWidth)` for the own zone and 0 for foreign zones. A noise config with a `dome` (the
     mountain) adds a massif that rises with the square of the vertex's depth, `domeDepthAt`
-    ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)), and its `detail` layers (bulges and bumps) are
+    ([`generation/zones/blend/index.ts`](../generation/zones/blend/index.ts)), and its `detail` layers (bulges and bumps) are
     added linearly at every depth. The depth is the zone's site depths (each site's distance to its
     zone's nearest foreign wall, cached per cell), interpolated by a compact kernel over the sites
     nearby, and smooth-min'ed under `zoneMinDist` so it is 0 on the edge. Joined cells have no wall
     between them, so a joined group is one dome, highest where it is deepest. The dome also fades the
     noise in from `noiseFloor`.
   - **A water biome (lake):** a bowl defined relative to the blended lake level (`lakeLevelAt`,
-    [`water/lakes/`](../utils/workers/water/lakes/index.ts); brought down under the natural ground of the land beside it, `landDeficitAt`). It is `SHORE_RISE` above the level at the wall and
+    [`water/lakes/`](../generation/water/lakes/index.ts); brought down under the natural ground of the land beside it, `landDeficitAt`). It is `SHORE_RISE` above the level at the wall and
     `depth` below it at full presence (its `<Lake>`'s hummocks grown in), minus the base noise, so the base cancels.
-  - **The city, own zone:** `getCityTerrain` ([`roads/cityTerrain.ts`](../utils/workers/roads/cityTerrain.ts)),
+  - **The city, own zone:** `getCityTerrain` ([`generation/roads/city/index.ts`](../generation/roads/city/index.ts)),
     after `riverQuayAt` fills the straight river field. The city branch runs in this order (the
     order is part of the output: city cells are cached by first query):
-    1. Pick the district ([`roads/cityDistricts.ts`](../utils/workers/roads/cityDistricts.ts)) and rotate into its local frame.
+    1. Pick the district ([`generation/roads/city/utils.ts`](../generation/roads/city/utils.ts)) and rotate into its local frame.
     2. Look up the block-grid cell and its 3×3 labels (`readNeighborLabels`). A cell's label comes from
-       its survey (`cellSurvey` in [`roads/cityCells.ts`](../utils/workers/roads/cityCells.ts), cached per cell): a REMNANT, one the edge roads (belt, arterials, quays)
+       its survey (`cellSurvey` in [`generation/roads/city/index.ts`](../generation/roads/city/index.ts), cached per cell): a REMNANT, one the edge roads (belt, arterials, quays)
        leave too little of, takes a full neighbor's label, so its land joins that block.
     3. Collect the road constraints: merged cell-boundary segments (`addBoundaryStreets`, not inside
        a roundabout's ring); the shape feature (`addShapeFeature`: a triangle super-cell's diagonal, a
        roundabout ring); the arterial field (`addArterialConstraint`: district boundaries, recovering
-       past 12.2); the belt (`addBeltConstraint` → `findWaterfrontBelt`, [`roads/cityWaterfront.ts`](../utils/workers/roads/cityWaterfront.ts): the wall, or the waterfront
+       past 12.2); the belt (`addBeltConstraint` → `findWaterfrontBelt`, [`generation/roads/city/index.ts`](../generation/roads/city/index.ts): the wall, or the waterfront
        where a wall is drowned); the quay road beside a river (`addQuayConstraint`).
     4. Interpolate the plateau heights bilinearly (`plateauElevation`).
     5. Ramp toward the mid-plateau freeway grade near arterials and the belt.
@@ -176,7 +176,7 @@ same scratch buffers.
 
 ### Step 7: the bed limit cap
 
-`capRiverBed` ([`water/rivers/bedLimit.ts`](../utils/workers/water/rivers/bedLimit.ts); only a bank whose
+`capRiverBed` ([`generation/water/rivers/bed-limit/index.ts`](../generation/water/rivers/bed-limit/index.ts); only a bank whose
 riverbed yields ends the bed, see GPU step 3.4): off a biome keeping its own banks, wherever `riverBedDistance` is inside the reach, past
 step 2's `bedLimit` it reads as out of reach, fading over up to 8 factor-1 units inward of it (never inside
 the half-width), so the bed ends at its first steep bank and never resumes beyond.
@@ -186,9 +186,9 @@ the paint does not step across it.
 
 ### Step 8: the river channel, its flow, and the merge beside a lake
 
-1. **The channel** (`carveRiverChannel`, [`water/channel/`](../utils/workers/water/channel/index.ts)), where `distanceToRiver < halfWidth + bank`. Its
+1. **The channel** (`carveRiverChannel`, [`water/channel/`](../generation/water/channel/index.ts)), where `distanceToRiver < halfWidth + bank`. Its
    surface is first held up to a lake's level by the weight of a biome keeping its own banks there
-   (`holdRiverBesideQuays`, [`water/joins/`](../utils/workers/water/joins/index.ts)): its crisp wall pass draws
+   (`holdRiverBesideQuays`, [`water/joins/`](../generation/water/joins/index.ts)): its crisp wall pass draws
    no lake on its side of the wall. The channel is FORCED, not min'ed:
    - inside the half-width, a parabola from `surface − depth×√factor` up to the rim
      (`surface + SHORE_RISE`, lifted by a `<Banks/>` relief over a levee); `depth` is scaled by a disc's
@@ -196,7 +196,7 @@ the paint does not step across it.
    - out to the bank's edge, a blend from the rim back into the terrain (low ground is held at the
      rim across the water band).
    The water height becomes the river surface inside the water band, or the max with a lake.
-   - **At a mouth** (`riverMouthShare`, [`water/joins/`](../utils/workers/water/joins/index.ts)): where the ground
+   - **At a mouth** (`riverMouthShare`, [`water/joins/`](../generation/water/joins/index.ts)): where the ground
      before the carve lies under the lake drawn there, the carve only deepens it (no rim, no held
      bank), the river surface comes down to the lake level, and `riverBedDistance` is pushed out of
      reach. The share ramps to 0 at the shore height (`level + SHORE_RISE`), so dry land is carved as
@@ -204,7 +204,7 @@ the paint does not step across it.
 2. **The flow.** `waterFlowX/Z` = the river's flow from step 2, fading from the water band to the
    reach and stilled over a mouth, so an edge triangle never interpolates full flow to none within one
    quad. 0 on a lake.
-3. **Beside a lake** (`riverLakeMerge`, [`water/joins/`](../utils/workers/water/joins/index.ts)), off a biome keeping
+3. **Beside a lake** (`riverLakeMerge`, [`water/joins/`](../generation/water/joins/index.ts)), off a biome keeping
    its own banks and 10–40u past any freeway's half-width and such a biome's wall: where the river's water band comes
    within `40 + min(band,120)/2` of a water wall (fading over 80u more; `riverSample.shore`, the
    centerline's signed wall distance), the land BETWEEN the two and the lake's beach there sink to the
@@ -218,7 +218,7 @@ the paint does not step across it.
 
 ### Step 9: freeways off the city
 
-`gradeOffCityFreeway` ([`roads/offCityFreeway.ts`](../utils/workers/roads/offCityFreeway.ts)) runs only when `city === null`. It covers the inter-city runs and the belt's
+`gradeOffCityFreeway` ([`generation/roads/freeways/index.ts`](../generation/roads/freeways/index.ts)) runs only when `city === null`. It covers the inter-city runs and the belt's
 OUTER half, and writes its results to `offCityRoad`.
 
 - **Reads:** `nearestRun` and `nearestCityWall` from step 3, the river field, and for the belt beside
@@ -243,7 +243,7 @@ OUTER half, and writes its results to `offCityRoad`.
 
 ### Step 10: the cave mouth bulge, then the flatten pads
 
-- **The bulge** (`mouthBulgeAt`, [`underground/mouthBulge.ts`](../utils/workers/underground/mouthBulge.ts)):
+- **The bulge** (`mouthBulgeAt`, [`generation/underground/index.ts`](../generation/underground/index.ts)):
   the one height step the tunnels make, around every mouth step 0 found. A cosine MOUND (up to 0.9
   opening radii, over 9 radii; off over the floor's strip — its half width + 1u, back by + 6u — while
   the ground is still at the floor, re-lifting as the ground rises 0.5–3u above it), a
@@ -255,7 +255,7 @@ OUTER half, and writes its results to `offCityRoad`.
   1.1 to each side), which overrides any lift. Zero where water stands over the ground and faded to zero
   within 4 + 8u of a road's and a freeway's paved half-width and of a river's keep-off, measured from
   the pipeline's own fields (so every worker agrees whether or not a generation filled its caches).
-- **The pads** (`applyFlattenPads`, [`flattenPads.ts`](../utils/workers/flattenPads.ts)) run only on
+- **The pads** (`applyFlattenPads`, [`generation/placement/flatten-pads/index.ts`](../generation/placement/flatten-pads/index.ts)) run only on
   the padded path, and only in biomes some flatten descriptor targets; a pad still overrides the bulge.
 - **Scratch:** before the pads, the sdf and presence are copied into `biomeSdfResult` /
   `biomePresenceResult`. Pad candidates recurse into the raw pipeline and overwrite the scratch.
@@ -266,9 +266,9 @@ OUTER half, and writes its results to `offCityRoad`.
 
 ### Step 11: the ground under the decks
 
-- **Code:** `cutGroundUnderDecks` ([`bridges/deckGround.ts`](../utils/workers/bridges/deckGround.ts)),
+- **Code:** `cutGroundUnderDecks` ([`generation/bridges/ground/index.ts`](../generation/bridges/ground/index.ts)),
   run only when step 0 found decks.
-- **The approach** (first). Within a landed end's approach (`bridgeApproachAt`, [`bridges/deckMouth.ts`](../utils/workers/bridges/deckMouth.ts): the cut margin +
+- **The approach** (first). Within a landed end's approach (`bridgeApproachAt`, [`generation/bridges/ground/utils.ts`](../generation/bridges/ground/utils.ts): the cut margin +
   16u in front, fading over 16u; inward over the ramp and the margin; 34u past the deck's sides) the
   height takes step 9's `approachDelta`, so the road is flat across at its grade and the bank gives
   way to it, gated off in the channel (`halfWidth` → the water band).
@@ -276,10 +276,10 @@ OUTER half, and writes its results to `offCityRoad`.
   margin, then eases back to the road's own height over 16u (height only). The curb's rise follows the
   field the mouth paints (last item), never a step where the mouth ends.
 - **The cut.** Under and beside every drawn slab, the ground is cut to just below it
-  (`bridgeTriangleCap`, [`bridges/drawnSlab.ts`](../utils/workers/bridges/drawnSlab.ts)). It stays above any drawn water, or drops the water where the slab is lower.
+  (`bridgeTriangleCap`, [`generation/bridges/deck/drawn-slab/index.ts`](../generation/bridges/deck/drawn-slab/index.ts)). It stays above any drawn water, or drops the water where the slab is lower.
 - **The fill.** Inward of a landed cut end, the ground is filled up to the slab.
 - **Paint.** Off the city, the road's paint is removed under the deck.
-- **The mouth's paint** (last). `bridgeMouthFieldAt` ([`bridges/deckMouth.ts`](../utils/workers/bridges/deckMouth.ts)):
+- **The mouth's paint** (last). `bridgeMouthFieldAt` ([`generation/bridges/ground/utils.ts`](../generation/bridges/ground/utils.ts)):
   between a landed cut end and its road's asphalt the road field becomes asphalt; it only ever LOWERS
   `distanceToRoadCenter`, and not past 14.2.
 - **Writes:** `underDeck`.
@@ -291,7 +291,7 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
 
 ### Step 12: road fragments and block islands
 
-- **Fragments** (`inRoadFragment`, [`roads/roadFragments.ts`](../utils/workers/roads/roadFragments.ts)),
+- **Fragments** (`inRoadFragment`, [`generation/roads/fragments/index.ts`](../generation/roads/fragments/index.ts)),
   on the padded path near rivers: road land that a river has cut off into a piece of at most about
   5000u², found by a flood fill on an 8u lattice of raw evaluations; not a fragment if a deck lands on
   it. A road vertex whose lattice square has no road corner at all goes too (a speck thinner than the
@@ -307,7 +307,7 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
 
 ### Step 13: the riverbed's texture distances
 
-- **Code:** `riverbedSdfAt` ([`zoneBlend.ts`](../utils/workers/zoneBlend.ts)), only within the bed's reach + 30u
+- **Code:** `riverbedSdfAt` ([`generation/zones/blend/index.ts`](../generation/zones/blend/index.ts)), only within the bed's reach + 30u
   (elsewhere the ground's `biomeSdf` is copied).
 - **What:** the vertex's `biomeSdf` with the few walls narrower than `RIVER_BED_TEXTURE_HALF` (the city's)
   re-applied at that half — a slot's value is a min or max over its walls, so this IS the pass with every
@@ -318,7 +318,7 @@ paint `LANE_END_CLEAR` (24u) short of the river end.
 - `waterDepth` = `waterHeight − height` where the water stands over the ground, else 0. Caves hold no
   water: nothing under the ground adds to the sheet.
 
-### Outputs (`VertexResult`, [`types.ts`](../utils/workers/types.ts))
+### Outputs (`VertexResult`, [`types.ts`](../generation/types.ts))
 
 | field | meaning |
 |---|---|
@@ -350,10 +350,10 @@ The terrain worker ships per vertex:
 | `freewayAlong` | the lane-paint dash phase |
 | `normals` | THREE's `computeVertexNormals`, replicated, main grid only |
 | `waterHeights`, `waterDepths`, `waterFlow` | all three, only when some vertex has `waterDepth` > 0 (`waterFlow` is x/z pairs) |
-| `snowDepths` | the terrain's own snow depth per vertex (`terrainSnowDepth`, [`snow/snowDrift.ts`](../utils/workers/snow/snowDrift.ts): the one snow rule from the vertex's height, its cover and the slope of its own grid), every LOD; null when no vertex has snow |
+| `snowDepths` | the terrain's own snow depth per vertex (`terrainSnowDepth`, [`generation/snow/index.ts`](../generation/snow/index.ts): the one snow rule from the vertex's height, its cover and the slope of its own grid), every LOD; null when no vertex has snow |
 | `colliderHeights` | column-major, collider LODs only |
 
-The main thread (`TerrainRenderer.tsx` → [`terrain/chunkGeometry.ts`](terrain/chunkGeometry.ts) `writeTerrainBuffers`) writes these arrays into the geometry. It writes
+The main thread (`TerrainRenderer.tsx` → [`world/terrain/chunk/geometry.ts`](terrain/chunk/geometry.ts) `writeTerrainBuffers`) writes these arrays into the geometry. It writes
 `heights` into `position.z` (the plane is rotated, so z becomes up), and fills these attributes:
 
 | attribute | from |
@@ -371,19 +371,19 @@ smoothsteps already saturate, and clamping makes them interpolate as a plain cro
 a coarse triangle spanning three zones interpolates every slot below −1, which renders black. LOD1–2
 keep the true distances, so a 1u city edge lands exactly. The water goes to the chunk's child water
 mesh (`writeWaterBuffers`: wet vertices at the water height with `waterDepth` and `waterFlow`, dry ones
-dived under the ground by at least the vertex spacing; [`water/material.ts`](water/material.ts)). A cave entrance PATCH
+dived under the ground by at least the vertex spacing; [`world/water/material.ts`](water/material.ts)). A cave entrance PATCH
 (world/underground) carries the same attributes plus `entranceRock`, and draws with the
 terrain's ENTRANCE variant.
 
 ## 4. The GPU material pipeline
 
 The terrain material is generated by `getMaterial` ([`terrain/material.ts`](terrain/material.ts)),
-which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shaders/combineBiomeMaterials.ts)).
+which calls `combineBiomeMaterials` ([`world/shaders/biome-materials/index.ts`](shaders/biome-materials/index.ts)).
 
 ### Vertex shader ([`shaders/vertex.glsl`](shaders/vertex.glsl))
 
 1. The attributes pass through as varyings, unchanged (`underwaterDepth` split into `vUnderwaterDepth` / `vFarSnow`).
-2. `projectChunkLocal` ([`shaders/chunkProjection.ts`](shaders/chunkProjection.ts), prepended by material.ts; the same function the rocks, the snow sheet, the tunnels and the water use) computes the world position as `wrapOrigin + mat3(modelMatrix) × position`: the chunk origin wrapped to `WORLD_WRAP` (4200) plus a chunk-local offset — never one absolute float32 number — snaps it to the grid (`quantizeWorldPos`, [`vfx/quantization.ts`](../vfx/quantization.ts)), writes `vWorldPosWrapped`, `vWorldPosAbs` (the unwrapped position, for lighting lookups only) and `vWorldNormal`, takes the view position as `modelViewMatrix[3] + mat3(viewMatrix) × offset`, measures `vFarDistance` from it, and adds the world curvature LAST, in view space (`curveViewPos`, [`vfx/curvature.ts`](../vfx/curvature.ts): purely visual; physics and the heights above stay flat).
+2. `projectChunkLocal` ([`world/shaders/material.ts`](shaders/material.ts) `CHUNK_PROJECTION_GLSL`, prepended by [`terrain/material.ts`](terrain/material.ts); the same function the rocks, the snow sheet, the tunnels and the water use) computes the world position as `wrapOrigin + mat3(modelMatrix) × position`: the chunk origin wrapped to `WORLD_WRAP` (4200) plus a chunk-local offset — never one absolute float32 number — snaps it to the grid (`quantizeWorldPos`, [`vfx/material.ts`](../vfx/material.ts)), writes `vWorldPosWrapped`, `vWorldPosAbs` (the unwrapped position, for lighting lookups only) and `vWorldNormal`, takes the view position as `modelViewMatrix[3] + mat3(viewMatrix) × offset`, measures `vFarDistance` from it, and adds the world curvature LAST, in view space (`curveViewPos`, [`vfx/material.ts`](../vfx/material.ts): purely visual; physics and the heights above stay flat).
 3. From those: `vWorldUv` (xz / `TEXTURE_TILE`, 26.25), `vHeight`, `vSlopeAngle`.
 
 ### Fragment shader (generated, in this order)
@@ -392,11 +392,11 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
    `createDiscardMaterial`: chunks mid LOD swap, chunks reaching the last 72% of `camera.far`, chunks touching
    a hole or skirt mask, every chunk while the player is underground). **LOD cross-fade**: the pixel is
    discarded unless its screen-door threshold lies in the chunk's `uLodFade` range (`lodFadeDiscards`,
-   [`shaders/lodFade.ts`](shaders/lodFade.ts); [`terrain/lodSwaps.ts`](terrain/lodSwaps.ts); a settled
+   [`world/shaders/material.ts`](shaders/material.ts); [`world/terrain/lod-swaps/LodSwapper.ts`](terrain/lod-swaps/LodSwapper.ts); a settled
    chunk's range keeps every pixel). The **far fade**. Then the **tunnel openings**: a pixel in a manhole shaft's cylinder or a cave mouth's
    footprint (by the entrance fade's screen-door share) is discarded, and a skirt pixel inside a skirt
    mask, or any skirt while the camera is underground (`terrainHoleDiscards`,
-   [`shaders/terrainHoles.ts`](shaders/terrainHoles.ts)). The cave ENTRANCE patch (`ENTRANCE_PATCH`) keeps
+   [`world/shaders/terrain-holes/material.ts`](shaders/terrain-holes/material.ts)). The cave ENTRANCE patch (`ENTRANCE_PATCH`) keeps
    the complement of that share and never draws a skirt.
 1. **Per biome slot, crispest tier first** (mirroring the CPU's `combineSlotWeights`):
    1. The weight is `smoothstep(-1, 1, sdf)`. The tier claims `remaining × weight`, and softer tiers
@@ -431,15 +431,15 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
    Then **the ground's snow**, where `vFarSnow > 0`: the pixel whitens by the vertex's snow depth
    (full by 0.35u) in a drift-varied white under the fake sun — at every LOD, the same color the near
    snow sheet stands in.
-5. **Night dim** (`nightDimGLSL`, [`lighting/dayNight.ts`](../lighting/dayNight.ts)). Then, in the
+5. **Night dim** (`nightDimGLSL`, [`lighting/day-night/material.ts`](../lighting/day-night/material.ts)). Then, in the
    ENTRANCE variant only, the patch blends into the tunnel rock by its rock share (`vEntranceRock.x`),
-   lit by its daylight (`vEntranceRock.y`, [`shaders/tunnelRock.ts`](shaders/tunnelRock.ts)
+   lit by its daylight (`vEntranceRock.y`, [`world/shaders/material.ts`](shaders/material.ts)
    `tunnelRockColor` / `tunnelShade`): the rock dims only what its daylight reaches, so it comes
    after the ground's dim and is never dimmed again.
-6. **Lamp glow** (`lampGlowAccumGLSL`, [`lighting/lampGlow.ts`](../lighting/lampGlow.ts)), added
+6. **Lamp glow** (`lampGlowAccumGLSL`, [`lighting/lamp-glow/material.ts`](../lighting/lamp-glow/material.ts)), added
    AFTER the dim so lamps brighten the ground. It uses `vWorldPosAbs`.
 7. **Scene point lights**, a lambert loop gated on `uNightBlend > 0.001`.
-8. **Dither** (`ditherGLSL`, [`vfx/dither.ts`](../vfx/dither.ts)).
+8. **Dither** (`ditherGLSL`, [`vfx/material.ts`](../vfx/material.ts)).
 
 ## Summary
 
@@ -457,7 +457,7 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
 | 7 | bed limit cap (the bed ends at the first steep rock bank) | `capRiverBed` | – | bed | 5′ |
 | 8 | river channel + banks, mouth, flow, merge beside a lake | `carveRiverChannel`, `riverMouthShare`, `riverLakeMerge` | ✔ | water, flow, bed | steps 5–6 |
 | 9 | off-city freeway grade, curb dip, road field | `gradeOffCityFreeway` | ✔ | road field, lane paint | 8 (not in the channel) |
-| 10a | cave mouth bulge (mound, hood, ledge; 0 on roads, rivers, water) | `applyMouthBulge` | ✔ | – | 5–9 |
+| 10a | cave mouth bulge (mound, hood, ledge; 0 on roads, rivers, water) | `mouthBulgeAt` | ✔ | – | 5–9 |
 | 10b | flatten pads | `applyFlattenPads` | ✔ | – | 5–10a |
 | 11 | deck approach / mouth / cut / fill / paint-off / mouth paint | `cutGroundUnderDecks` | ✔ | road, lane, water | 5–10 |
 | 11b | lane paint ends before undecked rivers | step 11b | – | lane paint | 5′, 9 |
@@ -484,14 +484,14 @@ which calls `combineBiomeMaterials` ([`shaders/combineBiomeMaterials.ts`](shader
   copy its arrays.
 - **The shore state is implicit.** `shoreLift` (and `blendedTerrainAt`) lift by whatever the LAST
   `lakeSurface` call stored. Every sampler must call `lakeSurface` for the point it means first:
-  `terrainOnlyAt` and the water's ground (`waterGroundAt`, `water/utils.ts`, which also puts the vertex in
+  `terrainOnlyAt` and the water's ground (`waterGroundAt`, `generation/water/utils.ts`, which also puts the vertex in
   progress back) all do; step 9's
   fallback grade reuses the vertex's own.
 - **Nothing reads a height on a stepping thread.** The movement modifiers (`surfaceModifiersAt`: the
   snow's drag and traction) run the pipeline and may generate a cell's caves; the Player, the local
   actors and the server's walkers sample them on a worker and hand the last answer in (physics/README.md).
 - **Depth precision.** Near a deck's ends the ground sits 0.08u under its top, which the depth buffer
-  resolves only within ~200u; the deck material's `polygonOffset` ([`deckMaterial.ts`](../objects/dressing/bridges/material.ts))
+  resolves only within ~200u; the deck material's `polygonOffset` ([`objects/dressing/bridges/material.ts`](../objects/dressing/bridges/material.ts))
   wins those ties at any distance. Nothing here changes for it.
 - **Float precision.** Generation is float64 on absolute world coordinates; never rebase it. The
   shader never forms an absolute float32 world position: it uses the wrapped origin plus an offset,

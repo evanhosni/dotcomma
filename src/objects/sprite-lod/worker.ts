@@ -1,6 +1,6 @@
-import { SPAWN_CHUNK_SIZE } from "../../utils/workers/constants";
-import type { DomainConfig } from "../../utils/workers/vertexCompute";
-import { createWorkerClient } from "../../utils/workers/workerClient";
+import { SPAWN_CHUNK_SIZE } from "../actors/spawning/constants";
+import type { DomainConfig } from "../../generation";
+import { createWorkerClient } from "../../utils/worker-client";
 import type { SerializedActorDescriptor } from "../actors/spawning/types";
 import { chunkGap, spriteClock } from "./utils";
 import type { SpriteChunkLook, SpriteChunkResult, SpriteKindSource } from "./types";
@@ -84,7 +84,7 @@ const createGenerator = (index: number): Generator => ({
   index,
   request: null,
   client: createWorkerClient({
-    create: () => new Worker(new URL("../../utils/workers/spawn.worker.ts", import.meta.url), { type: "module" }),
+    create: () => new Worker(new URL("../actors/spawning/spawn.worker.ts", import.meta.url), { type: "module" }),
     init: () => ({ config: source!.config, maxFootprint: source!.maxFootprint }),
     resultType: "SPRITES_RESULT",
   }),

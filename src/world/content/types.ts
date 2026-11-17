@@ -44,3 +44,8 @@ export interface ContentNode<P = Record<string, unknown>> {
   /** The declarations mounted inside it, in JSX order — which is VORONOI order for regions and biomes. */
   children: ContentNode<any>[];
 }
+
+export interface MountedDriver {
+  kind: string;
+  Driver: () => ReactElement | null;
+}

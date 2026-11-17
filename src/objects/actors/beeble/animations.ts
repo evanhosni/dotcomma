@@ -1,5 +1,5 @@
 import type * as THREE from "three";
-import type { ProceduralClip, ProceduralLayer, ProceduralPose } from "../../../animation";
+import type { ProceduralClip, ProceduralLayer, ProceduralPose } from "../../../animation/types";
 
 // The beeble's procedural animations (src/animation/README.md).
 //

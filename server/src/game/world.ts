@@ -1,26 +1,15 @@
-import type { DomainId, EntityRegisterItem, MoveIntent, PlayerData, PlayerSnapshot, ServerMessage } from "../../../src/net/protocol";
-import { EntityManager, type PlayerView } from "./entities/manager.js";
-import { PlayerPersistence } from "./persistence.js";
-import { PHYSICS_DOMAIN, type PhysicsWorld } from "./physics/physicsWorld.js";
-
 /**
  * Sessions (ephemeral presence), rooms (one per domain — every broadcast is room-scoped,
  * a domain change is leave + join), entities and persistence. Transport-agnostic: the
  * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
-
-export interface Session extends Omit<PlayerSnapshot, "st"> {
-  /** Persistence key — NOT broadcast. */
-  identity: string;
-  domain: DomainId;
-  /** Server time of the last move: the `st` its snapshots and relayed moves carry. */
-  lastMoveAt: number;
-}
-
-export interface Outbox {
-  send(sessionId: string, msg: ServerMessage): void;
-  sendMany(sessionIds: Iterable<string>, msg: ServerMessage, exceptSessionId?: string): void;
-}
+import type { DomainId, EntityRegisterItem, MoveIntent, PlayerData, PlayerSnapshot } from "../../../src/net/protocol/types";
+import { EntityManager } from "./entities/EntityManager.js";
+import type { PlayerView } from "./entities/types.js";
+import { PlayerPersistence } from "./PlayerPersistence.js";
+import { PHYSICS_DOMAIN } from "./physics/constants.js";
+import type { PhysicsWorld } from "./physics/physicsWorld.js";
+import type { Session, Outbox } from "./types";
 
 const GOLDEN_ANGLE_DEG = 137.508;
 const SPAWN_RING_RADIUS = 3;
@@ -165,7 +154,7 @@ export class World {
   }
 
   /** Flips a manhole's or door's open state in the player's domain and tells everyone there. The id's
-   *  shape is checked (transport/ws.ts), not that the player stands by it: a forged id opens nothing
+   *  shape is checked (server/src/transport/index.ts), not that the player stands by it: a forged id opens nothing
    *  anyone can reach. */
   toggleTunnel(id: string, tunnelId: string): void {
     const s = this.sessions.get(id);

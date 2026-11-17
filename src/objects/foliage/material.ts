@@ -1,8 +1,7 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
-import { _curvature } from "../../vfx/curvature";
-import { _quantization } from "../../vfx/quantization";
-import { _spawnFade } from "../../vfx/spawnFade";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/day-night/material";
+import { _curvature, _quantization } from "../../vfx/material";
+import { _spawnFade } from "../../vfx/spawn-fade";
 
 /** The one foliage shader: billboarding, sway, per-instance distance fade, quantization, curvature, night dim. */
 

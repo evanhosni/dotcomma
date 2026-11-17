@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { DevContextProvider, initDevmodeFromUrl } from "./context/DevContext";
+import { DevContextProvider } from "./context/DevContextProvider";
+import { initDevmodeFromUrl } from "./context/utils";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { NetOverlay } from "./menus/overlay/NetOverlay";
-import { startConnection } from "./net/connection";
-import "./net/playerData"; // subscribes to the connection (persisted player data)
+import { startConnection } from "./net";
+import "./net/store"; // subscribes to the connection (persisted player data)
 import "./style.css";
 import { CustomCanvas } from "./world/CustomCanvas";
 import { DOMAIN_CONFIGS, DOMAIN_TREES } from "./world/domains";
 import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
-import { resetDomainSystems } from "./world/domains/reset";
+import { resetDomainSystems } from "./world/domains/utils";
 import { DomainId } from "./world/domains/types";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);

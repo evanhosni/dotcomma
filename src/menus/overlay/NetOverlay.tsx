@@ -1,7 +1,7 @@
-import { useDevContext } from "../../context/DevContext";
-import { useConnectionState } from "../../net/connection";
+import { useDevContext } from "../../context/hooks";
+import { useConnectionState } from "../../net";
 import { useRosterVersion, getRemotePlayers } from "../../net/players/store";
-import { HUD_COLOR, HUD_Z_INDEX, PANEL_STYLE } from "./styles";
+import { HUD_COLOR, HUD_Z_INDEX, PANEL_STYLE } from "./constants";
 
 const NET_PANEL_STYLE: React.CSSProperties = { ...PANEL_STYLE, position: "fixed", top: 12, right: 12, zIndex: HUD_Z_INDEX };
 

@@ -9,11 +9,11 @@ so none of them can miss a world-wide effect.
 **This is not terrain.** Terrain has its own chunks, sized per LOD level and driven by the quadtree
 ([terrain/](../terrain/README.md)). These are a flat grid at one size, below and beside it.
 
-- **[types.ts](types.ts)** — Three-free, and the **SERVER imports it**: `WORLD_CHUNK_SIZE` (client
-  and server must chunk identically — belt-freeway coverage depends on the query centre's wall set),
-  `ChunkBounds`, `ChunkViewProps`, and the collider shapes (`ColliderPart`, `ColliderMesh`,
-  `ColliderBody`).
-- **[index.tsx](index.tsx)** — the lifecycle:
+- **[types.ts](types.ts)** + **[constants.ts](constants.ts)** — Three-free, and the **SERVER imports
+  them**: `WORLD_CHUNK_SIZE` (client and server must chunk identically — belt-freeway coverage
+  depends on the query centre's wall set), `ChunkBounds`, `ChunkViewProps`, and the collider shapes
+  (`ColliderPart`, `ColliderMesh`, `ColliderBody`).
+- **[hooks.ts](hooks.ts)** — the lifecycle (its material patchers in [material.ts](material.ts)):
   - `useChunkAssets(create, warm?)`: shared geometries/materials once, each through
     `prepareChunkMaterial` (curvature, spawn fade), programs warmed at load, disposed on unmount.
   - `useWorldChunks({ renderDistance, build })`: the camera-following lifecycle. `build(bounds)`
@@ -28,7 +28,7 @@ so none of them can miss a world-wide effect.
     heads in the glow grid) leaked as phantom lights across domain switches and HMR.
   - `selfPatchedMaterial(m)`: for a system with its own ShaderMaterial built on the shared chunk
     projection — the base then disposes it and applies only the spawn fade, never curvature twice.
-- **[colliders.tsx](colliders.tsx)** — `useChunkColliders` + `<ChunkColliders>`: the bodies of the
+- **[hooks.ts](hooks.ts)** `useChunkColliders` + **[ChunkColliders.tsx](ChunkColliders.tsx)** — the bodies of the
   chunks near the player as imperative Rapier bodies, a few per frame nearest first, within
   `colliderDistance`. `<ChunkColliders>` takes its `parts` by IDENTITY — a changed array rebuilds
   every body — so a system passes ONE array, never an inline literal. A body is keyed by `key`

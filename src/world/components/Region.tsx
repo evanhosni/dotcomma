@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { declare } from "../content";
-import type { RegionIdentity } from "../content/config";
+import type { RegionIdentity } from "../content/config/types";
 import { RegionContext } from "./context";
 
 export interface RegionProps extends RegionIdentity {

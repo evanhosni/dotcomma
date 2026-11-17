@@ -1,16 +1,24 @@
+import { UNIT_RADIX, UNIT_STEPS, SPRITE_DATA_FLOATS } from "./constants";
 import * as THREE from "three";
-import { _curvature } from "../../vfx/curvature";
-import { SCREEN_DOOR_GLSL } from "../../vfx/dither";
-import { chainMaterialPatch } from "../../vfx/materialPatch";
-import { SPRITE_DATA_FLOATS, SPRITE_UNPACK_GLSL } from "./layout";
+import { _curvature, SCREEN_DOOR_GLSL, chainMaterialPatch } from "../../vfx/material";
 import type { SpriteLook } from "./types";
+
+/** The unpacking side of packUnitPair/packColor; colors come back LINEAR, like a baked vertex color. */
+export const SPRITE_UNPACK_GLSL = /* glsl */ `
+  float spriteUnitPairHigh(float packed) { return floor(packed / ${UNIT_RADIX}.0) / ${UNIT_STEPS}.0; }
+  float spriteUnitPairLow(float packed) { return mod(packed, ${UNIT_RADIX}.0) / ${UNIT_STEPS}.0; }
+  vec3 spriteUnpackColor(float packed) {
+    vec3 srgb = vec3(floor(packed / 65536.0), mod(floor(packed / 256.0), 256.0), mod(packed, 256.0)) / 255.0;
+    return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), step(0.04045, srgb));
+  }
+`;
 
 /**
  * THE SPRITE BASE's material: a scene-lit MeshStandardMaterial whose quad turns about the vertical axis to face
  * the camera, lit as a facade facing the camera horizontally. Of the world-wide effects it takes curvature only:
  * a flat billboard has nothing to quantize, and lamp glow is wrong on a far stand-in. Its own screen-door
  * dither (the spawn fade's Bayer pattern) combines three visibilities:
- *  - detail: the actor's reported spawn fade (detail.ts) — the sprite draws exactly the pixels it discards;
+ *  - detail: the actor's reported spawn fade (objects/sprite-lod/store.ts) — the sprite draws exactly the pixels it discards;
  *  - arrival: a chunk's sprites dither in over ARRIVAL_SECONDS after it lands;
  *  - far: the last FAR_FADE_FRACTION of the kind's sprite renderDistance, measured horizontally.
  * A sprite its actor fully covers, or that is fully faded, collapses to a point and rasterizes nothing.

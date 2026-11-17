@@ -1,8 +1,9 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/dayNight";
-import { LAMP_GLOW_UNIFORMS_GLSL, LAMP_GRID_UNIFORMS, lampGlowAccumGLSL } from "../../../lighting/lampGlow";
-import { ditherGLSL } from "../../../vfx/dither";
-import { getTerrainParams } from "../../../world/domains/utils";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/day-night/material";
+import { LAMP_GLOW_UNIFORMS_GLSL, lampGlowAccumGLSL } from "../../../lighting/lamp-glow/material";
+import { LAMP_GRID_UNIFORMS } from "../../../lighting/lamp-glow";
+import { ditherGLSL } from "../../../vfx/material";
+import { getTerrainParams } from "../../../world/domains/store";
 
 /**
  * The deck's material: the TERRAIN ROAD's look, so a deck reads as the road carried on over the

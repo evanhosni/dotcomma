@@ -10,14 +10,14 @@ import {
   bridgeParapetAt,
   bridgeSections,
   DEFAULT_BRIDGE_PLACEMENT,
-} from "../../../utils/workers/vertexCompute";
-import type { BridgeWallJoin } from "../../../utils/workers/bridges/types";
+} from "../../../generation";
+import type { BridgeWallJoin } from "../../../generation/bridges/types";
 
 /** The feature's kind. */
 export const BRIDGES = "bridges";
 
 // Three-free: the deck art (Bridges.tsx), the client colliders AND the server's
-// (physics/obstacles.ts) are all built from these — from ONE set of stations, so every
+// (server/src/game/physics/bodies/index.ts) are all built from these — from ONE set of stations, so every
 // collider box lies exactly under the wall or slab it stands for.
 
 // The deck's width, its sections and its parapet gaps come with the deck (FreewayBridge, from the

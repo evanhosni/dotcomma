@@ -10,7 +10,7 @@ child.** To remove the sewers, delete `<Sewers>` from the biome.
 - **[types.ts](types.ts)** — `ContentDeclaration` (what one declaration contributes) and
   `ContentNode` (one mounted declaration, as the walker reads it).
 - **[index.ts](index.ts)** — `declare()`, `content()` and the walker.
-- **[config.ts](config.ts)** — THE `DomainConfig` assembler, plus `actorPlacementsOf`,
+- **[config/index.ts](config/index.ts)** — THE `DomainConfig` assembler, plus `actorPlacementsOf`,
   `biomeNoiseOf`, `terrainParamsOf`, `biomeIdOf`. Three-free and React-free: `server/` imports it.
 
 ### A declaration
@@ -30,7 +30,7 @@ stands in a biome or inside one of its features, and its path says which).
 An `<Actor>` inside a feature lists under the feature's PATH (`beeble@sewers.rooms`), each segment the
 kind — or the declaration's `placesAs(node)`, for a kind mounted several times per biome
 (`pond:pond`); `actorPlacementsOf(biome, region)` also folds in its region's bodies of water it does not override,
-and `utils/workers/featurePlacement.ts` maps each path to where it stands.
+and `generation/placement/registry.ts` maps each path to where it stands.
 
 ### A content file
 
@@ -58,7 +58,7 @@ reach.
 
 ### Hazards
 
-- **Config literals.** Every prop `config.ts` reads must be a literal or a Three-free constant. The
+- **Config literals.** Every prop `world/content/config/index.ts` reads must be a literal or a Three-free constant. The
   server's build replaces three.js with a stub that answers anything, so a prop computed from a
   three.js value would become a proxy in the server's config — silently.
 - **JSX order is VORONOI order** for `<Region>` and `<Biome>` children. Reordering or appending one
@@ -69,9 +69,9 @@ reach.
 
 ## How to add a declaration
 
-1. Put it in the folder of the system it belongs to, as that folder's `index.ts(x)`.
+1. Put it in the folder of the system it belongs to, as a file named after it (`objects/dressing/snow-drift/Snow.tsx`).
 2. `declare({ kind, within, read?, View?, Driver? })`. Give `kind` a constant in a Three-free
    module (`params.ts`) so the pipeline and the component share one string.
-3. If the pipeline reads it, export its accessors beside it:
+3. If the pipeline reads it, export its accessors from that `params.ts`:
    `export const snowBiomeIds = () => biomeIdsWith(SNOW)`.
 4. Mount it. Nothing else — no registry entry, no config field, no flag.

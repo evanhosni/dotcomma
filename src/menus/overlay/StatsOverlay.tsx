@@ -1,11 +1,10 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import type * as THREE from "three";
-import { useDevContext } from "../../context/DevContext";
-import { useGameContext } from "../../context/GameContext";
-import { getPlace } from "../../world/place";
-import { getOrCreateLeftColumn } from "./overlayContainer";
-import { PANEL_CSS } from "./styles";
+import { useDevContext, useGameContext } from "../../context/hooks";
+import { getPlace } from "../../world/place/store";
+import { getOrCreateLeftColumn } from "./utils";
+import { PANEL_CSS } from "./constants";
 
 /** FPS is counted over windows this long. */
 const FPS_WINDOW_S = 0.5;

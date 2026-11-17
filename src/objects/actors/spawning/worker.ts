@@ -1,6 +1,6 @@
-import { DomainConfig } from "../../../utils/workers/vertexCompute";
-import { createWorkerClient } from "../../../utils/workers/workerClient";
-import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
+import { DomainConfig } from "../../../generation";
+import { createWorkerClient } from "../../../utils/worker-client";
+import { SPAWN_CHUNK_SIZE } from "./constants";
 import { AnyActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
 /** A time-budgeted request may finish only a prefix of the requested chunks. */
@@ -12,7 +12,7 @@ interface SpawnsResult {
 let pendingInit: { config: DomainConfig; maxFootprint: number } | null = null;
 
 const client = createWorkerClient({
-  create: () => new Worker(new URL("../../../utils/workers/spawn.worker.ts", import.meta.url), { type: "module" }),
+  create: () => new Worker(new URL("./spawn.worker.ts", import.meta.url), { type: "module" }),
   init: () => pendingInit!,
   resultType: "SPAWNS_RESULT",
 });

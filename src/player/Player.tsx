@@ -1,25 +1,26 @@
-// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 import { PointerLockControls } from "@react-three/drei/core/PointerLockControls";
 import { useFrame, useThree } from "@react-three/fiber";
-import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
+import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
+import type { RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useDevContext } from "../context/DevContext";
-import { useGameContext } from "../context/GameContext";
-import { getAssignedSpawnOffset } from "../net/connection";
+import { useDevContext, useGameContext } from "../context/hooks";
+import { getAssignedSpawnOffset } from "../net";
 import { fetchSurfaceModifiers } from "../objects/dressing/worker";
-import { createCharacter, createStepResult, disposeCharacter, GRAVITY, stepCharacter, TERMINAL_VELOCITY, type Character, type SwimInput } from "../physics/characterMovement";
-import { createSurfaceSampler } from "../physics/movementModifiers";
-import { setCameraWaterDepth } from "../vfx/underwater";
-import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personalLight";
+import { createCharacter, createStepResult, disposeCharacter, stepCharacter } from "../physics";
+import { GRAVITY, TERMINAL_VELOCITY } from "../physics/constants";
+import type { Character, SwimInput } from "../physics/types";
+import { createSurfaceSampler } from "../physics/movement-modifiers";
+import { setCameraWaterDepth } from "../vfx/screen-pass/store";
+import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personal-light";
 import { entranceDaylightAt } from "../world/underground/registry";
-import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/trail";
+import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
 import { CAMERA_FAR } from "./constants";
-import { useGroundSafetyNets } from "./groundSafetyNets";
+import { useGroundSafetyNets, useUndergroundMode, useInput, useWaterProbe } from "./hooks";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
-import { useUndergroundMode } from "./undergroundMode";
-import { type InputState, useInput } from "./useInput";
-import { useWaterProbe } from "./waterProbe";
+import type { InputState } from "./types";
+
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
 /** BODY-CENTER position; the player free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
@@ -30,7 +31,7 @@ const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
  *  hand-placed one). */
 const SPAWN_DROP_HEIGHT = 100;
 
-// Movement feel (slopes, gravity, jump, substepping) is tuned in physics/characterMovement.ts.
+// Movement feel (slopes, gravity, jump, substepping) is tuned in physics/index.ts.
 const WALK_SPEED = 15;
 const SPRINT_SPEED = 45;
 /** Frames between surface samples on the dressing worker: a drift's edge is metres wide, a sprint covers 4.5u in 6. */

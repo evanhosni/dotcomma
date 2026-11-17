@@ -1,10 +1,3 @@
-import { Worker } from "node:worker_threads";
-import type { DomainId } from "../../../../src/net/protocol";
-import type { MovementModifiers } from "../../../../src/physics/movementModifiers";
-import type { ChunkFetch } from "./chunks.js";
-import type { ObstaclePoint } from "./obstaclePoints.js";
-import type { TunnelPart } from "./tunnels.js";
-
 /**
  * Main-thread side of chunkGenerator.worker.ts. Sampling a terrain chunk is 9409 height evaluations
  * (100–400ms cold) and a single sample crossing a cold bridge cell can take 100ms+, which the
@@ -17,23 +10,11 @@ import type { TunnelPart } from "./tunnels.js";
  * checks): the worker sampled the chunks around every body, so its pipeline caches are warm there,
  * while the tick thread's own are cold — one cold computeVertexData measured 254–385ms on the tick.
  */
-
-/** What the worker computes per chunk, by layer. */
-export interface ChunkLayerData {
-  terrain: Float32Array;
-  dressing: ObstaclePoint[];
-  tunnels: TunnelPart[];
-}
-
-export type ChunkLayer = keyof ChunkLayerData;
-
-export type ChunkGeneratorRequest =
-  | { t: "job"; id: number; layer: ChunkLayer; gx: number; gz: number }
-  | { t: "height"; id: number; x: number; z: number }
-  | { t: "surface"; id: number; x: number; z: number; feetY: number }
-  | { t: "cancel"; id: number };
-
-export type ChunkGeneratorReply = { id: number; data?: unknown; error?: string };
+import { Worker } from "node:worker_threads";
+import type { DomainId } from "../../../../src/net/protocol/types";
+import type { MovementModifiers } from "../../../../src/physics/movement-modifiers/types";
+import type { ChunkFetch } from "./types.js";
+import type { ChunkGeneratorReply, ChunkLayer, ChunkLayerData, ChunkGeneratorRequest } from "./types";
 
 interface PendingJob {
   resolve: (data: unknown) => void;

@@ -26,8 +26,9 @@ for every variable; server vars go in `server/.env`, client vars in `.env`.
 
 - `players` is the only table; `data` is an opaque JSON blob whose shape is
   still undefined. All SQL is in `server/src/data/`.
-- Migrations: `server/src/data/migrations.ts`, append-only, versioned by
-  `PRAGMA user_version`. Read the header comment before adding one.
+- Migrations: `MIGRATIONS` in `server/src/data/registry.ts`, append-only, versioned by
+  `PRAGMA user_version`. Read the header comment in `server/src/data/index.ts`
+  before adding one.
 - `npm run db:migrate` (`--dry-run`, `--no-backup`) applies pending migrations
   after taking a `<file>.<timestamp>.bak` copy. `npm run db:inspect [--id X]`
   shows version, row count, and rows. From the repo root these run the compiled

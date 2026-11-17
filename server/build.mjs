@@ -67,9 +67,9 @@ const stubbed = {
  *  no renderer reached the server all go through this. */
 export const buildOptions = ({ tests = false } = {}) => ({
   entryPoints: tests
-    ? readdirSync(new URL("test", import.meta.url))
+    ? readdirSync(new URL("tests", import.meta.url))
         .filter((f) => f.endsWith(".test.ts"))
-        .map((f) => `test/${f}`)
+        .map((f) => `tests/${f}`)
     : [
         "src/index.ts",
         "src/game/physics/chunkGenerator.worker.ts",
@@ -82,7 +82,7 @@ export const buildOptions = ({ tests = false } = {}) => ({
   target: "node24",
   format: "esm",
   outdir: tests ? "dist-test" : "dist",
-  outbase: tests ? "test" : "src",
+  outbase: tests ? "tests" : "src",
   sourcemap: true,
   logLevel: "warning",
   // Rapier, delaunator, noise-ts and seedrandom are BUNDLED from the ROOT install, so the client

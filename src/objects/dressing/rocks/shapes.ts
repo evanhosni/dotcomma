@@ -2,8 +2,8 @@
  *  ROCK_SHAPE_COUNT per rock. Three-free: the client bakes them into its chunk meshes and the server
  *  builds the same trimesh colliders from them. */
 
-import { seededStream } from "../../../utils/math/seededStream";
-import { ROCK_SHAPE_COUNT } from "../../../utils/workers/vertexCompute";
+import { seededStream } from "../../../utils/math";
+import { ROCK_SHAPE_COUNT } from "../../../generation";
 
 export interface RockShape {
   /** Unit-radius corners (xyz triples). */

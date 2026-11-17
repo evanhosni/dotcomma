@@ -1,10 +1,38 @@
+import { TRAIL_TEXELS, TRAIL_LIFE_SECONDS, TRAIL_WINDOW, TRAIL_TEXEL } from "./constants";
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/dayNight";
-import { ditherGLSL } from "../../../vfx/dither";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/chunkProjection";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../../lighting/day-night/material";
+import { ditherGLSL } from "../../../vfx/material";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../../world/shaders/material";
 import commonShader from "../../../world/shaders/common.glsl";
-import { glslFloat, WORLD_WRAP } from "../../../world/shaders/constants";
-import { SNOW_TRAIL_GLSL, SNOW_TRAIL_UNIFORMS, SNOW_TRAIL_UNIFORMS_GLSL } from "./trail";
+import { glslFloat } from "../../../world/shaders/utils";
+import { WORLD_WRAP } from "../../../world/shaders/constants";
+import { SNOW_TRAIL_UNIFORMS } from "./store";
+
+/** The vertex-stage read: the dent (0–1) at an ABSOLUTE world position, bilinear over the four
+ *  nearest texels, each counted only where its tile is this position's and its stamp still lives.
+ *  Needs the two uniforms declared by SNOW_TRAIL_UNIFORMS_GLSL. */
+export const SNOW_TRAIL_UNIFORMS_GLSL = /* glsl */ `
+  uniform sampler2D uSnowTrail;
+  uniform float uTrailNow;
+`;
+export const SNOW_TRAIL_GLSL = /* glsl */ `
+  float snowTrailTexel(vec2 texel, vec2 tile) {
+    vec4 s = texture2D(uSnowTrail, (texel + 0.5) / ${TRAIL_TEXELS.toFixed(1)});
+    if (abs(s.y - tile.x) > 0.5 || abs(s.z - tile.y) > 0.5) return 0.0;
+    return s.w * (1.0 - smoothstep(0.0, ${TRAIL_LIFE_SECONDS.toFixed(1)}, uTrailNow - s.x));
+  }
+  float snowTrailDent(vec2 worldXZ) {
+    vec2 tile = floor(worldXZ / ${TRAIL_WINDOW.toFixed(1)});
+    vec2 t = worldXZ / ${TRAIL_TEXEL.toFixed(2)} - 0.5;
+    vec2 t0 = floor(t);
+    vec2 f = t - t0;
+    float a = snowTrailTexel(t0, tile);
+    float b = snowTrailTexel(t0 + vec2(1.0, 0.0), tile);
+    float c = snowTrailTexel(t0 + vec2(0.0, 1.0), tile);
+    float d = snowTrailTexel(t0 + vec2(1.0, 1.0), tile);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+`;
 
 /** The near snow sheet's material (SnowDrift.tsx): the mountain's snow under the terrain's
  *  fake sun, no tone mapping, both sides; each vertex SINKS by its depth as the camera distance goes

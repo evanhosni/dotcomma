@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
-import { useDevContext } from "../../context/DevContext";
+import { useDevContext } from "../../context/hooks";
 import { DEV_TOGGLES } from "../../context/constants";
-import { getOrCreateLeftColumn } from "./overlayContainer";
-import { VFX_GROUPS, VFX_KNOBS } from "../../vfx/tuning";
-import { createHudCheckbox, createHudSlider, HUD_COLOR, paintHudCheckbox, PANEL_CSS } from "./styles";
+import { getOrCreateLeftColumn, createHudCheckbox, createHudSlider, paintHudCheckbox } from "./utils";
+import { prepareVfxKnobs, VFX_KNOBS } from "../../vfx/registry";
+import { VFX_GROUPS } from "../../vfx/enums";
+import { HUD_COLOR, PANEL_CSS } from "./constants";
 
 export const DevOverlay = () => {
   const dev = useDevContext();
@@ -44,7 +45,7 @@ export const DevOverlay = () => {
       return checkbox.input;
     });
 
-    // "vfx ▸" expands one live slider per world effect (vfx/tuning.ts), sectioned by its group (the panel
+    // "vfx ▸" expands one live slider per world effect (vfx/registry.ts), sectioned by its group (the panel
     // scrolls), re-read on every open: a domain switch resets them to that domain's values.
     const vfxToggle = document.createElement("div");
     vfxToggle.style.cssText = "margin-top:4px;cursor:pointer;pointer-events:auto;user-select:none;";
@@ -87,6 +88,7 @@ export const DevOverlay = () => {
 
   useEffect(() => {
     if (panelRef.current) panelRef.current.style.display = dev.devMode ? "block" : "none";
+    if (dev.devMode) prepareVfxKnobs();
   }, [dev.devMode]);
 
   // The function keys flip toggles outside the panel. One character per flag: re-syncs on any change.

@@ -1,20 +1,20 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM } from "../../lighting/dayNight";
-import { PERSONAL_LIGHT_UNIFORMS } from "../../lighting/personalLight";
-import { ditherGLSL } from "../../vfx/dither";
-import { _spawnFade } from "../../vfx/spawnFade";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../shaders/chunkProjection";
+import { NIGHT_BLEND_UNIFORM } from "../../lighting/day-night/material";
+import { PERSONAL_LIGHT_UNIFORMS } from "../../lighting/personal-light/material";
+import { ditherGLSL } from "../../vfx/material";
+import { _spawnFade } from "../../vfx/spawn-fade";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS, TUNNEL_ROCK_GLSL } from "../shaders/material";
 import commonShader from "../shaders/common.glsl";
-import { ENTRANCE_FADE_UNIFORM } from "../shaders/terrainHoles";
-import { glslFloat, WORLD_WRAP } from "../shaders/constants";
-import { TUNNEL_ROCK_GLSL } from "../shaders/tunnelRock";
+import { ENTRANCE_FADE_UNIFORM } from "../shaders/terrain-holes/material";
+import { glslFloat } from "../shaders/utils";
+import { WORLD_WRAP } from "../shaders/constants";
 
 /**
  * The tunnels' materials. Every custom program here keeps the terrain's precision scheme, its
- * quantization and the world curvature (world/shaders/chunkProjection.ts), and is spawn-faded by the
+ * quantization and the world curvature (world/shaders/material.ts), and is spawn-faded by the
  * dressing base's twin scheme (_spawnFade.patchMaterial supplies screenDoorThreshold, so nothing else
  * may declare it). The day/night cycle reaches a tunnel only through `tunnelShade`'s daylit term
- * (world/shaders/tunnelRock.ts): no program here dims its output by the night.
+ * (world/shaders/material.ts): no program here dims its output by the night.
  */
 
 const FRAGMENT_PRELUDE = /* glsl */ `
@@ -34,7 +34,7 @@ const finish = (material: THREE.ShaderMaterial): THREE.ShaderMaterial => {
   return material;
 };
 
-/** The cave walls: the rock formula (world/shaders/tunnelRock.ts) from position and normal, lit by
+/** The cave walls: the rock formula (world/shaders/material.ts) from position and normal, lit by
  *  the vertex's daylight; keeps the complement of the entrance fade's screen-door pixels. */
 export const createCaveRockMaterial = (): THREE.ShaderMaterial =>
   finish(

@@ -1,11 +1,9 @@
 import { parentPort, workerData } from "node:worker_threads";
-import type { DomainId } from "../../../../src/net/protocol";
-import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/utils/workers/vertexCompute";
+import type { DomainId } from "../../../../src/net/protocol/types";
+import { computeVertexData, initCompute, surfaceModifiersAt } from "../../../../src/generation";
 import { DOMAIN_CONFIGS } from "../../../../src/world/domains";
-import type { ChunkGeneratorReply, ChunkGeneratorRequest, ChunkLayer, ChunkLayerData } from "./chunkGenerator.js";
-import { enumerateObstacles } from "./obstaclePoints.js";
-import { sampleChunkHeights } from "./terrain.js";
-import { sampleTunnelChunk } from "./tunnels.js";
+import type { ChunkGeneratorReply, ChunkGeneratorRequest, ChunkLayer, ChunkLayerData } from "./types.js";
+import { enumerateObstacles, sampleChunkHeights, sampleTunnelChunk } from "./utils.js";
 
 /**
  * The CPU half of chunk generation (heights, dressing points) off the tick's thread: the same

@@ -1,8 +1,9 @@
 import * as THREE from "three";
-import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/dayNight";
-import { ditherGLSL } from "../../vfx/dither";
-import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../world/shaders/chunkProjection";
-import { glslFloat, WORLD_WRAP } from "../../world/shaders/constants";
+import { NIGHT_BLEND_UNIFORM, nightDimGLSL } from "../../lighting/day-night/material";
+import { ditherGLSL } from "../../vfx/material";
+import { CHUNK_PROJECTION_GLSL, CHUNK_PROJECTION_UNIFORMS } from "../../world/shaders/material";
+import { glslFloat } from "../../world/shaders/utils";
+import { WORLD_WRAP } from "../../world/shaders/constants";
 
 /**
  * THE PARTICLE BASE (CLAUDE.md "The three game-object classes" → particles): mass, stateless, LOOPING

@@ -1,12 +1,12 @@
 import type { ColliderPart, DressingColliderSpec } from "../types";
-import type { FreewayLampParams } from "../../../utils/workers/roads/runLamps";
+import type { FreewayLampParams } from "../../../generation/roads/dressing/types";
 
 /** The two lamp features' kinds (also their glow-head owner ids). */
 export const STREET_LAMPS = "streetLamps";
 export const FREEWAY_LAMPS = "freewayLamps";
 
 // Three-free: the art (lampGeometry.ts), the client colliders (StreetLamps.tsx) and the
-// SERVER colliders (physics/obstacles.ts) are all built from these numbers.
+// SERVER colliders (server/src/game/physics/bodies/index.ts) are all built from these numbers.
 
 export const LAMP_POLE_HEIGHT = 10.8;
 export const LAMP_HEAD_OFFSET_X = 1.25; // head offset along the arm
@@ -49,7 +49,7 @@ export const STREET_LAMPS_SPEC: DressingColliderSpec<"densityPoints"> = {
 
 /** The inter-city runs' lamps (getFreewayRunLamps): both sides, staggered — 48u on each side, the
  *  far side offset by 24u, so along the road a head stands every 24u = the lamp-glow grid's cell
- *  (lighting/lampGlow.ts: one head per 24u texel, falloff = one cell). Each head lands in a cell of
+ *  (lighting/lamp-glow/index.ts: one head per 24u texel, falloff = one cell). Each head lands in a cell of
  *  its own and the pools of light meet on the pavement; paired lamps would share a cell pair every
  *  48u and leave a dark gap between. */
 export const FREEWAY_LAMP_PLACEMENT: FreewayLampParams = {

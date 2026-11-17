@@ -1,3 +1,5 @@
+import type { SeededStream } from "./types";
+
 /** The ONE string that defines "the same world": every deterministic roll goes through seedRand. */
 export const MASTER_SEED = "mynamebierce";
 
@@ -92,4 +94,32 @@ export const distanceToSegment = (px: number, pz: number, ax: number, az: number
   if (t < 0) t = 0;
   else if (t > 1) t = 1;
   return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
+};
+
+export const seededStream = (seed: string): SeededStream => {
+  let a = Math.floor(seedRand(seed) * 2 ** 31) | 0;
+  const next = (): number => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const between = (min: number, max: number): number => min + (max - min) * next();
+  return {
+    next,
+    between,
+    signedUnit: () => (next() < 0.5 ? -1 : 1),
+    intBetween: (min, max) => min + Math.floor(next() * (max - min + 1)),
+    pick: (items) => items[Math.floor(next() * items.length)],
+    shuffled: (items) => {
+      const out = items.slice();
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(next() * (i + 1));
+        const t = out[i];
+        out[i] = out[j];
+        out[j] = t;
+      }
+      return out;
+    },
+  };
 };
