@@ -1,29 +1,45 @@
-// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 import { PointerLockControls } from "@react-three/drei/core/PointerLockControls";
 import { useFrame, useThree } from "@react-three/fiber";
-import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
+import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
+import type { RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useDevContext } from "../context/DevContext";
-import { useGameContext } from "../context/GameContext";
-import { getAssignedSpawnOffset } from "../net/connection";
-import { createCharacter, createStepResult, disposeCharacter, stepCharacter, type Character, type SwimInput } from "../physics/characterMovement";
-import { setCameraWaterDepth } from "../vfx/underwater";
+import { useDevContext, useGameContext } from "../context/hooks";
+import { getAssignedSpawnOffset } from "../net";
+import { fetchSurfaceModifiers } from "../objects/dressing/worker";
+import { createCharacter, createStepResult, disposeCharacter, stepCharacter } from "../physics";
+import { GRAVITY, TERMINAL_VELOCITY } from "../physics/constants";
+import type { Character, SwimInput } from "../physics/types";
+import { createSurfaceSampler } from "../physics/movement-modifiers";
+import { setCameraWaterDepth } from "../vfx/screen-pass/store";
+import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personal-light";
+import { entranceDaylightAt } from "../world/underground/registry";
+import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
 import { CAMERA_FAR } from "./constants";
-import { useGroundSafetyNets } from "./groundSafetyNets";
+import { useGroundSafetyNets, useUndergroundMode, useInput, useWaterProbe } from "./hooks";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
-import { type InputState, useInput } from "./useInput";
-import { useWaterProbe } from "./waterProbe";
+import type { InputState } from "./types";
+
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
 /** BODY-CENTER position; the player free-falls onto the terrain once it loads. */
 const SPAWN_POSITION: [number, number, number] = [0, 50, 0];
-/** Held this far above the spawn's ground until the terrain exists, then dropped: a spawn point inside a
- *  building's footprint lands the player on top of it instead of inside its walls. */
+/** The default hold above a COMPUTED spawn's ground until the terrain exists, then dropped: a spawn point
+ *  inside a building's footprint lands the player on top of it instead of inside its walls. A spawn's own
+ *  drop height (GameContext spawnDropHeight) overrides it: higher starts there and falls to this hold while
+ *  the ground loads (entering the overworld), 0 stands the player exactly on the spawn (a domain's own,
+ *  hand-placed one). */
 const SPAWN_DROP_HEIGHT = 100;
 
-// Movement feel (slopes, gravity, jump, substepping) is tuned in physics/characterMovement.ts.
+// Movement feel (slopes, gravity, jump, substepping) is tuned in physics/index.ts.
 const WALK_SPEED = 15;
 const SPRINT_SPEED = 45;
+/** Frames between surface samples on the dressing worker: a drift's edge is metres wide, a sprint covers 4.5u in 6. */
+const SURFACE_SAMPLE_INTERVAL = 6;
+/** Standing in a pile at least this deep leaves tracks. */
+const SNOW_TRACK_MIN_DEPTH = 0.05;
+/** The ground safety nets stay off this long after leaving a tunnel. */
+const UNDERGROUND_NET_GRACE_SECONDS = 1.5;
 
 const DEV_SPEED = 60;
 const DEV_SPRINT_SPEED = 300;
@@ -37,6 +53,7 @@ const MAX_STEP_SECONDS = 0.05;
 const CAMERA_LERP = 0.3;
 
 const _direction = new THREE.Vector3();
+const _flashlightDirection = new THREE.Vector3();
 const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
@@ -56,14 +73,14 @@ const readMoveDirection = (camera: THREE.Camera, input: InputState, out: THREE.V
   return out;
 };
 
-/** Free flight: no collision, no gravity; jump/control rise and sink. */
+/** Free flight: no collision, no gravity; jump/C rise and sink. */
 const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }, input: InputState, move: THREE.Vector3, dt: number): void => {
   const hSpeed = input.sprint ? DEV_SPRINT_SPEED : DEV_SPEED;
   const vSpeed = input.sprint ? DEV_VERTICAL_SPRINT_SPEED : DEV_VERTICAL_SPEED;
   if (move.lengthSq() > 0) move.normalize().multiplyScalar(hSpeed);
   let vy = 0;
   if (input.jump) vy += vSpeed;
-  if (input.control) vy -= vSpeed;
+  if (input.descend) vy -= vSpeed;
   rb.setTranslation({ x: pos.x + move.x * dt, y: pos.y + vy * dt, z: pos.z + move.z * dt }, true);
 };
 
@@ -71,19 +88,26 @@ const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }
 export const Player = () => {
   const inputRef = useInput();
   const { camera } = useThree();
-  const { terrainLoaded, playerPosition, playerSpawn: spawnPosition } = useGameContext();
-  const { noclip } = useDevContext();
+  const { terrainLoaded, playerPosition, playerSpawn: spawnPosition, spawnDropHeight } = useGameContext();
+  const { noclip, flashlight } = useDevContext();
 
   const rigidBodyRef = useRef<RapierRigidBody | null>(null);
   const cameraReady = useRef(false);
   const characterRef = useRef<Character | null>(null);
   const stepResult = useRef(createStepResult()).current;
-  const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded);
-  const water = useWaterProbe();
-  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false }).current;
-  const jumpWasHeld = useRef(false);
-
   const { world, rapier } = useRapier();
+  const underground = useUndergroundMode();
+  // The nets stay suspended for a grace period after a tunnel, so a late or false "outside" never lifts
+  // the player from under the mountain onto its summit.
+  const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded, () => underground.isInside() || underground.outsideFor() < UNDERGROUND_NET_GRACE_SECONDS);
+  const water = useWaterProbe();
+  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false, viscosity: 1 }).current;
+  const jumpWasHeld = useRef(false);
+  // The ground under the player (CharacterInput.surface: the snow's drag and traction), sampled on the
+  // dressing worker: on this thread the sample would run the height pipeline, and a cold mountain cell
+  // costs ~250ms there (physics/DECISIONS.md).
+  const surface = useRef(createSurfaceSampler(SURFACE_SAMPLE_INTERVAL, fetchSurfaceModifiers)).current;
+  const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
 
   // The domain's spawn is a feet position; +0.05 keeps the capsule from starting inside the ground.
   const spawn = useMemo<[number, number, number]>(
@@ -93,6 +117,12 @@ export const Player = () => {
         : SPAWN_POSITION,
     [spawnPosition?.[0], spawnPosition?.[1], spawnPosition?.[2]]
   );
+
+  /** The capsule's height while the ground loads; NaN = start over from the spawn's drop height. */
+  const holdY = useRef(NaN);
+  useEffect(() => {
+    if (!terrainLoaded) holdY.current = NaN;
+  }, [spawn, spawnDropHeight, terrainLoaded]);
 
   useEffect(() => {
     const character = createCharacter(rapier, world, { height: PLAYER_HEIGHT, radius: PLAYER_RADIUS });
@@ -108,16 +138,28 @@ export const Player = () => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
-  /** Pins the capsule (and camera) at the spawn plus the server's spawn offset until the ground exists.
+  /** Holds the capsule (and camera) over the spawn plus the server's spawn offset until the ground exists:
+   *  falling from the spawn's drop height, never below the hold (SPAWN_DROP_HEIGHT, or a lower drop height).
    *  The offset is applied here, not via the RigidBody position prop: it can change on reconnect and
    *  must never teleport a player who has already landed. */
-  const holdAtSpawn = (rb: RapierRigidBody, character: Character): void => {
-    const off = getAssignedSpawnOffset();
+  const holdAtSpawn = (rb: RapierRigidBody, character: Character, dt: number): void => {
+    // A hand-placed spawn (drop height 0: a <Domain playerSpawn>) is exact: the server's multiplayer spread
+    // would put the home page's title off-center.
+    const off = spawnDropHeight === 0 ? null : getAssignedSpawnOffset();
     const sx = spawn[0] + (off?.x ?? 0);
     const sz = spawn[2] + (off?.z ?? 0);
-    const sy = spawn[1] + SPAWN_DROP_HEIGHT;
+    const drop = spawnDropHeight ?? SPAWN_DROP_HEIGHT;
+    const lowest = spawn[1] + Math.min(drop, SPAWN_DROP_HEIGHT);
+    if (Number.isNaN(holdY.current)) {
+      holdY.current = spawn[1] + drop;
+      character.state.vy = 0;
+    } else if (holdY.current > lowest) {
+      character.state.vy = Math.max(character.state.vy + GRAVITY * dt, TERMINAL_VELOCITY);
+      holdY.current = Math.max(holdY.current + character.state.vy * dt, lowest);
+    }
+    if (holdY.current <= lowest) character.state.vy = 0;
+    const sy = holdY.current;
     rb.setTranslation({ x: sx, y: sy, z: sz }, true);
-    character.state.vy = 0;
     _camTarget.set(sx, sy + PLAYER_HEIGHT * 0.5, sz);
     camera.position.copy(_camTarget);
     cameraReady.current = false;
@@ -146,36 +188,62 @@ export const Player = () => {
     const pos = rb.translation();
 
     if (!terrainLoaded && !noclip) {
-      holdAtSpawn(rb, character);
-      // A teleport or domain switch: the last sample is another place's water.
+      holdAtSpawn(rb, character, dt);
+      // A teleport or domain switch: the last sample is another place's water, and the player starts outside.
       water.clear();
+      underground.reset();
+      surface.reset();
+      resetPersonalLight();
       setCameraWaterDepth(0);
       return;
     }
 
+    let liquidY = NaN;
     if (noclip) {
       flyNoclip(rb, pos, input, move, dt);
     } else {
       const collider = rb.collider(0);
       if (collider) {
+        const ug = underground.update(rb, pos, input, character, dt);
+        const at = rb.translation();
         const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
-        const surfaceY = water.surfaceY();
+        surface.sample(at.x, at.z, at.y - PLAYER_HEIGHT / 2);
+        // Inside a tunnel its liquid is the water; outside, the water probe's surface.
+        liquidY = ug.liquidY;
+        const surfaceY = underground.isInside() ? liquidY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
         swimInput.surfaceY = surfaceY;
+        swimInput.viscosity = underground.isInside() ? ug.liquidViscosity : 1;
         swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
-        const characterInput = { dirX: move.x, dirZ: move.z, speed, jump: input.jump, swim: Number.isNaN(surfaceY) ? null : swimInput };
-        const r = stepCharacter(world, character, rb, collider, pos.x, pos.y, pos.z, characterInput, dt, stepResult);
-        safetyNets.escapeIfStuck(r, pos, character);      }
+        const characterInput = {
+          dirX: ug.holdWalk ? 0 : move.x,
+          dirZ: ug.holdWalk ? 0 : move.z,
+          speed,
+          jump: input.jump,
+          swim: Number.isNaN(surfaceY) ? null : swimInput,
+          vyOverride: ug.vyOverride,
+          ignoreTerrain: ug.ignoreTerrain,
+          surface: surface.modifiers,
+        };
+        const r = stepCharacter(world, character, rb, collider, at.x, at.y, at.z, characterInput, dt, stepResult);
+        safetyNets.escapeIfStuck(r, at, character);
+        if (surface.modifiers.snowDepth > SNOW_TRACK_MIN_DEPTH && (r.grounded || r.walkableSupport)) stampSnowTrailAlong(lastStamp, r.x, r.z);
+      }
     }
 
     jumpWasHeld.current = input.jump;
 
     const finalPos = rb.translation();
+    // The personal light comes on after a second in the dark (a tunnel out of its entrances' daylight).
+    drivePersonalLight(underground.isInside() ? entranceDaylightAt(finalPos.x, finalPos.y + PLAYER_HEIGHT * 0.5, finalPos.z) : 1, dt);
+    driveFlashlight(flashlight, camera.getWorldDirection(_flashlightDirection), dt);
     if (!noclip && terrainLoaded) safetyNets.runBackstop(finalPos, character);
     safetyNets.respawnIfFallen(finalPos, character);
     followWithCamera(finalPos);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
-    setCameraWaterDepth(water.surfaceY() - camera.position.y);
+    const cameraSurface = underground.isInside() ? liquidY : water.surfaceOver(camera.position.y);
+    if (underground.isInside()) setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "sewage");
+    else setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "water", water.colors());
   }, -3);
 
   return (

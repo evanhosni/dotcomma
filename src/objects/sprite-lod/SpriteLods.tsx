@@ -1,71 +1,26 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
-import { reportContentError } from "../../utils/contentError";
-import { SPAWN_CHUNK_SIZE } from "../../utils/workers/constants";
-import { meshTemplate, warmPrograms } from "../../utils/warmPrograms";
-import { getActiveDomainConfig } from "../../world/domains/utils";
-import { despawnRadiusOf, spawnRadiusOf } from "../actors/spawning/radii";
-import type { ActorWarmupHooks, AnyActorDescriptor, SerializedActorDescriptor } from "../actors/spawning/types";
-import { onSpriteDetail } from "./detail";
+import { SPAWN_CHUNK_SIZE } from "../actors/spawning/constants";
+import { meshTemplate, warmPrograms } from "../../utils/render";
+import { getActiveDomainConfig } from "../../world/domains/store";
+import { despawnRadiusOf, spawnRadiusOf } from "../actors/spawning/utils";
+import type { SerializedActorDescriptor } from "../actors/spawning/types";
+import { onSpriteDetail } from "./store";
 import { LookMesh } from "./LookMesh";
-import { SPRITE_UNIFORMS } from "./spriteMaterial";
-import {
-  initSpriteWorkers,
-  type LoadedSpriteChunk,
-  loadedSpriteChunks,
-  resetSpriteWorkers,
-  spriteChunksVersion,
-  spriteLoadingStats,
-  updateSpriteLoading,
-} from "./spriteWorker";
-import type { SpriteKind, SpriteLook } from "./types";
+import { SPRITE_UNIFORMS } from "./material";
+import { initSpriteWorkers, loadedSpriteChunks, resetSpriteWorkers, spriteChunksVersion, spriteLoadingStats, updateSpriteLoading } from "./worker";
+import type { LoadedSpriteChunk } from "./worker";
+import type { SpriteKind } from "./types";
 import { spriteClock } from "./utils";
+import { debugGlobal } from "../../utils/utils";
 
 /**
  * THE SPRITE TIER (sprite-lod/README.md): every loaded sprite of one look in one instanced draw, rebased near
- * the camera, its per-instance detail kept in step with the actors' handoff reports (detail.ts).
+ * the camera, its per-instance detail kept in step with the actors' handoff reports (objects/sprite-lod/store.ts).
  */
 
 /** The camera may stray this far (u) from the rebase origin before everything is repacked around a new one. */
 const REBASE_DISTANCE = 1000;
-
-/** Only structured-clone-safe values can reach the generator threads. */
-const isPlainData = (value: unknown): boolean => {
-  if (typeof value === "function" || typeof value === "symbol") return false;
-  if (value === null || typeof value !== "object") return true;
-  if (Array.isArray(value)) return value.every(isPlainData);
-  return Object.getPrototypeOf(value) === Object.prototype && Object.values(value).every(isPlainData);
-};
-
-/** Every descriptor with a `spriteLod`, by id. A kind whose member has no look, or two looks under one
- *  describer, are content errors. */
-export const spriteKindsOf = (descriptors: AnyActorDescriptor[]): Map<string, SpriteKind> => {
-  const kinds = new Map<string, SpriteKind>();
-  const looks = new Map<string, SpriteLook>();
-  for (const desc of descriptors) {
-    if (!desc.spriteLod) continue;
-    const look = (desc.component as ActorWarmupHooks).spriteLook;
-    if (!look) {
-      reportContentError(
-        `[sprite-lod] "${desc.id}" has a spriteLod but its member component has no static \`spriteLook\` ` +
-          `(ActorWarmupHooks): nothing would stand in for it past its renderDistance. Give the member a look or drop the spriteLod.`,
-      );
-      continue;
-    }
-    if ((looks.get(look.describer) ?? look) !== look) {
-      reportContentError(`[sprite-lod] two different looks use the describer "${look.describer}": one look per describer.`);
-      continue;
-    }
-    looks.set(look.describer, look);
-    const attributes = Object.fromEntries(Object.entries(desc).filter(([key, value]) => key !== "component" && isPlainData(value)));
-    kinds.set(desc.id, {
-      look,
-      footprint: desc.footprint,
-      source: { id: desc.id, describer: look.describer, renderDistance: desc.spriteLod.renderDistance, attributes },
-    });
-  }
-  return kinds;
-};
 
 /** Brings every look's buffer to the loaded set: a chunk that left (or was reloaded) leaves, a new one joins,
  *  its offsets moved from its corner onto the rebase origin in float64. */
@@ -81,6 +36,17 @@ const syncLoaded = (lookMeshes: Map<string, LookMesh>, drawn: Map<number, Loaded
     drawn.set(key, chunk);
     for (const look of chunk.looks) lookMeshes.get(look.describer)?.add(look, chunk.minX - originX, chunk.minZ - originZ, chunk.born);
   });
+};
+
+/** What a sprite chunk must place for its sprite kinds to land exactly where the pool's do: a feature kind's
+ *  points never enter the spacing hash, so it is left out unless it is a sprite kind; and while every sprite
+ *  kind is a flatten (or feature) kind, every other kind goes too — the flatten engine never reads the hash.
+ *  MEASURED (node, a 453-chunk ring of the sprite thread): city 8.7 → 2.8 s, grass 5.2 → 2.0 s, mountain
+ *  5.9 → 1.9 s — over half of it was generating sewer systems for the sewer beebles, which have no sprite. */
+const spritePlacementDescriptors = (descriptors: SerializedActorDescriptor[], kinds: Map<string, SpriteKind>): SerializedActorDescriptor[] => {
+  const placed = descriptors.filter((d) => !d.feature || kinds.has(d.id));
+  const spritesStandAlone = placed.every((d) => !kinds.has(d.id) || d.flattenGround || d.feature);
+  return spritesStandAlone ? placed.filter((d) => kinds.has(d.id)) : placed;
 };
 
 interface SpriteLodsProps {
@@ -130,7 +96,7 @@ export const SpriteLods = ({ kinds, descriptors, maxFootprint }: SpriteLodsProps
     initSpriteWorkers({
       config: getActiveDomainConfig(),
       maxFootprint,
-      descriptors,
+      descriptors: spritePlacementDescriptors(descriptors, kinds),
       kinds: sprites.map(({ source }) => source),
       reach: Math.max(...tiers.map(spawnRadiusOf)),
       dropDistance: Math.max(...tiers.map(despawnRadiusOf)),
@@ -139,7 +105,7 @@ export const SpriteLods = ({ kinds, descriptors, maxFootprint }: SpriteLodsProps
   }, [kinds, descriptors, maxFootprint]);
 
   useEffect(() => {
-    (window as any).__spriteLod = () => {
+    return debugGlobal("__spriteLod", () => {
       const { originX, originZ } = renderedRef.current;
       return {
         ...spriteLoadingStats(),
@@ -153,10 +119,7 @@ export const SpriteLods = ({ kinds, descriptors, maxFootprint }: SpriteLodsProps
         camera: [Math.round(camera.position.x), Math.round(camera.position.z)],
         origin: [originX, originZ],
       };
-    };
-    return () => {
-      delete (window as any).__spriteLod;
-    };
+    });
   }, [camera]);
 
   useFrame((state) => {

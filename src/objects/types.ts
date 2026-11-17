@@ -12,12 +12,13 @@
 
 import type * as THREE from "three";
 import type { SpriteLodAttributes } from "./sprite-lod/types";
+import type { WaterZone } from "../generation/water/types";
 
 /** All optional here — a class's descriptor/props type re-declares the ones it requires. */
 export interface GameObjectAttributes {
   renderDistance?: number;
-  /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (ModelActor.tsx), a
-   *  building to 120u (Building.tsx); dressing to DRESSING_COLLIDER_DISTANCE (bridges 140u); foliage has
+  /** A GLTF actor defaults to min(MAX_COLLIDER_RENDER_DISTANCE, renderDistance / 2) (objects/actors/model/ModelActor.tsx), a
+   *  building to 120u (Building.tsx); dressing to CHUNK_COLLIDER_DISTANCE (bridges 140u); foliage has
    *  no colliders. */
   colliderDistance?: number;
   /** Unset = the global grid from <PostProcessing quantization>. Dressing is never quantized (instances are rebased). */
@@ -29,6 +30,12 @@ export interface GameObjectAttributes {
 
   /** Unset = every biome. */
   biomeIds?: number[];
+  /** Set for a <Spawn> inside a feature (world/features.ts): that feature's path, which places the
+   *  instances (one per sewer side room…) instead of the density roll and its filters. */
+  feature?: string;
+  /** Mounted in a body of water (<Lake>, <Rivers>, <Pond>): where in it the object stands — submerged, the
+   *  shallows or the bank (generation/water/params.ts, the one zone rule). Unset = its class's default. */
+  zone?: WaterZone;
   heightRange?: [number, number];
   /** Degrees. */
   slopeRange?: [number, number];
@@ -56,7 +63,7 @@ export interface ActorAttributes extends GameObjectAttributes {
   frustumPadding?: number;
   /** true = always grow the cursor on hover, false = never, unset = from triggers. */
   cursorOverride?: boolean;
-  /** The terrain flattens a pad under every instance; placement becomes deterministic (vertexCompute.ts flatten engine). */
+  /** The terrain flattens a pad under every instance; placement becomes deterministic (generation/index.ts flatten engine). */
   flattenGround?: boolean;
   /** Default footprint * 0.45. */
   flattenRadius?: number;
@@ -86,7 +93,10 @@ export interface FoliageAttributes extends GameObjectAttributes {
   swaySpeed?: number;
   /** Two fields with the SAME seed and density land on identical points and grow through each other. */
   seed?: string;
-  /** true = grows ONLY under water (seaweed), each instance shortened to stay under the surface;
-   *  unset = never under water. */
-  underwater?: boolean;
+  /** In a body of water's SUBMERGED zone (water/README.md "Parts"): the shallowest water it grows in… */
+  submergedMinDepth?: number;
+  /** …how far under the surface a blade's tip stays (each is cut to the water over it)… */
+  tipClearance?: number;
+  /** …and the least share of its height a cut blade keeps (shorter, it is not placed). */
+  minCutScale?: number;
 }

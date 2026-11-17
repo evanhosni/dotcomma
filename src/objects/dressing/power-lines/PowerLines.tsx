@@ -1,23 +1,22 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils";
-import {
-  finalizeInstancedChunk,
-  instancedFromPoints,
-  setInstanceTransform,
-  type SolidDressingProps,
-  useDressingAssets,
-  useSolidDressing,
-  yawFromDir,
-} from "../Dressing";
-import type { CityFreewaySidePoint } from "../../../utils/workers/vertexCompute";
+import { finalizeInstancedChunk, instancedFromPoints, setInstanceTransform } from "../geometry";
+import { type SolidDressingProps } from "../types";
+import { useChunkAssets, useSolidDressing, yawFromDir } from "../hooks";
+import type { CityFreewaySidePoint } from "../../../generation";
 import {
   CROSSARM_DEPTH,
   CROSSARM_HALF_LENGTH,
   CROSSARM_THICKNESS,
   CROSSARM_Y,
+  POWER_LINES,
   POWER_LINES_SPEC,
   UTILITY_POLE_HEIGHT,
-} from "./poleSpec";
+} from "./spec";
+import { declare } from "../../../world/content";
+import { featureMounts } from "../../../generation/registry";
+import { farthest } from "../utils";
+import { CHUNK_COLLIDER_DISTANCE } from "../../../world/chunks/constants";
 
 const DEFAULT_RENDER_DISTANCE = 420;
 const WIRE_SEGMENTS = 3; // straight pieces faking the catenary sag per span
@@ -79,8 +78,16 @@ const fillWireSpans = (wires: THREE.InstancedMesh, spans: CityFreewaySidePoint[]
 
 /** Each pole owns the wire span to its `next` point, so runs stay continuous across chunk borders.
  *  Placement lives in poleSpec.ts only (the server builds the colliders from it). */
-export const PowerLines = ({ renderDistance, colliderDistance }: SolidDressingProps) => {
-  const assets = useDressingAssets(() => ({
+export const PowerLines = declare<SolidDressingProps>({
+  kind: POWER_LINES,
+  within: "biome",
+  read: (node) => ({ ...node.props }),
+  Driver: () => <PowerLinesDriver />,
+});
+
+const PowerLinesDriver = () => {
+  const mounts = featureMounts<SolidDressingProps>(POWER_LINES);
+  const assets = useChunkAssets(() => ({
     poleGeometry: mergeGeometries([
       new THREE.BoxGeometry(0.3, UTILITY_POLE_HEIGHT, 0.3).translate(0, UTILITY_POLE_HEIGHT / 2, 0),
       new THREE.BoxGeometry(CROSSARM_THICKNESS, CROSSARM_DEPTH, CROSSARM_HALF_LENGTH * 2).translate(0, CROSSARM_Y, 0),
@@ -95,9 +102,8 @@ export const PowerLines = ({ renderDistance, colliderDistance }: SolidDressingPr
   // Post + crossarm colliders only; wires are deliberately not solid (poleSpec.ts).
   const { content } = useSolidDressing(POWER_LINES_SPEC, {
     requestExtras: { withNext: true },
-    renderDistance,
-    defaultRenderDistance: DEFAULT_RENDER_DISTANCE,
-    colliderDistance,
+    renderDistance: farthest(mounts, "renderDistance", DEFAULT_RENDER_DISTANCE),
+    colliderDistance: farthest(mounts, "colliderDistance", CHUNK_COLLIDER_DISTANCE),
     build: (points) => {
       const poles = instancedFromPoints(assets.poleGeometry, assets.poleMaterial, points, (p) => ({
         x: p.x,

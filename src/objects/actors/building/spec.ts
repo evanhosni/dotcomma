@@ -1,9 +1,10 @@
 import type { ActorAttributes } from "../../types";
 import type { ActorSpec } from "../spec";
 import type { SpriteLodAttributes } from "../../sprite-lod/types";
-import { BuildingAttributes, LIGHT_TYPE, ROOF_STYLE } from "./types";
+import { BuildingAttributes } from "./types";
+import { LIGHT_TYPE, ROOF_STYLE } from "./enums";
 
-// The server (physics/buildings.ts) generates the SAME plan from a spec's `hull` to build the
+// The server (server/src/game/physics/bodies/index.ts) generates the SAME plan from a spec's `hull` to build the
 // sealed collider, and its domain config derives the flatten pads from the placement here — a
 // building kind's shape and placement are defined once, in its spec.
 
@@ -39,7 +40,7 @@ const HULL_KEY_SET: Record<BuildingHullKey, true> = {
 export const BUILDING_HULL_KEYS = Object.keys(HULL_KEY_SET) as readonly BuildingHullKey[];
 
 /** A building's default seed: its spawn position, rounded — so the client (Building.tsx) and the
- *  server (physics/buildings.ts) generate the same plan for the same spot. */
+ *  server (server/src/game/physics/bodies/index.ts) generate the same plan for the same spot. */
 export const buildingSeedAt = (x: number, z: number): string => `${Math.round(x)}_${Math.round(z)}`;
 
 export const BUILDING_ATTRS: BuildingAttributes = {};

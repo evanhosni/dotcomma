@@ -1,27 +1,23 @@
-// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 import { useGLTF } from "@react-three/drei/core/useGLTF";
 import { useFrame, useThree } from "@react-three/fiber";
-import React, { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
-import { useGameContext } from "../../../context/GameContext";
-import { traceEvent } from "../../../utils/spikeTrace";
-import { getActiveRegions, getActiveDomainConfig } from "../../../world/domains/utils";
-import { DEFAULT_FRUSTUM_PADDING, driveActorFrames } from "../Actor";
-import type { ModelActorAttributes } from "../ModelActor";
-import { collectDescriptors } from "./collectDescriptors";
-import { SPAWN_CHUNK_SIZE } from "../../../utils/workers/constants";
+import React from "react";
+import { Suspense, useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { useGameContext } from "../../../context/hooks";
+import { traceEvent } from "../../../utils/spike-trace";
+import { getActiveActors, getActiveDomainConfig } from "../../../world/domains/store";
+import { DEFAULT_FRUSTUM_PADDING } from "../constants";
+import { driveActorFrames } from "../store";
+import type { ModelActorAttributes } from "../model/ModelActor";
+import { SPAWN_CHUNK_SIZE } from "./constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
-import { SpriteLods, spriteKindsOf } from "../../sprite-lod/SpriteLods";
-import { despawnRadiusOf, spawnRadiusOf } from "./radii";
-import {
-  cleanupSpawnCache,
-  getCachedSpawnChunks,
-  getNearbyChunkKeys,
-  requestSpawnChunks,
-  initSpawnWorker,
-  serializeDescriptors,
-  updateSpawnFootprint,
-} from "./spawnWorker";
-import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SPAWN_ONLY_KEYS, SpawnPoint, spawnPointId } from "./types";
+import { SpriteLods } from "../../sprite-lod/SpriteLods";
+import { spriteKindsOf } from "../../sprite-lod/utils";
+import { despawnRadiusOf, spawnRadiusOf, spawnPointId } from "./utils";
+import { cleanupSpawnCache, getCachedSpawnChunks, getNearbyChunkKeys, requestSpawnChunks, initSpawnWorker, serializeDescriptors, updateSpawnFootprint } from "./worker";
+import { AnyActorDescriptor, ActorProps, ActorWarmupHooks, SpawnPoint } from "./types";
+import { SPAWN_ONLY_KEYS } from "./enums";
+
+// A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
 // Spawn lifecycle radii and the despawn ledger are described in CLAUDE.md → Actor Spawn Lifecycle.
 const MIN_FRAMES_BETWEEN_BATCHES = 5; // ~83ms at 60fps
@@ -164,7 +160,7 @@ export const ActorPool = () => {
   const { camera } = useThree();
   const { terrainLoaded, progress } = useGameContext();
 
-  const descriptors = useMemo(() => collectDescriptors(getActiveRegions()), []);
+  const descriptors = useMemo(() => getActiveActors(), []);
 
   const descriptorMap = useMemo(() => {
     const map = new Map<string, AnyActorDescriptor>();
@@ -206,7 +202,7 @@ export const ActorPool = () => {
     for (const desc of descriptors) {
       const model = (desc as Partial<ModelActorAttributes>).model;
       if (model) {
-        useGLTF.preload(model);
+        useGLTF.preload(model, false);
       }
     }
   }, [descriptors]);

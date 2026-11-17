@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createFoliage } from "../Foliage";
+import { createFoliage } from "../FoliageField";
 
 // A plant type is only its art and its defaults; the pipeline is ../Foliage.tsx. Copy this
 // file for a shrub or fern — different billboard, different seed.

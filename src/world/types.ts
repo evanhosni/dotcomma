@@ -1,6 +1,4 @@
-import type { ActorMount } from "../objects/actors/spec";
-import type { AnyActorDescriptor } from "../objects/actors/spawning/types";
-import type { BiomeDomeConfig, TerrainNoiseParams } from "../utils/workers/vertexCompute";
+import type { BiomeDomeConfig, TerrainNoiseParams } from "../generation/types";
 
 /** City terrain knobs — the layout itself is documented in CLAUDE.md. */
 export interface CityConfig {
@@ -32,8 +30,6 @@ export interface RiverConfig {
   depth: number;
   /** Bank: the channel blends back to the terrain over this many units past halfWidth. */
   bank: number;
-  /** Fallback for regions that set no `riverProbability`; 0 everywhere = no rivers in the domain. */
-  defaultProbability: number;
 }
 
 /** Blend widths at biome or region level; unset = inherit from the level above. */
@@ -52,11 +48,19 @@ export interface TerrainParams {
   defaultBlendWidth: number;
   /** Domain-level fallback for every zone's height blend. */
   defaultHeightBlendWidth: number;
+  /** Domain-level fallback for the smallest pond radius (real units; `pondMinRadius` on a biome or region). */
+  defaultPondMinRadius: number;
+  /** Domain-level fallbacks for how far land rises away from water and over how far (real units;
+   *  `additionalHeight`/`additionalHeightBlend` on a biome or region: utils/workers/water/valleys). */
+  defaultAdditionalHeight: number;
+  defaultAdditionalHeightBlend: number;
   roadNoise: TerrainNoiseParams;
   /** Fallback regional base noise for regions that set none. */
   baseNoise: TerrainNoiseParams;
   river: RiverConfig;
   cityConfig: CityConfig;
+  /** Draw the terrain as its triangles' edges only, in each biome's <Material> (a flat world's grid). */
+  wireframe: boolean;
 }
 
 export interface MaterialData {
@@ -74,70 +78,39 @@ export interface RiverbedMaterial {
   saturation?: number;
   /** Multiplied onto the (desaturated) texture; default [1, 1, 1]. */
   tint?: [number, number, number];
+  /** The bed YIELDS to the biome's own ground on steep banks: whole up to the first slope, gone by the
+   *  second (degrees; under the water the rule fades out). Unset: it never yields — grass, dunes and snow
+   *  cut into a bed in wedges and strips reaching the water wherever a bank steepens. */
+  yieldSlope?: [number, number];
 }
 
-/** A biome's height definition — evaluated by the ONE shared pipeline (vertexCompute.ts). */
+/** A biome's height definition — evaluated by the ONE shared pipeline (generation/index.ts). */
 export interface BiomeNoiseConfig {
   params: TerrainNoiseParams;
   absNeg?: boolean;
   scale?: number;
   offset?: number;
   dome?: BiomeDomeConfig;
+  /** Layers added linearly at every depth (a domed biome's foot keeps them). */
+  detail?: TerrainNoiseParams[];
 }
 
-/** A water-filled biome (lakes): the terrain bowls `depth` below the region base and the
- *  Water system fills it to the level of the base at the cell's site. */
-export interface BiomeWaterConfig {
-  depth: number;
-}
-
-/** What a biome folder's `spec.ts` exports — read by the JSX and by the server's shared config. */
-export interface BiomeSpec extends BlendWidthProps {
-  /** Unique across the domain (a biome shared by two regions keeps one id). */
+/** THE CLIENT LOOK MODEL — what the one terrain material is assembled from, read off the content
+ *  tree at the commit (world/components/Domain.tsx). Everything the GENERATION side needs is the
+ *  DomainConfig instead (world/content/config/index.ts), which the server shares. */
+export interface Biome {
   id: number;
-  /** Unique across the domain, lowercase letters only: the `/<region>/<name>` address word, the
-   *  `<name>_frag` shader function and the key of the region's `biomes` component map. */
   name: string;
-  joinable: boolean;
-  /** Omitted by biomes with bespoke height code (city → branch in vertexCompute.ts). */
-  noise?: BiomeNoiseConfig;
-  water?: BiomeWaterConfig;
-  /** No inter-city freeway may run along this biome's walls (its own belt causeway is unaffected). */
-  prohibitRoads?: boolean;
-  /** No river reaches this biome: one approaching it ends in a pond before its footprint gets there. */
-  prohibitRivers?: boolean;
-  /** The actors spawned from this biome, with this biome's overrides — read by <Biome> (the client
-   *  registrations) and by the domain's config.ts (the flatten pads the server's terrain needs). */
-  actors?: ActorMount[];
+  /** This biome's own fragment shader, from its <Material>. */
+  getMaterial?: () => Promise<MaterialData>;
+  riverbed?: RiverbedMaterial;
 }
 
-/** A region's own fields — what RegionSpec and the committed Region share. */
-export interface RegionSpecBase extends BlendWidthProps {
-  /** Unique across the domain. */
+export interface Region {
   id: number;
-  /** Unique across the domain, lowercase letters only: the `/<name>` address word, the
-   *  `<name>_base_frag` shader function and the key of the domain's region component map. */
   name: string;
-  /** This region's base terrain; unset = the domain's baseNoise. */
-  baseNoise?: TerrainNoiseParams;
-  /** River density under this region: scales each river-grid edge's chance to carry a river (CLAUDE.md "Rivers"). */
-  riverProbability?: number;
-}
-
-/** What a region folder's `spec.ts` exports. */
-export interface RegionSpec extends RegionSpecBase {
-  /** VORONOI order: the biome roll is `floor(u × count)` over this list, and <Region> renders in it. */
-  biomes: BiomeSpec[];
-}
-
-export interface Region extends RegionSpecBase {
+  /** VORONOI (= JSX) order. */
   biomes: Biome[];
   /** The region's BASE material — what its biomes fade into at their edges. */
   getMaterial?: () => Promise<MaterialData>;
-}
-export interface Biome extends Omit<BiomeSpec, "actors"> {
-  getMaterial?: () => Promise<MaterialData>;
-  riverbed?: RiverbedMaterial;
-  /** Registered by <Actor>; dressing/foliage are not part of the data model. */
-  actors?: AnyActorDescriptor[];
 }

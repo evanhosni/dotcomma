@@ -1,6 +1,11 @@
-import type * as THREE from "three";
+import type { DoorHandle, DoorLeafBox } from "../../doors/types";
 import { ActorAttributes } from "../../types";
 import { ActorProps } from "../spawning/types";
+import { LIGHT_TYPE, ROOF_STYLE, WINDOW_SHAPE } from "./enums";
+import * as THREE from "three";
+import type { RampCollider } from "./interior/types";
+
+export type { DoorHandle } from "../../doors/types";
 
 export type WallSide = "+z" | "-z" | "+x" | "-x";
 
@@ -84,7 +89,6 @@ export interface WallBox {
   rotY?: number;
 }
 
-
 /** Interior-local space. */
 export interface ChildSlot {
   position: [number, number, number];
@@ -162,38 +166,10 @@ export interface BuildingPlan {
   interior: InteriorPlan;
 }
 
-/** Drawn on both faces of every door leaf, on the side away from the hinge. */
-export interface DoorHandle {
-  /** A lever pointing at the hinge; otherwise a round knob. */
-  lever: boolean;
-  color: number;
-}
-
 /** Both defaults use per-building baked vertex colors; a custom material must respect or deliberately ignore them. */
 export interface BuildingMaterials {
   exterior?: THREE.Material;
   interior?: THREE.Material;
-}
-
-export enum WINDOW_SHAPE {
-  CIRCLE = "circle",
-  SQUARE = "square",
-}
-
-/** Generation knobs; anything unset is seeded-random per building. Array
- *  knobs are CHOICES, one picked per building (or per floor for roomCount). */
-export enum LIGHT_TYPE {
-  /** Flat fluorescent rectangles on a grid across the whole ceiling. */
-  PANEL = "panel",
-  /** Round dome fixtures, one to three per room. */
-  DOME = "dome",
-}
-
-export enum ROOF_STYLE {
-  /** Lofted segments that lean, taper and lip, topped by caps and pipes. */
-  FLAT = "flat",
-  /** A house: straight walls under an overhanging hip roof, windows on every floor. */
-  PITCHED = "pitched",
 }
 
 export interface BuildingAttributes extends ActorAttributes {
@@ -245,4 +221,109 @@ export interface BuildingProps extends ActorProps<BuildingAttributes> {
   seed?: string | number;
   materials?: BuildingMaterials;
   children?: React.ReactNode;
+}
+
+export type Pt2 = [number, number];
+
+/** The plan's one seeded random stream. */
+export interface PlanRng {
+  (): number;
+  range(a: number, b: number): number;
+  rangeInt(a: number, b: number): number;
+  pick<T>(arr: T[]): T;
+  shuffle<T>(arr: T[]): T[];
+}
+
+/** Everything the phases after sizing share: the shell's shape, the story dimensions, the interior
+ *  footprint and the BSP domain rooms are split within. */
+export interface Massing {
+  pitched: boolean;
+  sides: number;
+  rect: boolean;
+  ringRotation: number;
+  ceilingHeight: number;
+  storyHeight: number;
+  doorWidth: number;
+  doorHeight: number;
+  doorBandTop: number;
+  /** After the ramp fit — may be fewer than requested. */
+  stories: number;
+  requestedStories: number;
+  pickRoomCount: () => number;
+  rampRun: number;
+  shaftLen: number;
+  interiorHalfWidth: number;
+  interiorHalfDepth: number;
+  /** Exterior half-extents at ground level. */
+  halfWidth: number;
+  halfDepth: number;
+  /** The interior perimeter polygon. */
+  intPts: Pt2[];
+  /** The BSP domain: only room BOOKKEEPING — split walls are later stretched past it to the shell's
+   *  inner surface (no enclosed room-within-a-room). */
+  bsp: RoomRect;
+}
+
+export type Vec3 = [number, number, number];
+
+export interface DoorPlacement {
+  position: Vec3;
+  /** +z faces out of the building. */
+  yaw: number;
+  width: number;
+  height: number;
+}
+
+export interface ProceduralBuildingAssets {
+  plan: BuildingPlan;
+  exteriorGeometry: THREE.BufferGeometry;
+  /** Body triangles only (windows excluded), so door openings are walkable. */
+  exteriorVertices: Float32Array;
+  exteriorIndices: Uint32Array;
+  /** Wall/pillar cuboids; slabs are the trimesh below. (The interior MESH is not here: it is built
+   *  only for buildings the player walks up to — beginBuildingInteriorBuild.) */
+  interiorColliders: WallBox[];
+  rampColliders: RampCollider[];
+  interiorSlabVertices: Float32Array;
+  interiorSlabIndices: Uint32Array;
+  /** Origin = hinge edge, leaf extends +x, so rotating the parent group swings it (objects/doors). */
+  doorGeometry: THREE.BufferGeometry;
+  /** The same leaf as a box (hinge-relative center + size + color) for the far-door instances. */
+  doorLeaf: DoorLeafBox;
+  doors: DoorPlacement[];
+  /** Plain typed array — nothing to dispose (see objects/actors/building/collider/index.ts). */
+  proxyHullVertices: Float32Array;
+}
+
+// REFCOUNTED: the city mounts 300-600 buildings, and an eviction that ignored
+// mounts would dispose geometry still on live meshes.
+export interface BuildingCacheEntry {
+  assets: ProceduralBuildingAssets;
+  /** Walls, slabs, ramps and ceiling lights as ONE vertex-colored geometry; null until someone needs it.
+   *  Lives exactly while the building is mounted: disposed when the refcount drops to 0. */
+  interior: THREE.BufferGeometry | null;
+  refCount: number;
+  /** Monotonic tick of the last drop to refcount 0 — eviction order. */
+  releasedAt: number;
+}
+
+export interface FarDoorSpec {
+  /** Where the door's hinge group sits in the world: building coordinates + the plan's door position. */
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  /** Door opening width: the hinge is at -width/2 along the door's x. */
+  width: number;
+  /** The leaf box relative to the hinge (ProceduralBuildingAssets.doorLeaf). */
+  leafCenter: [number, number, number];
+  leafSize: [number, number, number];
+  color: number;
+}
+
+export interface FarDoor extends FarDoorSpec {
+  angle: number;
+  /** Its building's spawn-fade visibility (the per-instance aSpawnFade). */
+  fade: number;
+  index: number;
 }

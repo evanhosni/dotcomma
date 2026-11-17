@@ -8,14 +8,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && esbuild src/index.ts src/game/physics/chunkGenerator.worker.ts src/cli/migrate.ts src/cli/inspect.ts src/cli/physicsDemo.ts --bundle --platform=node --target=node24 --format=esm --external:express --external:ws --external:three --external:react --outdir=dist --outbase=src --sourcemap --log-level=warning",
+    "dev": "node build.mjs --watch",
+    "build": "node build.mjs",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json",
-    "db:migrate": "tsx --env-file-if-exists=.env src/cli/migrate.ts",
-    "db:inspect": "tsx --env-file-if-exists=.env src/cli/inspect.ts",
-    "test": "node --import tsx --test test/*.test.ts",
-    "physics:demo": "tsx src/cli/physicsDemo.ts"
+    "db:migrate": "node build.mjs && node --env-file-if-exists=.env dist/cli/migrate.js",
+    "db:inspect": "node build.mjs && node --env-file-if-exists=.env dist/cli/inspect.js",
+    "test": "node build.mjs && node build.mjs --tests && node --test dist-test/*.test.js",
+    "physics:demo": "node build.mjs && node dist/cli/physicsDemo.js"
   },
   "dependencies": {
     "express": "^4.21.2",

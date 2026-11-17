@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useDevContext } from "../../context/DevContext";
-import { FONT_CSS, HUD_COLOR, HUD_Z_INDEX, PANEL_BACKGROUND } from "./styles";
+import { useDevContext } from "../../context/hooks";
+import { FONT_CSS, HUD_COLOR, HUD_Z_INDEX, PANEL_BACKGROUND } from "./constants";
 
 const EXPIRE_MS = 30_000;
 const CHECK_INTERVAL_MS = 1_000;

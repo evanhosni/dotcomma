@@ -1,6 +1,7 @@
-import { useConnectionState } from "../../net/connection";
+import { useDevContext } from "../../context/hooks";
+import { useConnectionState } from "../../net";
 import { useRosterVersion, getRemotePlayers } from "../../net/players/store";
-import { HUD_COLOR, HUD_Z_INDEX, PANEL_STYLE } from "./styles";
+import { HUD_COLOR, HUD_Z_INDEX, PANEL_STYLE } from "./constants";
 
 const NET_PANEL_STYLE: React.CSSProperties = { ...PANEL_STYLE, position: "fixed", top: 12, right: 12, zIndex: HUD_Z_INDEX };
 
@@ -15,7 +16,7 @@ const STATUS_LABEL = {
  * Connection status HUD (top-right). Re-renders only on UI-cadence events:
  * status changes and roster changes — never on movement.
  */
-export const NetOverlay = () => {
+const NetHud = () => {
   const { status, selfId, color } = useConnectionState();
   useRosterVersion();
   const others = getRemotePlayers().size;
@@ -35,4 +36,10 @@ export const NetOverlay = () => {
       )}
     </div>
   );
+};
+
+/** The devmode connection HUD (top-right). */
+export const NetOverlay = () => {
+  const { devMode } = useDevContext();
+  return devMode ? <NetHud /> : null;
 };

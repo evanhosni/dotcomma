@@ -1,11 +1,9 @@
 import http from "node:http";
 import { availableParallelism } from "node:os";
-import { closeDb, getDb, resolveDatabasePath } from "./data/db.js";
-import { TICK_MS } from "./game/tick.js";
+import { closeDb, getDb, resolveDatabasePath } from "./data/index.js";
+import { TICK_MS, SAVE_INTERVAL_MS } from "./game/constants.js";
 import { PhysicsWorld } from "./game/physics/physicsWorld.js";
-import { SAVE_INTERVAL_MS } from "./game/persistence.js";
-import { createApp } from "./http.js";
-import { attachWebSocketTransport } from "./transport/ws.js";
+import { createApp, attachWebSocketTransport } from "./transport/index.js";
 
 // One HTTP server for both the static client and the WebSocket transport: the
 // client connects back to its own origin — no CORS, one port, one Railway service.
@@ -32,7 +30,7 @@ console.log(`[physics] rapier ready — chunk generation ${chunkGeneratorWorker 
 const server = http.createServer(createApp());
 const { wss, world } = attachWebSocketTransport(server, physics);
 
-// Deliberately a coarse timer, NOT the game tick (see the write policy in game/persistence.ts).
+// Deliberately a coarse timer, NOT the game tick (see the write policy in server/src/game/PlayerPersistence.ts).
 const saveSweep = setInterval(() => world.flushDirty(), SAVE_INTERVAL_MS / 3);
 saveSweep.unref();
 
