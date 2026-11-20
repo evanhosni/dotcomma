@@ -5,6 +5,7 @@ import { useDevContext } from "../context/hooks";
 import { GameContextProvider } from "../context/GameContextProvider";
 import { StatsOverlay } from "../menus/overlay/StatsOverlay";
 import { Player } from "../player/Player";
+import { VehicleDriver } from "../vehicles/VehicleDriver";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
 import { LampGlowDriver } from "../lighting/lamp-glow/LampGlowDriver";
@@ -79,11 +80,12 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
       <LampGlowDriver />
       <PixelationDriver baseDpr={BASE_DPR} />
       <StatsOverlay />
-      {/* interpolate={false} + timeStep="vary": no dynamic bodies; the fixed 1/60 accumulator
+      {/* interpolate={false} + timeStep="vary" (one step per frame; the cars step their forces with it): the fixed 1/60 accumulator
           drove kinematic bodies at 60/fps of their speed above 60fps (see CLAUDE.md). */}
       <Physics gravity={PHYSICS_GRAVITY} debug={physicsDebug} interpolate={false} timeStep="vary">
         {children}
         <Player />
+        <VehicleDriver />
       </Physics>
       <LocalPlayerSync />
       <RemotePlayers />

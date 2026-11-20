@@ -18,7 +18,7 @@ import type { PuppetTarget } from "../../net/entities/types";
 import { DEFAULT_RENDER_DISTANCE, DEFAULT_FRUSTUM_PADDING, DESPAWN_DISTANCE_FACTOR, COLLIDER_ACTIVATION_WINDOW_S } from "./constants";
 import type { ActorLifecycleOptions, ActorLifecycle, ActorFrameContext, ActorFrameUpdater } from "./types";
 import { withinGate, framePhaseMsOf } from "./utils";
-import { frustum, frameUpdaters } from "./store";
+import { frustum, frameUpdaters, liveActorPositions } from "./store";
 
 let lastColliderActivationTime = -Infinity;
 
@@ -309,8 +309,10 @@ export const useActorLifecycle = ({
       reportContentError(`[actors] "${descriptorId ?? id}" has both a sprite handoff and fadeOut: a held-hidden actor would never destroy itself.`);
     }
     frameUpdaters.add(frameUpdaterRef);
+    if (positionRef) liveActorPositions.set(id, positionRef);
     return () => {
       frameUpdaters.delete(frameUpdaterRef);
+      if (liveActorPositions.get(id) === positionRef) liveActorPositions.delete(id);
       // A pooled clone must go back on its base materials.
       resetFade();
     };

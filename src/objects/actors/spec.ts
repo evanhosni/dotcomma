@@ -26,7 +26,7 @@ export type BodyKind = "none" | "fixed" | "kinematic";
 export type MovementKind = "ground" | "free";
 
 /** Which client member renders the kind (objects/actors/registry.ts). */
-export type ActorComponentName = "model" | "building";
+export type ActorComponentName = "model" | "building" | "scroller";
 
 /** A GLTF actor's own knobs (ModelActor). */
 export interface ModelAttributes {

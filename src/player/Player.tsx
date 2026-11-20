@@ -7,7 +7,7 @@ import * as THREE from "three";
 import { useDevContext, useGameContext } from "../context/hooks";
 import { getAssignedSpawnOffset } from "../net";
 import { fetchSurfaceModifiers } from "../objects/dressing/worker";
-import { createCharacter, createStepResult, disposeCharacter, stepCharacter } from "../physics";
+import { createCharacter, createStepResult, disposeCharacter, resetCharacterMotion, stepCharacter } from "../physics";
 import { GRAVITY, TERMINAL_VELOCITY } from "../physics/constants";
 import type { Character, SwimInput } from "../physics/types";
 import { createSurfaceSampler } from "../physics/movement-modifiers";
@@ -15,6 +15,9 @@ import { setCameraWaterDepth } from "../vfx/screen-pass/store";
 import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personal-light";
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
+import { getSeatedVehicle, takeExitPoint } from "../vehicles/store";
+import type { LiveVehicle } from "../vehicles/types";
+import { seatPositionOf } from "../vehicles/utils";
 import { CAMERA_FAR } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useWaterProbe } from "./hooks";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
@@ -58,6 +61,7 @@ const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
+const _seat = new THREE.Vector3();
 
 /** The held keys as a horizontal direction from the camera's flattened forward/side (not normalized). */
 const readMoveDirection = (camera: THREE.Camera, input: InputState, out: THREE.Vector3): THREE.Vector3 => {
@@ -177,10 +181,36 @@ export const Player = () => {
     }
   };
 
+  /** In a car (vehicles/VehicleDriver.tsx drives it and the camera): the capsule rides in the seat
+   *  with its collider off, and the published position is the seat. */
+  const rideIn = (rb: RapierRigidBody, car: LiveVehicle): void => {
+    const collider = rb.collider(0);
+    if (collider?.isEnabled()) collider.setEnabled(false);
+    const seat = seatPositionOf(car, _seat);
+    rb.setTranslation(seat, true);
+    playerPosition.copy(seat);
+    water.clear();
+    setCameraWaterDepth(0);
+  };
+
+  const stepOut = (rb: RapierRigidBody, character: Character, at: { x: number; y: number; z: number }): void => {
+    rb.setTranslation(at, true);
+    rb.collider(0)?.setEnabled(true);
+    resetCharacterMotion(character.state);
+  };
+
   useFrame((_, delta) => {
     const rb = rigidBodyRef.current;
     const character = characterRef.current;
     if (!rb || !character) return;
+
+    const car = getSeatedVehicle();
+    if (car) {
+      rideIn(rb, car);
+      return;
+    }
+    const exit = takeExitPoint();
+    if (exit) stepOut(rb, character, exit);
 
     const input = inputRef.current;
     const dt = Math.min(delta, MAX_STEP_SECONDS);

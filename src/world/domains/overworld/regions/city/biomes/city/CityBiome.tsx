@@ -1,5 +1,6 @@
 import { BEEBLE_SPEC } from "../../../../../../../objects/actors/beeble/spec";
 import { BUILDING_SPEC, SKYSCRAPER_SPEC } from "../../../../../../../objects/actors/building/spec";
+import { SCROLLER_SPEC } from "../../../../../../../objects/actors/scroller/spec";
 import { Bridges } from "../../../../../../../objects/dressing/bridges/Bridges";
 import { PowerLines } from "../../../../../../../objects/dressing/power-lines/PowerLines";
 import { RoadMarkers } from "../../../../../../../objects/dressing/road-markers/RoadMarkers";
@@ -44,5 +45,6 @@ export const CityBiome = content(
     <Actor actor={BEEBLE_SPEC} />
     <Actor actor={BUILDING_SPEC} />
     <Actor actor={SKYSCRAPER_SPEC} />
+    <Actor actor={SCROLLER_SPEC} />
   </Biome>,
 );

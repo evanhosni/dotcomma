@@ -6,7 +6,7 @@ import { useGameContext } from "../../../context/hooks";
 import { traceEvent } from "../../../utils/spike-trace";
 import { getActiveActors, getActiveDomainConfig } from "../../../world/domains/store";
 import { DEFAULT_FRUSTUM_PADDING } from "../constants";
-import { driveActorFrames } from "../store";
+import { driveActorFrames, liveActorPositions } from "../store";
 import type { ModelActorAttributes } from "../model/ModelActor";
 import { SPAWN_CHUNK_SIZE } from "./constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
@@ -270,8 +270,9 @@ export const ActorPool = () => {
     objectsMapRef.current.forEach((obj, objId) => {
       const desc = descriptorMap.get(obj.point.descriptorId);
       if (!desc) return;
-      const dx = obj.point.x - camera.position.x;
-      const dz = obj.point.z - camera.position.z;
+      const at = liveActorPositions.get(objId)?.current ?? obj.point;
+      const dx = at.x - camera.position.x;
+      const dz = at.z - camera.position.z;
       const despawnRadius = despawnRadiusOf(desc);
       if (dx * dx + dz * dz > despawnRadius * despawnRadius) {
         objectsMapRef.current.delete(objId);

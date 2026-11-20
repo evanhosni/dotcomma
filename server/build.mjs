@@ -42,6 +42,7 @@ const STUBBED = [
   "three",
   "three/examples/jsm/utils/BufferGeometryUtils",
   "three/examples/jsm/loaders/GLTFLoader",
+  "three/examples/jsm/geometries/ConvexGeometry",
   "@react-three/fiber",
   "@react-three/drei",
   "@react-three/drei/core/useGLTF",

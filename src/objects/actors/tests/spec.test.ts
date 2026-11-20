@@ -29,6 +29,7 @@ describe("biome listings are an actor's biomes", () => {
       beeble: [1],
       building: [1],
       skyscraper: [1],
+      scroller: [1],
       house: [3],
       "beeble@pond:pond": [3],
       "beeble@caves.rooms": [7],

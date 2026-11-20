@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { DevContextProvider } from "./context/DevContextProvider";
 import { initDevmodeFromUrl } from "./context/utils";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
+import { DrivingOverlay } from "./menus/overlay/DrivingOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { NetOverlay } from "./menus/overlay/NetOverlay";
 import { startConnection } from "./net";
@@ -40,6 +41,7 @@ const Dotcomma = () => {
       <DevOverlay />
       <LogsOverlay />
       <NetOverlay />
+      <DrivingOverlay />
       <CustomCanvas>{tree}</CustomCanvas>
     </DevContextProvider>
   );

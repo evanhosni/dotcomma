@@ -7,6 +7,7 @@ import type { ActorSpec, ActorComponentName } from "./spec";
 import type React from "react";
 import { Building } from "./building/Building";
 import { ModelActor } from "./model/ModelActor";
+import { Scroller } from "./scroller/Scroller";
 import type { ActorWarmupHooks } from "./spawning/types";
 
 /**
@@ -44,6 +45,7 @@ export const actorCatalogOf = (domains: Iterable<ContentNode<any>>): Readonly<Re
 export const ACTOR_COMPONENTS: Record<ActorComponentName, React.FC<any> & ActorWarmupHooks> = {
   model: ModelActor,
   building: Building,
+  scroller: Scroller,
 };
 
 // A member without a load-time warm-up links its programs in the frame its first instance streams in.
