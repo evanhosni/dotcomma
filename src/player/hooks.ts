@@ -16,6 +16,7 @@ import { writeWaterColors } from "../generation/water/material";
 import { getActiveDomainConfig, isDomainCommitted } from "../world/domains/store";
 import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
 import { getConnectionState, subscribeConnectionState } from "../net";
+import { IS_DEV } from "../utils/constants";
 
 // The player's safety nets against the ANALYTIC terrain height (the source the heightfields are built
 // from): the physics ground is per-chunk heightfields swapped during LOD changes, so sweep hardening alone
@@ -197,7 +198,7 @@ const promptBeforeUnload = (e: BeforeUnloadEvent): void => {
 
 /**
  * A reload drops the socket mid-game. While playing (pointer locked, outside any text field) the reload
- * keys are swallowed in the capture phase; while in an overworld session, any other reload path (the
+ * keys are swallowed in the capture phase; while in an overworld session (production builds only), any other reload path (the
  * toolbar, a browser that ignores the keydown block) gets the "Leave site?" prompt.
  */
 export const useReloadGuard = (): void => {
@@ -212,6 +213,7 @@ export const useReloadGuard = (): void => {
   }, []);
 
   useEffect(() => {
+    if (IS_DEV) return; // every dev reload would ask
     let prompting = false;
     const sync = () => {
       const { status } = getConnectionState();

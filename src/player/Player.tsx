@@ -16,7 +16,7 @@ import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../ligh
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
 import { wrapAngle } from "../utils/math";
-import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN } from "./constants";
+import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, FRONT_VIEW_SECONDS, HEAD_SETTLED, HEAD_TURN_RATE, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
 import { getThirdPersonBodySide, setCameraBoom } from "./store";
@@ -122,6 +122,9 @@ export const Player = () => {
   /** The head the camera follows (eased), and where the body stood last frame (its speed). */
   const pivot = useRef(new THREE.Vector3()).current;
   const lastFeet = useRef({ x: NaN, z: NaN }).current;
+  /** The head's front-view rule (driveBody): seconds the camera has looked at the body's front, seconds
+   *  the head has held its direction, and whether it has centered (until the look leaves the front). */
+  const head = useRef({ frontViewFor: 0, settledFor: 0, centered: false }).current;
   const boomRay = useMemo(() => new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }), [rapier]);
 
   // The domain's spawn is a feet position; +0.05 keeps the capsule from starting inside the ground.
@@ -224,7 +227,18 @@ export const Player = () => {
     else if (move.lengthSq() > 0 && action.speed > PLAYER_MOVING_SPEED) {
       body.yaw += wrapAngle(Math.atan2(move.x, move.z) - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
     }
-    body.headYaw = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, wrapAngle(lookYaw - body.yaw)));
+    const lookFromBody = wrapAngle(lookYaw - body.yaw);
+    const followYaw = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, lookFromBody));
+    const headYaw = body.headYaw ?? 0;
+    if (Math.abs(lookFromBody) > FRONT_VIEW_ANGLE) head.frontViewFor += dt;
+    else {
+      head.frontViewFor = 0;
+      head.centered = false;
+    }
+    head.settledFor = Math.abs(followYaw - headYaw) < HEAD_SETTLED ? head.settledFor + dt : 0;
+    if (head.frontViewFor >= FRONT_VIEW_SECONDS && head.settledFor >= FRONT_VIEW_SECONDS) head.centered = true;
+    const headTarget = head.centered ? 0 : followYaw;
+    body.headYaw = headYaw + (headTarget - headYaw) * (1 - Math.exp(-HEAD_TURN_RATE * dt));
     body.feetX = at.x;
     body.feetY = at.y - PLAYER_HEIGHT / 2;
     body.feetZ = at.z;

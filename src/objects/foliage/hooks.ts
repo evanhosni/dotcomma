@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { reportContentError } from "../../utils/utils";
+import { IS_DEV } from "../../utils/constants";
 
 /** Mounted fields per seed, by plant type: two plant types on one seed (at one density) land on
  *  identical points and grow through each other. */
@@ -7,7 +8,7 @@ const plantsBySeed = new Map<string, Map<object, number>>();
 
 export const usePlantSeed = (seed: string, plant: object | undefined): void => {
   useEffect(() => {
-    if (!plant || process.env.NODE_ENV === "production") return;
+    if (!plant || !IS_DEV) return;
     let plants = plantsBySeed.get(seed);
     if (!plants) plantsBySeed.set(seed, (plants = new Map()));
     if ([...plants.keys()].some((other) => other !== plant)) {

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { IS_DEV } from "../constants";
 
 /**
  * PROGRAM WARM-UP at domain load (CLAUDE.md Performance Notes → "Programs link at LOAD"). three links
@@ -46,7 +47,7 @@ const reportedUnwarmed = new WeakMap<THREE.Material, Set<string>>();
  *  shows. Logs once per material + variant, naming what to add. Call it before the spawn fade swaps
  *  in its twin materials. */
 export const reportUnwarmedPrograms = (object: THREE.Object3D, owner: string, fix: string): void => {
-  if (process.env.NODE_ENV === "production") return;
+  if (!IS_DEV) return;
   object.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
@@ -117,7 +118,7 @@ export const warmPrograms = (scene: THREE.Object3D, templates: THREE.Object3D[],
     template.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
-      if (process.env.NODE_ENV !== "production") {
+      if (IS_DEV) {
         const variant = programVariantOf(mesh);
         for (const material of materialsOf(mesh)) {
           const variants = warmedVariants.get(material) ?? new Set<string>();

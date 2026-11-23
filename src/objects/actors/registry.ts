@@ -8,6 +8,7 @@ import type React from "react";
 import { Building } from "./building/Building";
 import { ModelActor } from "./model/ModelActor";
 import type { ActorWarmupHooks } from "./spawning/types";
+import { IS_DEV } from "../../utils/constants";
 
 /**
  * The actor kinds the SERVER simulates (a state machine, a moving body, a sealed hull), by id,
@@ -47,7 +48,7 @@ export const ACTOR_COMPONENTS: Record<ActorComponentName, React.FC<any> & ActorW
 };
 
 // A member without a load-time warm-up links its programs in the frame its first instance streams in.
-if (process.env.NODE_ENV !== "production") {
+if (IS_DEV) {
   for (const [name, component] of Object.entries(ACTOR_COMPONENTS)) {
     if (component.Warmup) continue;
     console.error(

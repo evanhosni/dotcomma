@@ -25,12 +25,13 @@ import { ensureTerrainWorker, resetTerrainWorker } from "./worker";
 import { Chunk } from "./types";
 import { isDomainCommitted } from "../domains/store";
 import { debugGlobal } from "../../utils/utils";
+import { IS_DEV } from "../../utils/constants";
 import { terrain, swapper } from "./store";
 
 // At the origin forever: a self-composing parent would force every chunk's matrixWorld each frame.
 terrain.group.matrixAutoUpdate = false;
 // Dev inspection: the swap state, and `fadeSeconds` for A/B-ing the cross-fade.
-if (process.env.NODE_ENV !== "production") debugGlobal("__terrainLod", { swapper, chunks: terrain.chunks });
+if (IS_DEV) debugGlobal("__terrainLod", { swapper, chunks: terrain.chunks });
 
 // ── Steady-state gate ────────────────────────────────────────────────────────
 // The desired set is recomputed only after DESIRED_MOVE_EPS of camera travel

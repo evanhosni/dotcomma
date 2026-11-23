@@ -42,3 +42,11 @@ export const MAX_HEAD_TURN = (50 * Math.PI) / 180;
  *  beside and over the body, never through it, as third-person games frame their character. */
 export const THIRD_PERSON_SHOULDER = 1.8;
 export const THIRD_PERSON_RISE = 0.8;
+/** Looking at the body's FRONT: the look this far (radians) from its facing. Held FRONT_VIEW_SECONDS, with
+ *  the head held still for as long (within HEAD_SETTLED of where it is turning), the head gives up turning
+ *  after the look and faces forward, at the camera: a head that turned and centered at once looked wrong. */
+export const FRONT_VIEW_ANGLE = (135 * Math.PI) / 180;
+export const FRONT_VIEW_SECONDS = 1;
+export const HEAD_SETTLED = (3 * Math.PI) / 180;
+/** 1/s: how fast the head eases to its target yaw. */
+export const HEAD_TURN_RATE = 8;
