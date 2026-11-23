@@ -1,10 +1,14 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
-import type * as THREE from "three";
+import * as THREE from "three";
 import { useDevContext, useGameContext } from "../../context/hooks";
 import { getPlace } from "../../world/place/store";
+import { aimFromCamera } from "../../player/utils";
 import { getOrCreateLeftColumn } from "./utils";
 import { PANEL_CSS } from "./constants";
+
+/** Pos is the eye on the line of sight (the camera in first person, the head it orbits in third). */
+const _aim = new THREE.Ray();
 
 /** FPS is counted over windows this long. */
 const FPS_WINDOW_S = 0.5;
@@ -318,7 +322,7 @@ const StatsHud = () => {
     // Sampling stays per-frame; the DOM/canvas writes were measurable in the numbers they report.
     if (stats.uiFrame++ % UI_REDRAW_INTERVAL !== 0) return;
     const terrain = terrainLoaded ? "loaded" : `${Math.round(progress * 100)}%`;
-    writeStatsPanel(panel, stats, { ms, geometries, textures, programs, renderCalls, renderTris, position: camera.position, terrain });
+    writeStatsPanel(panel, stats, { ms, geometries, textures, programs, renderCalls, renderTris, position: aimFromCamera(camera, _aim).origin, terrain });
   }, -1000);
 
   return null;

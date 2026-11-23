@@ -16,6 +16,7 @@ import type { TunnelStyle } from "../../generation/underground/types";
 import { LOD1_MAX_DISTANCE } from "../terrain/lod/constants";
 import { terrainMaterialReady } from "../terrain/material";
 import { hoveredDoor, swingDoors } from "../../objects/doors";
+import { aimFromCamera } from "../../player/utils";
 import { useChunkAssets, useChunkRegistry, useWorldChunks, useChunkColliders } from "../chunks/hooks";
 import type { ChunkViewProps, ColliderPart } from "../chunks/types";
 import { ChunkColliders } from "../chunks/ChunkColliders";
@@ -37,8 +38,7 @@ interface Hover {
   id: string;
 }
 
-const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
+const _aim = new THREE.Ray();
 const _plane = new THREE.Plane();
 const _hit = new THREE.Vector3();
 const _normal = new THREE.Vector3();
@@ -48,15 +48,15 @@ const _quaternion = new THREE.Quaternion();
 /** The manhole under the screen's center: from above its COVER's disc wherever it lies; from below the
  *  hole, and only through the shaft's foot when under the box ceiling. */
 const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>, hit: { distance: number }): CoverRuntime | null => {
-  _raycaster.setFromCamera(_center, camera);
-  const ray = _raycaster.ray;
-  const camY = camera.position.y;
+  const ray = aimFromCamera(camera, _aim);
+  const eye = ray.origin;
+  const camY = eye.y;
   let best: CoverRuntime | null = null;
   let bestDistance = Infinity;
   for (const obj of chunks) {
     for (const cover of obj.covers) {
       const e = cover.entrance;
-      const d = Math.hypot(e.x - camera.position.x, e.z - camera.position.z);
+      const d = Math.hypot(e.x - eye.x, e.z - eye.z);
       if (camY >= e.y) {
         if (d > COVER_REACH) continue;
         cover.mesh.getWorldPosition(_point);
@@ -64,7 +64,7 @@ const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>, 
         _plane.setFromNormalAndCoplanarPoint(_normal, _point);
         const hit = ray.intersectPlane(_plane, _hit);
         if (!hit || hit.distanceTo(_point) > COVER_RADIUS + COVER_SLACK) continue;
-        const dist = hit.distanceTo(camera.position);
+        const dist = hit.distanceTo(eye);
         if (dist < bestDistance && dist <= COVER_REACH) {
           bestDistance = dist;
           best = cover;
@@ -79,7 +79,7 @@ const pickManhole = (camera: THREE.Camera, chunks: Iterable<TunnelChunkObject>, 
           const foot = ray.intersectPlane(_plane, _point);
           if (!foot || Math.hypot(foot.x - e.x, foot.z - e.z) > e.radius) continue;
         }
-        const dist = hit.distanceTo(camera.position);
+        const dist = hit.distanceTo(eye);
         if (dist < bestDistance && dist <= HOLE_REACH) {
           bestDistance = dist;
           best = cover;
@@ -208,9 +208,10 @@ export const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, co
     const ids = idsRef.current;
     leaves.length = 0;
     ids.length = 0;
+    const eye = aimFromCamera(camera, _aim).origin;
     for (const obj of alive) {
       for (const d of obj.doors) {
-        if (Math.hypot(d.door.x - camera.position.x, d.door.z - camera.position.z) > DOOR_CANDIDATE_REACH) continue;
+        if (Math.hypot(d.door.x - eye.x, d.door.z - eye.z) > DOOR_CANDIDATE_REACH) continue;
         leaves.push(d.leaf);
         ids.push(d.id);
       }

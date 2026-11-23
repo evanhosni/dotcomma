@@ -181,6 +181,22 @@ export const useInput = (): React.MutableRefObject<InputState> => {
   return inputRef;
 };
 
+/** Third person on or off; the middle mouse button toggles it (its default, the browser's autoscroll, is
+ *  suppressed). */
+export const useThirdPersonToggle = (): React.MutableRefObject<boolean> => {
+  const thirdPerson = useRef(false);
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      thirdPerson.current = !thirdPerson.current;
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, []);
+  return thirdPerson;
+};
+
 /**
  * THE PLAYER UNDERGROUND: the shared tunnel rules (physics/tunnel-rules/index.ts — the same ones every server NPC
  * runs) on the player's TunnelSpace (the registry's loaded chunks), applied to the player's body, and the

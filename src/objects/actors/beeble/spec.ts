@@ -1,11 +1,13 @@
 import type { ActorSpec, CapsuleColliderSpec } from "../spec";
+import { PLAYER_HEIGHT, PLAYER_RADIUS } from "../../../player/spec";
 import { ASCEND_CLIP, HEAD_TURN_LAYER } from "./animations";
 import { BEEBLE_SM } from "./stateMachine";
 
+/** The player's capsule: the player IS a beeble (player/PlayerBody.tsx), so every beeble is its size. */
 const BEEBLE_COLLIDER: CapsuleColliderSpec = {
   shape: "capsule",
-  radius: 0.5,
-  height: 2.4,
+  radius: PLAYER_RADIUS,
+  height: PLAYER_HEIGHT,
 };
 
 /** The template NPC: behavior + body (what the server simulates) and its model and spawn knobs. */
@@ -18,7 +20,6 @@ export const BEEBLE_SPEC: ActorSpec = {
   collider: BEEBLE_COLLIDER,
   movement: "ground",
   model: "/models/beeble.glb",
-  scale: [1.2, 1.2, 1.2],
   footprint: 5,
   density: 200,
   clustering: 0,

@@ -4,6 +4,7 @@
  * turns the hinge about y toward +z.
  */
 import * as THREE from "three";
+import { aimFromCamera } from "../../player/utils";
 import { DOOR_SWING_RATE, DOOR_OPEN_ANGLE } from "./constants";
 
 /** Eases every hinge toward its open or closed angle; recomposes the hinge's matrices (frozen
@@ -31,7 +32,6 @@ export const swingDoors = (hinges: readonly (THREE.Object3D | null)[], open: rea
 };
 
 const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
 const _sphere = new THREE.Sphere();
 const _hits: THREE.Intersection[] = [];
 
@@ -39,7 +39,7 @@ const _hits: THREE.Intersection[] = [];
 export const hoveredDoor = (camera: THREE.Camera, leaves: readonly (THREE.Mesh | null)[], reach: number, hit?: { distance: number }): number => {
   let hover = -1;
   let nearest = Infinity;
-  _raycaster.setFromCamera(_center, camera);
+  aimFromCamera(camera, _raycaster.ray);
   _raycaster.far = reach;
   for (let i = 0; i < leaves.length; i++) {
     const mesh = leaves[i];
