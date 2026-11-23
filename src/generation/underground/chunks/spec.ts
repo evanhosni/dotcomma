@@ -3,7 +3,7 @@ import type { UndergroundChunk } from "../types";
 
 /** The rungs' collider slab: its face this far from the shaft's center on the exit side. */
 export const LADDER_FACE = 0.98;
-const LADDER_SLAB_WIDTH = 0.8;
+export const LADDER_SLAB_WIDTH = 0.8;
 const LADDER_SLAB_DEPTH = 0.2;
 const DOOR_SLAB_THICKNESS = 0.15;
 

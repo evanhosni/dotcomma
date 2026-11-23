@@ -1,7 +1,6 @@
 import { dropOldestHalf } from "../../cache/utils";
 import { FIELD_REACH } from "../constants";
-import { SEWER_LIQUID_VISCOSITY } from "../sewers/constants";
-import { liquidLevelOf } from "../sewers/geometry";
+import { sewageLevelOf } from "../sewers/geometry";
 import { compileField, insideMouthCut, probeRockAlongY, rockEscapeAt, surfaceAboveAt } from ".";
 import { type FieldFn, type RockEscape } from "./types";
 import type { MouthPiece, ShaftPiece, TunnelEntrance, TunnelPiece, UndergroundChunk } from "../types";
@@ -10,12 +9,12 @@ import type { MouthPiece, ShaftPiece, TunnelEntrance, TunnelPiece, UndergroundCh
  * THE TUNNELS AS A BODY SEES THEM: the air of a set of loaded tunnel chunks, merged (a piece two chunks
  * list counts once), with a compiled probe field per cell, and the questions a capsule's step asks —
  * is this point in the air, where is the floor, where is the way out of rock, which manhole's column
- * holds it, what liquid. Three-free: the client registry owns one (the player), the server's physics
+ * holds it, what sewage. Three-free: the client registry owns one (the player), the server's physics
  * world another (its NPCs), so both move by the same answers (physics/tunnel-rules/index.ts).
  */
 
 /** What a body's step needs of a chunk (the client has the whole UndergroundChunk; the server keeps this). */
-export type TunnelSpaceChunk = Pick<UndergroundChunk, "style" | "centerX" | "centerZ" | "pieces" | "systemEntrances" | "liquid">;
+export type TunnelSpaceChunk = Pick<UndergroundChunk, "style" | "centerX" | "centerZ" | "pieces" | "systemEntrances" | "sewage">;
 
 export interface UndergroundProbe {
   /** False while no tunnel chunk is loaded at all: the field is not known (a body keeps its last state). */
@@ -24,18 +23,15 @@ export interface UndergroundProbe {
   field: number;
   /** The first rock below the point; NaN out of the air. */
   floorY: number;
-  /** The liquid level whose swimming range holds the point (the sewers' sewage: no cave holds water);
-   *  NaN when none. */
-  liquidY: number;
-  /** That liquid's viscosity relative to water (1 where there is none). */
-  liquidViscosity: number;
+  /** The sewage level whose swimming range holds the point (no cave holds water); NaN when none. */
+  sewageY: number;
 }
 
 /** The probe index's cell size. */
 const CELL = 32;
 /** Compiled fields kept per cell before the oldest half goes. */
 const FIELDS_MAX = 1024;
-/** The liquid's swimming range: this far over its surface. */
+/** The sewage's swimming range: this far over its surface. */
 const SWIM_ABOVE_SURFACE = 3;
 /** The floor probe: steps down from the probe point to the first rock, then bisects. */
 const FLOOR_STEP = 0.5;
@@ -73,7 +69,7 @@ export class TunnelSpace {
   private entranceMap = new Map<string, TunnelEntrance>();
   private cellPieces = new Map<number, TunnelPiece[]>();
   private cellFields = new Map<number, FieldFn>();
-  private readonly probeResult: UndergroundProbe = { known: false, field: FIELD_REACH, floorY: NaN, liquidY: NaN, liquidViscosity: 1 };
+  private readonly probeResult: UndergroundProbe = { known: false, field: FIELD_REACH, floorY: NaN, sewageY: NaN };
   private readonly shaftOpen = (s: ShaftPiece): boolean => this.isOpen(s.id);
 
   /** `isOpen`: a manhole's (and a door's) open state, by id. */
@@ -144,33 +140,31 @@ export class TunnelSpace {
     return f;
   }
 
-  /** The liquid level at (x, z) from the loaded chunks' liquid triangles; NaN when none. */
-  liquidLevelAt(x: number, z: number): number {
+  /** The sewage level at (x, z) from the loaded chunks' sewage triangles; NaN when none. */
+  sewageLevelAt(x: number, z: number): number {
     for (const c of this.chunks) {
-      if (!c.liquid) continue;
-      const level = liquidLevelOf(c.liquid, x - c.centerX, z - c.centerZ);
+      if (!c.sewage) continue;
+      const level = sewageLevelOf(c.sewage, x - c.centerX, z - c.centerZ);
       if (!Number.isNaN(level)) return level;
     }
     return NaN;
   }
 
-  /** The field, the floor and the liquid at a point. The result object is SHARED: read it before the next call. */
+  /** The field, the floor and the sewage at a point. The result object is SHARED: read it before the next call. */
   probe(x: number, y: number, z: number): UndergroundProbe {
     const probe = this.probeResult;
     const field = this.chunks.size === 0 ? FIELD_REACH : this.fieldAt(x, z)(x, y, z);
     probe.known = this.chunks.size > 0;
     probe.field = field;
     probe.floorY = NaN;
-    probe.liquidY = NaN;
-    probe.liquidViscosity = 1;
+    probe.sewageY = NaN;
     if (field < 0) {
       probe.floorY = probeRockAlongY(this.fieldAt(x, z), x, y, z, -1, FLOOR_STEP, FLOOR_REACH);
-      const level = this.liquidLevelAt(x, z);
-      // The point's liquid: its surface stands over the floor under the point (a walkway stands over the
+      const level = this.sewageLevelAt(x, z);
+      // The point's sewage: its surface stands over the floor under the point (a walkway stands over the
       // channel's surface; a room's pool floor lies 5u under it) and the point is not far above it.
       if (!Number.isNaN(level) && level > probe.floorY && y <= level + SWIM_ABOVE_SURFACE) {
-        probe.liquidY = level;
-        probe.liquidViscosity = SEWER_LIQUID_VISCOSITY;
+        probe.sewageY = level;
       }
     }
     return probe;

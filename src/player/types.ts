@@ -33,3 +33,36 @@ export interface WaterProbe {
   colors(): CameraWaterColors;
   clear(): void;
 }
+
+/** What the player did this frame, as far as its animation cares (utils.ts, playerAnimationOf). */
+export interface PlayerActionSample {
+  noclip: boolean;
+  swimming: boolean;
+  /** Off the ground and not about to touch it. */
+  airborne: boolean;
+  sliding: boolean;
+  climbing: boolean;
+  /** Left the ground by jumping (cleared on landing). */
+  jumped: boolean;
+  vy: number;
+  /** Horizontal u/s. */
+  speed: number;
+  sprint: boolean;
+}
+
+/** Written by Player.tsx each frame, drawn by PlayerBody.tsx. */
+export interface PlayerBodyState {
+  feetX: number;
+  feetY: number;
+  feetZ: number;
+  yaw: number;
+  /** The head bone's yaw from the body (HEAD_TURN_LAYER); undefined = the clip's. */
+  headYaw: number | undefined;
+  clip: string;
+  clipSpeed: number;
+  loop: "repeat" | "once";
+  /** False in first person: the camera is inside the head. */
+  visible: boolean;
+}
+
+export type ScreenSide = "left" | "right";

@@ -1,6 +1,6 @@
 /**
  * What a tunnel chunk DRAWS (and its collider bodies), built from an UndergroundChunk on the main
- * thread: the walls, the entrance patch, the liquid, each door with its
+ * thread: the walls, the entrance patch, the sewage, each door with its
  * frame, each manhole's cover, frame ring and ladder. Everything is relative to the chunk's center
  * (the group's position); the chunk's collider bodies are the brick columns, a slab per ladder and a
  * slab per CLOSED door.
@@ -22,7 +22,7 @@ import { selfPatchedMaterial } from "../chunks/material";
 import type { ColliderBody } from "../chunks/types";
 import { WORLD_CHUNK_SIZE } from "../chunks/constants";
 import { yawFromDir } from "../chunks/utils";
-import { createCaveRockMaterial, createIronMaterial, createLiquidMaterial, createSewerWallMaterial, createTunnelObjectMaterial } from "./material";
+import { createCaveRockMaterial, createIronMaterial, createSewageMaterial, createSewerWallMaterial, createTunnelObjectMaterial } from "./material";
 import { isOpen } from "./store";
 import type { TunnelAssets, TunnelChunkObject, DoorRuntime, CoverRuntime } from "./types";
 
@@ -48,7 +48,7 @@ export const createTunnelAssets = (): TunnelAssets => ({
   caveRock: selfPatchedMaterial(createCaveRockMaterial()),
   sewerWall: selfPatchedMaterial(createSewerWallMaterial()),
   object: selfPatchedMaterial(createTunnelObjectMaterial()),
-  liquid: selfPatchedMaterial(createLiquidMaterial()),
+  sewage: selfPatchedMaterial(createSewageMaterial()),
   iron: createIronMaterial(),
   cover: new THREE.CylinderGeometry(COVER_RADIUS, COVER_RADIUS, COVER_THICKNESS, 24).translate(0, COVER_THICKNESS / 2, 0),
 });
@@ -58,7 +58,7 @@ export const tunnelWarmTemplates = (a: TunnelAssets): THREE.Object3D[] => [
   meshTemplate(a.caveRock.material),
   meshTemplate(a.sewerWall.material),
   meshTemplate(a.object.material),
-  meshTemplate(a.liquid.material),
+  meshTemplate(a.sewage.material),
   meshTemplate(a.iron),
   instancedTemplate(a.object.material, { instanceColor: true }),
 ];
@@ -154,13 +154,13 @@ const boundingSphereOf = (positions: Float32Array): THREE.Sphere => {
   return new THREE.Sphere(new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2), Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) / 2);
 };
 
-const buildLiquid = (chunk: UndergroundChunk, assets: TunnelAssets): THREE.Mesh | null => {
-  if (!chunk.liquid) return null;
+const buildSewageMesh = (chunk: UndergroundChunk, assets: TunnelAssets): THREE.Mesh | null => {
+  if (!chunk.sewage) return null;
   const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(chunk.liquid.positions, 3));
-  g.setIndex(new THREE.BufferAttribute(chunk.liquid.indices, 1));
-  g.boundingSphere = boundingSphereOf(chunk.liquid.positions);
-  return own(new THREE.Mesh(g, assets.liquid.material));
+  g.setAttribute("position", new THREE.BufferAttribute(chunk.sewage.positions, 3));
+  g.setIndex(new THREE.BufferAttribute(chunk.sewage.indices, 1));
+  g.boundingSphere = boundingSphereOf(chunk.sewage.positions);
+  return own(new THREE.Mesh(g, assets.sewage.material));
 };
 
 
@@ -323,8 +323,8 @@ export const buildChunkObject = (chunk: UndergroundChunk, assets: TunnelAssets, 
   }
   obj.patch = buildPatch(chunk, entranceMaterial, obj);
   if (obj.patch) group.add(obj.patch);
-  const liquid = buildLiquid(chunk, assets);
-  if (liquid) group.add(liquid);
+  const sewage = buildSewageMesh(chunk, assets);
+  if (sewage) group.add(sewage);
   for (const d of chunk.doors) {
     const door = buildDoor(chunk, d, assets, group);
     obj.doors.push(door);

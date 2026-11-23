@@ -208,6 +208,13 @@ const crispnessTiers = (slots: number[], halfOf: (k: number) => number): number[
   return tiers;
 };
 
+/** A colour call's gate, the same for the whole 2×2 pixel quad: it runs wherever its weight is above 0 in ANY
+ *  pixel of the quad (fwidth, taken here in uniform control flow). Gated per pixel, the quad straddling a
+ *  feather's outer edge sampled its textures with only some pixels active, so their implicit mip derivatives
+ *  were undefined: a dotted line of wrong-mip texels traced every biome wall's far edge from a distance. The
+ *  extra pixels carry weight 0, so the colour is unchanged; the cost is one pixel ring per edge. */
+const quadGate = (weight: string): string => `(${weight} > 0.0 || fwidth(${weight}) > 0.0)`;
+
 /** The per-pixel biome cross-fade, in two passes. WEIGHTS: each tier claims `remaining × weight`, softer
  *  tiers split the rest, and a visible slot's weight goes to its region BASE and its own frag by presence
  *  (a biome with no <Material> of its own is all base: the salt flats; one with no region base is all frag).
@@ -251,14 +258,14 @@ const biomeMixGLSL = (input: BiomeMixInput, citySlot: number): string => {
   );
   const fragColor = (k: number): string =>
     k === citySlot
-      ? `if (fragW${k} > 0.0 || vDistanceToRoadCenter < ${glslFloat(FREEWAY_CORRIDOR_OUTER)}) { ${biomes[k].name}_frag(); cityColor = gl_FragColor; }
+      ? `if (${quadGate(`fragW${k}`)} || vDistanceToRoadCenter < ${glslFloat(FREEWAY_CORRIDOR_OUTER)}) { ${biomes[k].name}_frag(); cityColor = gl_FragColor; }
       blended += cityColor * fragW${k};`
-      : `if (fragW${k} > 0.0) { ${biomes[k].name}_frag(); blended += gl_FragColor * fragW${k}; }`;
+      : `if (${quadGate(`fragW${k}`)}) { ${biomes[k].name}_frag(); blended += gl_FragColor * fragW${k}; }`;
   return [
     bases.map((b) => `float ${baseW(b)} = 0.0;`).join(" "),
     frags.map((k) => `float fragW${k} = 0.0;`).join(" "),
     ...weights,
-    ...bases.map((b) => `if (${baseW(b)} > 0.0) { ${b}(); blended += gl_FragColor * ${baseW(b)}; }`),
+    ...bases.map((b) => `if (${quadGate(baseW(b))}) { ${b}(); blended += gl_FragColor * ${baseW(b)}; }`),
     citySlot >= 0 ? "vec4 cityColor = vec4(0.0);" : "",
     ...frags.map(fragColor),
   ].join("\n      ");

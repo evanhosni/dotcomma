@@ -9,6 +9,7 @@ import { StateMachineRunner } from "./StateMachineRunner";
 import { claimHover, releaseHover } from "../../../utils/cursor";
 import type { HoverTarget } from "../../../utils/cursor/types";
 import { mouseActionOf } from "./utils";
+import { aimFromCamera } from "../../../player/utils";
 import { ANIMATED_BOUNDS_INFLATE, RAYCAST_RANGE_PAD, VIEW_CONE_SKIP_WITHIN_SQ, VIEW_CONE_COS, MOUSE_RAYCAST_INTERVAL_FRAMES } from "./constants";
 
 /**
@@ -152,8 +153,7 @@ const dispatchMouse = (e: MouseEvent, bb: Record<string, any>, sync: SyncHandle 
 };
 const _toActor = new THREE.Vector3();
 
-const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
+const _aim = new THREE.Ray();
 
 const _worldSphere = new THREE.Sphere();
 const _invMatrix = new THREE.Matrix4();
@@ -230,17 +230,17 @@ export function useMouseEvents(
     const range = reach + RAYCAST_RANGE_PAD;
     const rangeSq = range * range;
     if (distanceSq2D > rangeSq) return Infinity;
-    const dist3DSq = camera.position.distanceToSquared(group.position);
+    aimFromCamera(camera, _aim);
+    const dist3DSq = _aim.origin.distanceToSquared(group.position);
     if (dist3DSq > rangeSq) return Infinity;
 
-    _raycaster.setFromCamera(_center, camera);
-    _toActor.subVectors(group.position, _raycaster.ray.origin);
+    _toActor.subVectors(group.position, _aim.origin);
     const outsideViewCone =
-      dist3DSq > VIEW_CONE_SKIP_WITHIN_SQ && _toActor.normalize().dot(_raycaster.ray.direction) < VIEW_CONE_COS;
+      dist3DSq > VIEW_CONE_SKIP_WITHIN_SQ && _toActor.normalize().dot(_aim.direction) < VIEW_CONE_COS;
     if (outsideViewCone) return Infinity;
 
     if (cachedMeshesRef.current.length === 0) collectSkinnedMeshes(group, cachedMeshesRef.current);
-    return rayHitDistance(_raycaster.ray, cachedMeshesRef.current, reach);
+    return rayHitDistance(_aim, cachedMeshesRef.current, reach);
   };
 
   const tick = (camera: THREE.Camera, distanceSq2D: number, sync: SyncHandle | null): void => {

@@ -31,7 +31,7 @@ const CHANNEL_FLOOR = -15.5;
 const PROBE_OVER_FEET = 0.3;
 const WALL_COLUMN = "1496_-6648";
 /** The bouncing spot: the channel floor, the sewage over it and the client's swim input there. */
-const CHANNEL = { x: 5891.5, z: -9210.3, floor: -15.15, liquid: -14.34, viscosity: 2.5 };
+const CHANNEL = { x: 5891.5, z: -9210.3, floor: -15.15, sewage: -14.34 };
 
 let pw: PhysicsWorld;
 let field: FieldFn;
@@ -164,7 +164,7 @@ describe("the player in a sewer", () => {
   it("a capsule sunk under the channel floor rises back onto it; the sunk lift lands on it", () => {
     for (const swim of [false, true]) {
       const w = new Walker(pw, CHANNEL.x, CHANNEL.floor - 0.25, CHANNEL.z, CAPSULE);
-      (w as any).input.swim = swim ? { surfaceY: CHANNEL.liquid, viscosity: CHANNEL.viscosity, jumpPressed: false } : null;
+      (w as any).input.swim = swim ? { surfaceY: CHANNEL.sewage, liquid: "sewage", jumpPressed: false } : null;
       const feet: number[] = [];
       for (let i = 0; i < 60; i++) {
         w.step(FRAME, 0, 0);

@@ -2,7 +2,7 @@ import { PointerLockControls } from "@react-three/drei/core/PointerLockControls"
 import { useFrame, useThree } from "@react-three/fiber";
 import { CapsuleCollider, RigidBody, useRapier } from "@react-three/rapier";
 import type { RapierRigidBody } from "@react-three/rapier";
-import { useEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useDevContext, useGameContext } from "../context/hooks";
 import { getAssignedSpawnOffset } from "../net";
@@ -15,10 +15,14 @@ import { setCameraWaterDepth } from "../vfx/screen-pass/store";
 import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personal-light";
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
-import { CAMERA_FAR } from "./constants";
-import { useGroundSafetyNets, useUndergroundMode, useInput, useWaterProbe } from "./hooks";
+import { wrapAngle } from "../utils/math";
+import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN } from "./constants";
+import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
+import { PlayerBody } from "./PlayerBody";
+import { getThirdPersonBodySide, setCameraBoom } from "./store";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
-import type { InputState } from "./types";
+import type { InputState, PlayerActionSample, PlayerBodyState } from "./types";
+import { playerAnimationOf } from "./utils";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
@@ -58,6 +62,9 @@ const _side = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
+const _lookDirection = new THREE.Vector3();
+const _boom = new THREE.Vector3();
+const _right = new THREE.Vector3();
 
 /** The held keys as a horizontal direction from the camera's flattened forward/side (not normalized). */
 const readMoveDirection = (camera: THREE.Camera, input: InputState, out: THREE.Vector3): THREE.Vector3 => {
@@ -87,6 +94,7 @@ const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }
 /** Mounted ONCE by CustomCanvas; persists across domain switches (see CLAUDE.md). */
 export const Player = () => {
   const inputRef = useInput();
+  useReloadGuard();
   const { camera } = useThree();
   const { terrainLoaded, playerPosition, playerSpawn: spawnPosition, spawnDropHeight } = useGameContext();
   const { noclip, flashlight } = useDevContext();
@@ -101,13 +109,20 @@ export const Player = () => {
   // the player from under the mountain onto its summit.
   const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded, () => underground.isInside() || underground.outsideFor() < UNDERGROUND_NET_GRACE_SECONDS);
   const water = useWaterProbe();
-  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false, viscosity: 1 }).current;
+  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false, liquid: "water" }).current;
   const jumpWasHeld = useRef(false);
   // The ground under the player (CharacterInput.surface: the snow's drag and traction), sampled on the
   // dressing worker: on this thread the sample would run the height pipeline, and a cold mountain cell
   // costs ~250ms there (physics/DECISIONS.md).
   const surface = useRef(createSurfaceSampler(SURFACE_SAMPLE_INTERVAL, fetchSurfaceModifiers)).current;
   const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
+  const thirdPerson = useThirdPersonToggle();
+  const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false }).current;
+  const body = useRef<PlayerBodyState>({ feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
+  /** The head the camera follows (eased), and where the body stood last frame (its speed). */
+  const pivot = useRef(new THREE.Vector3()).current;
+  const lastFeet = useRef({ x: NaN, z: NaN }).current;
+  const boomRay = useMemo(() => new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }), [rapier]);
 
   // The domain's spawn is a feet position; +0.05 keeps the capsule from starting inside the ground.
   const spawn = useMemo<[number, number, number]>(
@@ -167,14 +182,53 @@ export const Player = () => {
     playerPosition.set(sx, sy, sz);
   };
 
-  const followWithCamera = (at: { x: number; y: number; z: number }): void => {
+  /** First person: the camera is the eased head. Third person: it hangs THIRD_PERSON_DISTANCE behind the
+   *  head along the look, over the shoulder that leaves the body on its chosen side of the screen, pulled in front of whatever the boom hits
+   *  (the player's own body excluded). The boom's length along the look starts the aim ray (utils.ts). */
+  const followWithCamera = (at: { x: number; y: number; z: number }, rb: RapierRigidBody): void => {
     _camTarget.set(at.x, at.y + PLAYER_HEIGHT * 0.5, at.z);
     if (!cameraReady.current) {
-      camera.position.copy(_camTarget);
+      pivot.copy(_camTarget);
       cameraReady.current = true;
     } else {
-      camera.position.lerp(_camTarget, CAMERA_LERP);
+      pivot.lerp(_camTarget, CAMERA_LERP);
     }
+    if (!thirdPerson.current) {
+      camera.position.copy(pivot);
+      setCameraBoom(0);
+      return;
+    }
+    camera.getWorldDirection(_lookDirection);
+    _right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    _boom.copy(_lookDirection).multiplyScalar(-THIRD_PERSON_DISTANCE).addScaledVector(_right, getThirdPersonBodySide() === "left" ? THIRD_PERSON_SHOULDER : -THIRD_PERSON_SHOULDER).addScaledVector(_up, THIRD_PERSON_RISE);
+    const length = _boom.length();
+    _boom.divideScalar(length);
+    boomRay.origin = { x: pivot.x, y: pivot.y, z: pivot.z };
+    boomRay.dir = { x: _boom.x, y: _boom.y, z: _boom.z };
+    const hit = world.castRay(boomRay, length + THIRD_PERSON_WALL_MARGIN, true, undefined, undefined, undefined, rb);
+    const reach = hit ? Math.max(hit.timeOfImpact - THIRD_PERSON_WALL_MARGIN, 0) : length;
+    camera.position.copy(pivot).addScaledVector(_boom, reach);
+    setCameraBoom(-reach * _boom.dot(_lookDirection));
+  };
+
+  /** Picks this frame's clip and places the body: facing the walk in third person, the look in first. */
+  const driveBody = (at: { x: number; y: number; z: number }, move: THREE.Vector3, dt: number): void => {
+    action.speed = Number.isNaN(lastFeet.x) ? 0 : Math.hypot(at.x - lastFeet.x, at.z - lastFeet.z) / Math.max(dt, 1e-4);
+    lastFeet.x = at.x;
+    lastFeet.z = at.z;
+    playerAnimationOf(action, body);
+
+    camera.getWorldDirection(_lookDirection);
+    const lookYaw = Math.atan2(_lookDirection.x, _lookDirection.z);
+    if (!thirdPerson.current) body.yaw = lookYaw;
+    else if (move.lengthSq() > 0 && action.speed > PLAYER_MOVING_SPEED) {
+      body.yaw += wrapAngle(Math.atan2(move.x, move.z) - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
+    }
+    body.headYaw = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, wrapAngle(lookYaw - body.yaw)));
+    body.feetX = at.x;
+    body.feetY = at.y - PLAYER_HEIGHT / 2;
+    body.feetZ = at.z;
+    body.visible = thirdPerson.current;
   };
 
   useFrame((_, delta) => {
@@ -186,6 +240,8 @@ export const Player = () => {
     const dt = Math.min(delta, MAX_STEP_SECONDS);
     const move = readMoveDirection(camera, input, _moveVec);
     const pos = rb.translation();
+    action.noclip = noclip;
+    action.sprint = input.sprint;
 
     if (!terrainLoaded && !noclip) {
       holdAtSpawn(rb, character, dt);
@@ -195,29 +251,32 @@ export const Player = () => {
       surface.reset();
       resetPersonalLight();
       setCameraWaterDepth(0);
+      body.visible = false;
+      lastFeet.x = NaN;
       return;
     }
 
-    let liquidY = NaN;
+    let sewageY = NaN;
     if (noclip) {
       flyNoclip(rb, pos, input, move, dt);
     } else {
       const collider = rb.collider(0);
       if (collider) {
-        const ug = underground.update(rb, pos, input, character, dt);
+        const ug = underground.update(rb, pos, input, move, character, dt);
         const at = rb.translation();
         const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
         surface.sample(at.x, at.z, at.y - PLAYER_HEIGHT / 2);
-        // Inside a tunnel its liquid is the water; outside, the water probe's surface.
-        liquidY = ug.liquidY;
-        const surfaceY = underground.isInside() ? liquidY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
+        // Inside a tunnel its sewage is the liquid; outside, the water probe's surface.
+        sewageY = ug.sewageY;
+        const surfaceY = underground.isInside() ? sewageY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
         swimInput.surfaceY = surfaceY;
-        swimInput.viscosity = underground.isInside() ? ug.liquidViscosity : 1;
+        swimInput.liquid = underground.isInside() ? "sewage" : "water";
         swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
+        const pushed = ug.pushX !== 0 || ug.pushZ !== 0;
         const characterInput = {
-          dirX: ug.holdWalk ? 0 : move.x,
-          dirZ: ug.holdWalk ? 0 : move.z,
-          speed,
+          dirX: pushed ? ug.pushX : ug.holdWalk ? 0 : move.x,
+          dirZ: pushed ? ug.pushZ : ug.holdWalk ? 0 : move.z,
+          speed: pushed ? Math.hypot(ug.pushX, ug.pushZ) : speed,
           jump: input.jump,
           swim: Number.isNaN(surfaceY) ? null : swimInput,
           vyOverride: ug.vyOverride,
@@ -226,6 +285,15 @@ export const Player = () => {
         };
         const r = stepCharacter(world, character, rb, collider, at.x, at.y, at.z, characterInput, dt, stepResult);
         safetyNets.escapeIfStuck(r, at, character);
+        const onGround = r.grounded || r.walkableSupport;
+        // The press frame can still report grounded: a jump is a fresh press that sent the body up.
+        if (swimInput.jumpPressed && character.state.vy > 0 && !r.swimming) action.jumped = true;
+        else if ((onGround && character.state.vy <= 0) || r.swimming) action.jumped = false;
+        action.airborne = !onGround && !r.nearGround && !r.swimming;
+        action.swimming = r.swimming;
+        action.sliding = r.onSlideSlope && !r.walkableSupport;
+        action.climbing = ug.vyOverride !== null && ug.vyOverride > 0;
+        action.vy = character.state.vy;
         if (surface.modifiers.snowDepth > SNOW_TRACK_MIN_DEPTH && (r.grounded || r.walkableSupport)) stampSnowTrailAlong(lastStamp, r.x, r.z);
       }
     }
@@ -238,20 +306,24 @@ export const Player = () => {
     driveFlashlight(flashlight, camera.getWorldDirection(_flashlightDirection), dt);
     if (!noclip && terrainLoaded) safetyNets.runBackstop(finalPos, character);
     safetyNets.respawnIfFallen(finalPos, character);
-    followWithCamera(finalPos);
+    followWithCamera(finalPos, rb);
+    driveBody(finalPos, move, dt);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
-    const cameraSurface = underground.isInside() ? liquidY : water.surfaceOver(camera.position.y);
+    const cameraSurface = underground.isInside() ? sewageY : water.surfaceOver(camera.position.y);
     if (underground.isInside()) setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "sewage");
     else setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "water", water.colors());
   }, -3);
 
   return (
     <>
-      <PointerLockControls />
+      <PointerLockControls minPolarAngle={CAMERA_PITCH_MARGIN} maxPolarAngle={Math.PI - CAMERA_PITCH_MARGIN} />
       <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={spawn} colliders={false} ccd>
         <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
       </RigidBody>
+      <Suspense fallback={null}>
+        <PlayerBody state={body} />
+      </Suspense>
     </>
   );
 };

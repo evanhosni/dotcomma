@@ -1,6 +1,6 @@
 /** Tunnels on the REAL pipeline with the overworld's config: caves (mouths, grades, cover, radii, ragged
  *  openings, formations, rocks, determinism, the bulge, a chunk), the surface nets, and sewers (manholes,
- *  liquid, faces, plates, chunks, the floor's air). */
+ *  sewage, faces, plates, chunks, the floor's air). */
 import { CITY_BIOME_ID, QUANTIZATION_GRID } from "../../../world/constants";
 import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { computeVertexData, computeVertexDataRaw, initCompute } from "../..";
@@ -9,11 +9,11 @@ import { mouthSpots } from "../caves";
 import { buildUndergroundChunk, setRockTestEnabled } from "../chunks";
 import { AXIS_LIFT, OPENING_RADIUS_MAX, OPENING_RADIUS_MIN, ROCK_COVER, VOXEL } from "../constants";
 import { FLOOR_GRADE, INNER_RADIUS_MAX, INNER_RADIUS_MIN, MOUTH_STEEP_GRADE } from "../caves/constants";
-import { LIQUID_BELOW_WALKWAY, POOL_DEPTH, SEWER_DEPTH } from "../sewers/constants";
+import { SEWAGE_BELOW_WALKWAY, POOL_DEPTH, SEWER_DEPTH } from "../sewers/constants";
 import { drawnGroundAt } from "../../drawn-ground";
 import { layoutPieces, mergeLayouts } from "../sewers";
 import { type SewerSystem } from "../sewers/types";
-import { buildSewerTriangles, liquidLevelOf } from "../sewers/geometry";
+import { buildSewerTriangles, sewageLevelOf } from "../sewers/geometry";
 import { meshBrick, NetVertices, type NetsOutput } from "../caves/geometry";
 import { clearTunnelCaches, systemAt } from "..";
 import { compileField, mouthFloorAt, mouthRadiusAt } from "../field";
@@ -240,7 +240,7 @@ describe("sewers", () => {
     }
   });
 
-  it("builds a chunk whose triangles it holds, with liquid under the walkways and every floor point in air", () => {
+  it("builds a chunk whose triangles it holds, with sewage under the walkways and every floor point in air", () => {
     const e = sewer.entrances[0];
     const minX = Math.floor(e.x / 256) * 256;
     const minZ = Math.floor(e.z / 256) * 256;
@@ -291,13 +291,13 @@ describe("sewers", () => {
     expect(floorPoints).toBeGreaterThan(0);
     if (bad.length > 0) console.log(JSON.stringify(bad.slice(0, 6)));
     expect(bad.length).toBe(0);
-    expect(c.liquid).not.toBeNull();
+    expect(c.sewage).not.toBeNull();
     const layout = mergeLayouts(sewer.district!, [sewer]);
     for (const n of layout.nodes.values()) {
       if (n.x < minX || n.x >= minX + 256 || n.z < minZ || n.z >= minZ + 256) continue;
-      const level = liquidLevelOf(c.liquid!, n.x - c.centerX, n.z - c.centerZ);
-      // The liquid is snapped to the shader's lattice like the walls (generation/underground/sewers/geometry.ts): within half a step.
-      expect(Math.abs(level - (n.floor - LIQUID_BELOW_WALKWAY))).toBeLessThanOrEqual(QUANTIZATION_GRID / 2 + 1e-6);
+      const level = sewageLevelOf(c.sewage!, n.x - c.centerX, n.z - c.centerZ);
+      // The sewage is snapped to the shader's lattice like the walls (generation/underground/sewers/geometry.ts): within half a step.
+      expect(Math.abs(level - (n.floor - SEWAGE_BELOW_WALKWAY))).toBeLessThanOrEqual(QUANTIZATION_GRID / 2 + 1e-6);
       if (n.room) expect(level - (n.floor - POOL_DEPTH)).toBeGreaterThan(1.8);
     }
   });

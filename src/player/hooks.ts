@@ -10,9 +10,12 @@ import { SAMPLE_GIVE_UP_MS } from "./constants";
 import { playerTunnels } from "../world/underground/registry";
 import { createTunnelState, createTunnelStep, resetTunnelState, stepTunnelRules } from "../physics/tunnel-rules";
 import type { TunnelBody, TunnelStep } from "../physics/tunnel-rules/types";
+import type { PointXZ } from "../utils/math/types";
 import { setCameraUnderground } from "../world/shaders/terrain-holes/store";
 import { writeWaterColors } from "../generation/water/material";
 import { getActiveDomainConfig, isDomainCommitted } from "../world/domains/store";
+import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
+import { getConnectionState, subscribeConnectionState } from "../net";
 
 // The player's safety nets against the ANALYTIC terrain height (the source the heightfields are built
 // from): the physics ground is per-chunk heightfields swapped during LOD changes, so sweep hardening alone
@@ -180,6 +183,71 @@ export const useInput = (): React.MutableRefObject<InputState> => {
   return inputRef;
 };
 
+const isTextEntry = (target: EventTarget | null): boolean =>
+  target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
+
+/** Ctrl/Cmd+R (Shift too) and a bare F5. Ctrl+F5 / Shift+F5 stay the deliberate hard reload. */
+const isReloadShortcut = (e: KeyboardEvent): boolean =>
+  (e.code === "KeyR" && (e.ctrlKey || e.metaKey)) || (e.code === "F5" && !e.ctrlKey && !e.metaKey && !e.shiftKey);
+
+const promptBeforeUnload = (e: BeforeUnloadEvent): void => {
+  e.preventDefault();
+  e.returnValue = ""; // Firefox and older Chrome only prompt with returnValue set
+};
+
+/**
+ * A reload drops the socket mid-game. While playing (pointer locked, outside any text field) the reload
+ * keys are swallowed in the capture phase; while in an overworld session, any other reload path (the
+ * toolbar, a browser that ignores the keydown block) gets the "Leave site?" prompt.
+ */
+export const useReloadGuard = (): void => {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!document.pointerLockElement || isTextEntry(e.target) || !isReloadShortcut(e)) return;
+      e.preventDefault();
+      // TODO(game): a game-specific Ctrl+R action goes here.
+    };
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, []);
+
+  useEffect(() => {
+    let prompting = false;
+    const sync = () => {
+      const { status } = getConnectionState();
+      const inSession = getCurrentDomain() === "overworld" && (status === "connected" || status === "reconnecting");
+      if (inSession === prompting) return;
+      prompting = inSession;
+      if (inSession) window.addEventListener("beforeunload", promptBeforeUnload);
+      else window.removeEventListener("beforeunload", promptBeforeUnload);
+    };
+    sync();
+    const offConnection = subscribeConnectionState(sync);
+    const offDomain = onDomainChange(sync);
+    return () => {
+      offConnection();
+      offDomain();
+      window.removeEventListener("beforeunload", promptBeforeUnload);
+    };
+  }, []);
+};
+
+/** Third person on or off; the middle mouse button toggles it (its default, the browser's autoscroll, is
+ *  suppressed). */
+export const useThirdPersonToggle = (): React.MutableRefObject<boolean> => {
+  const thirdPerson = useRef(false);
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      thirdPerson.current = !thirdPerson.current;
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, []);
+  return thirdPerson;
+};
+
 /**
  * THE PLAYER UNDERGROUND: the shared tunnel rules (physics/tunnel-rules/index.ts — the same ones every server NPC
  * runs) on the player's TunnelSpace (the registry's loaded chunks), applied to the player's body, and the
@@ -195,7 +263,7 @@ interface Position {
 export const useUndergroundMode = () => {
   const state = useRef(createTunnelState()).current;
   const step = useRef(createTunnelStep()).current;
-  const body = useRef<TunnelBody>({ x: 0, y: 0, z: 0, height: PLAYER_HEIGHT, radius: PLAYER_RADIUS, jump: false }).current;
+  const body = useRef<TunnelBody>({ x: 0, y: 0, z: 0, height: PLAYER_HEIGHT, radius: PLAYER_RADIUS, jump: false, moveX: 0, moveZ: 0 }).current;
 
   const isInside = (): boolean => state.inside;
   /** Seconds since the player was last inside a tunnel (Infinity: never). */
@@ -207,11 +275,13 @@ export const useUndergroundMode = () => {
   };
 
   /** The step's adjustments for the capsule at body center `pos`; may teleport the body (a manhole's catch, its exit). */
-  const update = (rb: RapierRigidBody, pos: Position, input: InputState, character: Character, dt: number): TunnelStep => {
+  const update = (rb: RapierRigidBody, pos: Position, input: InputState, move: PointXZ, character: Character, dt: number): TunnelStep => {
     body.x = pos.x;
     body.y = pos.y;
     body.z = pos.z;
     body.jump = input.jump;
+    body.moveX = move.x;
+    body.moveZ = move.z;
     stepTunnelRules(playerTunnels, state, step, body, dt);
     if (!Number.isNaN(step.teleportX)) rb.setTranslation({ x: step.teleportX, y: step.teleportY, z: step.teleportZ }, true);
     if (step.resetMotion) resetCharacterMotion(character.state);

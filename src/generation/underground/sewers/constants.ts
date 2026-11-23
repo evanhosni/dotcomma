@@ -7,11 +7,9 @@ export const PIPE_RADIUS = 4;
 export const PIPE_AXIS_LIFT = 1.2;
 export const CHANNEL_HALF = 1.4;
 export const CHANNEL_DEPTH = 1.2;
-/** The channel's air and liquid run this far past both ends of a pipe. */
+/** The channel's air and sewage run this far past both ends of a pipe. */
 export const CHANNEL_OVERRUN = CHANNEL_HALF;
-export const LIQUID_BELOW_WALKWAY = 0.35;
-/** The liquid's viscosity relative to water: divides the swim's speeds (physics/index.ts). */
-export const SEWER_LIQUID_VISCOSITY = 2.5;
+export const SEWAGE_BELOW_WALKWAY = 0.35;
 export const THROUGH_CHANCE = 0.5;
 export const THROUGH_MIN = 5;
 export const THROUGH_MAX = 9;

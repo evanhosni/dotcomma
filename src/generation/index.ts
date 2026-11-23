@@ -29,6 +29,7 @@ import { FRAGMENT_REMOVED_FIELD, FRAGMENT_RIVER_REACH, ISLAND_LAND_FIELD } from 
 import { TO_BANK, TO_ROAD } from "./roads/fragments/enums";
 import { blockIslandAt, clearRoadFragments, islandRoad, inRoadFragment } from "./roads/fragments";
 import { clearSnowCaches, snowMovementAt } from "./snow";
+import { SNOW_WADE_DEPTH } from "./snow/constants";
 import { createMovementModifiers, resetMovementModifiers } from "../physics/movement-modifiers";
 import type { MovementModifiers } from "../physics/movement-modifiers/types";
 import { clearMouthTiles, mouthBulgeAt, mouthsNear, NO_MOUTHS, clearTunnelCaches, generatingTunnels } from "./underground";
@@ -645,8 +646,6 @@ export const surfaceModifiersAt = (x: number, z: number, feetY = NaN, out: Movem
  *  texture mix (grass vs dirt on a slope) is decided per pixel by each biome's shader and is not known
  *  here: a point that is none of the shared surfaces below reads as its biome's name. */
 
-/** Snow at least this deep reads as snow (thinner is a dusting over the biome's own ground). */
-const SNOW_GROUND_DEPTH = 0.05;
 /** The city shader's bands in street units past the road's half width: curb + sidewalk (city fragment.glsl). */
 const SIDEWALK_BAND = 5;
 
@@ -654,7 +653,7 @@ export const groundAt = (x: number, z: number): string => {
   if (!domainConfig) throw new Error("vertexCompute not initialized");
   const vd = computeVertexData(x, z);
   if (vd.waterHeight > vd.height) return "water";
-  if (surfaceModifiersAt(x, z).snowDepth >= SNOW_GROUND_DEPTH) return "snow";
+  if (surfaceModifiersAt(x, z).snowDepth >= SNOW_WADE_DEPTH) return "snow";
   const { cityConfig, river } = domainConfig;
   if (vd.distanceToFreewayCenter <= cityConfig.freewayWidth) return "freeway";
   if (roadBearingBiomeIds().includes(vd.biomeId)) {

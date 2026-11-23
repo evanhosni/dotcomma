@@ -1,33 +1,33 @@
 /**
  * MOVEMENT MODIFIERS: what the ground does to a capsule's step — one object every capsule (the
- * player, local actors, server NPCs) reads, filled by every surface SOURCE in turn (the snow today;
- * mud, ice, wind later = one more fold in vertexCompute's surfaceModifiersAt). Speed factors multiply,
- * slope bonuses add, clamped to ±SLOPE_BONUS_LIMIT. Sampled OFF the stepping thread and handed in as
- * CharacterInput.surface (physics/README.md). Three-free.
+ * player, local actors, server NPCs) reads, filled by every ground SOURCE in turn (the snow today;
+ * mud, ice later = one SURFACE_MOVEMENT entry and one fold in vertexCompute's surfaceModifiersAt). Every
+ * kind is a pair of multipliers (constants.ts). Sampled OFF the stepping thread and handed in as
+ * CharacterInput.surface (physics/README.md); the liquids are known on the stepping side and fold in
+ * there (CharacterInput.swim). Three-free.
  */
-import type { MovementModifiers, SurfaceFetch, SurfaceSampler } from "./types";
+import { SURFACE_MOVEMENT } from "./constants";
+import type { MovementModifiers, SurfaceFetch, SurfaceKind, SurfaceSampler } from "./types";
 
-/** The ground probe stops reading ground as ground past ~60°; the 40° slide angle + 15° stays under it. */
-export const SLOPE_BONUS_LIMIT = (15 * Math.PI) / 180;
-
-export const createMovementModifiers = (): MovementModifiers => ({ speedFactor: 1, slopeBonus: 0, snowDepth: 0 });
+export const createMovementModifiers = (): MovementModifiers => ({ speedFactor: 1, slopeFactor: 1, snowDepth: 0 });
 
 export const resetMovementModifiers = (m: MovementModifiers): void => {
   m.speedFactor = 1;
-  m.slopeBonus = 0;
+  m.slopeFactor = 1;
   m.snowDepth = 0;
 };
 
 export const copyMovementModifiers = (into: MovementModifiers, from: MovementModifiers): void => {
   into.speedFactor = from.speedFactor;
-  into.slopeBonus = from.slopeBonus;
+  into.slopeFactor = from.slopeFactor;
   into.snowDepth = from.snowDepth;
 };
 
-/** Folds one source's share in. */
-export const combineMovementModifiers = (into: MovementModifiers, speedFactor: number, slopeBonus: number): void => {
-  into.speedFactor *= speedFactor;
-  into.slopeBonus = Math.max(-SLOPE_BONUS_LIMIT, Math.min(SLOPE_BONUS_LIMIT, into.slopeBonus + slopeBonus));
+/** Folds one kind of ground in. */
+export const combineMovementModifiers = (into: MovementModifiers, kind: SurfaceKind): void => {
+  const { speed, slope } = SURFACE_MOVEMENT[kind];
+  into.speedFactor *= speed;
+  into.slopeFactor *= slope;
 };
 
 export const createSurfaceSampler = (interval: number, fetch: SurfaceFetch): SurfaceSampler => {

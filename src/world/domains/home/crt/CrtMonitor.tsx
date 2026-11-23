@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { claimHover, releaseHover } from "../../../../utils/cursor";
 import { type HoverTarget } from "../../../../utils/cursor/types";
 import { enterOverworld } from "../../navigation";
+import { aimFromCamera } from "../../../../player/utils";
 import { CRT_GLOW } from "./constants";
 import { CRT_POWER, createScreenMaterial } from "./material";
 
@@ -27,7 +28,6 @@ const BODY_HALF: THREE.Vector3Tuple = [SCREEN_W / 2 + BEZEL, SCREEN_H / 2 + BEZE
 const BODY_CENTER_Z = (FRAME_Z + FRAME_DEPTH / 2 + BACK_Z - BACK_DEPTH / 2) / 2;
 
 const _raycaster = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0);
 const _worldPos = new THREE.Vector3();
 
 /**
@@ -109,8 +109,8 @@ export const CrtMonitor = ({ position, delayMs = 1000, fadeMs = 2000 }: { positi
     const screen = screenRef.current;
     if (!screen) return;
     let hover = false;
-    if (powerOnTriggeredRef.current && camera.position.distanceTo(screen.getWorldPosition(_worldPos)) < HOVER_CHECK_DISTANCE) {
-      _raycaster.setFromCamera(_center, camera);
+    aimFromCamera(camera, _raycaster.ray);
+    if (powerOnTriggeredRef.current && _raycaster.ray.origin.distanceTo(screen.getWorldPosition(_worldPos)) < HOVER_CHECK_DISTANCE) {
       _raycaster.far = INTERACT_DISTANCE;
       const hit = _raycaster.intersectObject(screen, false)[0];
       _raycaster.far = Infinity;

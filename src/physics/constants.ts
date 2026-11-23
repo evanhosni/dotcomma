@@ -30,6 +30,11 @@ export const GRAVITY = -100;
 export const TERMINAL_VELOCITY = -150;
 export const JUMP_IMPULSE = 40;
 export const MAX_MOVEMENT_PER_FRAME = 8;
+/** A rise that moved less than this share of its desired step hit a ceiling: the upward speed is dropped. */
+export const CEILING_BLOCKED_FRACTION = 0.5;
+/** Support stops a fall only with the gap under the capsule within this past the contact offset (a
+ *  standing capsule reads the offset itself). */
+export const SUPPORT_REST_GAP = 0.05;
 // No single swept solve moves farther than ~a capsule radius (one long
 // glancing sweep accumulates penetration). 16 substeps covers MAX_MOVEMENT_PER_FRAME.
 export const MAX_SUBSTEP_DISTANCE = 0.5;
@@ -48,14 +53,15 @@ export const GROUND_RAY_SLACK = SNAP_TO_GROUND + 0.4;
 export const GROUND_EMBED_TOLERANCE = 0.03;
 export const GROUND_EMBED_RECOVERY = 0.1;
 
-// SWIMMING (input.swim): under water the capsule sinks slowly, a held jump swims up and floats the
-// head just above the surface, and a fresh press with the head near the surface breaches out of it.
+// SWIMMING (input.swim): under water the capsule sinks slowly; each jump PRESS is a stroke up that
+// SWIM_SINK_ACCEL bleeds back to the sink (holding does nothing), and a press with the head near the
+// surface breaches out of it.
 /** Fraction of the capsule's height under the surface before it swims rather than wades. */
 export const SWIM_SUBMERGED_FRACTION = 0.6;
 export const SWIM_SINK_SPEED = -3;
 export const SWIM_SINK_ACCEL = 12;
-export const SWIM_UP_SPEED = 9;
-export const SWIM_UP_ACCEL = 40;
+/** A stroke's upward kick: decelerating at SWIM_SINK_ACCEL it rises about 2u (v² / 2a). */
+export const SWIM_STROKE_IMPULSE = 7;
 /** 1/s: how fast a dive's fall speed bleeds off to the sink speed. */
 export const WATER_DRAG = 5;
 /** Under JUMP_IMPULSE: enough to clear the surface by about a body height. */
@@ -63,5 +69,3 @@ export const SWIM_BREACH_IMPULSE = 32;
 export const SWIM_HEAD_ABOVE_SURFACE = 0.35;
 /** A fresh press breaches while the head is less than this under the surface. */
 export const SWIM_BREACH_REACH = 1.5;
-/** Horizontal input speed multiplier while swimming. */
-export const SWIM_SPEED_FACTOR = 0.55;

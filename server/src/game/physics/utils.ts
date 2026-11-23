@@ -99,7 +99,7 @@ export const sampleChunkRow = (gx: number, gz: number, iz: number, heights: Floa
 /**
  * The tunnels an NPC moves through: per dressing chunk, every tunnel style under every biome that holds
  * one, built by the client's own chunk builder (generation/underground/chunks/index.ts) and kept as what
- * a body needs — the probe's pieces and entrances, the liquid, and the colliders (the brick columns plus
+ * a body needs — the probe's pieces and entrances, the sewage, and the colliders (the brick columns plus
  * the ladders and closed doors: generation/underground/chunks/spec.ts). Rapier-free: the generation worker runs it.
  */
 
@@ -108,8 +108,8 @@ export const sampleTunnelChunk = (gx: number, gz: number): TunnelPart[] => {
   const out: TunnelPart[] = [];
   const add = (chunk: UndergroundChunk | null): void => {
     if (!chunk) return;
-    const { style, centerX, centerZ, pieces, systemEntrances, liquid, colliders, entrances, doors } = chunk;
-    out.push({ style, centerX, centerZ, pieces, systemEntrances, liquid, colliders, entrances, doors });
+    const { style, centerX, centerZ, pieces, systemEntrances, sewage, colliders, entrances, doors } = chunk;
+    out.push({ style, centerX, centerZ, pieces, systemEntrances, sewage, colliders, entrances, doors });
   };
   for (const id of sewerBiomeIds()) add(buildUndergroundChunk(bounds, "sewer", id));
   for (const id of caveBiomeIds()) add(buildUndergroundChunk(bounds, "cave", id));

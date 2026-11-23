@@ -14,7 +14,7 @@ import {
   CHANNEL_OVERRUN,
   DOOR_HEIGHT,
   DOOR_WIDTH,
-  LIQUID_BELOW_WALKWAY,
+  SEWAGE_BELOW_WALKWAY,
   PIPE_AXIS_LIFT,
   PIPE_RADIUS,
   PIPE_SLICE,
@@ -573,15 +573,15 @@ export const sewerPlaneSections = (layout: SewerLayout, axis: PlaneAxis, at: num
   return out;
 };
 
-export interface LiquidQuads {
+export interface SewageQuads {
   /** Four corners per quad, absolute. */
   quads: P3[][];
 }
 
-/** The liquid surface: a strip along each channel (node middle to node middle, overrun past both
+/** The sewage surface: a strip along each channel (node middle to node middle, overrun past both
  *  ends, stopping at a room's pool) and a pool per room (a fan sharing the strips' end points),
- *  LIQUID_BELOW_WALKWAY under the walkways. Triangles and quads alike: the chunk clip fans each. */
-export const buildSewerLiquid = (layout: SewerLayout): LiquidQuads => {
+ *  SEWAGE_BELOW_WALKWAY under the walkways. Triangles and quads alike: the chunk clip fans each. */
+export const buildSewage = (layout: SewerLayout): SewageQuads => {
   const quads: P3[][] = [];
   // On the lattice like the walls: a strip's end meets the pool's edge, and the two reach the same
   // points through different arithmetic.
@@ -589,7 +589,7 @@ export const buildSewerLiquid = (layout: SewerLayout): LiquidQuads => {
   for (const node of layout.nodes.values()) {
     if (!node.room) continue;
     const f = frameOf(layout, node.x, node.z);
-    const y = node.floor - LIQUID_BELOW_WALKWAY;
+    const y = node.floor - SEWAGE_BELOW_WALKWAY;
     // The pool as a fan over its outline WITH each entering strip's two end points on its edge: a
     // plain quad left them mid-edge, and the per-vertex quantization opened a line along the join.
     const outline: [number, number][] = [[-poolHalf, -poolHalf], [poolHalf, -poolHalf], [poolHalf, poolHalf], [-poolHalf, poolHalf]];
@@ -610,7 +610,7 @@ export const buildSewerLiquid = (layout: SewerLayout): LiquidQuads => {
     const from = a.room ? poolHalf : -CHANNEL_OVERRUN;
     const to = len - (b.room ? poolHalf : -CHANNEL_OVERRUN);
     const slices = Math.max(1, Math.ceil((to - from) / PIPE_SLICE));
-    const at = (sAlong: number, l: number): P3 => sp([a.x + dx * sAlong + sx * l, pipeFloorAt(piece, sAlong, len) - LIQUID_BELOW_WALKWAY, a.z + dz * sAlong + sz * l]);
+    const at = (sAlong: number, l: number): P3 => sp([a.x + dx * sAlong + sx * l, pipeFloorAt(piece, sAlong, len) - SEWAGE_BELOW_WALKWAY, a.z + dz * sAlong + sz * l]);
     for (let k = 0; k < slices; k++) {
       const s0 = from + ((to - from) * k) / slices;
       const s1 = from + ((to - from) * (k + 1)) / slices;
@@ -620,11 +620,11 @@ export const buildSewerLiquid = (layout: SewerLayout): LiquidQuads => {
   return { quads };
 };
 
-/** The liquid level at a point (relative to the chunk's center, like the liquid's positions) from a
- *  chunk's liquid triangles: the first triangle holding the point, by barycentric weights; NaN when none. */
-export const liquidLevelOf = (liquid: { positions: Float32Array; indices: Uint32Array }, lx: number, lz: number): number => {
-  const pos = liquid.positions;
-  const idx = liquid.indices;
+/** The sewage level at a point (relative to the chunk's center, like the sewage's positions) from a
+ *  chunk's sewage triangles: the first triangle holding the point, by barycentric weights; NaN when none. */
+export const sewageLevelOf = (sewage: { positions: Float32Array; indices: Uint32Array }, lx: number, lz: number): number => {
+  const pos = sewage.positions;
+  const idx = sewage.indices;
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t] * 3;
     const b = idx[t + 1] * 3;
@@ -641,17 +641,17 @@ export const liquidLevelOf = (liquid: { positions: Float32Array; indices: Uint32
   return NaN;
 };
 
-const geometryCache = new Map<string, { triangles: SewerTriangles; liquid: LiquidQuads }>();
+const geometryCache = new Map<string, { triangles: SewerTriangles; sewage: SewageQuads }>();
 const GEOMETRY_CACHE_MAX = 16;
 
 export const clearSewerGeometry = (): void => geometryCache.clear();
 
 /** A merged layout's geometry, built once (every chunk of the district takes its own triangles). */
-export const sewerGeometryOf = (layout: SewerLayout): { triangles: SewerTriangles; liquid: LiquidQuads } => {
+export const sewerGeometryOf = (layout: SewerLayout): { triangles: SewerTriangles; sewage: SewageQuads } => {
   let g = geometryCache.get(layout.key);
   if (!g) {
     if (geometryCache.size >= GEOMETRY_CACHE_MAX) dropOldestHalf(geometryCache);
-    g = { triangles: buildSewerTriangles(layout), liquid: buildSewerLiquid(layout) };
+    g = { triangles: buildSewerTriangles(layout), sewage: buildSewage(layout) };
     geometryCache.set(layout.key, g);
   }
   return g;
