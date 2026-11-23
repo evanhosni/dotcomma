@@ -34,7 +34,7 @@ export const PLAYER_MOVING_SPEED = 0.5;
 /** Third person: the camera's distance behind the head, and how far it stays off whatever the boom hits. */
 export const THIRD_PERSON_DISTANCE = 6;
 export const THIRD_PERSON_WALL_MARGIN = 0.3;
-/** 1/s: how fast the body turns to its walking direction in third person. */
+/** 1/s: how fast the body turns to its walking direction. */
 export const BODY_TURN_RATE = 12;
 /** The head turns toward the look up to this far from the body (radians). */
 export const MAX_HEAD_TURN = (50 * Math.PI) / 180;

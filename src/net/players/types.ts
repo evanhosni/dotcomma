@@ -12,7 +12,6 @@ export interface AvatarSnapshot extends PlayerAvatar {
 
 export interface RemotePlayer {
   id: string;
-  color: string;
   snapshots: Snapshot[];
   playback: PosePlayback;
   /** The sampled pose (capsule CENTER); `valid` once the first sample landed. */
