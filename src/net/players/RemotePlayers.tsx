@@ -10,6 +10,7 @@ import { DEFAULT_INTERACT_REACH } from "../../objects/actors/spec";
 import type { CapsuleColliderSpec } from "../../objects/actors/spec";
 import { MOUSE_RAYCAST_INTERVAL_FRAMES, RAYCAST_RANGE_PAD } from "../../objects/actors/state/constants";
 import { PlayerBody } from "../../player/PlayerBody";
+import { posePlayerBody } from "../../player/registry";
 import { PLAYER_HEIGHT } from "../../player/spec";
 import { aimFromCamera } from "../../player/utils";
 import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/store";
@@ -20,7 +21,7 @@ import type { RemotePlayer } from "./types";
 
 /**
  * Remote players as beebles (player/PlayerBody.tsx, the local player's body), ALL driven from ONE useFrame
- * that writes each one's body state; React only sees the roster. Positions are played back on the SERVER
+ * that writes each one's body state and poses it; React only sees the roster. Positions are played back on the SERVER
  * clock by the entities' snapshot sampler (net/entities/utils.ts: a relocation snaps), and each received
  * pose (clip, head) is shown when that same clock reaches its move, so a jump clip starts as the body
  * leaves the ground. The sender's drawn pose is the source of truth: its facing is sampled from the track and
@@ -132,6 +133,7 @@ export const RemotePlayers = () => {
 
   // Before PlayerBody's pose (-2), as the local Player (-3).
   useFrame((state, delta) => {
+    const nowMs = state.clock.elapsedTime * 1000;
 
     for (const p of getRemotePlayers().values()) {
       if (p.playback.sample(p, delta, p.pose) === "none") continue;
@@ -147,6 +149,7 @@ export const RemotePlayers = () => {
       body.feetZ = p.z;
       body.yaw = pose.ry;
       body.visible = true;
+      posePlayerBody(body, nowMs);
       // Published positions are the capsule CENTER, which is the collider's.
       _next.x = p.x;
       _next.y = p.y;

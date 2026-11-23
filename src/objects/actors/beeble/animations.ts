@@ -95,9 +95,6 @@ export const HEAD_YAW_INPUT = "headYaw";
 export const HEAD_PITCH_INPUT = "headPitch";
 /** Farthest the head tilts up or down. */
 export const MAX_HEAD_PITCH = (60 * Math.PI) / 180;
-/** Height of the beeble's eyes above its feet (beeble.glb's eye meshes span y 1.77–1.87 at scale 1): where
- *  its head aims FROM. What it aims AT on a player is the player's eyes, its camera (player/spec.ts). */
-export const BEEBLE_EYE_HEIGHT = 1.82;
 
 /** The head's look, set in the BODY's frame: yaw about its up, then pitch about the turned head's right, both
  *  from the head's bind pose (beeble.glb's face looks level along the body's forward there). The clip's

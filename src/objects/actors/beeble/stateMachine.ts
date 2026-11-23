@@ -1,7 +1,7 @@
 import { angleDiffAbs, lerpAngle, custom, pitchToPlayerEyes, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/utils";
 import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
-import { PLAYER_HEIGHT } from "../../../player/spec";
-import { BEEBLE_EYE_HEIGHT, HEAD_PITCH_INPUT, HEAD_YAW_INPUT, MAX_HEAD_PITCH } from "./animations";
+import { PLAYER_EYE_HEIGHT, PLAYER_HEIGHT } from "../../../player/spec";
+import { HEAD_PITCH_INPUT, HEAD_YAW_INPUT, MAX_HEAD_PITCH } from "./animations";
 
 /** The template NPC behavior: wanders, notices a player in its sight cone, turns
  *  to face them, ascends when clicked. It never touches the scene: the head turn
@@ -28,8 +28,9 @@ function releaseHead(ctx: BehaviorContext): void {
   ctx.animation.setInput(HEAD_PITCH_INPUT, undefined);
 }
 
-/** This beeble's eyes above its positionRef (the body CENTER; its capsule is the player's). */
-const EYE_OFFSET = BEEBLE_EYE_HEIGHT - PLAYER_HEIGHT / 2;
+/** This beeble's eyes above its positionRef (the body CENTER): a beeble's body is the player's, so its
+ *  eyes are where a player's are. */
+const EYE_OFFSET = PLAYER_EYE_HEIGHT - PLAYER_HEIGHT / 2;
 
 function updateHeadTracking(ctx: BehaviorContext): void {
   let relAngle = angleToPlayer(ctx) - ctx.motion.yaw;

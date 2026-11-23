@@ -39,7 +39,6 @@ const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ s
 
 const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   id: p.id,
-  color: p.color,
   snapshots: [snapshotOf(p)],
   playback: new PosePlayback(),
   pose: { valid: false, x: p.x, y: p.y, z: p.z, ry: p.ry, vx: 0, vy: 0, vz: 0 },
