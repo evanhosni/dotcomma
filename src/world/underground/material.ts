@@ -136,14 +136,14 @@ export const createTunnelObjectMaterial = (): THREE.ShaderMaterial =>
     }),
   );
 
-/** The sewers' standing liquid: glossy green with drifting lighter streaks, lit as the deep walls —
+/** The sewers' standing sewage: glossy green with drifting lighter streaks, lit as the deep walls —
  *  the player's own light alone, its gloss with it — so it is dark wherever the walls are (a glow of
  *  its own showed the whole channel from any distance). */
-export const createLiquidMaterial = (): THREE.ShaderMaterial =>
+export const createSewageMaterial = (): THREE.ShaderMaterial =>
   finish(
     new THREE.ShaderMaterial({
       // LINEAR: 0x5a8a22; encoded on output.
-      uniforms: { ...sharedUniforms(), uTime: { value: 0 }, uLiquidColor: { value: new THREE.Vector3(0.102, 0.254, 0.016) } },
+      uniforms: { ...sharedUniforms(), uTime: { value: 0 }, uSewageColor: { value: new THREE.Vector3(0.102, 0.254, 0.016) } },
       vertexShader: /* glsl */ `
         ${CHUNK_PROJECTION_GLSL}
         void main() {
@@ -152,10 +152,10 @@ export const createLiquidMaterial = (): THREE.ShaderMaterial =>
       `,
       fragmentShader: /* glsl */ `
         uniform float uTime;
-        uniform vec3 uLiquidColor;
+        uniform vec3 uSewageColor;
         ${FRAGMENT_PRELUDE}
         void main() {
-          vec3 base = uLiquidColor;
+          vec3 base = uSewageColor;
           vec2 p = vWorldPosWrapped.xz;
           float streak = sin(p.x * 0.8 + p.y * 0.3 + uTime * 0.6) * sin(p.y * 1.3 - p.x * 0.2 - uTime * 0.45);
           vec3 color = base * (0.85 + 0.3 * smoothstep(0.2, 0.9, streak));
@@ -175,6 +175,6 @@ export const createLiquidMaterial = (): THREE.ShaderMaterial =>
 /** The manhole covers and frame rings: iron lit by the sky (the dressing base prepares it). */
 export const createIronMaterial = (): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.85, metalness: 0.35 });
 
-export const tickLiquid = (material: THREE.ShaderMaterial, time: number): void => {
+export const tickSewage = (material: THREE.ShaderMaterial, time: number): void => {
   material.uniforms.uTime.value = time;
 };

@@ -14,7 +14,7 @@ import { Walker } from "./Walker.js";
 /**
  * A walking NPC: its Walker, the terrain + dressing + tunnel chunks it HOLDS so the ground
  * around it exists, the player's tunnel rules (physics/tunnel-rules/index.ts: it walks caves and sewers
- * and falls down an open manhole as the player does; it never climbs out) and the player's two
+ * and falls down an open manhole as the player does; it never climbs a ladder: no walk is passed to the rules) and the player's two
  * surface fix-ups (stuck escape, analytic backstop), which a body in a tunnel skips.
  * A body whose held chunks aren't built yet simply doesn't move; nothing stalls the tick.
  * Its analytic height queries (spawn ground, backstop, stuck check) go through
@@ -77,7 +77,7 @@ export class GroundBody implements NpcBody {
     const feet = Number.isNaN(spawn.height) ? hintFeetY : spawn.height + SPAWN_CLEARANCE;
     this.spawn = spawn;
     this.walker = new Walker(pw, x, feet, z, shape);
-    this.tunnelBody = { x, y: feet + shape.height / 2, z, height: shape.height, radius: shape.radius, jump: false };
+    this.tunnelBody = { x, y: feet + shape.height / 2, z, height: shape.height, radius: shape.radius, jump: false, moveX: 0, moveZ: 0 };
     this.holds = [
       { store: pw.terrain, chunkSize: TERRAIN_CHUNK_SIZE, keys: new Set() },
       { store: pw.dressing, chunkSize: WORLD_CHUNK_SIZE, keys: new Set() },
@@ -108,7 +108,8 @@ export class GroundBody implements NpcBody {
     this.intentSpeedSq = vx * vx + vz * vz;
     if (!this.ready) return;
     const t = this.stepTunnels(dt);
-    this.walker.step(dt, t.holdWalk ? 0 : vx, t.holdWalk ? 0 : vz, t.vyOverride ?? vy, t.ignoreTerrain);
+    const pushed = t.pushX !== 0 || t.pushZ !== 0;
+    this.walker.step(dt, pushed ? t.pushX : t.holdWalk ? 0 : vx, pushed ? t.pushZ : t.holdWalk ? 0 : vz, t.vyOverride ?? vy, t.ignoreTerrain);
   }
 
   /** The shared tunnel rules on the world's tunnels, applied to this body. */

@@ -6,9 +6,9 @@
  */
 import type Rapier from "@dimforge/rapier3d-compat";
 import { smoothstep } from "../utils/math";
-import type { MovementModifiers } from "./movement-modifiers/types";
+import { LIQUID_VISCOSITY, MAX_SLIDE_ANGLE, SURFACE_MOVEMENT } from "./movement-modifiers/constants";
 import type { CharacterMotionState, RapierRuntime, CharacterShape, Character, CharacterInput, SwimInput, CharacterStepResult } from "./types";
-import { CONTROLLER_CONTACT_OFFSET, SLOPE_SLIDE_ANGLE, SNAP_TO_GROUND, SLOPE_SOFT_START, SLOPE_SOFT_END, SLOPE_TIMER_DECAY, GROUND_RAY_LENGTH, GROUND_RAY_SLACK, SLOPE_ENGAGE_DELAY, SLIDE_STOP_DECEL, SLIDE_MAX_SPEED, GRAVITY, TERMINAL_VELOCITY, NEAR_GROUND_FALL_SPEED_CAP, JUMP_IMPULSE, SWIM_SUBMERGED_FRACTION, SWIM_BREACH_REACH, SWIM_BREACH_IMPULSE, SWIM_SINK_SPEED, WATER_DRAG, SWIM_UP_SPEED, SWIM_UP_ACCEL, SWIM_HEAD_ABOVE_SURFACE, SWIM_SINK_ACCEL, MAX_SUBSTEPS, MAX_SUBSTEP_DISTANCE, SLIDE_ENGAGE_DELAY, SWIM_SPEED_FACTOR, GROUND_EMBED_TOLERANCE, GROUND_EMBED_RECOVERY, MAX_MOVEMENT_PER_FRAME } from "./constants";
+import { CONTROLLER_CONTACT_OFFSET, SLOPE_SLIDE_ANGLE, SNAP_TO_GROUND, SLOPE_SOFT_START, SLOPE_SOFT_END, SLOPE_TIMER_DECAY, GROUND_RAY_LENGTH, GROUND_RAY_SLACK, SLOPE_ENGAGE_DELAY, SLIDE_STOP_DECEL, SLIDE_MAX_SPEED, GRAVITY, TERMINAL_VELOCITY, NEAR_GROUND_FALL_SPEED_CAP, JUMP_IMPULSE, SWIM_SUBMERGED_FRACTION, SWIM_BREACH_REACH, SWIM_BREACH_IMPULSE, SWIM_SINK_SPEED, WATER_DRAG, SWIM_STROKE_IMPULSE, SWIM_HEAD_ABOVE_SURFACE, SWIM_SINK_ACCEL, MAX_SUBSTEPS, MAX_SUBSTEP_DISTANCE, SLIDE_ENGAGE_DELAY, GROUND_EMBED_TOLERANCE, GROUND_EMBED_RECOVERY, MAX_MOVEMENT_PER_FRAME, CEILING_BLOCKED_FRACTION, SUPPORT_REST_GAP } from "./constants";
 
 export const createCharacterMotionState = (): CharacterMotionState => ({
   vy: 0,
@@ -47,13 +47,13 @@ export const createCharacter = (rapier: RapierRuntime, world: Rapier.World, shap
   slideAngle: SLOPE_SLIDE_ANGLE,
 });
 
-/** The step's slope limits: the constants plus the surface's traction (physics/movement-modifiers/index.ts). */
+/** The step's slope limits: the constants times the ground's slope factor (physics/movement-modifiers/constants.ts). */
 const _slopes = { softStart: SLOPE_SOFT_START, softEnd: SLOPE_SOFT_END, slide: SLOPE_SLIDE_ANGLE };
-const applySlopeLimits = (c: Character, surface: MovementModifiers | null | undefined): typeof _slopes => {
-  const bonus = surface ? surface.slopeBonus : 0;
-  _slopes.softStart = SLOPE_SOFT_START + bonus;
-  _slopes.softEnd = SLOPE_SOFT_END + bonus;
-  _slopes.slide = SLOPE_SLIDE_ANGLE + bonus;
+const applySlopeLimits = (c: Character, slopeFactor: number): typeof _slopes => {
+  const k = Math.min(slopeFactor, MAX_SLIDE_ANGLE / SLOPE_SLIDE_ANGLE);
+  _slopes.softStart = SLOPE_SOFT_START * k;
+  _slopes.softEnd = SLOPE_SOFT_END * k;
+  _slopes.slide = SLOPE_SLIDE_ANGLE * k;
   // The controller's own climb wall follows the slide angle; two wasm calls, only when it moved.
   if (Math.abs(_slopes.slide - c.slideAngle) > 1e-4) {
     c.slideAngle = _slopes.slide;
@@ -216,13 +216,14 @@ const updateSlide = (s: CharacterMotionState, g: GroundProbe, onSlideSlope: bool
   s.slideSpeed = Math.min(SLIDE_MAX_SPEED, s.slideSpeed + -GRAVITY * Math.sin(g.angle) * dt);
 };
 
-/** Gravity (reset on support), the near-ground fall clamp and the jump — or the caller's own vy. */
-const updateVertical = (s: CharacterMotionState, input: CharacterInput, supported: boolean, nearGround: boolean, onSlideSlope: boolean, dt: number): void => {
+/** Gravity (reset on support with the gap under the capsule closed: `resting`), the near-ground fall clamp
+ *  and the jump — or the caller's own vy. */
+const updateVertical = (s: CharacterMotionState, input: CharacterInput, supported: boolean, resting: boolean, nearGround: boolean, onSlideSlope: boolean, dt: number): void => {
   if (input.vyOverride != null) {
     s.vy = input.vyOverride;
     return;
   }
-  if (supported && s.vy <= 0) {
+  if (supported && resting && s.vy <= 0) {
     s.vy = 0;
   } else {
     s.vy = Math.max(s.vy + GRAVITY * dt, TERMINAL_VELOCITY);
@@ -240,28 +241,24 @@ const isSwimming = (swim: SwimInput | null | undefined, py: number, height: numb
   !!swim && swim.surfaceY - (py - height / 2) > height * SWIM_SUBMERGED_FRACTION;
 
 /** The swim's vy, or false while a breach is still rising (plain gravity carries it out of the water). */
-const updateSwimVertical = (s: CharacterMotionState, input: CharacterInput, swim: SwimInput, py: number, height: number, dt: number): boolean => {
+const updateSwimVertical = (s: CharacterMotionState, swim: SwimInput, py: number, height: number, dt: number): boolean => {
   if (s.breaching) {
     if (s.vy > 0) return false;
     s.breaching = false;
   }
   const head = py + height / 2;
-  const thick = swim.viscosity ?? 1;
+  const thick = LIQUID_VISCOSITY[swim.liquid];
   if (swim.jumpPressed && head > swim.surfaceY - SWIM_BREACH_REACH) {
     s.vy = SWIM_BREACH_IMPULSE / thick;
     s.breaching = true;
     return true;
   }
   const sinkSpeed = SWIM_SINK_SPEED / thick;
-  // The drag only approaches the sink speed, so it must not gate the strokes below.
+  if (swim.jumpPressed) s.vy = Math.max(s.vy, SWIM_STROKE_IMPULSE / thick);
   if (s.vy < sinkSpeed) s.vy += (sinkSpeed - s.vy) * (1 - Math.exp(-WATER_DRAG * thick * dt));
-  if (input.jump) {
-    s.vy = Math.min(SWIM_UP_SPEED / thick, s.vy + (SWIM_UP_ACCEL / thick) * dt);
-    // Floats at the surface instead of shooting out of it: only a fresh press breaches.
-    s.vy = Math.min(s.vy, (swim.surfaceY + SWIM_HEAD_ABOVE_SURFACE - head) / dt);
-  } else if (s.vy > sinkSpeed) {
-    s.vy = Math.max(sinkSpeed, s.vy - (SWIM_SINK_ACCEL / thick) * dt);
-  }
+  else if (s.vy > sinkSpeed) s.vy = Math.max(sinkSpeed, s.vy - (SWIM_SINK_ACCEL / thick) * dt);
+  // A stroke from deep stops with the head at the surface instead of shooting out: only a press near it breaches.
+  if (s.vy > 0) s.vy = Math.min(s.vy, Math.max(0, swim.surfaceY + SWIM_HEAD_ABOVE_SURFACE - head) / dt);
   return true;
 };
 
@@ -318,8 +315,8 @@ const sweepSubstepped = (
 
 /** One step for a capsule at body center (px, py, pz): sets the body's NEXT
  *  kinematic translation and fills `out`. `dt` is the caller's already-clamped delta. Every capsule
- *  feels its ground: `input.surface` scales its walk and moves its slope limits (the snow's wading and
- *  traction, physics/movement-modifiers/index.ts). */
+ *  feels its ground: `input.surface` and a liquid over its feet (`input.swim`) scale its walk and its
+ *  slope limits (physics/movement-modifiers/constants.ts SURFACE_MOVEMENT). */
 export const stepCharacter = (
   world: Rapier.World,
   c: Character,
@@ -336,7 +333,9 @@ export const stepCharacter = (
   const filter = input.ignoreTerrain ? _notSensorNotTerrain : _notSensor;
   const grounded = controller.computedGrounded();
   const ground = probeGround(world, ray, c.shape.height / 2, c.shape.radius, collider, body, px, py, pz, filter);
-  const slopes = applySlopeLimits(c, input.surface);
+  const liquid = input.swim && input.swim.surfaceY > py - c.shape.height / 2 ? SURFACE_MOVEMENT[input.swim.liquid] : null;
+  const speedFactor = (input.surface ? input.surface.speedFactor : 1) * (liquid ? liquid.speed : 1);
+  const slopes = applySlopeLimits(c, (input.surface ? input.surface.slopeFactor : 1) * (liquid ? liquid.slope : 1));
 
   s.softSlopeTime = bumpSlopeTimer(s.softSlopeTime, ground.nearGround && ground.angle > slopes.softStart, dt, SLOPE_ENGAGE_DELAY);
   s.steepSlopeTime = bumpSlopeTimer(s.steepSlopeTime, ground.nearGround && ground.angle > slopes.slide, dt, SLIDE_ENGAGE_DELAY);
@@ -346,18 +345,15 @@ export const stepCharacter = (
   // slopes) AND holds true on steep faces (a pushed capsule crept UP 44°).
   const walkableSupport = ground.supported && ground.angle <= slopes.slide;
 
-  const walk = steerWalk(input, input.speed * (input.surface ? input.surface.speedFactor : 1), ground, s, slopes.softStart, slopes.softEnd);
+  const walk = steerWalk(input, input.speed * speedFactor, ground, s, slopes.softStart, slopes.softEnd);
   updateSlide(s, ground, onSlideSlope, dt);
   const swimming = input.vyOverride == null && isSwimming(input.swim, py, c.shape.height);
-  if (swimming) {
-    const factor = SWIM_SPEED_FACTOR / (input.swim!.viscosity ?? 1);
-    walk.x *= factor;
-    walk.z *= factor;
-  } else {
-    s.breaching = false;
-  }
-  if (!swimming || !updateSwimVertical(s, input, input.swim!, py, c.shape.height, dt)) {
-    updateVertical(s, input, grounded || walkableSupport, ground.nearGround, onSlideSlope, dt);
+  if (!swimming) s.breaching = false;
+  if (!swimming || !updateSwimVertical(s, input.swim!, py, c.shape.height, dt)) {
+    // Support reaches SNAP_TO_GROUND under the feet, and the controller snaps only a MOVING capsule: a
+    // fall that stopped on support alone hung a still capsule up to 0.4u over the floor after a jump.
+    const resting = ground.embed >= -(CONTROLLER_CONTACT_OFFSET + SUPPORT_REST_GAP);
+    updateVertical(s, input, grounded || walkableSupport, resting, ground.nearGround, onSlideSlope, dt);
   }
 
   _desired.x = (walk.x + s.slideDirX * s.slideSpeed) * dt;
@@ -372,6 +368,9 @@ export const stepCharacter = (
     _desired.z *= k;
   }
   sweepSubstepped(world, controller, body, collider, px, py, pz, filter);
+  // A rise the sweep stopped short of (a ceiling) ends the rise: kept, the upward speed drained by gravity
+  // alone and held the head against the ceiling for a moment before the fall.
+  if (s.vy > 0 && _desired.y > 0 && _trans.y - py < _desired.y * CEILING_BLOCKED_FRACTION) s.vy = 0;
 
   out.x = _trans.x;
   out.y = _trans.y;

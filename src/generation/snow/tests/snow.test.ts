@@ -1,7 +1,8 @@
-/** The movement modifiers (physics/movement-modifiers/index.ts) as the snow fills them: depth → speed factor
- *  and slope bonus, no snow for a capsule off the drawn ground, and the sheet's own rule. */
+/** The movement modifiers (physics/movement-modifiers/index.ts) as the snow fills them: the "snow" surface's
+ *  multipliers whatever the depth, no snow for a capsule off the drawn ground, and the sheet's own rule. */
 import { DOMAIN_CONFIGS } from "../../../world/domains";
-import { combineMovementModifiers, createMovementModifiers, SLOPE_BONUS_LIMIT } from "../../../physics/movement-modifiers";
+import { combineMovementModifiers, createMovementModifiers } from "../../../physics/movement-modifiers";
+import { SURFACE_MOVEMENT } from "../../../physics/movement-modifiers/constants";
 import { findBiomeCell, getBiomeCellSite, getSnowDrift, initCompute, surfaceModifiersAt } from "../..";
 import { drawnGroundAt } from "../../drawn-ground";
 import { DRESSING_ENUMERATORS } from "../../../objects/dressing/registry";
@@ -30,27 +31,27 @@ const snowyPoint = (): { x: number; z: number; depth: number } | null => {
 };
 
 describe("snow", () => {
-  it("slows and shoulders a capsule by its depth, and not one off the drawn ground", () => {
+  it("gives a capsule in a pile the snow's multipliers, whatever its depth, and not one off the drawn ground", () => {
     const p = snowyPoint();
     expect(p).not.toBeNull();
     const { x, z, depth } = p!;
     expect(depth).toBeLessThanOrEqual(1.85);
     const m = surfaceModifiersAt(x, z, drawnGroundAt(x, z));
     expect(m.snowDepth).toBeCloseTo(depth, 9);
-    expect(m.speedFactor).toBeCloseTo(Math.max(0.25, 1 - 0.42 * depth), 9);
-    expect(m.slopeBonus).toBeCloseTo(Math.min((12 * Math.PI) / 180, (8 * Math.PI) / 180 * depth), 9);
+    expect(m.speedFactor).toBe(SURFACE_MOVEMENT.snow.speed);
+    expect(m.slopeFactor).toBe(SURFACE_MOVEMENT.snow.slope);
     const off = surfaceModifiersAt(x, z, drawnGroundAt(x, z) + 5);
     expect(off.speedFactor).toBe(1);
-    expect(off.slopeBonus).toBe(0);
+    expect(off.slopeFactor).toBe(1);
     expect(off.snowDepth).toBe(0);
   });
 
-  it("clamps the slope bonus to the limit and multiplies speed factors", () => {
+  it("multiplies every kind's factors in", () => {
     const m = createMovementModifiers();
-    combineMovementModifiers(m, 0.5, 0.2);
-    combineMovementModifiers(m, 0.5, 0.2);
-    expect(m.speedFactor).toBe(0.25);
-    expect(m.slopeBonus).toBe(SLOPE_BONUS_LIMIT);
+    combineMovementModifiers(m, "snow");
+    combineMovementModifiers(m, "water");
+    expect(m.speedFactor).toBeCloseTo(SURFACE_MOVEMENT.snow.speed * SURFACE_MOVEMENT.water.speed, 12);
+    expect(m.slopeFactor).toBeCloseTo(SURFACE_MOVEMENT.snow.slope * SURFACE_MOVEMENT.water.slope, 12);
   });
 
   it("lays a sheet the snow's depth over the drawn ground, its cut vertices just under it", () => {

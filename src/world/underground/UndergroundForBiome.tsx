@@ -24,7 +24,7 @@ import type { CoverRuntime, TunnelChunkObject } from "./types";
 import { driveUnderground, entranceFadeOf, isCellLoaded, registerChunk, unregisterChunk } from "./registry";
 import { isOpen, onToggle, toggleOpen } from "./store";
 import { buildUndergroundChunk } from "./worker";
-import { tickLiquid } from "./material";
+import { tickSewage } from "./material";
 import { COVER_REACH, COVER_SLACK, HOLE_REACH, HOLE_SLACK, DOOR_CANDIDATE_REACH, DOOR_REACH, PICK_INTERVAL_FRAMES } from "./constants";
 import { CAVE_RENDER_DISTANCE, SEWER_RENDER_DISTANCE, DEFAULT_COLLIDER_DISTANCE } from "./defaults";
 
@@ -223,7 +223,7 @@ export const UndergroundForBiome = ({ tunnel: style, biomeId, renderDistance, co
 
   useFrame((state, delta) => {
     driveUnderground(state, delta);
-    tickLiquid(assets.liquid.material, state.clock.elapsedTime);
+    tickSewage(assets.sewage.material, state.clock.elapsedTime);
     const cam = state.camera.position;
     const alive = aliveRef.current;
     alive.length = 0;

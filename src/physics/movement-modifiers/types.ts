@@ -1,8 +1,18 @@
+export type LiquidKind = "water" | "sewage";
+export type SurfaceKind = "snow" | LiquidKind;
+
+export interface SurfaceMovement {
+  /** Multiplies the walk speed (1 = neutral). */
+  speed: number;
+  /** Multiplies every slope limit (1 = neutral). */
+  slope: number;
+}
+
 export interface MovementModifiers {
   /** Multiplies the walk speed (1 = neutral). */
   speedFactor: number;
-  /** Added to every slope limit (radians): the uphill fade's start and end and the slide angle. */
-  slopeBonus: number;
+  /** Multiplies every slope limit: the uphill fade's start and end and the slide angle. */
+  slopeFactor: number;
   /** The snow depth under the capsule (0 = none). */
   snowDepth: number;
 }

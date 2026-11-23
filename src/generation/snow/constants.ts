@@ -26,13 +26,9 @@ export const EDGE_AMOUNT = 0.18;
 export const KEEP_OFF_FADE = 4;
 /** Water: no snow under it or within this of its surface. */
 export const WATER_CLEAR = 0.3;
-/** Wading: speed × max(SPEED_FLOOR, 1 − SPEED_PER_DEPTH × depth) — the deepest pile (1.85u) is a
- *  quarter of the walk; and TRACTION: every slope limit rises SLOPE_BONUS_PER_DEPTH per unit of depth, up
- *  to SLOPE_BONUS_MAX (deep snow packs under the feet; the slide angle 40° → 52°). Both grow with the depth. */
-export const SPEED_PER_DEPTH = 0.42;
-export const SPEED_FLOOR = 0.25;
-export const SLOPE_BONUS_PER_DEPTH = 8 * (Math.PI / 180);
-export const SLOPE_BONUS_MAX = 12 * (Math.PI / 180);
+/** Snow at least this deep is the "snow" surface (its walk and slope multipliers: physics/movement-modifiers/constants.ts);
+ *  thinner is a dusting over the biome's own ground. */
+export const SNOW_WADE_DEPTH = 0.05;
 /** The sheet's grid, and how far the cut edge sits under the ground. */
 export const SNOW_GRID = 2;
 export const EDGE_SINK = 0.05;

@@ -10,6 +10,7 @@ import { SAMPLE_GIVE_UP_MS } from "./constants";
 import { playerTunnels } from "../world/underground/registry";
 import { createTunnelState, createTunnelStep, resetTunnelState, stepTunnelRules } from "../physics/tunnel-rules";
 import type { TunnelBody, TunnelStep } from "../physics/tunnel-rules/types";
+import type { PointXZ } from "../utils/math/types";
 import { setCameraUnderground } from "../world/shaders/terrain-holes/store";
 import { writeWaterColors } from "../generation/water/material";
 import { getActiveDomainConfig, isDomainCommitted } from "../world/domains/store";
@@ -195,7 +196,7 @@ interface Position {
 export const useUndergroundMode = () => {
   const state = useRef(createTunnelState()).current;
   const step = useRef(createTunnelStep()).current;
-  const body = useRef<TunnelBody>({ x: 0, y: 0, z: 0, height: PLAYER_HEIGHT, radius: PLAYER_RADIUS, jump: false }).current;
+  const body = useRef<TunnelBody>({ x: 0, y: 0, z: 0, height: PLAYER_HEIGHT, radius: PLAYER_RADIUS, jump: false, moveX: 0, moveZ: 0 }).current;
 
   const isInside = (): boolean => state.inside;
   /** Seconds since the player was last inside a tunnel (Infinity: never). */
@@ -207,11 +208,13 @@ export const useUndergroundMode = () => {
   };
 
   /** The step's adjustments for the capsule at body center `pos`; may teleport the body (a manhole's catch, its exit). */
-  const update = (rb: RapierRigidBody, pos: Position, input: InputState, character: Character, dt: number): TunnelStep => {
+  const update = (rb: RapierRigidBody, pos: Position, input: InputState, move: PointXZ, character: Character, dt: number): TunnelStep => {
     body.x = pos.x;
     body.y = pos.y;
     body.z = pos.z;
     body.jump = input.jump;
+    body.moveX = move.x;
+    body.moveZ = move.z;
     stepTunnelRules(playerTunnels, state, step, body, dt);
     if (!Number.isNaN(step.teleportX)) rb.setTranslation({ x: step.teleportX, y: step.teleportY, z: step.teleportZ }, true);
     if (step.resetMotion) resetCharacterMotion(character.state);

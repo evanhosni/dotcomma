@@ -8,7 +8,7 @@ export type TunnelAssets = {
   caveRock: SelfPatchedMaterial;
   sewerWall: SelfPatchedMaterial;
   object: SelfPatchedMaterial;
-  liquid: SelfPatchedMaterial;
+  sewage: SelfPatchedMaterial;
   iron: THREE.MeshStandardMaterial;
   cover: THREE.BufferGeometry;
 };

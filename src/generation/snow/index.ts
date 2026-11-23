@@ -19,7 +19,7 @@ import { caveKeepOffFade, keepOffRadius, mouthsNear, caveMouthsNear } from "../u
 import { mouthSectionDistanceToRect } from "../underground/field";
 import type { MouthPiece } from "../underground/types";
 import { biomeWeightOf, computeVertexData, riverKeepOff } from "..";
-import { ALTITUDE_LOW, ALTITUDE_HIGH, WATER_CLEAR, KEEP_OFF_FADE, SNOW_LINE_LOW, SNOW_LINE_HIGH, SLOPE_LIMIT, SLOPE_LIMIT_ALTITUDE, AMOUNT_OFFSET, SNOW_DEPTH_MAX, EDGE_AMOUNT, SLOPE_SOFT, GROUND_SLOPE_EXTRA, GROUND_SLOPE_SOFT, GROUND_AMOUNT_FADE, GROUND_AMOUNT_PAST, GROUND_DEPTH_SHARE, COVER_CACHE_MAX, SNOW_FEET_TOLERANCE, SPEED_FLOOR, SPEED_PER_DEPTH, SLOPE_BONUS_MAX, SLOPE_BONUS_PER_DEPTH, SNOW_GRID, EDGE_SINK } from "./constants";
+import { ALTITUDE_LOW, ALTITUDE_HIGH, WATER_CLEAR, KEEP_OFF_FADE, SNOW_LINE_LOW, SNOW_LINE_HIGH, SLOPE_LIMIT, SLOPE_LIMIT_ALTITUDE, AMOUNT_OFFSET, SNOW_DEPTH_MAX, EDGE_AMOUNT, SLOPE_SOFT, GROUND_SLOPE_EXTRA, GROUND_SLOPE_SOFT, GROUND_AMOUNT_FADE, GROUND_AMOUNT_PAST, GROUND_DEPTH_SHARE, COVER_CACHE_MAX, SNOW_FEET_TOLERANCE, SNOW_WADE_DEPTH, SNOW_GRID, EDGE_SINK } from "./constants";
 import type { SheetNodes, SnowDriftMesh } from "./types";
 
 /** A smooth 0–1 world field (~50–90u). */
@@ -136,8 +136,8 @@ const pileDepthAt = (x: number, z: number): number => {
   return pileDepthFrom(x, z, drawnGroundAt(x, z), cover * keepOff, slope);
 };
 
-/** The snow's share of a capsule's movement modifiers at a point (physics/movement-modifiers/index.ts): the
- *  pile's depth slows the walk and grips the slopes; folded into `out` (neutral off snow). `feetY`:
+/** The snow's share of a capsule's movement modifiers at a point (physics/movement-modifiers/index.ts): a
+ *  pile at least SNOW_WADE_DEPTH deep is the "snow" surface, whatever its depth; folded into `out` (neutral off snow). `feetY`:
  *  the capsule's feet, so a walker in a cave under a snowy summit is not wading (NaN = on the ground). */
 export const snowMovementAt = (x: number, z: number, out: MovementModifiers, feetY = NaN): MovementModifiers => {
   if (!domainConfig || snowBiomeIds().length === 0) return out;
@@ -145,7 +145,7 @@ export const snowMovementAt = (x: number, z: number, out: MovementModifiers, fee
   const depth = pileDepthAt(x, z);
   if (depth <= 0) return out;
   out.snowDepth = Math.max(out.snowDepth, depth);
-  combineMovementModifiers(out, Math.max(SPEED_FLOOR, 1 - SPEED_PER_DEPTH * depth), Math.min(SLOPE_BONUS_MAX, SLOPE_BONUS_PER_DEPTH * depth));
+  if (depth >= SNOW_WADE_DEPTH) combineMovementModifiers(out, "snow");
   return out;
 };
 

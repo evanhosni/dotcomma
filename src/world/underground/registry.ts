@@ -16,7 +16,7 @@ import { isOpen, onToggle } from "./store";
 
 /**
  * THE UNDERGROUND REGISTRY (main thread): every loaded tunnel chunk in THE player's TunnelSpace
- * (generation/underground/field/TunnelSpace.ts: the probe, the floor, the manhole columns, the liquid —
+ * (generation/underground/field/TunnelSpace.ts: the probe, the floor, the manhole columns, the sewage —
  * the same answers the server's NPCs move by), plus the client's own: the skirt masks, the mouths, and
  * the ONE per-frame driver every mounted tunnel feature calls (it runs once per frame whoever calls
  * first): the terrain's openings, the LOD1 sites and the entrance fades.

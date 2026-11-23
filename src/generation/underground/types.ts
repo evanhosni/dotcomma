@@ -273,8 +273,8 @@ export interface UndergroundChunk {
   /** Positions relative to (centerX, 0, centerZ). */
   mesh: TunnelMesh;
   colliders: ColumnCollider[];
-  /** Sewers: the liquid surface, relative like the mesh. */
-  liquid: { positions: Float32Array; indices: Uint32Array } | null;
+  /** Sewers: the sewage surface, relative like the mesh. */
+  sewage: { positions: Float32Array; indices: Uint32Array } | null;
   patch: EntrancePatch | null;
   doors: SewerDoor[];
   /** Sewers: the border caps, per neighbour chunk. */

@@ -1,5 +1,5 @@
 import type Rapier from "@dimforge/rapier3d-compat";
-import type { MovementModifiers } from "./movement-modifiers/types";
+import type { LiquidKind, MovementModifiers } from "./movement-modifiers/types";
 
 export interface CharacterShape {
   height: number;
@@ -20,13 +20,13 @@ export interface CharacterMotionState {
 }
 
 export interface SwimInput {
-  /** The water surface over the capsule. */
+  /** The liquid's surface over the capsule. */
   surfaceY: number;
+  /** Which liquid: its walk and slope multipliers (SURFACE_MOVEMENT) apply from the feet under the
+   *  surface, and its LIQUID_VISCOSITY thickens the swim (physics/movement-modifiers/constants.ts). */
+  liquid: LiquidKind;
   /** The jump key went down this step (not merely held). */
   jumpPressed: boolean;
-  /** The liquid's viscosity relative to water (unset = 1): divides every swim speed and acceleration
-   *  and multiplies the drag — the sewers' liquid is thick. */
-  viscosity?: number;
 }
 
 export interface CharacterInput {
@@ -36,13 +36,13 @@ export interface CharacterInput {
   jump: boolean;
   /** Caller drives vy this step (NPC ascend, a manhole climb); gravity, fall clamp and jump are skipped. */
   vyOverride?: number | null;
-  /** Water over the capsule (unset = none): it swims once SWIM_SUBMERGED_FRACTION of it is under. */
+  /** A liquid over the capsule (unset = none): it wades from the feet under, swims once SWIM_SUBMERGED_FRACTION of it is. */
   swim?: SwimInput | null;
   /** The terrain heightfields (markTerrainCollider) are neither ground nor obstacle this step: a
    *  player in a tunnel under them (player/hooks.ts). */
   ignoreTerrain?: boolean;
-  /** What the ground under the capsule does to its walk and its grip (physics/movement-modifiers/index.ts: the snow's
-   *  drag and traction; unset = neutral). Sampled by the CALLER on a worker (`surfaceModifiersAt`) and
+  /** What the ground under the capsule does to its walk and its grip (physics/movement-modifiers/index.ts: the snow;
+   *  unset = neutral). Sampled by the CALLER on a worker (`surfaceModifiersAt`) and
    *  handed in: evaluating it on the stepping thread runs the height pipeline at the capsule, and a cold
    *  cell there costs 250–385ms (physics/DECISIONS.md). */
   surface?: MovementModifiers | null;

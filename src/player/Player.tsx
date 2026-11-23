@@ -15,7 +15,7 @@ import { setCameraWaterDepth } from "../vfx/screen-pass/store";
 import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../lighting/personal-light";
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
-import { CAMERA_FAR } from "./constants";
+import { CAMERA_FAR, CAMERA_PITCH_MARGIN } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useWaterProbe } from "./hooks";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
 import type { InputState } from "./types";
@@ -101,7 +101,7 @@ export const Player = () => {
   // the player from under the mountain onto its summit.
   const safetyNets = useGroundSafetyNets(rigidBodyRef, terrainLoaded, () => underground.isInside() || underground.outsideFor() < UNDERGROUND_NET_GRACE_SECONDS);
   const water = useWaterProbe();
-  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false, viscosity: 1 }).current;
+  const swimInput = useRef<SwimInput>({ surfaceY: NaN, jumpPressed: false, liquid: "water" }).current;
   const jumpWasHeld = useRef(false);
   // The ground under the player (CharacterInput.surface: the snow's drag and traction), sampled on the
   // dressing worker: on this thread the sample would run the height pipeline, and a cold mountain cell
@@ -198,26 +198,27 @@ export const Player = () => {
       return;
     }
 
-    let liquidY = NaN;
+    let sewageY = NaN;
     if (noclip) {
       flyNoclip(rb, pos, input, move, dt);
     } else {
       const collider = rb.collider(0);
       if (collider) {
-        const ug = underground.update(rb, pos, input, character, dt);
+        const ug = underground.update(rb, pos, input, move, character, dt);
         const at = rb.translation();
         const speed = input.sprint ? SPRINT_SPEED : WALK_SPEED;
         surface.sample(at.x, at.z, at.y - PLAYER_HEIGHT / 2);
-        // Inside a tunnel its liquid is the water; outside, the water probe's surface.
-        liquidY = ug.liquidY;
-        const surfaceY = underground.isInside() ? liquidY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
+        // Inside a tunnel its sewage is the liquid; outside, the water probe's surface.
+        sewageY = ug.sewageY;
+        const surfaceY = underground.isInside() ? sewageY : water.surfaceOver(at.y - PLAYER_HEIGHT / 2);
         swimInput.surfaceY = surfaceY;
-        swimInput.viscosity = underground.isInside() ? ug.liquidViscosity : 1;
+        swimInput.liquid = underground.isInside() ? "sewage" : "water";
         swimInput.jumpPressed = input.jump && !jumpWasHeld.current;
+        const pushed = ug.pushX !== 0 || ug.pushZ !== 0;
         const characterInput = {
-          dirX: ug.holdWalk ? 0 : move.x,
-          dirZ: ug.holdWalk ? 0 : move.z,
-          speed,
+          dirX: pushed ? ug.pushX : ug.holdWalk ? 0 : move.x,
+          dirZ: pushed ? ug.pushZ : ug.holdWalk ? 0 : move.z,
+          speed: pushed ? Math.hypot(ug.pushX, ug.pushZ) : speed,
           jump: input.jump,
           swim: Number.isNaN(surfaceY) ? null : swimInput,
           vyOverride: ug.vyOverride,
@@ -241,14 +242,14 @@ export const Player = () => {
     followWithCamera(finalPos);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
-    const cameraSurface = underground.isInside() ? liquidY : water.surfaceOver(camera.position.y);
+    const cameraSurface = underground.isInside() ? sewageY : water.surfaceOver(camera.position.y);
     if (underground.isInside()) setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "sewage");
     else setCameraWaterDepth(Number.isNaN(cameraSurface) ? 0 : cameraSurface - camera.position.y, "water", water.colors());
   }, -3);
 
   return (
     <>
-      <PointerLockControls />
+      <PointerLockControls minPolarAngle={CAMERA_PITCH_MARGIN} maxPolarAngle={Math.PI - CAMERA_PITCH_MARGIN} />
       <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={spawn} colliders={false} ccd>
         <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
       </RigidBody>

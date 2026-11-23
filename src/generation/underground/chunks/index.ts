@@ -197,7 +197,7 @@ export const buildCaveChunk = (b: RectXZ, biomeId: number): UndergroundChunk | n
     masks: masksTouching(masks, b),
     mesh: assembly.mesh(),
     colliders: assembly.colliders(),
-    liquid: null,
+    sewage: null,
     patch: patchIndices.length > 0 ? buildPatch(patchVertices, patchIndices, centerX, centerZ) : null,
     doors: [],
     caps: [],
@@ -207,7 +207,7 @@ export const buildCaveChunk = (b: RectXZ, biomeId: number): UndergroundChunk | n
 /**
  * A SEWER chunk (per 256u streaming chunk and biome): every district layout in reach, its explicit faces
  * (generation/underground/sewers/geometry.ts) clipped to the chunk and cut at the drawn ground, with per-vertex color and daylight
- * from the manholes; the column colliders, the liquid, the doors and the border caps. Positions relative
+ * from the manholes; the column colliders, the sewage, the doors and the border caps. Positions relative
  * to the chunk's center in x/z, absolute in y. Three-free.
  */
 
@@ -358,8 +358,8 @@ const p3X = (p: P3): number => p[0];
 const p3Z = (p: P3): number => p[2];
 const lerpP3 = (p: P3, q: P3, t: number): P3 => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t];
 
-/** Convex polygons (absolute) clipped to the chunk and fanned into a liquid surface relative to its center. */
-const clipLiquid = (polygons: readonly P3[][], b: RectXZ, centerX: number, centerZ: number): UndergroundChunk["liquid"] => {
+/** Convex polygons (absolute) clipped to the chunk and fanned into a sewage surface relative to its center. */
+const clipSewage = (polygons: readonly P3[][], b: RectXZ, centerX: number, centerZ: number): UndergroundChunk["sewage"] => {
   const positions: number[] = [];
   const indices: number[] = [];
   for (const points of polygons) {
@@ -403,7 +403,7 @@ interface SewerChunkParts {
   systemEntrances: TunnelEntrance[];
   masks: SkirtMask[];
   doors: SewerDoor[];
-  liquid: P3[][];
+  sewage: P3[][];
   /** The border caps' triangles, per border (bordersOf order). */
   caps: ChunkAssembly[];
 }
@@ -443,7 +443,7 @@ const addBorderCaps = (layout: SewerLayout, border: ChunkBorder, lights: readonl
 
 /** A merged district layout's share of the chunk: its pieces in reach, its manholes (and their
  *  daylight), masks and doors in the chunk, its faces clipped to the chunk and cut at the drawn
- *  ground, and its liquid. */
+ *  ground, and its sewage. */
 const addDistrictToSewerChunk = (layout: SewerLayout, district: string, b: RectXZ, assembly: ChunkAssembly, parts: SewerChunkParts): void => {
   const layoutAll = layoutPieces(layout, district);
   for (const p of layoutAll) if (boundsTouchXZ(p.bounds, b.minX, b.minZ, b.maxX, b.maxZ, FIELD_REACH)) parts.pieces.push(p);
@@ -483,7 +483,7 @@ const addDistrictToSewerChunk = (layout: SewerLayout, district: string, b: RectX
       cutAtGround(p, q, r, emit, underGround(p, q, r));
     }
   }
-  parts.liquid.push(...geometry.liquid.quads);
+  parts.sewage.push(...geometry.sewage.quads);
   bordersOf(b).forEach((border, i) => addBorderCaps(layout, border, lights, parts.caps[i]));
 };
 
@@ -493,7 +493,7 @@ export const buildSewerChunk = (b: RectXZ, biomeId: number): UndergroundChunk | 
   const centerX = (b.minX + b.maxX) / 2;
   const centerZ = (b.minZ + b.maxZ) / 2;
   const assembly = new ChunkAssembly(centerX, centerZ, b.minX, b.minZ, true);
-  const parts: SewerChunkParts = { pieces: [], entrances: [], systemEntrances: [], masks: [], doors: [], liquid: [], caps: bordersOf(b).map(() => new ChunkAssembly(centerX, centerZ, b.minX, b.minZ, true)) };
+  const parts: SewerChunkParts = { pieces: [], entrances: [], systemEntrances: [], masks: [], doors: [], sewage: [], caps: bordersOf(b).map(() => new ChunkAssembly(centerX, centerZ, b.minX, b.minZ, true)) };
   for (const [district, layout] of layouts) addDistrictToSewerChunk(layout, district, b, assembly, parts);
   if (parts.pieces.length === 0) return null;
   return {
@@ -506,7 +506,7 @@ export const buildSewerChunk = (b: RectXZ, biomeId: number): UndergroundChunk | 
     masks: parts.masks,
     mesh: assembly.mesh(),
     colliders: assembly.colliders(),
-    liquid: clipLiquid(parts.liquid, b, centerX, centerZ),
+    sewage: clipSewage(parts.sewage, b, centerX, centerZ),
     patch: null,
     mouths: [],
     doors: parts.doors,
@@ -519,7 +519,7 @@ export const buildSewerChunk = (b: RectXZ, biomeId: number): UndergroundChunk | 
 /**
  * THE tunnel chunk builder: one UndergroundChunk per 256u streaming chunk, style and biome — the caves'
  * (generation/underground/chunks/index.ts: surface nets, the entrance patch) or the sewers' (generation/underground/chunks/index.ts: explicit faces, the
- * liquid, the caps) — or null when nothing of the style reaches it. The tunnel worker and the server
+ * sewage, the caps) — or null when nothing of the style reaches it. The tunnel worker and the server
  * import it here. Three-free.
  */
 

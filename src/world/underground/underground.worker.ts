@@ -17,7 +17,7 @@ let initialized = false;
 const transferables = (chunk: UndergroundChunk): Transferable[] => {
   const out: Transferable[] = [chunk.mesh.positions.buffer, chunk.mesh.normals.buffer, chunk.mesh.colors.buffer, chunk.mesh.daylight.buffer, chunk.mesh.indices.buffer];
   for (const c of chunk.colliders) out.push(c.vertices.buffer, c.indices.buffer);
-  if (chunk.liquid) out.push(chunk.liquid.positions.buffer, chunk.liquid.indices.buffer);
+  if (chunk.sewage) out.push(chunk.sewage.positions.buffer, chunk.sewage.indices.buffer);
   if (chunk.patch) for (const value of Object.values(chunk.patch)) out.push((value as Float32Array).buffer);
   return out;
 };

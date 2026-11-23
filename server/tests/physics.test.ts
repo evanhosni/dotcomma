@@ -408,10 +408,10 @@ describe("full-speed slopes", () => {
 });
 
 describe("movement modifiers", () => {
-  // The snow's drag and traction reach a server walker through the ONE character step: its sampled
-  // `surface` (physics/movement-modifiers/index.ts) scales the walk and moves the slide angle, exactly as the
-  // player's does (the depth → factor rule itself is pinned in src/generation/snow/tests/snow.test.ts).
-  const walk = async (speedFactor: number, slopeBonus: number) => {
+  // The snow's multipliers reach a server walker through the ONE character step: its sampled
+  // `surface` (physics/movement-modifiers/index.ts) scales the walk and the slide angle, exactly as the
+  // player's does (the snow's own rule is pinned in src/generation/snow/tests/snow.test.ts).
+  const walk = async (speedFactor: number, slopeFactor: number) => {
     const world = await PhysicsWorld.create();
     try {
       const spot = findBiomePatch(GRASS_BIOME_ID)!;
@@ -419,7 +419,7 @@ describe("movement modifiers", () => {
       world.holdTerrainAround(spot.x, spot.z);
       world.workFor(Infinity);
       // The sample is answered in place, at once: the walker reads it from its next step on.
-      world.surfaceModifiersAt = (_x, _z, _feetY, answer) => answer({ speedFactor, slopeBonus, snowDepth: slopeBonus > 0 ? 1 : 0 });
+      world.surfaceModifiersAt = (_x, _z, _feetY, answer) => answer({ speedFactor, slopeFactor, snowDepth: slopeFactor > 1 ? 1 : 0 });
       const w = new Walker(world, spot.x, height + 0.1, spot.z, CAPSULE);
       for (let i = 0; i < 12; i++) {
         w.step(TICK_SECONDS, 0, 0);
@@ -437,11 +437,11 @@ describe("movement modifiers", () => {
     }
   };
 
-  it("a walker wades at the surface's speed factor and its slide angle moves by the bonus", async () => {
-    const neutral = await walk(1, 0);
-    const snow = await walk(0.5, 0.1);
+  it("a walker wades at the surface's speed factor and its slide angle scales by its slope factor", async () => {
+    const neutral = await walk(1, 1);
+    const snow = await walk(0.5, 1.2);
     assert.ok(neutral.along > SPEED * 0.6, `neutral walk: ${neutral.along.toFixed(2)}u in 1s`);
     assert.ok(Math.abs(snow.along / neutral.along - 0.5) < 0.15, `wading: ${snow.along.toFixed(2)}u vs ${neutral.along.toFixed(2)}u`);
-    assert.ok(Math.abs(snow.slideAngle - (neutral.slideAngle + 0.1)) < 1e-6, `slide angle ${snow.slideAngle} vs ${neutral.slideAngle} + 0.1`);
+    assert.ok(Math.abs(snow.slideAngle - neutral.slideAngle * 1.2) < 1e-6, `slide angle ${snow.slideAngle} vs ${neutral.slideAngle} × 1.2`);
   });
 });
