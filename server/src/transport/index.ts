@@ -97,6 +97,9 @@ const routeToWorld = (world: World, sessionId: string, msg: Exclude<ClientMessag
     case "tunnel:toggle":
       world.toggleTunnel(sessionId, msg.id);
       return;
+    case "player:click":
+      world.clickPlayer(sessionId, msg.id);
+      return;
   }
 };
 

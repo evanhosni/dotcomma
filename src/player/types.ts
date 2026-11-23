@@ -47,6 +47,8 @@ export interface PlayerActionSample {
   vy: number;
   /** Horizontal u/s. */
   speed: number;
+  /** Standing, the body turning in place toward the look. */
+  turningInPlace: boolean;
   sprint: boolean;
 }
 
@@ -56,8 +58,9 @@ export interface PlayerBodyState {
   feetY: number;
   feetZ: number;
   yaw: number;
-  /** The head bone's yaw from the body (HEAD_TURN_LAYER); undefined = the clip's. */
+  /** The head bone's yaw from the body and its pitch (+ = up) (HEAD_TURN_LAYER); undefined = the clip's. */
   headYaw: number | undefined;
+  headPitch: number | undefined;
   clip: string;
   clipSpeed: number;
   loop: "repeat" | "once";

@@ -47,13 +47,17 @@ export const createCharacter = (rapier: RapierRuntime, world: Rapier.World, shap
   slideAngle: SLOPE_SLIDE_ANGLE,
 });
 
+/** A swimmer's slope limits: no ground reaches them, so the water alone moves it (no slide, no uphill
+ *  fade, and the Rapier climb wall lifted so a stroke into a steep bank glides up it). */
+const NO_SLOPE_LIMIT = Math.PI / 2;
+
 /** The step's slope limits: the constants times the ground's slope factor (physics/movement-modifiers/constants.ts). */
 const _slopes = { softStart: SLOPE_SOFT_START, softEnd: SLOPE_SOFT_END, slide: SLOPE_SLIDE_ANGLE };
-const applySlopeLimits = (c: Character, slopeFactor: number): typeof _slopes => {
+const applySlopeLimits = (c: Character, slopeFactor: number, swimming: boolean): typeof _slopes => {
   const k = Math.min(slopeFactor, MAX_SLIDE_ANGLE / SLOPE_SLIDE_ANGLE);
-  _slopes.softStart = SLOPE_SOFT_START * k;
-  _slopes.softEnd = SLOPE_SOFT_END * k;
-  _slopes.slide = SLOPE_SLIDE_ANGLE * k;
+  _slopes.softStart = swimming ? NO_SLOPE_LIMIT : SLOPE_SOFT_START * k;
+  _slopes.softEnd = swimming ? NO_SLOPE_LIMIT : SLOPE_SOFT_END * k;
+  _slopes.slide = swimming ? NO_SLOPE_LIMIT : SLOPE_SLIDE_ANGLE * k;
   // The controller's own climb wall follows the slide angle; two wasm calls, only when it moved.
   if (Math.abs(_slopes.slide - c.slideAngle) > 1e-4) {
     c.slideAngle = _slopes.slide;
@@ -240,8 +244,10 @@ const updateVertical = (s: CharacterMotionState, input: CharacterInput, supporte
 const isSwimming = (swim: SwimInput | null | undefined, py: number, height: number): swim is SwimInput =>
   !!swim && swim.surfaceY - (py - height / 2) > height * SWIM_SUBMERGED_FRACTION;
 
-/** The swim's vy, or false while a breach is still rising (plain gravity carries it out of the water). */
-const updateSwimVertical = (s: CharacterMotionState, swim: SwimInput, py: number, height: number, dt: number): boolean => {
+/** The swim's vy, or false while a breach is still rising (plain gravity carries it out of the water).
+ *  `onBed`: resting on ray-confirmed support, where the sink stops (pressed on into a slope, the solve
+ *  deflected it down the fall line: a swimmer crept 0.15u/s down a 50° bed). */
+const updateSwimVertical = (s: CharacterMotionState, swim: SwimInput, py: number, height: number, onBed: boolean, dt: number): boolean => {
   if (s.breaching) {
     if (s.vy > 0) return false;
     s.breaching = false;
@@ -259,6 +265,7 @@ const updateSwimVertical = (s: CharacterMotionState, swim: SwimInput, py: number
   else if (s.vy > sinkSpeed) s.vy = Math.max(sinkSpeed, s.vy - (SWIM_SINK_ACCEL / thick) * dt);
   // A stroke from deep stops with the head at the surface instead of shooting out: only a press near it breaches.
   if (s.vy > 0) s.vy = Math.min(s.vy, Math.max(0, swim.surfaceY + SWIM_HEAD_ABOVE_SURFACE - head) / dt);
+  else if (onBed) s.vy = 0;
   return true;
 };
 
@@ -335,7 +342,9 @@ export const stepCharacter = (
   const ground = probeGround(world, ray, c.shape.height / 2, c.shape.radius, collider, body, px, py, pz, filter);
   const liquid = input.swim && input.swim.surfaceY > py - c.shape.height / 2 ? SURFACE_MOVEMENT[input.swim.liquid] : null;
   const speedFactor = (input.surface ? input.surface.speedFactor : 1) * (liquid ? liquid.speed : 1);
-  const slopes = applySlopeLimits(c, (input.surface ? input.surface.slopeFactor : 1) * (liquid ? liquid.slope : 1));
+  // Water overrides the ground's slopes: a swimmer never slides down the bed or is slowed up it.
+  const swimming = input.vyOverride == null && isSwimming(input.swim, py, c.shape.height);
+  const slopes = applySlopeLimits(c, (input.surface ? input.surface.slopeFactor : 1) * (liquid ? liquid.slope : 1), swimming);
 
   s.softSlopeTime = bumpSlopeTimer(s.softSlopeTime, ground.nearGround && ground.angle > slopes.softStart, dt, SLOPE_ENGAGE_DELAY);
   s.steepSlopeTime = bumpSlopeTimer(s.steepSlopeTime, ground.nearGround && ground.angle > slopes.slide, dt, SLIDE_ENGAGE_DELAY);
@@ -347,12 +356,16 @@ export const stepCharacter = (
 
   const walk = steerWalk(input, input.speed * speedFactor, ground, s, slopes.softStart, slopes.softEnd);
   updateSlide(s, ground, onSlideSlope, dt);
-  const swimming = input.vyOverride == null && isSwimming(input.swim, py, c.shape.height);
   if (!swimming) s.breaching = false;
-  if (!swimming || !updateSwimVertical(s, input.swim!, py, c.shape.height, dt)) {
-    // Support reaches SNAP_TO_GROUND under the feet, and the controller snaps only a MOVING capsule: a
-    // fall that stopped on support alone hung a still capsule up to 0.4u over the floor after a jump.
-    const resting = ground.embed >= -(CONTROLLER_CONTACT_OFFSET + SUPPORT_REST_GAP);
+  // Support reaches SNAP_TO_GROUND under the feet, and the controller snaps only a MOVING capsule: a
+  // fall that stopped on support alone hung a still capsule up to 0.4u over the floor after a jump.
+  const restGap = CONTROLLER_CONTACT_OFFSET + SUPPORT_REST_GAP;
+  const resting = ground.embed >= -restGap;
+  // The contact offset is held along the NORMAL, so on a slope the column's gap is 1/nY of it (a swimmer
+  // at rest on a 50° bed read 0.156u, past the flat 0.13u). Only the swim reads it: the land's `resting`
+  // is a fall-through defense.
+  const onBed = walkableSupport && ground.embed >= -restGap / Math.max(ground.nY, 0.25);
+  if (!swimming || !updateSwimVertical(s, input.swim!, py, c.shape.height, onBed, dt)) {
     updateVertical(s, input, grounded || walkableSupport, resting, ground.nearGround, onSlideSlope, dt);
   }
 

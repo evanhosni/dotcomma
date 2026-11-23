@@ -42,11 +42,29 @@ export const MAX_HEAD_TURN = (50 * Math.PI) / 180;
  *  beside and over the body, never through it, as third-person games frame their character. */
 export const THIRD_PERSON_SHOULDER = 1.8;
 export const THIRD_PERSON_RISE = 0.8;
-/** Looking at the body's FRONT: the look this far (radians) from its facing. Held FRONT_VIEW_SECONDS, with
- *  the head held still for as long (within HEAD_SETTLED of where it is turning), the head gives up turning
- *  after the look and faces forward, at the camera: a head that turned and centered at once looked wrong. */
+/** Looking at the body's FRONT: the look this far (radians) from its facing. With the mouse still for
+ *  FRONT_VIEW_SECONDS while there, the head gives up turning after the look and faces forward, at the camera. */
 export const FRONT_VIEW_ANGLE = (135 * Math.PI) / 180;
+/** ...and the look tilted no more than this up or down: looking well up or down is not looking at its face. */
+export const FRONT_VIEW_MAX_PITCH = (30 * Math.PI) / 180;
+/** A centered head follows the look again once the look is within this of the body's facing (the camera
+ *  back behind it), or the player moves. */
+export const FRONT_VIEW_RELEASE_ANGLE = Math.PI / 2;
 export const FRONT_VIEW_SECONDS = 1;
-export const HEAD_SETTLED = (3 * Math.PI) / 180;
 /** 1/s: how fast the head eases to its target yaw. */
 export const HEAD_TURN_RATE = 8;
+/** Standing in first person, the body turns in place (walking) once the look is this far from its facing
+ *  and stops within IN_PLACE_TURN_DONE, at IN_PLACE_TURN_RATE: the NPC beeble's own thresholds
+ *  (objects/actors/beeble/stateMachine.ts); until then only the head follows. */
+export const IN_PLACE_TURN_START = Math.PI / 2;
+export const IN_PLACE_TURN_DONE = Math.PI / 9;
+export const IN_PLACE_TURN_RATE = 4;
+/** What the crosshair is on: its ray's first hit, or the point this far along it when it hits nothing.
+ *  The third-person head looks at it, and switching views keeps the crosshair on it. */
+export const CROSSHAIR_AIM_FAR = 500;
+/** Into third person, the crosshair target is aimed at along the crosshair at the smooth maximum
+ *  (d^p + MIN^p)^(1/p) of its distance d and this: MIN right in front, the target itself from ~2 × MIN out. A
+ *  near target is (or nearly is) under no third-person crosshair, and solving for it swung the camera sideways. */
+export const VIEW_SWITCH_MIN_AIM = 10;
+/** The smooth maximum's sharpness: higher hands over from MIN to the target's own distance more abruptly. */
+export const VIEW_SWITCH_AIM_SHARPNESS = 4;

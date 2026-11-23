@@ -172,12 +172,19 @@ export const useInput = (): React.MutableRefObject<InputState> => {
     };
     const handleKeyDown = (e: KeyboardEvent) => setHeld(e.code, true);
     const handleKeyUp = (e: KeyboardEvent) => setHeld(e.code, false);
+    // A key held while the tab loses focus never sends its keyup; the game runs on behind a hidden tab,
+    // so a held W would walk the player off forever.
+    const releaseAll = () => {
+      for (const action of Object.keys(inputRef.current) as (keyof InputState)[]) inputRef.current[action] = false;
+    };
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", releaseAll);
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", releaseAll);
     };
   }, []);
 

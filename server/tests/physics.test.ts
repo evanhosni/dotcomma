@@ -21,6 +21,8 @@ import { Walker } from "../src/game/physics/bodies/Walker.js";
 import { GroundBody } from "../src/game/physics/bodies/GroundBody.js";
 import { findBiomePatch, findSlopeSpot } from "../src/cli/utils.js";
 import type { SlopeSample } from "../src/cli/types.js";
+import { stepCharacter } from "../../src/physics";
+import type { CharacterInput } from "../../src/physics/types";
 import { TERRAIN_SEGMENTS } from "../src/game/physics/constants.js";
 
 /** The tests run from the BUNDLE (build.mjs --tests), so the worker is the built one beside it. */
@@ -404,6 +406,41 @@ describe("full-speed slopes", () => {
     // Full speed ALONG the surface: its horizontal is cos(38°) of the walk.
     assert.ok(tagged > SPEED * Math.cos(PITCH) * 0.9, `tagged ramp: ${tagged.toFixed(2)}u in 1s`);
     assert.ok(untagged < tagged * 0.5, `untagged ramp: ${untagged.toFixed(2)}u vs ${tagged.toFixed(2)}u`);
+  });
+});
+
+describe("swimming", () => {
+  // Water overrides the ground's slopes: on a 50° bed (past the slide angle) a dry capsule slides, a
+  // swimming one settles where it sank.
+  const drift = async (swimming: boolean): Promise<{ downhill: number; slid: boolean }> => {
+    const world = await PhysicsWorld.create();
+    try {
+      // A fresh world holds no terrain: the ramp at the origin, where float32 resolves a centimetre.
+      const [X, Z, N, SIZE] = [0, 0, 21, 100];
+      const slope = Math.tan((50 * Math.PI) / 180);
+      const heights = new Float32Array(N * N);
+      for (let ix = 0; ix < N; ix++) for (let iz = 0; iz < N; iz++) heights[ix * N + iz] = (ix / (N - 1) - 0.5) * SIZE * slope;
+      const ground = world.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(X, 0, Z));
+      world.world.createCollider(RAPIER.ColliderDesc.heightfield(N - 1, N - 1, heights, { x: SIZE, y: 1, z: SIZE }), ground);
+      const w = new Walker(world, X, 2, Z, CAPSULE);
+      const input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null, swim: swimming ? { surfaceY: 20, jumpPressed: false, liquid: "water" } : null };
+      let slid = false;
+      for (let i = 0; i < Math.round(3 / TICK_SECONDS); i++) {
+        const p = w.position();
+        slid ||= stepCharacter(world.world, w.character, w.body, w.collider, p.x, p.y, p.z, input, TICK_SECONDS, w.lastStep).onSlideSlope;
+        world.step();
+      }
+      return { downhill: X - w.position().x, slid };
+    } finally {
+      world.free();
+    }
+  };
+
+  it("a swimmer on a slide slope stays put; a dry capsule slides", async () => {
+    const dry = await drift(false);
+    const wet = await drift(true);
+    assert.ok(dry.slid && dry.downhill > 1, `dry: slid ${dry.downhill.toFixed(2)}u downhill`);
+    assert.ok(!wet.slid && Math.abs(wet.downhill) < 0.1, `swimming: drifted ${wet.downhill.toFixed(2)}u downhill`);
   });
 });
 

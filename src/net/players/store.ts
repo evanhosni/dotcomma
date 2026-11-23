@@ -9,7 +9,11 @@ import { PosePlayback } from "../entities/posePlayback";
 import { pushSnapshot } from "../entities/utils";
 import type { Snapshot } from "../entities/types";
 import type { PlayerSnapshot, ServerMoveMessage } from "../protocol/types";
-import type { RemotePlayer } from "./types";
+import { PLAYER_HEIGHT } from "../../player/spec";
+import type { AvatarSnapshot, RemotePlayer } from "./types";
+
+/** Received poses kept per player: a clock that stops advancing (a hidden tab) must not grow it forever. */
+const MAX_AVATAR_QUEUE = 32;
 
 const players = new Map<string, RemotePlayer>();
 let rosterVersion = 0;
@@ -31,6 +35,8 @@ const snapshotOf = (m: PlayerSnapshot | ServerMoveMessage): Snapshot => ({
   vz: m.vz,
 });
 
+const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ st: m.st, hy: m.hy, hp: m.hp, clip: m.clip, cs: m.cs, loop: m.loop });
+
 const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   id: p.id,
   color: p.color,
@@ -40,8 +46,9 @@ const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   x: p.x,
   y: p.y,
   z: p.z,
-  displayYaw: p.ry,
-  object: null,
+  avatars: [avatarOf(p)],
+  meshes: [],
+  body: { feetX: p.x, feetY: p.y - PLAYER_HEIGHT / 2, feetZ: p.z, yaw: p.ry, headYaw: p.hy, headPitch: p.hp, clip: p.clip, clipSpeed: p.cs, loop: p.loop, visible: false },
   lastStamp: { x: Infinity, z: Infinity },
 });
 
@@ -70,11 +77,17 @@ onServerMessage((msg) => {
       break;
     case "move": {
       const p = players.get(msg.id);
-      if (p) pushSnapshot(p.snapshots, snapshotOf(msg));
+      if (!p) break;
+      pushSnapshot(p.snapshots, snapshotOf(msg));
+      p.avatars.push(avatarOf(msg));
+      if (p.avatars.length > MAX_AVATAR_QUEUE) p.avatars.shift();
       break;
     }
     case "leave":
       if (players.delete(msg.id)) bumpRoster();
+      break;
+    case "player:clicked":
+      console.log("you were clicked");
       break;
   }
 });

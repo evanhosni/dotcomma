@@ -16,11 +16,12 @@ import { driveFlashlight, drivePersonalLight, resetPersonalLight } from "../ligh
 import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
 import { wrapAngle } from "../utils/math";
-import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, FRONT_VIEW_SECONDS, HEAD_SETTLED, HEAD_TURN_RATE, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN } from "./constants";
+import { BEEBLE_EYE_HEIGHT, MAX_HEAD_PITCH } from "../objects/actors/beeble/animations";
+import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
-import { getThirdPersonBodySide, setCameraBoom } from "./store";
-import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
+import { getThirdPersonBodySide, setCameraBoom, setLocalPlayerBody } from "./store";
+import { PLAYER_EYE_OFFSET, PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
 import type { InputState, PlayerActionSample, PlayerBodyState } from "./types";
 import { playerAnimationOf } from "./utils";
 
@@ -63,6 +64,18 @@ const _up = new THREE.Vector3(0, 1, 0);
 const _moveVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 const _lookDirection = new THREE.Vector3();
+const _headAim = new THREE.Vector3();
+const _crosshairTarget = new THREE.Vector3();
+const _aimEuler = new THREE.Euler(0, 0, 0, "YXZ");
+/** Look-and-place rounds after a re-aim, for a boom a wall pulled in (the exact solve assumes its full length). */
+const WALLED_AIM_ROUNDS = 3;
+/** The look's pitch limit (PointerLockControls' clamp), for a re-aim. */
+const MAX_AIM_PITCH = Math.PI / 2 - CAMERA_PITCH_MARGIN;
+/** The look's pitch limit (PointerLockControls' clamp). */
+const MAX_LOOK_PITCH = Math.PI / 2 - CAMERA_PITCH_MARGIN;
+
+/** The head's pitch for a look pitch: the whole look range onto the head's, linearly. */
+const headPitchOf = (lookPitch: number): number => (MAX_HEAD_PITCH * lookPitch) / MAX_LOOK_PITCH;
 const _boom = new THREE.Vector3();
 const _right = new THREE.Vector3();
 
@@ -117,14 +130,22 @@ export const Player = () => {
   const surface = useRef(createSurfaceSampler(SURFACE_SAMPLE_INTERVAL, fetchSurfaceModifiers)).current;
   const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
   const thirdPerson = useThirdPersonToggle();
-  const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false }).current;
-  const body = useRef<PlayerBodyState>({ feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
+  const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false, turningInPlace: false }).current;
+  const body = useRef<PlayerBodyState>({ feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
   /** The head the camera follows (eased), and where the body stood last frame (its speed). */
   const pivot = useRef(new THREE.Vector3()).current;
   const lastFeet = useRef({ x: NaN, z: NaN }).current;
-  /** The head's front-view rule (driveBody): seconds the camera has looked at the body's front, seconds
-   *  the head has held its direction, and whether it has centered (until the look leaves the front). */
-  const head = useRef({ frontViewFor: 0, settledFor: 0, centered: false }).current;
+  /** The head's front-view rule (driveBody): seconds the mouse has been still (the camera's turn unchanged
+   *  since `lastLook`), and whether the head has centered (until the camera is back behind the body or the
+   *  player moves). */
+  const head = useRef({ mouseStillFor: 0, centered: false, lastLook: new THREE.Quaternion() }).current;
+  /** The view the camera was last placed for; a switch re-aims at what the old view's crosshair was on. */
+  const placedThirdPerson = useRef(false);
+  const switchAim = useRef(new THREE.Vector3()).current;
+  /** Each view's look when it was last left, and the look the last switch set (`entered`): while the camera
+   *  still has that one (the mouse untouched since), a switch gives the view back its own look. */
+  const viewLooks = useRef({ first: new THREE.Quaternion(), third: new THREE.Quaternion(), entered: new THREE.Quaternion(), switched: false }).current;
+  const aimRay = useMemo(() => new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }), [rapier]);
   const boomRay = useMemo(() => new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }), [rapier]);
 
   // The domain's spawn is a feet position; +0.05 keeps the capsule from starting inside the ground.
@@ -150,6 +171,11 @@ export const Player = () => {
       characterRef.current = null;
     };
   }, [world, rapier]);
+
+  useEffect(() => {
+    setLocalPlayerBody(body);
+    return () => setLocalPlayerBody(null);
+  }, [body]);
 
   useEffect(() => {
     camera.far = CAMERA_FAR;
@@ -178,28 +204,120 @@ export const Player = () => {
     if (holdY.current <= lowest) character.state.vy = 0;
     const sy = holdY.current;
     rb.setTranslation({ x: sx, y: sy, z: sz }, true);
-    _camTarget.set(sx, sy + PLAYER_HEIGHT * 0.5, sz);
+    _camTarget.set(sx, sy + PLAYER_EYE_OFFSET, sz);
     camera.position.copy(_camTarget);
     cameraReady.current = false;
     // Published while holding too: the address bar and terrain streaming follow the spawn, not the last stand.
     playerPosition.set(sx, sy, sz);
   };
 
-  /** First person: the camera is the eased head. Third person: it hangs THIRD_PERSON_DISTANCE behind the
-   *  head along the look, over the shoulder that leaves the body on its chosen side of the screen, pulled in front of whatever the boom hits
-   *  (the player's own body excluded). The boom's length along the look starts the aim ray (utils.ts). */
+  /** Eases the head the camera follows and places the camera for the view. On a view switch the camera is then
+   *  turned to what the old view's crosshair was on, so the crosshair stays on it; or, when the mouse has not
+   *  moved since the last switch, given back the look it had when this view was last left, so switching back
+   *  and forth never drifts. */
   const followWithCamera = (at: { x: number; y: number; z: number }, rb: RapierRigidBody): void => {
-    _camTarget.set(at.x, at.y + PLAYER_HEIGHT * 0.5, at.z);
+    const switching = thirdPerson.current !== placedThirdPerson.current;
+    const restore = switching && viewLooks.switched && camera.quaternion.equals(viewLooks.entered) ? (thirdPerson.current ? viewLooks.third : viewLooks.first) : null;
+    if (switching) (placedThirdPerson.current ? viewLooks.third : viewLooks.first).copy(camera.quaternion);
+    if (switching && !restore) {
+      crosshairTarget(rb, switchAim);
+      if (thirdPerson.current) {
+        const d = switchAim.distanceTo(camera.position);
+        const k = VIEW_SWITCH_AIM_SHARPNESS;
+        const aimAt = Math.pow(d ** k + VIEW_SWITCH_MIN_AIM ** k, 1 / k);
+        switchAim.copy(camera.position).addScaledVector(camera.getWorldDirection(_lookDirection), aimAt);
+      }
+    }
+    _camTarget.set(at.x, at.y + PLAYER_EYE_OFFSET, at.z);
     if (!cameraReady.current) {
       pivot.copy(_camTarget);
       cameraReady.current = true;
+    } else if (switching) {
+      // No easing left to slide the new camera off its aim.
+      pivot.copy(_camTarget);
     } else {
       pivot.lerp(_camTarget, CAMERA_LERP);
     }
+    placedThirdPerson.current = thirdPerson.current;
+    if (!switching) {
+      placeCamera(rb);
+      return;
+    }
+    if (restore) {
+      camera.quaternion.copy(restore);
+      placeCamera(rb);
+    } else {
+      aimCameraAt(switchAim);
+      if (!placeCamera(rb)) {
+        for (let i = 0; i < WALLED_AIM_ROUNDS; i++) {
+          lookAt(switchAim);
+          placeCamera(rb);
+        }
+      }
+    }
+    viewLooks.entered.copy(camera.quaternion);
+    viewLooks.switched = true;
+  };
+
+  /** Turns the camera so that, once placed for the view (at full boom), the crosshair is on `target`.
+   *  First person: straight at it from the head. Third person, solved exactly: the boom is -DISTANCE along
+   *  the look + SHOULDER along the camera's (horizontal) right + RISE up, so the crosshair passes through the
+   *  target when the target's offset from the head, seen from above, is SHOULDER along that right: the yaw
+   *  turns by asin(SHOULDER / horizontal distance) off "straight at it", and the pitch follows. */
+  const aimCameraAt = (target: THREE.Vector3): void => {
+    if (!thirdPerson.current) {
+      camera.position.copy(pivot);
+      lookAt(target);
+      return;
+    }
+    const shoulder = getThirdPersonBodySide() === "left" ? THIRD_PERSON_SHOULDER : -THIRD_PERSON_SHOULDER;
+    const hx = target.x - pivot.x;
+    const hz = target.z - pivot.z;
+    const h = Math.hypot(hx, hz);
+    if (h < 1e-6) return;
+    // Too close to fit beside the crosshair line: the nearest the yaw gets.
+    const turn = Math.asin(Math.max(-1, Math.min(1, shoulder / h)));
+    const yaw = Math.atan2(-hx, -hz) + turn;
+    const qx = hx - shoulder * Math.cos(yaw);
+    const qz = hz + shoulder * Math.sin(yaw);
+    const qy = target.y - pivot.y - THIRD_PERSON_RISE;
+    const pitch = Math.max(-MAX_AIM_PITCH, Math.min(MAX_AIM_PITCH, Math.atan2(qy, Math.hypot(qx, qz))));
+    camera.quaternion.setFromEuler(_aimEuler.set(pitch, yaw, 0));
+  };
+
+  /** What the crosshair is on from where the camera is now (the player's own body skipped): its ray's first
+   *  hit, or CROSSHAIR_AIM_FAR along it. */
+  const crosshairTarget = (rb: RapierRigidBody, out: THREE.Vector3): THREE.Vector3 => {
+    camera.getWorldDirection(_lookDirection);
+    aimRay.origin.x = camera.position.x;
+    aimRay.origin.y = camera.position.y;
+    aimRay.origin.z = camera.position.z;
+    aimRay.dir.x = _lookDirection.x;
+    aimRay.dir.y = _lookDirection.y;
+    aimRay.dir.z = _lookDirection.z;
+    const hit = world.castRay(aimRay, CROSSHAIR_AIM_FAR, true, rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, rb);
+    return out.copy(camera.position).addScaledVector(_lookDirection, hit ? hit.timeOfImpact : CROSSHAIR_AIM_FAR);
+  };
+
+  /** Turns the camera to look at `target` from where it is (no roll; the look's pitch clamp kept). */
+  const lookAt = (target: THREE.Vector3): void => {
+    const dx = target.x - camera.position.x;
+    const dy = target.y - camera.position.y;
+    const dz = target.z - camera.position.z;
+    if (dx * dx + dy * dy + dz * dz < 1e-6) return;
+    const pitch = Math.max(-MAX_AIM_PITCH, Math.min(MAX_AIM_PITCH, Math.atan2(dy, Math.hypot(dx, dz))));
+    camera.quaternion.setFromEuler(_aimEuler.set(pitch, Math.atan2(-dx, -dz), 0));
+  };
+
+  /** First person: the camera is the eased head. Third person: it hangs THIRD_PERSON_DISTANCE behind the
+   *  head along the look, over the shoulder that leaves the body on its chosen side of the screen, pulled in
+   *  front of whatever the boom hits (the player's own body excluded). The boom's length along the look starts
+   *  the aim ray (utils.ts). True when the camera is at its full boom (first person: always). */
+  const placeCamera = (rb: RapierRigidBody): boolean => {
     if (!thirdPerson.current) {
       camera.position.copy(pivot);
       setCameraBoom(0);
-      return;
+      return true;
     }
     camera.getWorldDirection(_lookDirection);
     _right.set(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -212,33 +330,61 @@ export const Player = () => {
     const reach = hit ? Math.max(hit.timeOfImpact - THIRD_PERSON_WALL_MARGIN, 0) : length;
     camera.position.copy(pivot).addScaledVector(_boom, reach);
     setCameraBoom(-reach * _boom.dot(_lookDirection));
+    return !hit;
   };
 
-  /** Picks this frame's clip and places the body: facing the walk in third person, the look in first. */
-  const driveBody = (at: { x: number; y: number; z: number }, move: THREE.Vector3, dt: number): void => {
+  /** Where the head looks, as a unit vector into `out`: the camera's look in first person (the camera is at
+   *  the eyes); in third person from the beeble's eyes to what the crosshair is on (crosshairTarget, cast every
+   *  frame), which the camera, behind and beside the head, sees from another angle. */
+  const headAimOf = (at: { x: number; y: number; z: number }, rb: RapierRigidBody, out: THREE.Vector3): THREE.Vector3 => {
+    if (!thirdPerson.current) return camera.getWorldDirection(out);
+    crosshairTarget(rb, _crosshairTarget);
+    out.set(_crosshairTarget.x - at.x, _crosshairTarget.y - (at.y - PLAYER_HEIGHT / 2 + BEEBLE_EYE_HEIGHT), _crosshairTarget.z - at.z);
+    return out.lengthSq() > 1e-6 ? out.normalize() : camera.getWorldDirection(out);
+  };
+
+  /** Places the body and picks this frame's clip. Moving, the body faces the walk; standing in first person,
+   *  the head follows the look and past IN_PLACE_TURN_START the body turns in place after it (the NPCs' way);
+   *  standing in third person, it stays put and only the head turns. */
+  const driveBody = (at: { x: number; y: number; z: number }, rb: RapierRigidBody, move: THREE.Vector3, dt: number): void => {
     action.speed = Number.isNaN(lastFeet.x) ? 0 : Math.hypot(at.x - lastFeet.x, at.z - lastFeet.z) / Math.max(dt, 1e-4);
     lastFeet.x = at.x;
     lastFeet.z = at.z;
+
+    headAimOf(at, rb, _headAim);
+    const lookYaw = Math.atan2(_headAim.x, _headAim.z);
+    const moving = move.lengthSq() > 0 && action.speed > PLAYER_MOVING_SPEED;
+    if (moving) {
+      action.turningInPlace = false;
+      body.yaw += wrapAngle(Math.atan2(move.x, move.z) - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
+    } else if (thirdPerson.current) action.turningInPlace = false;
+    else {
+      const off = Math.abs(wrapAngle(lookYaw - body.yaw));
+      if (off > IN_PLACE_TURN_START) action.turningInPlace = true;
+      else if (off < IN_PLACE_TURN_DONE) action.turningInPlace = false;
+      if (action.turningInPlace) body.yaw += wrapAngle(lookYaw - body.yaw) * (1 - Math.exp(-IN_PLACE_TURN_RATE * dt));
+    }
     playerAnimationOf(action, body);
 
-    camera.getWorldDirection(_lookDirection);
-    const lookYaw = Math.atan2(_lookDirection.x, _lookDirection.z);
-    if (!thirdPerson.current) body.yaw = lookYaw;
-    else if (move.lengthSq() > 0 && action.speed > PLAYER_MOVING_SPEED) {
-      body.yaw += wrapAngle(Math.atan2(move.x, move.z) - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
-    }
     const lookFromBody = wrapAngle(lookYaw - body.yaw);
+    const lookPitch = Math.asin(Math.max(-1, Math.min(1, _headAim.y)));
     const followYaw = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, lookFromBody));
     const headYaw = body.headYaw ?? 0;
-    if (Math.abs(lookFromBody) > FRONT_VIEW_ANGLE) head.frontViewFor += dt;
-    else {
-      head.frontViewFor = 0;
-      head.centered = false;
-    }
-    head.settledFor = Math.abs(followYaw - headYaw) < HEAD_SETTLED ? head.settledFor + dt : 0;
-    if (head.frontViewFor >= FRONT_VIEW_SECONDS && head.settledFor >= FRONT_VIEW_SECONDS) head.centered = true;
+    const atFront = Math.abs(lookFromBody) > FRONT_VIEW_ANGLE && Math.abs(lookPitch) <= FRONT_VIEW_MAX_PITCH;
+    // Under pointer lock the mouse only ever turns the camera: a camera turned since last frame is a mouse moved.
+    head.mouseStillFor = camera.quaternion.equals(head.lastLook) ? head.mouseStillFor + dt : 0;
+    head.lastLook.copy(camera.quaternion);
+    // Centered, it stays so while the look roams the front and sides, until the camera is back behind the
+    // body or the player moves.
+    if (moving || Math.abs(lookFromBody) < FRONT_VIEW_RELEASE_ANGLE) head.centered = false;
+    if (atFront && head.mouseStillFor >= FRONT_VIEW_SECONDS) head.centered = true;
     const headTarget = head.centered ? 0 : followYaw;
-    body.headYaw = headYaw + (headTarget - headYaw) * (1 - Math.exp(-HEAD_TURN_RATE * dt));
+    const headK = 1 - Math.exp(-HEAD_TURN_RATE * dt);
+    body.headYaw = headYaw + (headTarget - headYaw) * headK;
+    // The look's own tilt, scaled onto the head's range (centered with the yaw).
+    const pitchTarget = head.centered ? 0 : headPitchOf(lookPitch);
+    const headPitch = body.headPitch ?? 0;
+    body.headPitch = headPitch + (pitchTarget - headPitch) * headK;
     body.feetX = at.x;
     body.feetY = at.y - PLAYER_HEIGHT / 2;
     body.feetZ = at.z;
@@ -316,12 +462,12 @@ export const Player = () => {
 
     const finalPos = rb.translation();
     // The personal light comes on after a second in the dark (a tunnel out of its entrances' daylight).
-    drivePersonalLight(underground.isInside() ? entranceDaylightAt(finalPos.x, finalPos.y + PLAYER_HEIGHT * 0.5, finalPos.z) : 1, dt);
+    drivePersonalLight(underground.isInside() ? entranceDaylightAt(finalPos.x, finalPos.y + PLAYER_EYE_OFFSET, finalPos.z) : 1, dt);
     driveFlashlight(flashlight, camera.getWorldDirection(_flashlightDirection), dt);
     if (!noclip && terrainLoaded) safetyNets.runBackstop(finalPos, character);
     safetyNets.respawnIfFallen(finalPos, character);
     followWithCamera(finalPos, rb);
-    driveBody(finalPos, move, dt);
+    driveBody(finalPos, rb, move, dt);
     playerPosition.set(finalPos.x, finalPos.y, finalPos.z);
     water.sample(finalPos.x, finalPos.z);
     const cameraSurface = underground.isInside() ? sewageY : water.surfaceOver(camera.position.y);
