@@ -3,6 +3,7 @@ import type { ActorAttributes } from "../types";
 import { BUILDING_HULL_KEYS } from "./building/spec";
 import type { BuildingAttributes } from "./building/types";
 import type { MotionConfig, StateMachineConfig } from "./state/types";
+import { IS_DEV } from "../../utils/constants";
 
 /**
  * The Three-free, React-free definition of an actor kind — one per kind in
@@ -101,7 +102,7 @@ const warnedHullOverrides = new Set<string>();
  *  hull attribute: the server builds the sealed hull from the SPEC's hull, so the two would differ. */
 export const mountOverridesOf = (mount: ActorMount): Record<string, unknown> => {
   const { actor, ...overrides } = mount;
-  if (process.env.NODE_ENV !== "production" && actor.hull && !warnedHullOverrides.has(actor.id)) {
+  if (IS_DEV && actor.hull && !warnedHullOverrides.has(actor.id)) {
     const hullKeys = Object.keys(overrides).filter((k) => (BUILDING_HULL_KEYS as readonly string[]).includes(k));
     if (hullKeys.length > 0) {
       warnedHullOverrides.add(actor.id);

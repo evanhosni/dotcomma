@@ -4,6 +4,7 @@
  * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
 import type { DomainId, EntityRegisterItem, MoveIntent, PlayerData, PlayerSnapshot } from "../../../src/net/protocol/types";
+import { PLAYER_CLIPS } from "../../../src/player/constants";
 import { EntityManager } from "./entities/EntityManager.js";
 import type { PlayerView } from "./entities/types.js";
 import { PlayerPersistence } from "./PlayerPersistence.js";
@@ -41,6 +42,11 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
   vy: s.vy,
   vz: s.vz,
   ry: s.ry,
+  hy: s.hy,
+  hp: s.hp,
+  clip: s.clip,
+  cs: s.cs,
+  loop: s.loop,
 });
 
 export class World {
@@ -87,6 +93,11 @@ export class World {
       vy: 0,
       vz: 0,
       ry: 0,
+      hy: 0,
+      hp: 0,
+      clip: PLAYER_CLIPS.idle,
+      cs: 1,
+      loop: "repeat",
       lastMoveAt: Date.now(),
     };
     this.joinCount++;
@@ -117,8 +128,21 @@ export class World {
     s.vy = m.vy;
     s.vz = m.vz;
     s.ry = m.ry;
+    s.hy = m.hy;
+    s.hp = m.hp;
+    s.clip = m.clip;
+    s.cs = m.cs;
+    s.loop = m.loop;
     s.lastMoveAt = Math.max(Date.now(), s.lastMoveAt + 1);
     this.out.sendMany(this.room(s.domain), { t: "move", id, st: s.lastMoveAt, ...m }, id);
+  }
+
+  /** Tells `targetId` it was clicked: only a player in the clicker's domain, never the clicker itself. */
+  clickPlayer(id: string, targetId: string): void {
+    const s = this.sessions.get(id);
+    const target = this.sessions.get(targetId);
+    if (!s || !target || target === s || target.domain !== s.domain) return;
+    this.out.send(targetId, { t: "player:clicked", by: id });
   }
 
   changeDomain(id: string, domain: DomainId): void {

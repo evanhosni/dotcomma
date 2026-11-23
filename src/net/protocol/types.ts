@@ -11,9 +11,12 @@
  *   server → init    {id, color, spawn, domain, players[], serverTime, data}
  *                                                 also re-sent after a `domain` switch
  *   server → join    {player}                     to the rest of the domain
- *   both   → move    {id?, st?, x,y,z, vx,vy,vz, ry}   ~10Hz while moving, plus every start/stop/
- *                                                 turn/relocation; the client omits `id` and `st`,
- *                                                 the server stamps `st` (its clock) on the relay
+ *   both   → move    {id?, st?, x,y,z, vx,vy,vz, ry, hy, hp, clip, cs, loop}   ~10Hz while moving, plus every
+ *                                                 start/stop/turn/relocation and every change of the
+ *                                                 drawn pose (clip, head); the client omits `id` and
+ *                                                 `st`, the server stamps `st` (its clock) on the relay
+ *   client → player:click {id}                    a click on another player's beeble
+ *   server → player:clicked {by}                  to the clicked player only (same domain)
  *   client → domain  {domain}                     leave old room + join new + fresh init
  *   server → leave   {id}
  *   client → ping    {t0} / server → pong {t0, serverTime}   liveness + clock sync
@@ -29,15 +32,28 @@
  *                                                 changed fields only, ≤10Hz, to registrants
  *
  * Domains are the broadcast scope; nothing crosses one except the mover's re-init.
- * Coordinates: players = capsule CENTER, entities = FEET; `ry` = three.js rotation.y.
+ * Coordinates: players = capsule CENTER, entities = FEET; `ry` = three.js rotation.y (a player's: its BODY's).
  */
 import type { AnimationState } from "../../animation/types";
 import { DOMAIN_IDS } from "./enums";
 
 export type DomainId = (typeof DOMAIN_IDS)[number];
 
+/** What a player's beeble shows beyond its position and facing (player/PlayerBody.tsx). */
+export interface PlayerAvatar {
+  /** Head yaw from the body and head pitch (+ = up) (radians). */
+  hy: number;
+  hp: number;
+  /** The animation clip (player/constants.ts PLAYER_CLIPS), its speed and loop. */
+  clip: string;
+  cs: number;
+  loop: PlayerClipLoop;
+}
+
+export type PlayerClipLoop = "repeat" | "once";
+
 /** Presence of one session as every client sees it. */
-export interface PlayerSnapshot {
+export interface PlayerSnapshot extends PlayerAvatar {
   id: string;
   color: string;
   /** Server time (ms) of this pose: its last move's stamp. */
@@ -52,7 +68,7 @@ export interface PlayerSnapshot {
 }
 
 /** The movement payload shared by both directions of `move`. */
-export interface MoveIntent {
+export interface MoveIntent extends PlayerAvatar {
   x: number;
   y: number;
   z: number;
@@ -126,7 +142,14 @@ export interface TunnelToggleMessage {
   id: string;
 }
 
+/** A click on another player's beeble (net/players/RemotePlayers.tsx): relayed to that player only. */
+export interface PlayerClickMessage {
+  t: "player:click";
+  id: string;
+}
+
 export type ClientMessage =
+  | PlayerClickMessage
   | TunnelToggleMessage
   | HelloMessage
   | ClientMoveMessage
@@ -215,7 +238,14 @@ export interface EntityUpdateMessage extends EntityUpdateFields {
   id: string;
 }
 
+/** You were clicked by session `by` (PlayerClickMessage). */
+export interface PlayerClickedMessage {
+  t: "player:clicked";
+  by: string;
+}
+
 export type ServerMessage =
+  | PlayerClickedMessage
   | TunnelStateMessage
   | InitMessage
   | JoinMessage

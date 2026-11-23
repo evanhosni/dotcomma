@@ -1,7 +1,14 @@
 import type * as THREE from "three";
 import { PosePlayback } from "../entities/posePlayback";
 import type { Snapshot, PuppetTarget } from "../entities/types";
+import type { PlayerAvatar } from "../protocol/types";
+import type { PlayerBodyState } from "../../player/types";
 import type { PointXZ } from "../../utils/math/types";
+
+/** A drawn pose as received, stamped with its move's server time. */
+export interface AvatarSnapshot extends PlayerAvatar {
+  st: number;
+}
 
 export interface RemotePlayer {
   id: string;
@@ -14,9 +21,12 @@ export interface RemotePlayer {
   x: number;
   y: number;
   z: number;
-  /** Displayed facing, eased toward the sampled one. */
-  displayYaw: number;
-  object: THREE.Object3D | null;
+  /** Received drawn poses, oldest first; each is shown once the playback clock reaches its `st`. */
+  avatars: AvatarSnapshot[];
+  /** Its beeble (player/PlayerBody.tsx), written by RemotePlayers.tsx every frame, and the beeble's skinned
+   *  meshes (filled while it is mounted): what the crosshair picks, as on an NPC. */
+  body: PlayerBodyState;
+  meshes: THREE.SkinnedMesh[];
   /** Where its last snow stamp was laid (RemotePlayers.tsx, objects/dressing/snow-drift/store.ts). */
   lastStamp: PointXZ;
 }

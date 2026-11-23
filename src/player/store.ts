@@ -1,4 +1,4 @@
-import type { ScreenSide } from "./types";
+import type { PlayerBodyState, ScreenSide } from "./types";
 
 /** How far the camera hangs behind the player's head along the look: 0 in first person (Player.tsx). */
 let cameraBoom = 0;
@@ -15,4 +15,12 @@ let thirdPersonBodySide: ScreenSide = "left";
 export const getThirdPersonBodySide = (): ScreenSide => thirdPersonBodySide;
 export const setThirdPersonBodySide = (side: ScreenSide): void => {
   thirdPersonBodySide = side;
+};
+
+/** The local player's drawn pose, written by Player.tsx every frame: what LocalPlayerSync publishes. */
+let localBody: PlayerBodyState | null = null;
+
+export const getLocalPlayerBody = (): PlayerBodyState | null => localBody;
+export const setLocalPlayerBody = (body: PlayerBodyState | null): void => {
+  localBody = body;
 };

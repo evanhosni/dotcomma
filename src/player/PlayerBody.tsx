@@ -5,8 +5,9 @@ import * as THREE from "three";
 import { AnimationChannel } from "../animation/AnimationChannel";
 import { AnimationPlayer } from "../animation/AnimationPlayer";
 import { proceduralDurations } from "../animation/utils";
-import { HEAD_YAW_INPUT } from "../objects/actors/beeble/animations";
+import { HEAD_PITCH_INPUT, HEAD_YAW_INPUT } from "../objects/actors/beeble/animations";
 import { BEEBLE_SPEC } from "../objects/actors/beeble/spec";
+import { collectSkinnedMeshes } from "../objects/actors/model/geometry";
 import { acquireModelClone, markPoseChanged, reclaimModelClone, releaseModelClone } from "../objects/actors/model/store";
 import type { PlayerBodyState } from "./types";
 
@@ -16,11 +17,13 @@ const MODEL = BEEBLE_SPEC.model!;
 const ANIMATION = BEEBLE_SPEC.animation;
 
 /**
- * The player's body: a beeble clone from the actors' model pool (its materials prepared by the actor
+ * A player's body: a beeble clone from the actors' model pool (its materials prepared by the actor
  * base: quantization, curvature, lamp glow), posed by the same AnimationChannel + AnimationPlayer an NPC
- * uses, from the clip Player.tsx picked for this frame. Drawn only in third person.
+ * uses, from a PlayerBodyState: the local player's (Player.tsx: the clip it picked, drawn only in third
+ * person) or a remote one's (net/players/RemotePlayers.tsx: the pose its moves carried). `meshes` is filled
+ * with its posed skinned meshes while mounted, for the crosshair to pick (as an NPC's).
  */
-export const PlayerBody = ({ state }: { state: PlayerBodyState }) => {
+export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?: THREE.SkinnedMesh[] }) => {
   const gltf = useGLTF(MODEL, false);
   const [clone] = useState(() => acquireModelClone(MODEL, gltf, BEEBLE_SPEC.quantization));
   const groupRef = useRef<THREE.Group>(null);
@@ -29,6 +32,14 @@ export const PlayerBody = ({ state }: { state: PlayerBodyState }) => {
     return new AnimationChannel({ defaults: ANIMATION, durations: { ...durations, ...proceduralDurations(ANIMATION?.procedural) } });
   }, [clone]);
   const [player] = useState(() => new AnimationPlayer(ANIMATION));
+
+  useEffect(() => {
+    if (!meshes) return;
+    collectSkinnedMeshes(clone.scene, meshes);
+    return () => {
+      meshes.length = 0;
+    };
+  }, [clone, meshes]);
 
   useEffect(() => {
     reclaimModelClone(clone);
@@ -54,6 +65,7 @@ export const PlayerBody = ({ state }: { state: PlayerBodyState }) => {
     // Called every frame: a one-shot must not restart on each call (a NEW clip still starts at 0).
     channel.play(state.clip, { speed: state.clipSpeed, loop: state.loop, restart: false });
     channel.setInput(HEAD_YAW_INPUT, state.headYaw);
+    channel.setInput(HEAD_PITCH_INPUT, state.headPitch);
     // Posed in first person too: switching views shows the current frame, never a stale one.
     if (player.update(clone, group, channel.state, channel.inputs, nowMs)) markPoseChanged(clone);
   }, -2);

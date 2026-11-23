@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import * as THREE from "three";
 import type { ProceduralClip, ProceduralLayer, ProceduralPose } from "../../../animation/types";
 
 // The beeble's procedural animations (src/animation/README.md).
@@ -90,9 +90,21 @@ const beginInflate = (group: THREE.Object3D): ProceduralPose => {
 
 export const ASCEND_CLIP: ProceduralClip = { name: "ascend", duration: INFLATE_SECONDS, create: beginInflate };
 
-/** The head bone's yaw relative to the body (radians), set by the behavior. */
+/** The head bone's yaw relative to the body and its pitch (radians, + = up), set by the behavior. */
 export const HEAD_YAW_INPUT = "headYaw";
+export const HEAD_PITCH_INPUT = "headPitch";
+/** Farthest the head tilts up or down. */
+export const MAX_HEAD_PITCH = (60 * Math.PI) / 180;
+/** Height of the beeble's eyes above its feet (beeble.glb's eye meshes span y 1.77–1.87 at scale 1): where
+ *  its head aims FROM. What it aims AT on a player is the player's eyes, its camera (player/spec.ts). */
+export const BEEBLE_EYE_HEIGHT = 1.82;
 
+/** The head's look, set in the BODY's frame: yaw about its up, then pitch about the turned head's right, both
+ *  from the head's bind pose (beeble.glb's face looks level along the body's forward there). The clip's
+ *  head is replaced and whatever it did to the bones above the head (a spine leaning into the walk or the
+ *  idle) is undone, so pitch 0 is level whatever plays: posed in the parent's frame, the head took the
+ *  spine's lean and looked down. An input left undefined is 0 while the other is set; both undefined keep
+ *  the clip's head. Three objects are made in create (client-only): the server's three is a stub. */
 export const HEAD_TURN_LAYER: ProceduralLayer = {
   name: "head-turn",
   create: (root) => {
@@ -101,10 +113,31 @@ export const HEAD_TURN_LAYER: ProceduralLayer = {
       if (node.isBone && node.name === "head") head = node;
     });
     const rest = head?.quaternion.clone();
+    const bind = new THREE.Quaternion();
+    root.traverse((node: any) => {
+      const i = node.isSkinnedMesh ? (node.skeleton.bones as THREE.Object3D[]).indexOf(head!) : -1;
+      if (i < 0) return;
+      new THREE.Matrix4()
+        .copy(node.skeleton.boneInverses[i])
+        .invert()
+        .decompose(new THREE.Vector3(), bind, new THREE.Vector3());
+    });
+    const look = new THREE.Euler(0, 0, 0, "YXZ");
+    const target = new THREE.Quaternion();
+    const above = new THREE.Quaternion();
     return {
       pose(inputs, weight) {
         const yaw = inputs[HEAD_YAW_INPUT];
-        if (head && yaw !== undefined) head.rotation.y = yaw * weight;
+        const pitch = inputs[HEAD_PITCH_INPUT];
+        if (!head || (yaw === undefined && pitch === undefined)) return;
+        // The head's parent chain up to the model root, as the clip posed it this frame.
+        above.identity();
+        for (let node = head.parent; node && node !== root; node = node.parent) above.premultiply(node.quaternion);
+        // + about the body's right tilts its forward (+z) down: up is −pitch.
+        target.setFromEuler(look.set(-(pitch ?? 0), yaw ?? 0, 0)).multiply(bind);
+        target.premultiply(above.invert());
+        if (weight >= 1) head.quaternion.copy(target);
+        else head.quaternion.slerpQuaternions(rest!, target, weight);
       },
       dispose() {
         if (head && rest) head.quaternion.copy(rest);

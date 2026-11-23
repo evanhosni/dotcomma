@@ -15,8 +15,18 @@ export const setMainRenderFpsCap = (fps: number | undefined): void => {
 
 export const getMainRenderFpsCap = (): number => fpsCap;
 
+let backgroundTick = false;
+/** Set around a frame BackgroundLoop drives while rAF is stopped: it simulates but presents nothing. */
+export const setBackgroundTick = (on: boolean): void => {
+  backgroundTick = on;
+};
+
 /** Call exactly once per rAF tick, before any render-producing useFrame. */
 export const shouldPresentThisFrame = (): boolean => {
+  if (backgroundTick) {
+    renderThisFrame = false;
+    return false;
+  }
   if (fpsCap <= 0) {
     renderThisFrame = true;
     return true;

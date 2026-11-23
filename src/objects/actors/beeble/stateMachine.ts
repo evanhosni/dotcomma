@@ -1,10 +1,11 @@
-import { angleDiffAbs, lerpAngle, custom, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/utils";
+import { angleDiffAbs, lerpAngle, custom, pitchToPlayerEyes, onMouseLeftClick, playerOutsideRange, randomInterval } from "../state/utils";
 import type { BehaviorContext, StateMachineConfig, TriggerContext } from "../state/types";
-import { HEAD_YAW_INPUT } from "./animations";
+import { PLAYER_HEIGHT } from "../../../player/spec";
+import { BEEBLE_EYE_HEIGHT, HEAD_PITCH_INPUT, HEAD_YAW_INPUT, MAX_HEAD_PITCH } from "./animations";
 
 /** The template NPC behavior: wanders, notices a player in its sight cone, turns
  *  to face them, ascends when clicked. It never touches the scene: the head turn
- *  is an animation layer fed the yaw (./animations.ts). */
+ *  is an animation layer fed the yaw and the tilt toward the player's eyes (./animations.ts). */
 
 const BEEBLE_SPEED = 5;
 const ASCEND_SPEED = 8;
@@ -24,7 +25,11 @@ const angleToPlayer = (ctx: TriggerContext): number => ctx.motion.angleTo(ctx.pl
 /** Hands the head back to the clip. */
 function releaseHead(ctx: BehaviorContext): void {
   ctx.animation.setInput(HEAD_YAW_INPUT, undefined);
+  ctx.animation.setInput(HEAD_PITCH_INPUT, undefined);
 }
+
+/** This beeble's eyes above its positionRef (the body CENTER; its capsule is the player's). */
+const EYE_OFFSET = BEEBLE_EYE_HEIGHT - PLAYER_HEIGHT / 2;
 
 function updateHeadTracking(ctx: BehaviorContext): void {
   let relAngle = angleToPlayer(ctx) - ctx.motion.yaw;
@@ -33,6 +38,9 @@ function updateHeadTracking(ctx: BehaviorContext): void {
   relAngle = Math.max(-MAX_HEAD_TURN, Math.min(MAX_HEAD_TURN, relAngle));
   const yaw = ctx.animation.inputs[HEAD_YAW_INPUT] ?? 0;
   ctx.animation.setInput(HEAD_YAW_INPUT, lerpAngle(yaw, relAngle, HEAD_LERP_SPEED * ctx.delta));
+  const pitchTarget = Math.max(-MAX_HEAD_PITCH, Math.min(MAX_HEAD_PITCH, pitchToPlayerEyes(ctx, EYE_OFFSET)));
+  const pitch = ctx.animation.inputs[HEAD_PITCH_INPUT] ?? 0;
+  ctx.animation.setInput(HEAD_PITCH_INPUT, lerpAngle(pitch, pitchTarget, HEAD_LERP_SPEED * ctx.delta));
 }
 
 /** The PER-PLAYER effect example: on a client mirror `ctx.input` is this player's

@@ -1,5 +1,5 @@
 import { isDomainId } from "../../../src/net/protocol/utils";
-import { PLAYER_DATA_MAX_BYTES, TUNNEL_TOGGLE_ID } from "../../../src/net/protocol/constants";
+import { MAX_CLIP_NAME_LENGTH, MAX_CLIP_SPEED, PLAYER_DATA_MAX_BYTES, TUNNEL_TOGGLE_ID } from "../../../src/net/protocol/constants";
 import type { ClientMessage, EntityRegisterItem, MoveIntent } from "../../../src/net/protocol/types";
 import { MAX_ID_LENGTH, MAX_ENTITIES_PER_MESSAGE } from "./constants";
 
@@ -20,10 +20,13 @@ const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
 };
 
 const parseMove = (raw: Record<string, unknown>): MoveIntent | null => {
-  const { x, y, z, vx, vy, vz, ry } = raw;
+  const { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop } = raw;
   if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(z)) return null;
   if (!isFiniteNumber(vx) || !isFiniteNumber(vy) || !isFiniteNumber(vz) || !isFiniteNumber(ry)) return null;
-  return { x, y, z, vx, vy, vz, ry };
+  if (!isFiniteNumber(hy) || !isFiniteNumber(hp) || !isFiniteNumber(cs) || cs < 0 || cs > MAX_CLIP_SPEED) return null;
+  if (typeof clip !== "string" || clip.length === 0 || clip.length > MAX_CLIP_NAME_LENGTH) return null;
+  if (loop !== "repeat" && loop !== "once") return null;
+  return { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop };
 };
 
 /** Anything odd → null → ignored. */
@@ -59,6 +62,8 @@ export const parseClientMessage = (data: unknown): ClientMessage | null => {
     }
     case "entity:interact":
       return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
+    case "player:click":
+      return isId(raw.id) ? { t: "player:click", id: raw.id } : null;
     case "tunnel:toggle":
       return typeof raw.id === "string" && TUNNEL_TOGGLE_ID.test(raw.id) ? { t: "tunnel:toggle", id: raw.id } : null;
     default:

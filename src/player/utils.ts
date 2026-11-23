@@ -19,7 +19,7 @@ export const playerAnimationOf = (s: PlayerActionSample, out: PlayerBodyState): 
     out.loop = "once";
   } else if (s.airborne) out.clip = PLAYER_CLIPS.fall;
   else if (s.sliding) out.clip = PLAYER_CLIPS.slide;
-  else if (!moving) out.clip = PLAYER_CLIPS.idle;
+  else if (!moving) out.clip = s.turningInPlace ? PLAYER_CLIPS.walk : PLAYER_CLIPS.idle;
   else if (s.sprint) out.clip = PLAYER_CLIPS.run;
   else {
     out.clip = PLAYER_CLIPS.walk;

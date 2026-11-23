@@ -2,6 +2,18 @@ import type { MotionOutput, StateDef, StateMachineConfig, MouseFlag, ConfigMaps,
 import { reportContentError } from "../../../utils/utils";
 import { MOUSE_ONE_SHOT_FLAGS } from "./enums";
 import { TriggerDef, TriggerFn } from "./types";
+import type { TriggerContext } from "./types";
+import { PLAYER_EYE_OFFSET } from "../../../player/spec";
+
+/** The pitch (radians, + = up) from this actor's eyes, `eyeOffset` above its positionRef, to the nearest
+ *  player's eyes (where its first-person camera is): what a head-tracking NPC's head tilts by to look the
+ *  player in the eye. */
+export const pitchToPlayerEyes = (ctx: TriggerContext, eyeOffset: number): number => {
+  const self = ctx.positionRef.current;
+  const player = ctx.playerPosition;
+  const rise = player.y + PLAYER_EYE_OFFSET - (self.y + eyeOffset);
+  return Math.atan2(rise, Math.hypot(player.x - self.x, player.z - self.z));
+};
 
 export const createMotionOutput = (): MotionOutput => ({ vx: 0, vy: null, vz: 0, yaw: 0 });
 

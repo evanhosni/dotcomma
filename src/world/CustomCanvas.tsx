@@ -22,6 +22,7 @@ import { InspectPass } from "../vfx/screen-pass/InspectPass";
 import { ScreenPassChain } from "../vfx/screen-pass/ScreenPassChain";
 import { PixelationDriver } from "../vfx/PixelationDriver";
 import { debugGlobal } from "../utils/utils";
+import { BackgroundLoop } from "./background-loop/BackgroundLoop";
 
 /** Non-zero useFrame priorities disable R3F's auto-render, so this renders
  *  explicitly. The FPS-cap decision runs ONCE per tick at -10, before every
@@ -78,6 +79,7 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
   return (
     <>
       <SceneRender />
+      <BackgroundLoop />
       <LampGlowDriver />
       <PixelationDriver baseDpr={BASE_DPR} />
       <StatsOverlay />
@@ -86,9 +88,10 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
       <Physics gravity={PHYSICS_GRAVITY} debug={physicsDebug} interpolate={false} timeStep="vary">
         {children}
         <Player />
+        {/* Inside: each remote player is a kinematic capsule in this world. */}
+        <RemotePlayers />
       </Physics>
       <LocalPlayerSync />
-      <RemotePlayers />
     </>
   );
 };

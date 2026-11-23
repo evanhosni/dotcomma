@@ -10,7 +10,8 @@ import { claimHover, releaseHover } from "../../../utils/cursor";
 import type { HoverTarget } from "../../../utils/cursor/types";
 import { mouseActionOf } from "./utils";
 import { aimFromCamera } from "../../../player/utils";
-import { ANIMATED_BOUNDS_INFLATE, RAYCAST_RANGE_PAD, VIEW_CONE_SKIP_WITHIN_SQ, VIEW_CONE_COS, MOUSE_RAYCAST_INTERVAL_FRAMES } from "./constants";
+import { collectSkinnedMeshes, rayHitDistance } from "../model/geometry";
+import { RAYCAST_RANGE_PAD, VIEW_CONE_SKIP_WITHIN_SQ, VIEW_CONE_COS, MOUSE_RAYCAST_INTERVAL_FRAMES } from "./constants";
 
 /**
  * React binding of StateMachineRunner. Local actors tick it authoritatively;
@@ -155,55 +156,6 @@ const _toActor = new THREE.Vector3();
 
 const _aim = new THREE.Ray();
 
-const _worldSphere = new THREE.Sphere();
-const _invMatrix = new THREE.Matrix4();
-const _localRay = new THREE.Ray();
-const _tA = new THREE.Vector3();
-const _tB = new THREE.Vector3();
-const _tC = new THREE.Vector3();
-const _hitPt = new THREE.Vector3();
-
-/** Largest-first so the body mesh (most likely hit) is tested before tiny face meshes. */
-const collectSkinnedMeshes = (group: THREE.Group, out: THREE.SkinnedMesh[]): void => {
-  group.traverse((child) => {
-    if ((child as THREE.SkinnedMesh).isSkinnedMesh) out.push(child as THREE.SkinnedMesh);
-  });
-  out.sort((a, b) => (b.geometry.index?.count ?? 0) - (a.geometry.index?.count ?? 0));
-};
-
-/** Ray distance to the first triangle hit, testing meshes until one is hit within `reach`; Infinity if none.
- *  Manual ray-triangle test: three's intersectObject silently drops valid hits for SkinnedMeshes mounted
- *  after the initial batch (cause unknown — geometry, bones and matrices are all correct). Same data,
- *  reliable hits. */
-const rayHitDistance = (ray: THREE.Ray, meshes: THREE.SkinnedMesh[], reach: number): number => {
-  let hitDist = Infinity;
-  for (let m = 0; m < meshes.length && hitDist > reach; m++) {
-    const mesh = meshes[m];
-    const geo = mesh.geometry;
-    if (!geo.index) continue;
-
-    if (!geo.boundingSphere) geo.computeBoundingSphere();
-    _worldSphere.copy(geo.boundingSphere!).applyMatrix4(mesh.matrixWorld);
-    _worldSphere.radius *= ANIMATED_BOUNDS_INFLATE;
-    if (!ray.intersectsSphere(_worldSphere)) continue;
-
-    _invMatrix.copy(mesh.matrixWorld).invert();
-    _localRay.copy(ray).applyMatrix4(_invMatrix);
-
-    const idx = geo.index;
-    for (let i = 0, l = idx.count; i < l; i += 3) {
-      mesh.getVertexPosition(idx.getX(i), _tA);
-      mesh.getVertexPosition(idx.getX(i + 1), _tB);
-      mesh.getVertexPosition(idx.getX(i + 2), _tC);
-      if (_localRay.intersectTriangle(_tA, _tB, _tC, false, _hitPt)) {
-        _hitPt.applyMatrix4(mesh.matrixWorld);
-        hitDist = ray.origin.distanceTo(_hitPt);
-        break;
-      }
-    }
-  }
-  return hitDist;
-};
 
 export function useMouseEvents(
   sm: StateMachineHandle | null,
