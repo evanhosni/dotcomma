@@ -14,6 +14,8 @@ import type { PointXZ } from "../utils/math/types";
 import { setCameraUnderground } from "../world/shaders/terrain-holes/store";
 import { writeWaterColors } from "../generation/water/material";
 import { getActiveDomainConfig, isDomainCommitted } from "../world/domains/store";
+import { getCurrentDomain, onDomainChange } from "../world/domains/navigation";
+import { getConnectionState, subscribeConnectionState } from "../net";
 
 // The player's safety nets against the ANALYTIC terrain height (the source the heightfields are built
 // from): the physics ground is per-chunk heightfields swapped during LOD changes, so sweep hardening alone
@@ -179,6 +181,55 @@ export const useInput = (): React.MutableRefObject<InputState> => {
   }, []);
 
   return inputRef;
+};
+
+const isTextEntry = (target: EventTarget | null): boolean =>
+  target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
+
+/** Ctrl/Cmd+R (Shift too) and a bare F5. Ctrl+F5 / Shift+F5 stay the deliberate hard reload. */
+const isReloadShortcut = (e: KeyboardEvent): boolean =>
+  (e.code === "KeyR" && (e.ctrlKey || e.metaKey)) || (e.code === "F5" && !e.ctrlKey && !e.metaKey && !e.shiftKey);
+
+const promptBeforeUnload = (e: BeforeUnloadEvent): void => {
+  e.preventDefault();
+  e.returnValue = ""; // Firefox and older Chrome only prompt with returnValue set
+};
+
+/**
+ * A reload drops the socket mid-game. While playing (pointer locked, outside any text field) the reload
+ * keys are swallowed in the capture phase; while in an overworld session, any other reload path (the
+ * toolbar, a browser that ignores the keydown block) gets the "Leave site?" prompt.
+ */
+export const useReloadGuard = (): void => {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!document.pointerLockElement || isTextEntry(e.target) || !isReloadShortcut(e)) return;
+      e.preventDefault();
+      // TODO(game): a game-specific Ctrl+R action goes here.
+    };
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, []);
+
+  useEffect(() => {
+    let prompting = false;
+    const sync = () => {
+      const { status } = getConnectionState();
+      const inSession = getCurrentDomain() === "overworld" && (status === "connected" || status === "reconnecting");
+      if (inSession === prompting) return;
+      prompting = inSession;
+      if (inSession) window.addEventListener("beforeunload", promptBeforeUnload);
+      else window.removeEventListener("beforeunload", promptBeforeUnload);
+    };
+    sync();
+    const offConnection = subscribeConnectionState(sync);
+    const offDomain = onDomainChange(sync);
+    return () => {
+      offConnection();
+      offDomain();
+      window.removeEventListener("beforeunload", promptBeforeUnload);
+    };
+  }, []);
 };
 
 /** Third person on or off; the middle mouse button toggles it (its default, the browser's autoscroll, is

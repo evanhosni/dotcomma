@@ -58,13 +58,13 @@ const setState = (patch: Partial<ConnectionState>) => {
 export const getConnectionState = (): ConnectionState => state;
 export const getAssignedSpawnOffset = (): { x: number; z: number } | null => state.spawnOffset;
 
-const subscribeState = (l: () => void) => {
+export const subscribeConnectionState = (l: () => void): (() => void) => {
   stateListeners.add(l);
   return () => {
     stateListeners.delete(l);
   };
 };
-export const useConnectionState = (): ConnectionState => useSyncExternalStore(subscribeState, getConnectionState);
+export const useConnectionState = (): ConnectionState => useSyncExternalStore(subscribeConnectionState, getConnectionState);
 
 type MessageHandler = (msg: ServerMessage) => void;
 const messageHandlers = new Set<MessageHandler>();

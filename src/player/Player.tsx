@@ -17,7 +17,7 @@ import { entranceDaylightAt } from "../world/underground/registry";
 import { stampSnowTrailAlong } from "../objects/dressing/snow-drift/store";
 import { wrapAngle } from "../utils/math";
 import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN } from "./constants";
-import { useGroundSafetyNets, useUndergroundMode, useInput, useThirdPersonToggle, useWaterProbe } from "./hooks";
+import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
 import { getThirdPersonBodySide, setCameraBoom } from "./store";
 import { PLAYER_HEIGHT, PLAYER_RADIUS } from "./spec";
@@ -94,6 +94,7 @@ const flyNoclip = (rb: RapierRigidBody, pos: { x: number; y: number; z: number }
 /** Mounted ONCE by CustomCanvas; persists across domain switches (see CLAUDE.md). */
 export const Player = () => {
   const inputRef = useInput();
+  useReloadGuard();
   const { camera } = useThree();
   const { terrainLoaded, playerPosition, playerSpawn: spawnPosition, spawnDropHeight } = useGameContext();
   const { noclip, flashlight } = useDevContext();
