@@ -19,14 +19,14 @@ import { wrapAngle } from "../utils/math";
 import { MAX_HEAD_PITCH } from "../objects/actors/beeble/animations";
 import { BEEBLE_SPEC } from "../objects/actors/beeble/spec";
 import { ModelActor } from "../objects/actors/model/ModelActor";
-import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
+import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, HEADING_FACING_OFFSET, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
 import { posePlayerBody } from "./registry";
 import { getThirdPersonBodySide, setCameraBoom, setLocalPlayerBody } from "./store";
 import { PLAYER_HEIGHT, PLAYER_RADIUS, playerEyeY } from "./spec";
 import type { InputState, PlayerActionSample, PlayerBodyState } from "./types";
-import { playerAnimationOf } from "./utils";
+import { moveHeadingOf, playerAnimationOf } from "./utils";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
@@ -131,7 +131,7 @@ export const Player = () => {
   const surface = useRef(createSurfaceSampler(SURFACE_SAMPLE_INTERVAL, fetchSurfaceModifiers)).current;
   const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
   const thirdPerson = useThirdPersonToggle();
-  const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false, turningInPlace: false }).current;
+  const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false, turningInPlace: false, heading: "forward" }).current;
   const body = useRef<PlayerBodyState>({ feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
   /** The head the camera follows (eased), and where the body stood last frame (its speed). */
   const pivot = useRef(new THREE.Vector3()).current;
@@ -369,7 +369,9 @@ export const Player = () => {
     const moving = move.lengthSq() > 0 && action.speed > PLAYER_MOVING_SPEED;
     if (moving) {
       action.turningInPlace = false;
-      body.yaw += wrapAngle(Math.atan2(move.x, move.z) - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
+      // Swimming and flying always face the way they go: their clips have no backward or sideways.
+      const facingOffset = action.swimming || action.noclip ? 0 : HEADING_FACING_OFFSET[action.heading];
+      body.yaw += wrapAngle(Math.atan2(move.x, move.z) + facingOffset - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
     } else if (thirdPerson.current) action.turningInPlace = false;
     else {
       const off = Math.abs(wrapAngle(lookYaw - body.yaw));
@@ -415,6 +417,7 @@ export const Player = () => {
     const pos = rb.translation();
     action.noclip = noclip;
     action.sprint = input.sprint;
+    action.heading = moveHeadingOf(input);
 
     if (!terrainLoaded && !noclip) {
       holdAtSpawn(rb, character, dt);
