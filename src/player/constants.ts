@@ -15,6 +15,9 @@ export const SAMPLE_GIVE_UP_MS = 1000;
 export const PLAYER_CLIPS = {
   idle: "idle",
   walk: "walk",
+  walkBack: "walk back",
+  strafeLeft: "strafe left",
+  strafeRight: "strafe right",
   run: "run",
   jump: "jump",
   fall: "fall",
@@ -34,6 +37,14 @@ export const PLAYER_MOVING_SPEED = 0.5;
 /** Third person: the camera's distance behind the head, and how far it stays off whatever the boom hits. */
 export const THIRD_PERSON_DISTANCE = 6;
 export const THIRD_PERSON_WALL_MARGIN = 0.3;
+/** The body's facing from its walking direction (radians, + = counterclockwise from above) per heading:
+ *  backing up faces away from the walk, a strafe faces the look (a left strafe walks +90° from it). */
+export const HEADING_FACING_OFFSET = {
+  forward: 0,
+  backward: Math.PI,
+  left: -Math.PI / 2,
+  right: Math.PI / 2,
+} as const;
 /** 1/s: how fast the body turns to its walking direction. */
 export const BODY_TURN_RATE = 12;
 /** The head turns toward the look up to this far from the body (radians). */

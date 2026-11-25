@@ -1,10 +1,28 @@
 import type * as THREE from "three";
 import { PLAYER_CLIPS, PLAYER_MOVING_SPEED, WALK_CLIP_GROUND_SPEED } from "./constants";
 import { getCameraBoom } from "./store";
-import type { PlayerActionSample, PlayerBodyState } from "./types";
+import type { InputState, MoveHeading, PlayerActionSample, PlayerBodyState } from "./types";
 
 /** Quarter steps: a speed that changed every frame would re-anchor the channel every frame. */
 const quantizeSpeed = (speed: number): number => Math.max(0.25, Math.round(speed * 4) / 4);
+
+const WALK_CLIP_OF_HEADING: Record<MoveHeading, string> = {
+  forward: PLAYER_CLIPS.walk,
+  backward: PLAYER_CLIPS.walkBack,
+  left: PLAYER_CLIPS.strafeLeft,
+  right: PLAYER_CLIPS.strafeRight,
+};
+
+/** Opposite keys cancel, as they do in readMoveDirection. */
+export const moveHeadingOf = (input: InputState): MoveHeading => {
+  const ahead = Number(input.forward) - Number(input.backward);
+  if (ahead > 0) return "forward";
+  if (ahead < 0) return "backward";
+  const aside = Number(input.right) - Number(input.left);
+  if (aside > 0) return "right";
+  if (aside < 0) return "left";
+  return "forward";
+};
 
 /** The clip for what the player is doing, written into `out` (clip, clipSpeed, loop). */
 export const playerAnimationOf = (s: PlayerActionSample, out: PlayerBodyState): void => {
@@ -20,9 +38,9 @@ export const playerAnimationOf = (s: PlayerActionSample, out: PlayerBodyState): 
   } else if (s.airborne) out.clip = PLAYER_CLIPS.fall;
   else if (s.sliding) out.clip = PLAYER_CLIPS.slide;
   else if (!moving) out.clip = s.turningInPlace ? PLAYER_CLIPS.walk : PLAYER_CLIPS.idle;
-  else if (s.sprint) out.clip = PLAYER_CLIPS.run;
+  else if (s.sprint && s.heading === "forward") out.clip = PLAYER_CLIPS.run;
   else {
-    out.clip = PLAYER_CLIPS.walk;
+    out.clip = WALK_CLIP_OF_HEADING[s.heading];
     out.clipSpeed = quantizeSpeed(s.speed / WALK_CLIP_GROUND_SPEED);
   }
 };

@@ -50,7 +50,12 @@ export interface PlayerActionSample {
   /** Standing, the body turning in place toward the look. */
   turningInPlace: boolean;
   sprint: boolean;
+  /** Which way the held keys walk, relative to the look (moveHeadingOf). */
+  heading: MoveHeading;
 }
+
+/** A diagonal with forward or backward in it counts as that; left or right alone is a strafe. */
+export type MoveHeading = "forward" | "backward" | "left" | "right";
 
 /** Written by Player.tsx each frame, drawn by PlayerBody.tsx. */
 export interface PlayerBodyState {
