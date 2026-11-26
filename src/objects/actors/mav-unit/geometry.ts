@@ -18,6 +18,11 @@ const HEAD_APOTHEM = MAV_HEAD_RADIUS * Math.cos(Math.PI / 6);
 
 /** The thread winds down the shank, narrowing with it, and stops short of the tip. */
 class Helix extends THREE.Curve<THREE.Vector3> {
+  /** Public: three's types make Curve's own constructor protected. */
+  public constructor() {
+    super();
+  }
+
   getPoint(t: number, target = new THREE.Vector3()): THREE.Vector3 {
     const y = -t * MAV_SCREW_LENGTH * 0.92;
     const r = MAV_SCREW_RADIUS * (1 - t * 0.92) + THREAD_RADIUS * 0.4;
