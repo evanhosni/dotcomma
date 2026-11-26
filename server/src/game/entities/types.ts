@@ -1,5 +1,5 @@
 import type { AnimationState } from "../../../../src/animation/types";
-import type { DomainId, ServerMessage } from "../../../../src/net/protocol/types";
+import type { DomainId, PlayerForm, ServerMessage } from "../../../../src/net/protocol/types";
 import type { ProxyColliderHandle } from "../../../../src/objects/actors/building/collider/types";
 import type { ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/StateMachineRunner";
@@ -23,6 +23,8 @@ export interface Published {
 export interface PlayerView {
   id: string;
   domain: DomainId;
+  /** Its form (src/player/spec.ts): what NPCs notice of it, and whether it has a capsule. */
+  form: PlayerForm;
   x: number;
   y: number;
   z: number;
@@ -34,6 +36,8 @@ export interface PlayerView {
 export interface EntityHost {
   playersIn(domain: DomainId): Iterable<PlayerView>;
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage): void;
+  /** An id that must never be simulated again in the domain (an NPC that became a player). */
+  isRetired?(domain: DomainId, id: string): boolean;
 }
 
 export interface EntityRecord extends Published {

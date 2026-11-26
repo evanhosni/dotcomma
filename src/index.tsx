@@ -12,12 +12,15 @@ import { CustomCanvas } from "./world/CustomCanvas";
 import { DOMAIN_CONFIGS, DOMAIN_TREES } from "./world/domains";
 import { getCurrentDomain, initDomainNavigation, onDomainChange } from "./world/domains/navigation";
 import { resetDomainSystems } from "./world/domains/utils";
+import { IntroOverlay } from "./world/domains/overworld/intro/IntroOverlay";
 import { DomainId } from "./world/domains/types";
 
 const root = ReactDOM.createRoot(document.getElementById("dotcomma") as HTMLElement);
 
 initDevmodeFromUrl();
 initDomainNavigation(DOMAIN_CONFIGS.overworld.regions);
+// The page's title (public/index.html) is the overworld intro's alone.
+if (getCurrentDomain() !== "overworld") IntroOverlay.removePageTitle();
 startConnection();
 
 /** Swaps the domain inside the ONE persistent canvas in two phases: render

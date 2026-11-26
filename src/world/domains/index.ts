@@ -4,7 +4,6 @@ import { domainConfigOf, domainNodeOf } from "../content/config";
 import type { ContentNode } from "../content/types";
 import type { DomainConfig } from "../../generation/types";
 import { NotFoundDomain } from "./404/NotFoundDomain";
-import { HomeDomain } from "./home/HomeDomain";
 import { OverworldDomain } from "./overworld/OverworldDomain";
 import type { DomainId } from "./types";
 
@@ -14,7 +13,6 @@ import type { DomainId } from "./types";
  * description of a domain anywhere (world/content/).
  */
 export const DOMAIN_TREES: Record<DomainId, JSX.Element> = {
-  home: HomeDomain,
   overworld: OverworldDomain,
   "404": NotFoundDomain,
 };

@@ -9,23 +9,22 @@ varying vec2 vUv;
 varying vec2 vWorldUv;
 
 void main() {
-  vec2 adjustedUV = fract(vWorldUv);
   float roadDist = vDistanceToRoadCenter;
 
   // Bands in STREET units from the centerline (freeways reuse them stretched):
   //   0..R asphalt | R..R+1 curb | R+1..R+5 sidewalk | R+5+ block interior
   float R = ROAD_HALF_WIDTH;
 
-  vec4 roadColor = texture2D(roadtexture, adjustedUV);
+  vec4 roadColor = texture2D(roadtexture, vWorldUv);
 
   // A band narrower than the LOD blur (world/shaders/lodBlur.ts) dims by its share of it, as an average
   // would: widened at full strength, a 1u gutter or a lane line would draw as a fat stripe far out.
   float gutter = (smoothstep(R - 1.6, R, roadDist) * (1.0 - smoothstep(R, R + 0.6, roadDist))) * 1.1 / (1.1 + lodBlur);
   roadColor.rgb *= 1.0 - gutter * 0.25;
 
-  vec4 sidewalkColor = texture2D(sidewalktexture, adjustedUV);
+  vec4 sidewalkColor = texture2D(sidewalktexture, vWorldUv);
   vec3 curbColor = min(sidewalkColor.rgb * 1.3, vec3(1.0));
-  vec3 interiorColor = texture2D(sidewalktexture, fract(vWorldUv * 0.35)).rgb * vec3(0.8, 0.79, 0.77);
+  vec3 interiorColor = texture2D(sidewalktexture, vWorldUv * 0.35).rgb * vec3(0.8, 0.79, 0.77);
 
   vec3 groundColor = mix(roadColor.rgb, curbColor, blurStep(R - 0.3, R + 0.5, roadDist));
   groundColor = mix(groundColor, sidewalkColor.rgb, blurStep(R + 0.9, R + 1.9, roadDist));

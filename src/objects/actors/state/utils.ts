@@ -1,4 +1,5 @@
 import type { MotionOutput, StateDef, StateMachineConfig, MouseFlag, ConfigMaps, ResolvedTransition } from "./types";
+import { DEFAULT_RECOVER_SECONDS, RAGDOLL_STATE, RECOVER_HOLD_KEY, RECOVER_STATE } from "./constants";
 import { reportContentError } from "../../../utils/utils";
 import { MOUSE_ONE_SHOT_FLAGS } from "./enums";
 import { TriggerDef, TriggerFn } from "./types";
@@ -46,19 +47,52 @@ const reportConfigError = (message: string): void => reportContentError(`[state 
 
 // Pure functions of the module-constant config — once per config, not per instance.
 const configMapsCache = new WeakMap<StateMachineConfig, ConfigMaps>();
+
+export const recoverSecondsOf = (config: StateMachineConfig): number => config.ragdoll?.recoverSeconds ?? DEFAULT_RECOVER_SECONDS;
+
+/** The two states every machine gets: limp, then standing back up into its initial state. A layer input left
+ *  set (a head tracking the player) lets go, so the head neither fights the fall nor snaps on the way up. */
+const ragdollStatesOf = (config: StateMachineConfig): StateDef[] => {
+  const recovered: TriggerDef = {
+    id: "ragdoll-recovered",
+    evaluate: (ctx) => ctx.stateElapsed >= recoverSecondsOf(config) && !ctx.blackboard[RECOVER_HOLD_KEY],
+  };
+  return [
+    {
+      id: RAGDOLL_STATE,
+      onEnter: (ctx) => {
+        ctx.motion.stop();
+        for (const input of Object.keys(ctx.animation.inputs)) ctx.animation.setInput(input, undefined);
+      },
+      transitions: [],
+    },
+    {
+      id: RECOVER_STATE,
+      onEnter: (ctx) => {
+        ctx.motion.stop();
+        if (config.ragdoll?.recoverClip) ctx.animation.play(config.ragdoll.recoverClip);
+      },
+      transitions: [{ trigger: recovered, target: config.initialState }],
+    },
+  ];
+};
 export const getConfigMaps = (config: StateMachineConfig): ConfigMaps => {
   const cached = configMapsCache.get(config);
   if (cached) return cached;
+  const states = [...config.states, ...ragdollStatesOf(config)];
   const stateMap = new Map<string, StateDef>();
-  for (const s of config.states) stateMap.set(s.id, s);
+  for (const s of states) {
+    if (stateMap.has(s.id)) reportConfigError(`state "${s.id}" is defined twice (${RAGDOLL_STATE} and ${RECOVER_STATE} are built in)`);
+    stateMap.set(s.id, s);
+  }
   const triggerById = new Map<string, TriggerDef>();
   for (const t of config.triggers ?? []) triggerById.set(t.id, t);
-  for (const s of config.states) {
+  for (const s of states) {
     for (const tr of s.transitions) if (typeof tr.trigger !== "string" && !triggerById.has(tr.trigger.id)) triggerById.set(tr.trigger.id, tr.trigger);
   }
   if (!stateMap.has(config.initialState)) reportConfigError(`initialState "${config.initialState}" is not a state`);
   const transitionsOf = new Map<string, ResolvedTransition[]>();
-  for (const s of config.states) {
+  for (const s of states) {
     const resolved: ResolvedTransition[] = [];
     for (const tr of s.transitions) {
       const trigger = typeof tr.trigger === "string" ? triggerById.get(tr.trigger) : tr.trigger;

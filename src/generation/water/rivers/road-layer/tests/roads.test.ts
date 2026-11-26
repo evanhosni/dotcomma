@@ -214,7 +214,7 @@ describe("roads at rivers", () => {
 
 describe("a world without <Rivers>", () => {
   it("has no river anywhere", () => {
-    initCompute(DOMAIN_CONFIGS.home);
+    initCompute(DOMAIN_CONFIGS["404"]);
     expect(riversEnabled).toBe(false);
     expect(riverPiecesNear(-5000, -5000, 5000, 5000, 1000)).toEqual([]);
     expect(computeVertexData(123, 456).distanceToRiverCenter).toBe(Infinity);

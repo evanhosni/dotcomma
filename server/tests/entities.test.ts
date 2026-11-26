@@ -32,7 +32,7 @@ const makeHost = () => {
     },
   };
   const setPlayer = (id: string, x: number, z: number) =>
-    players.set(id, { id, domain: "overworld", x, y: 0, z, vx: 0, vz: 0, lastMoveAt: Date.now() });
+    players.set(id, { id, domain: "overworld", form: "host", x, y: 0, z, vx: 0, vz: 0, lastMoveAt: Date.now() });
   const to = (who: string) => sent.filter((s) => s.to === who).map((s) => s.msg as any);
   const clear = () => (sent.length = 0);
   return { host, players, sent, setPlayer, to, clear };
@@ -144,6 +144,22 @@ describe("EntityManager (server authority)", () => {
     assert.equal(e.anim?.clip, "idle");
     assert.equal(e.vx, 0);
     assert.equal(e.vz, 0);
+  });
+
+  it("a lone MAV Unit goes unnoticed: no alert, and no capsule in its way", () => {
+    const h = makeHost();
+    const m = manager(h);
+    regBeeble(m, "A");
+    h.setPlayer("A", 500, 500);
+    const t0 = Date.now();
+    ticks(m, 3, t0);
+    const e = m.get(ID)!;
+    const yaw = e.ry;
+    h.players.set("B", { id: "B", domain: "overworld", form: "mav", x: e.x + Math.sin(yaw) * 5, y: e.y + 1, z: e.z + Math.cos(yaw) * 5, vx: 0, vz: 0, lastMoveAt: Date.now() });
+    const bodiesBefore = pw.stats().bodies;
+    ticks(m, 3, t0 + 300);
+    assert.equal(e.sm, "idle-walk", "still wandering");
+    assert.equal(pw.stats().bodies, bodiesBefore, "no capsule for the unit");
   });
 
   it("a forwarded click from a nearby player makes it ascend (vy > 0, clip switch)", () => {
@@ -302,6 +318,51 @@ describe("EntityManager (server authority)", () => {
     assert.equal(after.terrain.built, before.terrain.built, "terrain chunks released");
     assert.equal(after.dressing.built, before.dressing.built, "dressing chunks released");
     assert.equal(after.bodies, before.bodies, "no bodies left behind");
+  });
+
+  it("any machine goes limp and stands back up: the built-in ragdoll states, the impulse replicated", () => {
+    const h = makeHost();
+    const m = manager(h);
+    regBeeble(m, "A");
+    h.setPlayer("A", 500, 500);
+    const t0 = Date.now();
+    ticks(m, 5, t0);
+    h.clear();
+    const impulse = { bone: "head", x: 1, y: -7, z: 0 };
+    m.setRagdoll(ID, true, impulse);
+    ticks(m, 5, t0 + 5 * TICK_MS);
+    const e = m.get(ID)!;
+    assert.equal(e.sm, "ragdoll");
+    assert.deepEqual(e.state.ragdollImpulse, impulse);
+    assert.ok(h.to("A").some((u: any) => u.state?.ragdollImpulse), "the impulse reaches the registrant");
+    const limpAt = { x: e.x, z: e.z };
+    ticks(m, 20, t0 + 10 * TICK_MS);
+    assert.ok(Math.hypot(e.x - limpAt.x, e.z - limpAt.z) < 0.05, "a limp body does not walk");
+
+    m.setRagdoll(ID, false, undefined, true);
+    ticks(m, 60, t0 + 30 * TICK_MS); // 6s: past the recover time
+    assert.equal(e.sm, "ragdoll-recover", "held up: it stays in the recover state");
+    assert.equal(e.anim?.clip, "idle", "the beeble's recover clip");
+    assert.equal(e.state.ragdollImpulse, undefined);
+
+    m.setRagdoll(ID, true);
+    ticks(m, 2, t0 + 90 * TICK_MS);
+    m.setRagdoll(ID, false);
+    ticks(m, 40, t0 + 92 * TICK_MS); // 4s
+    assert.equal(e.sm, "idle-walk", "not held: back to its initial state once up");
+  });
+
+  it("a retired entity is forgotten and never registered again", () => {
+    const h = makeHost();
+    const retired = new Set<string>();
+    const m = new EntityManager({ ...h.host, isRetired: (_domain, id) => retired.has(id) }, pw, { workBudgetMs: Infinity, log: false });
+    live.push(m);
+    regBeeble(m, "A");
+    retired.add(ID);
+    m.retire(ID);
+    assert.equal(m.size, 0);
+    regBeeble(m, "B");
+    assert.equal(m.size, 0, "re-registration refused");
   });
 
   it("last registrant out forgets the entity (machine disposed)", () => {

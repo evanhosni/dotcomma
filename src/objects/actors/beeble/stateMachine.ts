@@ -63,6 +63,7 @@ const CLICKED = onMouseLeftClick();
 
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",
+  ragdoll: { recoverClip: "idle", recoverSeconds: 2.5 },
   states: [
     {
       id: "idle-walk",

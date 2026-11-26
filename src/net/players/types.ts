@@ -28,4 +28,7 @@ export interface RemotePlayer {
   meshes: THREE.SkinnedMesh[];
   /** Where its last snow stamp was laid (RemotePlayers.tsx, objects/dressing/snow-drift/store.ts). */
   lastStamp: PointXZ;
+  /** The NPC its lone MAV Unit was last shown screwing into ("" none): retired the moment it is shown as the
+   *  beeble instead (RemotePlayers.tsx), so the NPC and the player's body swap in one frame. */
+  shownMavHost: string;
 }

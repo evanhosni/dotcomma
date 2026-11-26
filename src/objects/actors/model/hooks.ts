@@ -105,5 +105,9 @@ export const useKinematicMover = ({
     groupRef.current?.position.set(pos.x, pos.y - halfHeight, pos.z);
   };
 
-  return { step };
+  const setSolid = (solid: boolean): void => {
+    rigidBodyRef.current?.collider(0)?.setEnabled(solid);
+  };
+
+  return { step, setSolid };
 };

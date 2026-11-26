@@ -1,4 +1,6 @@
 import { RootState } from "@react-three/fiber";
+import { PLAYER_DETECTABILITY } from "../../../player/spec";
+import { getLocalDetectability } from "../../../player/store";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useGameContext } from "../../../context/hooks";
@@ -24,13 +26,21 @@ const _nearestRemote = new THREE.Vector3();
 /** Rewritten by findNearestPlayer; `position` is the local player's own vector when it is nearest. */
 const nearestPlayer = { position: _nearestRemote, distSq: Infinity };
 
-/** The nearest player to `self` in 2D, local or remote. */
+/** Where "the player" is when no player can be noticed: far beyond every range. */
+const NO_PLAYER = new THREE.Vector3(1e9, 0, 1e9);
+
+/** The nearest player to `self` in 2D, local or remote, that NPCs can notice (PLAYER_DETECTABILITY). */
 const findNearestPlayer = (self: THREE.Vector3, localPlayer: THREE.Vector3): typeof nearestPlayer => {
-  const ldx = localPlayer.x - self.x;
-  const ldz = localPlayer.z - self.z;
-  nearestPlayer.position = localPlayer;
-  nearestPlayer.distSq = ldx * ldx + ldz * ldz;
+  nearestPlayer.position = NO_PLAYER;
+  nearestPlayer.distSq = Infinity;
+  if (getLocalDetectability() > 0) {
+    const ldx = localPlayer.x - self.x;
+    const ldz = localPlayer.z - self.z;
+    nearestPlayer.position = localPlayer;
+    nearestPlayer.distSq = ldx * ldx + ldz * ldz;
+  }
   for (const p of getRemotePlayers().values()) {
+    if (PLAYER_DETECTABILITY[p.body.form] <= 0) continue;
     const dx = p.x - self.x;
     const dz = p.z - self.z;
     const dSq = dx * dx + dz * dz;
@@ -94,6 +104,7 @@ export function useStateMachine(
               return runner.currentStateId;
             },
             forceTransition: (stateId: string) => runner.forceTransition(stateId),
+            setRagdoll: (on, impulse, hold) => runner.setRagdoll(on, impulse, hold),
             blackboard: runner.blackboard,
             motion: runner.motion,
             animation: runner.animation,

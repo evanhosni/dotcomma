@@ -45,7 +45,7 @@ export const playerAnimationOf = (s: PlayerActionSample, out: PlayerBodyState): 
   }
 };
 
-/** THE interaction ray (everything the crosshair picks: actors, doors, manholes, the CRT): the screen
+/** THE interaction ray (everything the crosshair picks: actors, doors, manholes, players): the screen
  *  center's ray, started where it passes the player's head instead of at the camera. In third person
  *  reach is then measured from the player, as in other third-person games, and the player's own body,
  *  behind the origin, never blocks it. */

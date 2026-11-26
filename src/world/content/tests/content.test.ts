@@ -48,9 +48,9 @@ describe("the content tree", () => {
       snow: 0.95,
       ocean: 1,
     });
-    // The home page mounts none, so it has none — there is no domain-level fallback.
-    const home = domainConfigOf(domainNodeOf(DOMAIN_TREES.home));
-    expect(home.regions.map((r) => r.riverChance)).toEqual([0]);
+    // The 404 mounts none, so it has none — there is no domain-level fallback.
+    const notFound = domainConfigOf(domainNodeOf(DOMAIN_TREES["404"]));
+    expect(notFound.regions.map((r) => r.riverChance)).toEqual([0]);
   });
 
   it("reads a lake off its <Lake> alone, never off a flag restating it", () => {

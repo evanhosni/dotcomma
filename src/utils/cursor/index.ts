@@ -1,7 +1,13 @@
 import { HUD_COLOR, HUD_Z_INDEX } from "../../menus/overlay/constants";
-import type { HoverTarget } from "./types";
+import type { CursorLook, HoverTarget } from "./types";
 
 const CURSOR_ID = "game-cursor";
+const RETICLE_ID = "game-reticle";
+/** The MAV Unit's reticle: four corner brackets around the screen centre (px). */
+const RETICLE_WIDTH = 64;
+const RETICLE_HEIGHT = 44;
+const RETICLE_ARM = 12;
+const RETICLE_STROKE = 3;
 
 function getOrCreateCursor(): HTMLDivElement {
   let el = document.getElementById(CURSOR_ID) as HTMLDivElement | null;
@@ -26,20 +32,48 @@ function getOrCreateCursor(): HTMLDivElement {
   return el;
 }
 
+function getOrCreateReticle(): HTMLDivElement {
+  let el = document.getElementById(RETICLE_ID) as HTMLDivElement | null;
+  if (el) return el;
+
+  el = document.createElement("div");
+  el.id = RETICLE_ID;
+  el.style.cssText = `position:fixed;top:50%;left:50%;width:${RETICLE_WIDTH}px;height:${RETICLE_HEIGHT}px;transform:translate(-50%,-50%);pointer-events:none;z-index:${HUD_Z_INDEX};display:none;`;
+  const line = `${RETICLE_STROKE}px solid ${HUD_COLOR}`;
+  for (const [v, h] of [["top", "left"], ["top", "right"], ["bottom", "left"], ["bottom", "right"]] as const) {
+    const corner = document.createElement("div");
+    corner.style.cssText = `position:absolute;${v}:0;${h}:0;width:${RETICLE_ARM}px;height:${RETICLE_ARM}px;border-${v}:${line};border-${h}:${line};`;
+    el.appendChild(corner);
+  }
+  document.body.appendChild(el);
+  return el;
+}
+
+/** What the centre of the screen shows (setCursorLook), drawn only while pointer lock is held: the crosshair
+ *  means nothing without it. */
+let look: CursorLook = "dot";
 let visibilityBound = false;
 
-export const initCursor = (): void => {
-  const el = getOrCreateCursor();
+const syncCursorLook = (): void => {
+  const locked = !!document.pointerLockElement;
+  getOrCreateCursor().style.display = locked && look === "dot" ? "block" : "none";
+  getOrCreateReticle().style.display = locked && look === "reticle" ? "block" : "none";
+};
 
-  // The crosshair only means anything while pointer lock is held.
+export const initCursor = (): void => {
+  getOrCreateCursor();
   if (!visibilityBound) {
     visibilityBound = true;
-    const sync = () => {
-      el.style.display = document.pointerLockElement ? "block" : "none";
-    };
-    sync();
-    document.addEventListener("pointerlockchange", sync);
+    syncCursorLook();
+    document.addEventListener("pointerlockchange", syncCursorLook);
   }
+};
+
+/** The beeble's dot, the MAV Unit's reticle, or nothing (the intro before its title has gone by). */
+export const setCursorLook = (next: CursorLook): void => {
+  if (next === look) return;
+  look = next;
+  syncCursorLook();
 };
 
 const MOUSE_EVENTS = ["click", "contextmenu", "pointerdown", "pointerup", "dblclick", "wheel"] as const;

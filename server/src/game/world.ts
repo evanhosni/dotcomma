@@ -3,7 +3,8 @@
  * a domain change is leave + join), entities and persistence. Transport-agnostic: the
  * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
-import type { DomainId, EntityRegisterItem, MoveIntent, PlayerData, PlayerSnapshot } from "../../../src/net/protocol/types";
+import type { DomainId, EntityRegisterItem, HostStep, MoveIntent, PlayerData, PlayerSnapshot } from "../../../src/net/protocol/types";
+import { mavImpactOf } from "../../../src/objects/actors/mav-unit/spec";
 import { PLAYER_CLIPS } from "../../../src/player/constants";
 import { EntityManager } from "./entities/EntityManager.js";
 import type { PlayerView } from "./entities/types.js";
@@ -16,6 +17,8 @@ const GOLDEN_ANGLE_DEG = 137.508;
 const SPAWN_RING_RADIUS = 3;
 /** Open manholes and doors kept per domain: a client spamming forged ids stops opening more here. */
 const MAX_OPEN_TUNNELS = 20000;
+/** NPCs that became players, kept per domain: past it, a possession still happens but is forgotten. */
+const MAX_HOSTS_TAKEN = 100000;
 
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
@@ -47,6 +50,9 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
   clip: s.clip,
   cs: s.cs,
   loop: s.loop,
+  fm: s.fm,
+  mh: s.mh,
+  md: s.md,
 });
 
 export class World {
@@ -59,12 +65,17 @@ export class World {
   /** The open manholes and doors, per domain (TunnelToggleMessage): the server's, so its NPCs fall into
    *  the open manholes every player sees. Not persisted: a restart closes them. */
   private readonly openTunnels = new Map<DomainId, Set<string>>();
+  /** The intro's possessions, per domain: each claimed NPC → the session whose MAV Unit is taking it, and
+   *  the NPCs already taken (never simulated or drawn again). Not persisted: a restart brings them back. */
+  private readonly hostClaims = new Map<DomainId, Map<string, string>>();
+  private readonly hostsTaken = new Map<DomainId, Set<string>>();
 
   constructor(private readonly out: Outbox, private readonly physics: PhysicsWorld | null = null) {
     this.entities = new EntityManager(
       {
         playersIn: (domain) => this.playerViews(domain),
         sendMany: (ids, msg) => this.out.sendMany(ids, msg),
+        isRetired: (domain, id) => this.hostsTakenIn(domain).has(id),
       },
       physics,
     );
@@ -98,6 +109,9 @@ export class World {
       clip: PLAYER_CLIPS.idle,
       cs: 1,
       loop: "repeat",
+      fm: "mav",
+      mh: "",
+      md: 0,
       lastMoveAt: Date.now(),
     };
     this.joinCount++;
@@ -109,6 +123,7 @@ export class World {
   removeSession(id: string): void {
     const s = this.sessions.get(id);
     if (!s) return;
+    this.releaseHosts(s);
     this.sessions.delete(id);
     this.entities.removeSession(id);
     this.leaveRoom(s);
@@ -133,6 +148,9 @@ export class World {
     s.clip = m.clip;
     s.cs = m.cs;
     s.loop = m.loop;
+    s.fm = m.fm;
+    s.mh = m.mh;
+    s.md = m.md;
     s.lastMoveAt = Math.max(Date.now(), s.lastMoveAt + 1);
     this.out.sendMany(this.room(s.domain), { t: "move", id, st: s.lastMoveAt, ...m }, id);
   }
@@ -148,6 +166,7 @@ export class World {
   changeDomain(id: string, domain: DomainId): void {
     const s = this.sessions.get(id);
     if (!s || s.domain === domain) return;
+    this.releaseHosts(s);
     this.entities.removeSession(id);
     this.leaveRoom(s);
     s.domain = domain;
@@ -192,6 +211,71 @@ export class World {
     this.out.sendMany(this.room(s.domain), { t: "tunnel:state", id: tunnelId, open: next });
   }
 
+  /** One step of the intro's possession (HostMessage). A claim is answered; every other step counts only
+   *  from the session holding the claim. A session holds one claim at a time. */
+  host(id: string, entityId: string, step: HostStep): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const claims = this.hostClaimsIn(s.domain);
+    if (step === "claim") {
+      const ok = !this.hostsTakenIn(s.domain).has(entityId) && (claims.get(entityId) ?? id) === id;
+      if (ok && claims.get(entityId) !== id) this.claimHostFor(s, entityId);
+      this.out.send(id, { t: "host:claim", id: entityId, ok });
+      return;
+    }
+    // A step with no claim on record claims the host now (a server restart between claim and impact lost it).
+    if (!claims.has(entityId) && !this.hostsTakenIn(s.domain).has(entityId) && step !== "release") this.claimHostFor(s, entityId);
+    if (claims.get(entityId) !== id) return;
+    switch (step) {
+      case "impact":
+        this.entities.setRagdoll(entityId, true, mavImpactOf(entityId));
+        return;
+      case "wake":
+        this.entities.setRagdoll(entityId, false, undefined, true);
+        return;
+      case "release":
+        claims.delete(entityId);
+        this.entities.setRagdoll(entityId, false);
+        return;
+      case "possess": {
+        claims.delete(entityId);
+        const taken = this.hostsTakenIn(s.domain);
+        if (taken.size < MAX_HOSTS_TAKEN) taken.add(entityId);
+        this.entities.retire(entityId);
+        this.out.sendMany(this.room(s.domain), { t: "host:taken", id: entityId });
+        return;
+      }
+    }
+  }
+
+  /** The session's one claim moves to `entityId`. */
+  private claimHostFor(s: Session, entityId: string): void {
+    this.releaseHosts(s);
+    this.hostClaimsIn(s.domain).set(entityId, s.id);
+  }
+
+  /** A leaving session's claim lets its NPC go: back up from limp, free to be claimed again. */
+  private releaseHosts(s: Session): void {
+    const claims = this.hostClaimsIn(s.domain);
+    for (const [entityId, sessionId] of claims) {
+      if (sessionId !== s.id) continue;
+      claims.delete(entityId);
+      this.entities.setRagdoll(entityId, false);
+    }
+  }
+
+  private hostClaimsIn(domain: DomainId): Map<string, string> {
+    let claims = this.hostClaims.get(domain);
+    if (!claims) this.hostClaims.set(domain, (claims = new Map()));
+    return claims;
+  }
+
+  private hostsTakenIn(domain: DomainId): Set<string> {
+    let taken = this.hostsTaken.get(domain);
+    if (!taken) this.hostsTaken.set(domain, (taken = new Set()));
+    return taken;
+  }
+
   private tunnelsOpenIn(domain: DomainId): Set<string> {
     let open = this.openTunnels.get(domain);
     if (!open) this.openTunnels.set(domain, (open = new Set()));
@@ -210,7 +294,7 @@ export class World {
   private *playerViews(domain: DomainId): Iterable<PlayerView> {
     for (const id of this.room(domain)) {
       const s = this.sessions.get(id);
-      if (s) yield { id: s.id, domain: s.domain, x: s.x, y: s.y, z: s.z, vx: s.vx, vz: s.vz, lastMoveAt: s.lastMoveAt };
+      if (s) yield { id: s.id, domain: s.domain, form: s.fm, x: s.x, y: s.y, z: s.z, vx: s.vx, vz: s.vz, lastMoveAt: s.lastMoveAt };
     }
   }
 
@@ -243,6 +327,7 @@ export class World {
       serverTime: Date.now(),
       data: this.persistence.get(s.identity)?.data ?? {},
       tunnelsOpen: [...this.tunnelsOpenIn(s.domain)],
+      hostsTaken: [...this.hostsTakenIn(s.domain)],
     });
     this.out.sendMany(room, { t: "join", player: snapshotOf(s) }, s.id);
   }

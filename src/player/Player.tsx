@@ -19,13 +19,15 @@ import { wrapAngle } from "../utils/math";
 import { MAX_HEAD_PITCH } from "../objects/actors/beeble/animations";
 import { BEEBLE_SPEC } from "../objects/actors/beeble/spec";
 import { ModelActor } from "../objects/actors/model/ModelActor";
+import { createMavUnit } from "../objects/actors/mav-unit";
+import { warmPrograms } from "../utils/render";
 import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, HEADING_FACING_OFFSET, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
 import { posePlayerBody } from "./registry";
-import { getThirdPersonBodySide, setCameraBoom, setLocalPlayerBody } from "./store";
-import { PLAYER_HEIGHT, PLAYER_RADIUS, playerEyeY } from "./spec";
-import type { InputState, PlayerActionSample, PlayerBodyState } from "./types";
+import { getThirdPersonBodySide, isPlayerHeld, setCameraBoom, setLocalPlayerBody, takePlayerPlacement } from "./store";
+import { PLAYER_HEIGHT, PLAYER_RADIUS, playerEyeY, SPAWN_CLEARANCE } from "./spec";
+import type { InputState, PlayerActionSample, PlayerBodyState, PlayerPlacement } from "./types";
 import { moveHeadingOf, playerAnimationOf } from "./utils";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
@@ -132,7 +134,7 @@ export const Player = () => {
   const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
   const thirdPerson = useThirdPersonToggle();
   const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false, turningInPlace: false, heading: "forward" }).current;
-  const body = useRef<PlayerBodyState>({ feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
+  const body = useRef<PlayerBodyState>({ form: "host", mavHost: "", mavDepth: 0, feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
   /** The head the camera follows (eased), and where the body stood last frame (its speed). */
   const pivot = useRef(new THREE.Vector3()).current;
   const lastFeet = useRef({ x: NaN, z: NaN }).current;
@@ -159,7 +161,7 @@ export const Player = () => {
   const spawn = useMemo<[number, number, number]>(
     () =>
       spawnPosition
-        ? [spawnPosition[0], spawnPosition[1] + PLAYER_HEIGHT / 2 + 0.05, spawnPosition[2]]
+        ? [spawnPosition[0], spawnPosition[1] + PLAYER_HEIGHT / 2 + SPAWN_CLEARANCE, spawnPosition[2]]
         : SPAWN_POSITION,
     [spawnPosition?.[0], spawnPosition?.[1], spawnPosition?.[2]]
   );
@@ -189,13 +191,18 @@ export const Player = () => {
     camera.updateProjectionMatrix();
   }, [camera]);
 
+  // Every player wears a MAV Unit, first drawn mid-intro (or when another player's falls into view): its
+  // programs link at load instead (each link blocks ~0.6s in Firefox).
+  const scene = useThree((s) => s.scene);
+  useEffect(() => warmPrograms(scene, [createMavUnit()]), [scene]);
+
   /** Holds the capsule (and camera) over the spawn plus the server's spawn offset until the ground exists:
    *  falling from the spawn's drop height, never below the hold (SPAWN_DROP_HEIGHT, or a lower drop height).
    *  The offset is applied here, not via the RigidBody position prop: it can change on reconnect and
    *  must never teleport a player who has already landed. */
   const holdAtSpawn = (rb: RapierRigidBody, character: Character, dt: number): void => {
     // A hand-placed spawn (drop height 0: a <Domain playerSpawn>) is exact: the server's multiplayer spread
-    // would put the home page's title off-center.
+    // would put it off its mark.
     const off = spawnDropHeight === 0 ? null : getAssignedSpawnOffset();
     const sx = spawn[0] + (off?.x ?? 0);
     const sz = spawn[2] + (off?.z ?? 0);
@@ -406,10 +413,36 @@ export const Player = () => {
     body.visible = thirdPerson.current;
   };
 
+  /** Stands the player where a cutscene left it (store.ts placePlayer), facing its yaw, the camera level
+   *  behind the eyes. A spawn not yet loaded still holds it (holdAtSpawn) until the ground exists. */
+  const takePlacement = (rb: RapierRigidBody, character: Character, placed: PlayerPlacement): void => {
+    rb.setTranslation({ x: placed.x, y: placed.feetY + PLAYER_HEIGHT / 2 + SPAWN_CLEARANCE, z: placed.z }, true);
+    character.state.vy = 0;
+    body.yaw = placed.yaw;
+    body.headYaw = undefined;
+    body.headPitch = undefined;
+    // The camera looks down its −z: facing the body's forward (sin yaw, cos yaw) is a yaw of π past it.
+    camera.quaternion.setFromEuler(_aimEuler.set(0, placed.yaw + Math.PI, 0));
+    cameraReady.current = false;
+    lastFeet.x = NaN;
+  };
+
   useFrame((frame, delta) => {
     const rb = rigidBodyRef.current;
     const character = characterRef.current;
     if (!rb || !character) return;
+
+    // A cutscene has the player: only the body it writes is drawn, and the capsule bumps into nothing.
+    const collider = rb.collider(0);
+    if (isPlayerHeld()) {
+      if (collider?.isEnabled()) collider.setEnabled(false);
+      setCameraWaterDepth(0);
+      posePlayerBody(body, frame.clock.elapsedTime * 1000);
+      return;
+    }
+    if (collider && !collider.isEnabled()) collider.setEnabled(true);
+    const placed = takePlayerPlacement();
+    if (placed) takePlacement(rb, character, placed);
 
     const input = inputRef.current;
     const dt = Math.min(delta, MAX_STEP_SECONDS);

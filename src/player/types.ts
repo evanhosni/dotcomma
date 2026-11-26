@@ -1,5 +1,6 @@
 import type { Character, CharacterStepResult } from "../physics/types";
 import type { CameraWaterColors } from "../vfx/screen-pass/types";
+import type { PlayerForm } from "../net/protocol/types";
 
 export interface GroundSafetyNets {
   /** Stuck escape: a capsule slightly embedded (under the backstop tolerance, e.g. after a LOD swap)
@@ -57,8 +58,13 @@ export interface PlayerActionSample {
 /** A diagonal with forward or backward in it counts as that; left or right alone is a strafe. */
 export type MoveHeading = "forward" | "backward" | "left" | "right";
 
-/** Written by Player.tsx each frame, drawn by PlayerBody.tsx. */
+/** Written by Player.tsx each frame (by the intro while it runs), drawn by PlayerBody.tsx. */
 export interface PlayerBodyState {
+  /** A beeble wearing its MAV Unit, or the unit alone: then `feet` is the unit's origin and `yaw` its spin. */
+  form: PlayerForm;
+  /** The NPC a lone unit is screwing into ("" none) and how far in (0–1): drawn on that NPC's head. */
+  mavHost: string;
+  mavDepth: number;
   feetX: number;
   feetY: number;
   feetZ: number;
@@ -74,3 +80,11 @@ export interface PlayerBodyState {
 }
 
 export type ScreenSide = "left" | "right";
+
+/** A cutscene's hand-off (store.ts placePlayer): the player stands there, facing `yaw` (the body's rotation.y). */
+export interface PlayerPlacement {
+  x: number;
+  feetY: number;
+  z: number;
+  yaw: number;
+}

@@ -43,10 +43,19 @@ vec4 triplanarSample(sampler2D tex, vec3 worldPos, vec3 worldNormal, float scale
   return xaxis * blending.x + yaxis * blending.y + zaxis * blending.z;
 }
 
+/** A texture-sampling gate that is the SAME for the whole 2×2 pixel quad: true wherever `weight` is above
+ *  `threshold` in this pixel or varies across the quad. Gated per pixel, a quad straddling the threshold
+ *  sampled with only some pixels active, so the implicit mip derivatives were undefined: a dotted line of
+ *  wrong-mip texels along the threshold's contour (generation/DECISIONS.md). Only valid in quad-uniform flow. */
+bool quadGate(float weight, float threshold) {
+  return weight > threshold || fwidth(weight) > 0.0;
+}
+
 /** `tex` at the flat world UV, blended toward a triplanar read by `tri` (steep ground); the triplanar reads
- *  are skipped where `tri` is negligible. */
+ *  are skipped where `tri` is 0 over the whole quad. */
 vec4 slopeBlendedSample(sampler2D tex, vec2 uv, float tri, vec3 worldPos, vec3 worldNormal, float scale) {
-  return tri < 0.01 ? texture2D(tex, uv) : mix(texture2D(tex, uv), triplanarSample(tex, worldPos, worldNormal, scale), tri);
+  vec4 flatRead = texture2D(tex, uv);
+  return quadGate(tri, 0.0) ? mix(flatRead, triplanarSample(tex, worldPos, worldNormal, scale), tri) : flatRead;
 }
 
 /** The terrain's fake directional light, 0..1: unlit ground scales by it so ramps, curbs and faces read. */

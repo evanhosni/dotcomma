@@ -6,6 +6,7 @@ import { QUANTIZATION_GRID } from "../../constants";
 import { Domain, Material, Skybox, Terrain, Water } from "../../components";
 import { DayNightCycle } from "../../sky/day-night/DayNightCycle";
 import { FastTravel } from "./FastTravel";
+import { Intro } from "./intro/Intro";
 import { CityRegion } from "./regions/city/CityRegion";
 import { DesertRegion } from "./regions/desert/DesertRegion";
 import { OceanRegion } from "./regions/ocean/OceanRegion";
@@ -27,6 +28,7 @@ export const OverworldDomain = (
     <DayNightCycle />
     <PostProcessing quantization={QUANTIZATION_GRID} />
     <FastTravel />
+    <Intro />
     {/* What every water shares, and what follows every water whatever body it is: every fall's boulders and spray. */}
     <Water>
       <WaterfallBoulders />

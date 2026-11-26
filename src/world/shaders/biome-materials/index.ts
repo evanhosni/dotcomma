@@ -208,12 +208,10 @@ const crispnessTiers = (slots: number[], halfOf: (k: number) => number): number[
   return tiers;
 };
 
-/** A colour call's gate, the same for the whole 2×2 pixel quad: it runs wherever its weight is above 0 in ANY
- *  pixel of the quad (fwidth, taken here in uniform control flow). Gated per pixel, the quad straddling a
- *  feather's outer edge sampled its textures with only some pixels active, so their implicit mip derivatives
- *  were undefined: a dotted line of wrong-mip texels traced every biome wall's far edge from a distance. The
- *  extra pixels carry weight 0, so the colour is unchanged; the cost is one pixel ring per edge. */
-const quadGate = (weight: string): string => `(${weight} > 0.0 || fwidth(${weight}) > 0.0)`;
+/** A colour call's gate, the same for the whole 2×2 pixel quad (common.glsl `quadGate`): a biome wall's
+ *  feather edge gated per pixel traced a dotted line of wrong-mip texels. The extra pixels carry weight 0,
+ *  so the colour is unchanged; the cost is one pixel ring per edge. */
+const quadGate = (weight: string, threshold = "0.0"): string => `quadGate(${weight}, ${threshold})`;
 
 /** The per-pixel biome cross-fade, in two passes. WEIGHTS: each tier claims `remaining × weight`, softer
  *  tiers split the rest, and a visible slot's weight goes to its region BASE and its own frag by presence
@@ -318,14 +316,14 @@ const riverBedGLSL = (
   const pavement = pavedSlots.length > 0 ? `min(${pavedSlots.map((k) => `smoothstep(-1.0, 1.0, ${slotOf("vBiomeSdf", k)})`).join(" + ")}, 1.0)` : "0.0";
   const steep = ranges.length > 0 ? ranges.map(([start, end], y) => `(1.0 - smoothstep(${cosDegGLSL(end)}, ${cosDegGLSL(start)}, normalize(vWorldNormal).y)) * min(bedYield${y}, 1.0)`).join(" + ") : "0.0";
   return `if (vRiverBedDistance < RIVER_BED_REACH) {
-        vec2 bedUV = fract(vWorldUv);
+        vec2 bedUV = vWorldUv;
         ${bedKeys.map((_, g) => `float bedW${g} = 0.0;`).join(" ")}
         float bedRemaining = 1.0;
         ${ranges.map((_, y) => `float bedYield${y} = 0.0;`).join(" ")}
         ${riverbedWeightsGLSL(bedGroupOf.length, bedGroupOf, bedHalves, yieldOf)}
         vec3 bed = vec3(0.0);
         float bedSum = 0.0;
-        ${bedKeys.map((_, g) => `if (bedW${g} > ${BIOME_WEIGHT_VISIBLE}) { bed += ${riverbedSampleGLSL(g, bedKeys)} * bedW${g}; bedSum += bedW${g}; }`).join("\n        ")}
+        ${bedKeys.map((_, g) => `if (${quadGate(`bedW${g}`, glslFloat(BIOME_WEIGHT_VISIBLE))}) { bed += ${riverbedSampleGLSL(g, bedKeys)} * bedW${g}; bedSum += bedW${g}; }`).join("\n        ")}
         vec4 riverColor = vec4(bedShade(bed / max(bedSum, 1e-4), vWorldPosWrapped, vUnderwaterDepth), 1.0);
         // The LOD blur widens the fade past the reach, where this branch cuts it: whole by the reach. A capped
         // bank (capRiverBed) and a mouth sit EXACTLY at the reach, so the branch flipped pixel by pixel on

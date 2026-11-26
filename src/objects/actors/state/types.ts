@@ -95,9 +95,27 @@ export interface StateDef {
   transitions: TransitionDef[];
 }
 
+/** How a machine's built-in ragdoll states behave (state/constants.ts RAGDOLL_STATE). */
+export interface RagdollConfig {
+  /** The clip the body stands back up into. Default: whatever was playing when it went limp. */
+  recoverClip?: string;
+  /** How long standing back up takes (the client's blend, the server's recover state). Default DEFAULT_RECOVER_SECONDS. */
+  recoverSeconds?: number;
+}
+
+/** A push given to one bone's body as the ragdoll starts (world units: mass × u/s). A bone the model lacks
+ *  pushes the ragdoll's root. */
+export interface RagdollImpulse {
+  bone: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface StateMachineConfig {
   initialState: string;
   states: StateDef[];
+  ragdoll?: RagdollConfig;
   /** Only for triggers a transition names by id; transitions may hold the trigger objects directly. */
   triggers?: TriggerDef[];
 }
@@ -126,6 +144,8 @@ export interface RunnerOptions {
 export interface StateMachineHandle {
   readonly currentStateId: string;
   forceTransition: (stateId: string) => void;
+  /** Limp (RAGDOLL_STATE) or back up (RECOVER_STATE); `hold` keeps it in the recover state once up. */
+  setRagdoll: (on: boolean, impulse?: RagdollImpulse, hold?: boolean) => void;
   blackboard: Record<string, any>;
   motion: Motion;
   animation: AnimationChannel;

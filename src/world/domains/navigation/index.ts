@@ -1,4 +1,4 @@
-import { ESCAPE_POD_EVENT, HOME_PATH, NOT_FOUND_PATH, PUBLIC_URL } from "./constants";
+import { ESCAPE_POD_EVENT, NOT_FOUND_PATH, PUBLIC_URL, ROOT_PATH } from "./constants";
 import { type Address } from "../overworld/address/types";
 import { isKnownAddress, parseAddressPath } from "../overworld/address";
 import type { SerializedRegion } from "../../../generation/types";
@@ -9,24 +9,27 @@ import { DomainId } from "../types";
  * navigates, so every history entry behind the player is same-document and a
  * back gesture can only fire `popstate` — which becomes the escape pod. Entries
  * pushed without a user gesture are back-button-skippable in Chrome, so the trap
- * arms only from real gestures (the home page's enter click, first pointer lock).
+ * arms only from real gestures (the first pointer lock: the intro's enter click).
  *
- * "/" is the home domain. A path that is an ADDRESS (world/domains/overworld/address/index.ts) boots
- * the overworld there, and the address bar follows the player as they walk
- * (replaceAddressPath). Every other path is replaced by "/404", the 404 domain.
+ * "/" and every path that is an ADDRESS (world/domains/overworld/address/index.ts) boot the overworld:
+ * the bare site at the origin's cell, an address at its place. The address bar is HELD on the boot path
+ * until the intro lets it go (holdAddressBar), then follows the player as they walk (replaceAddressPath).
+ * Every other path is replaced by "/404", the 404 domain.
  */
 
 const stripBase = (pathname: string): string => {
   const p = PUBLIC_URL && pathname.startsWith(PUBLIC_URL) ? pathname.slice(PUBLIC_URL.length) : pathname;
-  return p || HOME_PATH;
+  return p || ROOT_PATH;
 };
 
 // Set by initDomainNavigation(), the browser's entry point: the server bundles this module with the
 // content trees and has no window.
-let currentPath = HOME_PATH;
-let currentDomain: DomainId = "home";
+let currentPath = ROOT_PATH;
+let currentDomain: DomainId = "overworld";
 /** The address the overworld should travel to on mount (from the boot URL); null = the origin. */
 let pendingAddress: Address | null = null;
+/** While held, replaceAddressPath leaves the address bar alone (the intro's title screen: the bare site). */
+let addressHeld = false;
 
 const domainListeners = new Set<(domain: DomainId) => void>();
 
@@ -44,43 +47,46 @@ export const onDomainChange = (fn: (domain: DomainId) => void): (() => void) => 
   };
 };
 
-/** Consumed once by the overworld's FastTravel on mount. */
+/** Consumed once by the overworld's intro on mount. */
 export const takePendingAddress = (): Address | null => {
   const address = pendingAddress;
   pendingAddress = null;
   return address;
 };
 
-/** Must be called from a user gesture so the pushed entry isn't back-button-skippable. */
-const switchDomain = (id: DomainId) => {
+/** Switches the domain inside the one canvas (index.tsx). Call from a user gesture, so the pushed entry
+ *  isn't back-button-skippable. No caller today: every path boots its domain directly. */
+export const switchDomain = (id: DomainId) => {
   if (id === currentDomain) return;
   currentDomain = id;
-  if (id === "home") currentPath = HOME_PATH;
   if (id === "404") currentPath = NOT_FOUND_PATH;
   pushEntry();
   domainListeners.forEach((fn) => fn(id));
 };
 
-/** The home page's way in, from its click: the overworld, at the biome cell the world origin sits in. */
-export const enterOverworld = () => {
-  pendingAddress = null;
-  switchDomain("overworld");
+export const holdAddressBar = (held: boolean): void => {
+  addressHeld = held;
 };
 
 /** The address bar follows the player. replaceState, so the back trap's entry stays what it was. */
 export const replaceAddressPath = (path: string) => {
+  if (!addressHeld) flashAddressPath(path);
+};
+
+/** Shows a path even while the bar is held (the intro's scan flicking through addresses). */
+export const flashAddressPath = (path: string) => {
   if (currentDomain !== "overworld" || path === currentPath) return;
   currentPath = path;
   window.history.replaceState(window.history.state ?? historyState(), "", urlOf(path));
 };
 
 /** `overworldRegions` name the addresses that exist; passed in because the content trees import this
- *  module (the home page enters the overworld through it), and importing them back is a module cycle. */
+ *  module (the overworld's address glue), and importing them back is a module cycle. */
 export const initDomainNavigation = (overworldRegions: readonly SerializedRegion[]) => {
   const bootPath = stripBase(window.location.pathname);
-  const address = bootPath === HOME_PATH ? null : parseAddressPath(bootPath);
+  const address = bootPath === ROOT_PATH ? null : parseAddressPath(bootPath);
   pendingAddress = address && isKnownAddress(address, overworldRegions) ? address : null;
-  currentDomain = bootPath === HOME_PATH ? "home" : pendingAddress ? "overworld" : "404";
+  currentDomain = bootPath === ROOT_PATH || pendingAddress ? "overworld" : "404";
   currentPath = currentDomain === "404" ? NOT_FOUND_PATH : bootPath;
   if (currentPath !== bootPath) window.history.replaceState(window.history.state, "", urlOf(currentPath));
 

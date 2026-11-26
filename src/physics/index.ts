@@ -113,11 +113,14 @@ interface GroundProbe {
   nX: number;
   nY: number;
   nZ: number;
+  /** How far the capsule can drop before the ground under it is near (nearGround); Infinity when the ray
+   *  found none. */
+  gap: number;
   /** How far the ground's surface stands ABOVE where the capsule would rest on it (a plane's tilt
    *  allowed for): over GROUND_EMBED_TOLERANCE the capsule is inside its ground. */
   embed: number;
 }
-const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, fullSpeed: false, nX: 0, nY: 1, nZ: 0, embed: 0 };
+const _probe: GroundProbe = { nearGround: false, supported: false, angle: 0, fullSpeed: false, nX: 0, nY: 1, nZ: 0, gap: Infinity, embed: 0 };
 
 /** Probe EVERY step: computedGrounded() flickers false on steep surfaces, where this matters most. */
 const probeGround = (
@@ -131,9 +134,12 @@ const probeGround = (
   py: number,
   pz: number,
   filter: (c: Rapier.Collider) => boolean,
+  /** How far the capsule falls this step: the ray reaches that much further, so the ground ahead is seen. */
+  fall: number,
 ): GroundProbe => {
   const p = _probe;
   p.nearGround = false;
+  p.gap = Infinity;
   p.supported = false;
   p.angle = 0;
   p.fullSpeed = false;
@@ -144,7 +150,7 @@ const probeGround = (
   ray.origin.x = px;
   ray.origin.y = py;
   ray.origin.z = pz;
-  const hit = world.castRayAndGetNormal(ray, GROUND_RAY_LENGTH, false, undefined, undefined, collider, body, filter);
+  const hit = world.castRayAndGetNormal(ray, Math.max(GROUND_RAY_LENGTH, halfHeight + GROUND_RAY_SLACK + fall), false, undefined, undefined, collider, body, filter);
   if (!hit) return p;
   // Trimesh normals can face either way — orient upward.
   const flip = hit.normal.y < 0 ? -1 : 1;
@@ -153,6 +159,8 @@ const probeGround = (
   const hnZ = hit.normal.z * flip;
   // Reach scales 1/cos(angle) with the hit's own normal; ~76°+ counts as wall, not ground.
   const allowed = halfHeight / Math.max(hnY, 0.25) + GROUND_RAY_SLACK;
+  p.gap = hit.timeOfImpact - allowed;
+  if (hit.timeOfImpact > GROUND_RAY_LENGTH) return p;
   if (hit.timeOfImpact <= allowed) {
     p.nearGround = true;
     p.nX = hnX;
@@ -221,8 +229,9 @@ const updateSlide = (s: CharacterMotionState, g: GroundProbe, onSlideSlope: bool
 };
 
 /** Gravity (reset on support with the gap under the capsule closed: `resting`), the near-ground fall clamp
- *  and the jump — or the caller's own vy. */
-const updateVertical = (s: CharacterMotionState, input: CharacterInput, supported: boolean, resting: boolean, nearGround: boolean, onSlideSlope: boolean, dt: number): void => {
+ *  and the jump — or the caller's own vy. A fall that would drop past the near-ground band this step is
+ *  slowed to land in it (`gap`): the clamp then holds it, at any terminal velocity. */
+const updateVertical = (s: CharacterMotionState, input: CharacterInput, supported: boolean, resting: boolean, nearGround: boolean, gap: number, onSlideSlope: boolean, dt: number): void => {
   if (input.vyOverride != null) {
     s.vy = input.vyOverride;
     return;
@@ -234,6 +243,8 @@ const updateVertical = (s: CharacterMotionState, input: CharacterInput, supporte
   }
   if (nearGround && s.vy < NEAR_GROUND_FALL_SPEED_CAP) {
     s.vy = NEAR_GROUND_FALL_SPEED_CAP;
+  } else if (!nearGround && s.vy * dt < -gap) {
+    s.vy = Math.max(s.vy, Math.min(-gap / dt, NEAR_GROUND_FALL_SPEED_CAP));
   }
   if (input.jump && supported && !onSlideSlope && s.vy <= 0) {
     s.vy = JUMP_IMPULSE;
@@ -339,7 +350,7 @@ export const stepCharacter = (
   const { controller, ray, state: s } = c;
   const filter = input.ignoreTerrain ? _notSensorNotTerrain : _notSensor;
   const grounded = controller.computedGrounded();
-  const ground = probeGround(world, ray, c.shape.height / 2, c.shape.radius, collider, body, px, py, pz, filter);
+  const ground = probeGround(world, ray, c.shape.height / 2, c.shape.radius, collider, body, px, py, pz, filter, Math.max(0, -Math.min(s.vy + GRAVITY * dt, 0)) * dt);
   const liquid = input.swim && input.swim.surfaceY > py - c.shape.height / 2 ? SURFACE_MOVEMENT[input.swim.liquid] : null;
   const speedFactor = (input.surface ? input.surface.speedFactor : 1) * (liquid ? liquid.speed : 1);
   // Water overrides the ground's slopes: a swimmer never slides down the bed or is slowed up it.
@@ -366,7 +377,7 @@ export const stepCharacter = (
   // is a fall-through defense.
   const onBed = walkableSupport && ground.embed >= -restGap / Math.max(ground.nY, 0.25);
   if (!swimming || !updateSwimVertical(s, input.swim!, py, c.shape.height, onBed, dt)) {
-    updateVertical(s, input, grounded || walkableSupport, resting, ground.nearGround, onSlideSlope, dt);
+    updateVertical(s, input, grounded || walkableSupport, resting, ground.nearGround, ground.gap, onSlideSlope, dt);
   }
 
   _desired.x = (walk.x + s.slideDirX * s.slideSpeed) * dt;

@@ -1,6 +1,7 @@
 import { DOMAIN_CONFIGS } from "../../../world/domains";
 import { CITY_BIOME_ID } from "../../../world/constants";
 import { computeVertexData, computeVertexDataRaw, getCityFreewaySidePoints, getCityRoadMarkers, getCityTrafficLightPoints, getFlattenPoints, getFreewayBridges, getNetwork, getRiverSegments, initCompute, unwarp } from "../..";
+import { onFlattenPad } from "../../placement/flatten-pads";
 import { BRIDGE_PLACEMENT, bridgeColliderPoints, bridgePierColumns } from "../../../objects/dressing/bridges/spec";
 import { DRESSING_COLLIDER_SPECS, DRESSING_ENUMERATORS, runDressingEnumerator } from "../../../objects/dressing/registry";
 import { UTILITY_POLE_PLACEMENT } from "../../../objects/dressing/power-lines/spec";
@@ -103,6 +104,23 @@ describe("getCityTrafficLightPoints", () => {
 });
 
 describe("flatten-ground pads", () => {
+  it("knows when a point stands on a pad (no actor spawns on a building's ground)", () => {
+    const p = getFlattenPoints(cx - 400, cz - 400, cx + 400, cz + 400)[0];
+    expect(onFlattenPad(p.x, p.z)).toBe(true);
+    expect(onFlattenPad(p.x + p.radius * 0.9, p.z)).toBe(true);
+    expect(onFlattenPad(p.x + p.radius + 2, p.z, 3)).toBe(true);
+    // Far from every pad: a point in the open no pad covers.
+    const pads = getFlattenPoints(cx - 600, cz - 600, cx + 600, cz + 600);
+    let open = null as { x: number; z: number } | null;
+    for (let x = cx - 400; x <= cx + 400 && !open; x += 7) {
+      for (let z = cz - 400; z <= cz + 400 && !open; z += 7) {
+        if (pads.every((q) => Math.hypot(q.x - x, q.z - z) > q.radius + 1)) open = { x, z };
+      }
+    }
+    expect(open).not.toBeNull();
+    expect(onFlattenPad(open!.x, open!.z)).toBe(false);
+  });
+
   it("terrain is flat under every flatten-ground instance, at its exact spawn height", () => {
     const points = getFlattenPoints(cx - 400, cz - 400, cx + 400, cz + 400);
     expect(points.length).toBeGreaterThan(0);

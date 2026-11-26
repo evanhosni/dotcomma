@@ -16,6 +16,8 @@ export interface KinematicMoverOptions {
 
 export interface KinematicMover {
   step(delta: number, ctx: ActorFrameContext, motion: MotionOutput, serverDriven: boolean): void;
+  /** Whether its capsule collides (not while the body is a ragdoll: its parts would hit it). */
+  setSolid(solid: boolean): void;
 }
 
 export interface PooledModelClone {

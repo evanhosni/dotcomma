@@ -218,6 +218,8 @@ the server.
 
 ### The pieces of a config
 
+(Every config also gets the built-in `ragdoll` and `ragdoll-recover` states, and may set `ragdoll: { recoverClip, recoverSeconds }`: objects/actors/state/README.md.)
+
 ```ts
 export const BEEBLE_SM: StateMachineConfig = {
   initialState: "idle-walk",

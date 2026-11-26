@@ -23,11 +23,15 @@ export const SLIDE_MAX_SPEED = 30;
 export const SLIDE_STOP_DECEL = 60;
 // Fall-speed cap near ANY ground: a terminal-velocity scrape at a glancing
 // angle punches through the trimesh, and on gentle ground deflects into drift.
+// A fall is also slowed AHEAD of the ground (physics/index.ts updateVertical):
+// no step drops a capsule deeper than the near-ground band at any speed.
 export const NEAR_GROUND_FALL_SPEED_CAP = -20;
 
 /** u/s². Also the Rapier world gravity on the client (CustomCanvas) and the server (physicsWorld.ts). */
 export const GRAVITY = -100;
-export const TERMINAL_VELOCITY = -150;
+/** Safe at any value: the ground look-ahead slows every fall before the ground, and MAX_MOVEMENT_PER_FRAME
+ *  keeps every substep within MAX_SUBSTEP_DISTANCE (it also caps the server's 10Hz walkers at 80u/s). */
+export const TERMINAL_VELOCITY = -300;
 export const JUMP_IMPULSE = 40;
 export const MAX_MOVEMENT_PER_FRAME = 8;
 /** A rise that moved less than this share of its desired step hit a ceiling: the upward speed is dropped. */
