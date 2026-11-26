@@ -1,11 +1,13 @@
 import { isDomainId } from "../../../src/net/protocol/utils";
 import { MAX_CLIP_NAME_LENGTH, MAX_CLIP_SPEED, PLAYER_DATA_MAX_BYTES, TUNNEL_TOGGLE_ID } from "../../../src/net/protocol/constants";
-import type { ClientMessage, EntityRegisterItem, MoveIntent } from "../../../src/net/protocol/types";
+import { HOST_STEPS } from "../../../src/net/protocol/enums";
+import type { ClientMessage, EntityRegisterItem, HostStep, MoveIntent } from "../../../src/net/protocol/types";
 import { MAX_ID_LENGTH, MAX_ENTITIES_PER_MESSAGE } from "./constants";
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= MAX_ID_LENGTH;
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isHostStep = (v: unknown): v is HostStep => typeof v === "string" && (HOST_STEPS as readonly string[]).includes(v);
 
 const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ENTITIES_PER_MESSAGE) return null;
@@ -20,13 +22,15 @@ const parseRegisterItems = (raw: unknown): EntityRegisterItem[] | null => {
 };
 
 const parseMove = (raw: Record<string, unknown>): MoveIntent | null => {
-  const { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop } = raw;
+  const { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop, fm, mh, md } = raw;
   if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(z)) return null;
   if (!isFiniteNumber(vx) || !isFiniteNumber(vy) || !isFiniteNumber(vz) || !isFiniteNumber(ry)) return null;
   if (!isFiniteNumber(hy) || !isFiniteNumber(hp) || !isFiniteNumber(cs) || cs < 0 || cs > MAX_CLIP_SPEED) return null;
   if (typeof clip !== "string" || clip.length === 0 || clip.length > MAX_CLIP_NAME_LENGTH) return null;
   if (loop !== "repeat" && loop !== "once") return null;
-  return { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop };
+  if (fm !== "mav" && fm !== "host") return null;
+  if (typeof mh !== "string" || mh.length > MAX_ID_LENGTH || !isFiniteNumber(md) || md < 0 || md > 1) return null;
+  return { x, y, z, vx, vy, vz, ry, hy, hp, clip, cs, loop, fm, mh, md };
 };
 
 /** Anything odd → null → ignored. */
@@ -64,6 +68,8 @@ export const parseClientMessage = (data: unknown): ClientMessage | null => {
       return isId(raw.id) && isId(raw.action) ? { t: "entity:interact", id: raw.id, action: raw.action } : null;
     case "player:click":
       return isId(raw.id) ? { t: "player:click", id: raw.id } : null;
+    case "host":
+      return isId(raw.id) && isHostStep(raw.step) ? { t: "host", id: raw.id, step: raw.step } : null;
     case "tunnel:toggle":
       return typeof raw.id === "string" && TUNNEL_TOGGLE_ID.test(raw.id) ? { t: "tunnel:toggle", id: raw.id } : null;
     default:

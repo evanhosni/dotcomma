@@ -3,23 +3,15 @@ import { useEffect, useRef } from "react";
 import { useGameContext } from "../../../context/hooks";
 import { prefetchTerrainAround } from "../../terrain/build-requests";
 import { ensureVertexCompute, getVertexData, getVertexSample } from "../../terrain/utils";
-import { replaceAddressPath, takePendingAddress } from "../navigation";
-import { type Address } from "./address/types";
-import { addressOfPosition, pathForPlace, resolveAddress } from "./address";
+import { replaceAddressPath } from "../navigation";
+import { pathForPlace } from "./address";
 import { debugGlobal } from "../../../utils/utils";
 import { onPlaceChange } from "../../place/store";
 
-/** Entering the overworld starts this far above the landing site: the player falls while the ground loads
- *  (~10s at TERMINAL_VELOCITY, physics/index.ts). */
-const ENTRY_DROP_HEIGHT = 1500;
-
 /**
- * The overworld's URL ↔ position glue. On mount it resolves the pending address (none:
- * the biome cell the world origin sits in) to a world point and DROPS the player there
- * from ENTRY_DROP_HEIGHT: the terrain gate closes (terrainLoaded false), the player's
- * spawn moves, and the Player's hold-at-spawn branch lets the capsule fall toward it
- * until TerrainRenderer has built the ground under it. Afterwards it keeps the address
- * bar on the player's current region + biome cells. Renders nothing.
+ * The overworld's URL ↔ position glue: keeps the address bar on the player's current region + biome cells
+ * (while the intro does not hold it, world/domains/navigation/index.ts), and the debug teleport. Entering
+ * the world is the intro's (intro/Intro.tsx). Renders nothing.
  */
 export const FastTravel = () => {
   const { setPlayerSpawn, setTerrainLoaded, setProgress } = useGameContext();
@@ -33,7 +25,7 @@ export const FastTravel = () => {
     // Closes the terrain gate and moves the spawn onto the ground (or the water) at (x, z). With `y` (the
     // debug teleport into a tunnel) the gate stays open: closing it would drop the player from 100u above,
     // onto the street over the tunnel.
-    const landAt = async (x: number, z: number, y?: number, dropHeight?: number) => {
+    const landAt = async (x: number, z: number, y?: number) => {
       // The terrain worker starts on the destination while the height lookup round-trips.
       prefetchTerrainAround(x, z);
       if (y !== undefined) {
@@ -47,20 +39,8 @@ export const FastTravel = () => {
       setProgress(0);
       // Land ABOVE water: a lake cell's site is on the lake bed.
       const ground = Number.isNaN(vd.waterHeight) ? vd.height : Math.max(vd.height, vd.waterHeight);
-      setPlayerSpawn([x, ground, z], dropHeight);
+      setPlayerSpawn([x, ground, z]);
     };
-
-    const enter = async (address: Address | null) => {
-      await ensureVertexCompute();
-      if (cancelled) return;
-      // No/unresolvable address: the biome cell the world origin sits in.
-      const resolved = (address && resolveAddress(address)) ?? addressOfPosition(0, 0);
-      currentKey.current = resolved.path;
-      replaceAddressPath(resolved.path);
-      await landAt(resolved.site.x, resolved.site.z, undefined, ENTRY_DROP_HEIGHT);
-    };
-
-    enter(takePendingAddress());
 
     // Console/debug access only (like __game / __net): teleport to raw world coordinates.
     const travelTo = async (x: number, z: number, y?: number) => {

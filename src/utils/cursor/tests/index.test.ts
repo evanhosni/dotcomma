@@ -1,5 +1,5 @@
 /** The hover arbiter: the nearest claim gets the mouse, and the crosshair stays grown while ANY claim wants it. */
-import { claimHover, releaseHover } from "..";
+import { claimHover, initCursor, releaseHover, setCursorLook } from "..";
 import { type HoverTarget } from "../types";
 
 const target = (distance: number, growsCursor = true): HoverTarget & { got: string[] } => {
@@ -39,5 +39,21 @@ describe("hover arbiter", () => {
     releaseHover(quiet);
     window.dispatchEvent(new MouseEvent("click"));
     expect(quiet.got).toEqual([]);
+  });
+});
+
+describe("cursor look", () => {
+  const shown = (id: string) => document.getElementById(id)!.style.display;
+  it("draws the dot, the MAV reticle or nothing, and only under pointer lock", () => {
+    initCursor();
+    setCursorLook("reticle");
+    expect([shown("game-cursor"), shown("game-reticle")]).toEqual(["none", "none"]);
+    Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => document.body });
+    document.dispatchEvent(new Event("pointerlockchange"));
+    expect([shown("game-cursor"), shown("game-reticle")]).toEqual(["none", "block"]);
+    setCursorLook("none");
+    expect([shown("game-cursor"), shown("game-reticle")]).toEqual(["none", "none"]);
+    setCursorLook("dot");
+    expect([shown("game-cursor"), shown("game-reticle")]).toEqual(["block", "none"]);
   });
 });

@@ -13,6 +13,18 @@ import { SKINNED_BOUNDS_PAD, MAX_POOLED_PER_KEY } from "./constants";
 
 const pools = new Map<string, PooledModelClone[]>();
 
+/** userData flag of an object hung on a pooled model's bones from outside it (a MAV Unit on a head): the pool
+ *  takes it off before the clone is reused, so the next actor never inherits it. */
+export const ATTACHMENT_FLAG = "attachment";
+
+const stripAttachments = (root: THREE.Object3D): void => {
+  const found: THREE.Object3D[] = [];
+  root.traverse((node) => {
+    if (node !== root && node.userData[ATTACHMENT_FLAG]) found.push(node);
+  });
+  for (const node of found) node.removeFromParent();
+};
+
 // Materials and skeletons are deduped by SOURCE object: beeble.glb has 10
 // skinned meshes on ONE skeleton, and a skeleton per mesh meant 10×
 // Skeleton.update() + 10 bone-texture uploads per instance per frame.
@@ -117,7 +129,9 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
           });
         });
 
-        mesh.frustumCulled = true;
+        // A skinned part's bounds are its REST pose's (frozen below): a head turned or fallen away from them
+        // lost its eyes, nose or ears up close. The actor base culls the whole actor (useActorLifecycle).
+        mesh.frustumCulled = !(mesh as THREE.SkinnedMesh).isSkinnedMesh;
         mesh.castShadow = false;
         mesh.receiveShadow = false;
         // Deferring program link + uploads to the first LOOK was a 50-90ms render spike.
@@ -198,6 +212,7 @@ export const releaseModelClone = (clone: PooledModelClone): void => {
   clone.releaseTimer = setTimeout(() => {
     clone.releaseTimer = null;
     clone.mixer?.stopAllAction();
+    stripAttachments(clone.scene);
     let pool = pools.get(clone.key);
     if (!pool) {
       pool = [];

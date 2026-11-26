@@ -74,6 +74,13 @@ export class AnimationPlayer {
     this.layerFrame = NaN;
   }
 
+  /** The next update re-poses the whole frame even if it has not changed: something else wrote the bones
+   *  (a ragdoll blending back into the animation). */
+  invalidate(): void {
+    this.posed = unposedFrame();
+    this.layerFrame = NaN;
+  }
+
   /** `state` null keeps posing the last one taken (a delayed reader waiting for a change's time).
    *  `root` is what procedural clips and layers pose; `phaseMs` shifts this instance's frame grid.
    *  True when anything was re-posed (the skeleton's bone matrices are stale). */

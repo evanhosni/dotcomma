@@ -26,6 +26,8 @@ import { ActorProps, ActorWarmupHooks } from "../spawning/types";
 import { createMotionOutput, machineHasTrigger } from "../state/utils";
 import { MOUSE_RAYCAST_INTERVAL_FRAMES } from "../state/constants";
 import { useMouseEvents, useStateMachine } from "../state/hooks";
+import { useActorRagdoll } from "../ragdoll/hooks";
+import { registerLiveModelActor } from "./registry";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
@@ -163,10 +165,10 @@ export const ModelActor = ({
   /** Synced: the SERVER's channel, taken when the DELAYED render clock reaches its change time, so an
    *  idle clip starts exactly as the interpolated body stops. Local: the machine's (or manual) channel.
    *  The layers' inputs are always the local machine's (a mirror runs the behavior too). */
-  const animate = (clone: PooledModelClone, state: RootState, ctx: ActorFrameContext, serverDriven: boolean): void => {
+  const animate = (clone: PooledModelClone, state: RootState, ctx: ActorFrameContext, serverDriven: boolean, force = false): void => {
     animFrameParityRef.current = !animFrameParityRef.current;
     const halfRateDistance = renderDistance * ANIM_HALF_RATE_FRACTION;
-    if (!ctx.visible || (ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current)) return;
+    if (!force && (!ctx.visible || (ctx.distanceSq > halfRateDistance * halfRateDistance && animFrameParityRef.current))) return;
     const root = groupRef.current;
     const channel = machine?.animation ?? manualChannel;
     if (serverDriven) {
@@ -211,6 +213,7 @@ export const ModelActor = ({
       ctx.motion = motion;
       onFrame?.(state, delta, ctx);
       mover.step(delta, ctx, motion, serverDriven);
+      if (ragdoll.pose(pooled, state, ctx, serverDriven)) return;
       if (pooled) animate(pooled, state, ctx, serverDriven);
     },
   });
@@ -226,6 +229,7 @@ export const ModelActor = ({
     positionRef,
     groupRef: lifecycle.groupRef,
   });
+  const ragdoll = useActorRagdoll({ stateMachine, machine, motion, mover, animPlayer, animate });
 
   // reclaim/release are StrictMode-safe: the dev remount's cleanup schedules a
   // DEFERRED release that the immediate re-setup cancels.
@@ -235,8 +239,30 @@ export const ModelActor = ({
     lifecycle.resetLife();
     animPlayer.reset();
     markPoseChanged(pooled);
+    const detachRagdoll = ragdoll.attach(pooled.scene);
+    const unregister = registerLiveModelActor({
+      id,
+      model: pooled.scene,
+      get group() {
+        return groupRef.current;
+      },
+      setRagdoll: (on, impulse, hold) => ragdoll.setRagdoll(on, impulse, hold, !!lifecycle.sync?.known),
+      get ragdollPhase() {
+        return ragdoll.phase;
+      },
+      get yaw() {
+        const target = lifecycle.sync?.target;
+        return target?.valid ? target.ry : (machine?.motion.yaw ?? groupRef.current?.rotation.y ?? 0);
+      },
+      setDrawn: (drawn) => {
+        pooled.scene.visible = drawn;
+      },
+    });
 
     return () => {
+      unregister();
+      detachRagdoll();
+      pooled.scene.visible = true;
       animPlayer.reset();
       markPoseChanged(pooled);
       releaseModelClone(pooled);

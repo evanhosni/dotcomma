@@ -8,13 +8,17 @@
  * two sessions.
  *
  *   client → hello   {identity, domain}           exactly once, first
- *   server → init    {id, color, spawn, domain, players[], serverTime, data}
+ *   server → init    {id, color, spawn, domain, players[], serverTime, data, tunnelsOpen, hostsTaken}
  *                                                 also re-sent after a `domain` switch
  *   server → join    {player}                     to the rest of the domain
- *   both   → move    {id?, st?, x,y,z, vx,vy,vz, ry, hy, hp, clip, cs, loop}   ~10Hz while moving, plus every
+ *   both   → move    {id?, st?, x,y,z, vx,vy,vz, ry, hy, hp, clip, cs, loop, fm, mh, md}   ~10Hz while moving, plus every
  *                                                 start/stop/turn/relocation and every change of the
  *                                                 drawn pose (clip, head); the client omits `id` and
  *                                                 `st`, the server stamps `st` (its clock) on the relay
+ *   client → host    {id, step}                   the intro's MAV Unit and its host NPC: claim → impact →
+ *                                                 wake → possess (or release); only the claimer's steps count
+ *   server → host:claim {id, ok}                  to the claimer: whether the host is its
+ *   server → host:taken {id}                      to the domain: that NPC is a player now, never drawn again
  *   client → player:click {id}                    a click on another player's beeble
  *   server → player:clicked {by}                  to the clicked player only (same domain)
  *   client → domain  {domain}                     leave old room + join new + fresh init
@@ -35,12 +39,24 @@
  * Coordinates: players = capsule CENTER, entities = FEET; `ry` = three.js rotation.y (a player's: its BODY's).
  */
 import type { AnimationState } from "../../animation/types";
-import { DOMAIN_IDS } from "./enums";
+import { DOMAIN_IDS, HOST_STEPS } from "./enums";
 
 export type DomainId = (typeof DOMAIN_IDS)[number];
 
+/** What a player is: its MAV Unit alone (the intro: falling, then screwing into its host), or the beeble
+ *  host wearing it (player/PlayerBody.tsx). */
+export type PlayerForm = "mav" | "host";
+
+/** The intro's possession, step by step (HostMessage). */
+export type HostStep = (typeof HOST_STEPS)[number];
+
 /** What a player's beeble shows beyond its position and facing (player/PlayerBody.tsx). */
 export interface PlayerAvatar {
+  /** Its form. A "mav" player's position is its MAV Unit's origin (objects/actors/mav-unit/spec.ts). */
+  fm: PlayerForm;
+  /** The NPC entity a "mav" player is screwing into ("" none), and how far in (0–1). */
+  mh: string;
+  md: number;
   /** Head yaw from the body and head pitch (+ = up) (radians). */
   hy: number;
   hp: number;
@@ -142,6 +158,14 @@ export interface TunnelToggleMessage {
   id: string;
 }
 
+/** The intro's possession of an NPC beeble (world/domains/overworld/intro/): the server reserves it for the
+ *  claimer, ragdolls it on impact, stands it up on wake and retires it on possess. */
+export interface HostMessage {
+  t: "host";
+  id: string;
+  step: HostStep;
+}
+
 /** A click on another player's beeble (net/players/RemotePlayers.tsx): relayed to that player only. */
 export interface PlayerClickMessage {
   t: "player:click";
@@ -149,6 +173,7 @@ export interface PlayerClickMessage {
 }
 
 export type ClientMessage =
+  | HostMessage
   | PlayerClickMessage
   | TunnelToggleMessage
   | HelloMessage
@@ -174,6 +199,21 @@ export interface InitMessage {
   data: PlayerData;
   /** The domain's open manholes and doors (TunnelToggleMessage). */
   tunnelsOpen: string[];
+  /** The domain's NPCs that became players (HostTakenMessage): never spawned again. */
+  hostsTaken: string[];
+}
+
+/** The answer to a `host` claim, to the claimer only. */
+export interface HostClaimMessage {
+  t: "host:claim";
+  id: string;
+  ok: boolean;
+}
+
+/** An NPC became a player: to every player in the domain, the possessor included. */
+export interface HostTakenMessage {
+  t: "host:taken";
+  id: string;
 }
 
 /** A manhole or door of the domain changed: to every player in it, the toggler included. */
@@ -245,6 +285,8 @@ export interface PlayerClickedMessage {
 }
 
 export type ServerMessage =
+  | HostClaimMessage
+  | HostTakenMessage
   | PlayerClickedMessage
   | TunnelStateMessage
   | InitMessage

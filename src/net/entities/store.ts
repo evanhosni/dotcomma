@@ -8,6 +8,8 @@ import { onServerMessage, send } from "..";
 import type { EntityRegisterItem, ServerMessage } from "../protocol/types";
 import { pushSnapshot } from "./utils";
 import { debugGlobal } from "../../utils/utils";
+import { retireActor, setRetiredActors } from "../../objects/actors/store";
+import { getRemotePlayers } from "../players/store";
 import type { ClientEntity, RemoteFields } from "./types";
 
 const entities = new Map<string, ClientEntity>();
@@ -81,7 +83,13 @@ const notify = (e: ClientEntity) => e.listeners.forEach((l) => l(e));
 
 const onMessage = (msg: ServerMessage) => {
   switch (msg.t) {
+    case "host:taken":
+      // A player shown screwing into it is still drawn as its unit: RemotePlayers retires it when that
+      // player's beeble is shown, so the two swap in one frame.
+      if (![...getRemotePlayers().values()].some((p) => p.shownMavHost === msg.id)) retireActor(msg.id);
+      break;
     case "init": {
+      setRetiredActors(msg.hostsTaken);
       // The server forgot us: re-register everything mounted, keeping the last
       // known fields so nothing pops while it answers.
       if (entities.size) console.warn(`[sync] session reset — re-registering ${entities.size} entities (a server restart resets NPCs to spawn)`);

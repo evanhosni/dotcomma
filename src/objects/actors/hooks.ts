@@ -15,7 +15,7 @@ import { SPRITE_LOD_HYSTERESIS } from "../sprite-lod/constants";
 import { PosePlayback } from "../../net/entities/posePlayback";
 import { useSyncedEntity } from "../../net/entities/hooks";
 import type { PuppetTarget } from "../../net/entities/types";
-import { DEFAULT_RENDER_DISTANCE, DEFAULT_FRUSTUM_PADDING, DESPAWN_DISTANCE_FACTOR, COLLIDER_ACTIVATION_WINDOW_S } from "./constants";
+import { DEFAULT_RENDER_DISTANCE, DEFAULT_FRUSTUM_PADDING, DESPAWN_DISTANCE_FACTOR, COLLIDER_ACTIVATION_WINDOW_S, YAW_STEP_MIN_DISTANCE_SQ } from "./constants";
 import type { ActorLifecycleOptions, ActorLifecycle, ActorFrameContext, ActorFrameUpdater } from "./types";
 import { withinGate, framePhaseMsOf } from "./utils";
 import { frustum, frameUpdaters } from "./store";
@@ -77,6 +77,7 @@ export const useActorLifecycle = ({
     sync: null,
     syncRenderTime: NaN,
     spawnFade: 1,
+    holdPose: false,
   }).current;
 
   // Per-life constants derived per RENDER, not per frame — this is the hottest loop in the project.
@@ -219,7 +220,9 @@ export const useActorLifecycle = ({
   const stepYawToView = (group: THREE.Group, camera: THREE.Camera, realYaw: number | null): void => {
     if (realYaw !== null) drawn.realYaw = realYaw;
     else if (group.rotation.y !== drawn.leftYaw) drawn.realYaw = group.rotation.y;
-    const towardCamera = Math.atan2(camera.position.x - group.position.x, camera.position.z - group.position.z);
+    const dx = camera.position.x - group.position.x;
+    const dz = camera.position.z - group.position.z;
+    const towardCamera = dx * dx + dz * dz < YAW_STEP_MIN_DISTANCE_SQ ? 0 : Math.atan2(dx, dz);
     const relative = THREE.MathUtils.euclideanModulo(drawn.realYaw - towardCamera + Math.PI, Math.PI * 2) - Math.PI;
     const yaw = towardCamera + Math.round(relative / yawStep) * yawStep;
     if (group.rotation.y !== yaw) group.rotation.y = yaw;
@@ -284,8 +287,10 @@ export const useActorLifecycle = ({
       frameCtx.sync = sync;
       frameCtx.syncRenderTime = playback.renderTime;
       frameCtx.spawnFade = fadeVisibility;
+      frameCtx.holdPose = false;
       onFrame(state, delta, frameCtx);
     }
+    if (frameCtx.holdPose) return;
 
     // The server's pose wins over anything the component's logic wrote.
     const serverPosed = synced && !!group && sync.target.valid;

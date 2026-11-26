@@ -8,3 +8,6 @@ export interface HoverTarget {
   /** Every mouse event while it is the nearest claim: click, contextmenu, pointerdown/up, dblclick, wheel. */
   onMouse: (e: MouseEvent) => void;
 }
+
+/** The beeble's crosshair dot, the MAV Unit's bracket reticle, or nothing. */
+export type CursorLook = "dot" | "reticle" | "none";

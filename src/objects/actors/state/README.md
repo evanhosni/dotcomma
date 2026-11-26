@@ -9,6 +9,8 @@ An NPC's behavior is a `StateMachineConfig` ([types.ts](types.ts)): plain data a
 - `ctx` (`BehaviorContext`): `ctx.motion` ([objects/actors/state/motion.ts](motion.ts): `setSpeed`, `setTurnSpeed`, `pause`, `resume`, `move`, `heading`, `toward`, `fly`, `stop`, `face`, `faceHeading`, `faceToward`, `turnTo`, `turnToward`), `ctx.animation` (an `AnimationChannel`, [animation/](../../../animation/README.md): `play`, `pause`, `resume`, `stop`, `reverse`, `seek`, `setSpeed`, `setFrameRate`, `setIntensity`, …), `ctx.input` ([input.ts](input.ts): this tick's mouse flags), `ctx.playerPosition`, `ctx.blackboard`, timing, and `ctx.groupRef.current` (null on the server).
 - Input comes from a screen-center raycast within `interactReach` ([objects/actors/state/hooks.ts](hooks.ts)), forwarded to the server. On the server `ctx.input` is any player's; on a mirror only this player's.
 
+**Ragdoll** (built into every machine, [utils.ts](utils.ts) `ragdollStatesOf`, ids in [constants.ts](constants.ts)): `RAGDOLL_STATE` stops the motion and lets go of every layer input; the clients simulate the fall ([objects/actors/ragdoll/](../ragdoll/Ragdoll.ts)). Enter it with `setRagdoll(true, impulse?)` (the runner, or the server's `EntityManager.setRagdoll`, which also replicates the impulse) or from any transition targeting `"ragdoll"` (a death, a hard hit); leave it with `setRagdoll(false, undefined, hold?)`: `RECOVER_STATE` plays the config's `ragdoll.recoverClip` (default: the clip that was playing) for `ragdoll.recoverSeconds`, then the machine restarts at its initial state, unless held there. A config may not define states with these ids.
+
 **Motion config** (the spec's `motion`, `MotionConfig`, the movement counterpart of `animation`):
 
 | option | effect | where |

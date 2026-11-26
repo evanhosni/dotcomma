@@ -8,10 +8,12 @@ import * as THREE from "three";
  * itself at mount must stay visible until the forced draw happened. See CLAUDE.md.
  */
 export const uploadOnFirstDraw = (mesh: import("three").Object3D): void => {
+  // Put back as it was: a mesh that is never culled on its own (a skinned actor part) must stay so.
+  const culled = mesh.frustumCulled;
   mesh.frustumCulled = false;
   const prev = mesh.onAfterRender;
   mesh.onAfterRender = function (this: any, ...args: any[]) {
-    mesh.frustumCulled = true;
+    mesh.frustumCulled = culled;
     mesh.onAfterRender = prev;
     (prev as any)?.apply(this, args);
   } as typeof mesh.onAfterRender;

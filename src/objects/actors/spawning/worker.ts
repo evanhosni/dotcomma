@@ -1,5 +1,6 @@
 import { DomainConfig } from "../../../generation";
 import { createWorkerClient } from "../../../utils/worker-client";
+import { getActiveActors } from "../../../world/domains/store";
 import { SPAWN_CHUNK_SIZE } from "./constants";
 import { AnyActorDescriptor, SerializedActorDescriptor, SpawnPoint } from "./types";
 
@@ -10,6 +11,10 @@ interface SpawnsResult {
 }
 
 let pendingInit: { config: DomainConfig; maxFootprint: number } | null = null;
+/** Settles once ActorPool has booted the worker for the committed domain; asked before that, the
+ *  waiters are told when it boots. */
+let ready: Promise<void> | null = null;
+let readyWaiters: (() => void)[] = [];
 
 const client = createWorkerClient({
   create: () => new Worker(new URL("./spawn.worker.ts", import.meta.url), { type: "module" }),
@@ -21,7 +26,9 @@ const client = createWorkerClient({
 export const initSpawnWorker = (config: DomainConfig, maxFootprint: number): Promise<void> => {
   client.reset();
   pendingInit = { config, maxFootprint };
-  return client.ensure();
+  ready = client.ensure();
+  for (const wake of readyWaiters.splice(0)) wake();
+  return ready;
 };
 
 export const serializeDescriptors = (
@@ -57,6 +64,7 @@ export interface CachedSpawnChunk {
 const clientChunkCache = new Map<string, CachedSpawnChunk>();
 
 export const resetSpawnWorker = () => {
+  ready = null;
   client.reset();
   clientChunkCache.clear();
 };
@@ -74,6 +82,7 @@ const chunkKeyOf = (p: SpawnPoint): string =>
 // (a city chunk ~60ms of flatten pads, a grass chunk nearly free). Sits just
 // above the batch cadence floor (MIN_FRAMES_BETWEEN_BATCHES ≈ 83ms).
 const SPAWN_BUDGET_MS = 100;
+const MAX_LOAD_ROUNDS = 30;
 
 /** Asks the worker for the chunks not cached yet (keys sorted nearest-first: the budget covers them
  *  in that order and the rest are asked for again next time). Null when nothing is missing. The pool
@@ -105,6 +114,36 @@ export const requestSpawnChunks = (
         if (entry) entry.points.push(p);
       }
     });
+};
+
+/** Every spawn point within `radius` of (x, z), generated as needed: the very points ActorPool mounts (an id
+ *  found here is the id of the actor that will stand there). Always asked with the pool's WHOLE descriptor set:
+ *  the cache is per chunk, so a chunk asked for one kind is done for every kind (asked for the beeble alone,
+ *  the intro's host search left its chunks without buildings: only their far sprites drew), and kinds place
+ *  around each other. Waits for the pool to boot the worker. */
+export const loadSpawnPointsAround = async (x: number, z: number, radius: number): Promise<SpawnPoint[]> => {
+  const descriptors = serializeDescriptors(getActiveActors());
+  if (!ready) await new Promise<void>((wake) => readyWaiters.push(wake));
+  await ready;
+  const keys: string[] = [];
+  const reach = radius + SPAWN_CHUNK_SIZE;
+  for (let cx = Math.floor((x - radius) / SPAWN_CHUNK_SIZE); cx <= Math.floor((x + radius) / SPAWN_CHUNK_SIZE); cx++) {
+    for (let cz = Math.floor((z - radius) / SPAWN_CHUNK_SIZE); cz <= Math.floor((z + radius) / SPAWN_CHUNK_SIZE); cz++) {
+      if (Math.hypot((cx + 0.5) * SPAWN_CHUNK_SIZE - x, (cz + 0.5) * SPAWN_CHUNK_SIZE - z) <= reach) keys.push(`${cx}_${cz}`);
+    }
+  }
+  // Each request is time-budgeted and may finish only some of the chunks; the pool's cache sweep may evict a
+  // far chunk meanwhile, hence the cap.
+  for (let round = 0; round < MAX_LOAD_ROUNDS; round++) {
+    const request = requestSpawnChunks(keys, descriptors);
+    if (!request) break;
+    await request;
+  }
+  const points: SpawnPoint[] = [];
+  for (const chunk of getCachedSpawnChunks(keys)) {
+    for (const p of chunk.points) if (Math.hypot(p.x - x, p.z - z) <= radius) points.push(p);
+  }
+  return points;
 };
 
 /** The cache's own entries — point objects stay identity-stable while cached. */

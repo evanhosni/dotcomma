@@ -19,6 +19,7 @@
 import { FlattenPoint, DomainConfig, initCompute, computeVertexData, getFlattenPoints, outsideBiomes, riverKeepOff } from "../../../generation";
 import { densityCellRange, densityCellSize, densityProbability, passesPlacementFilters, rollDensityCell } from "../../../generation/placement/utils";
 import { slopeDegreesAt } from "../../../generation/placement";
+import { onFlattenPad } from "../../../generation/placement/flatten-pads";
 import { SPAWN_CHUNK_SIZE } from "./constants";
 import { boxMayHoldBiomes } from "../../../generation/zones";
 import { warpMax } from "../../../generation/utils";
@@ -194,6 +195,9 @@ const placeDensityPoints = (desc: SerializedDescriptor, chunkMinX: number, chunk
         if (slope < desc.slopeRange[0] || slope > desc.slopeRange[1]) continue;
       }
       if (spatialHash!.isTooClose(x, z, desc.footprint, desc.spacingOverrides)) continue;
+      // Never on a building's pad: spacing measures only the new point's own footprint, so a beeble 6u from a
+      // building's centre passed, inside its walls, and stood frozen there (the intro even chose one as a host).
+      if (onFlattenPad(x, z, desc.footprint / 2)) continue;
 
       const point: SpawnPoint = {
         x,

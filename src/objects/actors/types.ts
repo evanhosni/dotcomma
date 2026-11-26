@@ -67,6 +67,9 @@ export interface ActorFrameContext {
   visible: boolean;
   /** Spawn-fade visibility, 0..1 — for parts drawn outside the group (a building's far doors). */
   spawnFade: number;
+  /** Set by onFrame for this frame: the group stays exactly where it is (no server pose, no yaw step, no
+   *  held frame), because the bones are posed in world space under it (a ragdoll). */
+  holdPose: boolean;
 }
 
 export interface ActorLifecycle {

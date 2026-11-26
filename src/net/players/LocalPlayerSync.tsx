@@ -28,10 +28,12 @@ const STOP_SPEED = 0.35;
 const YAW_THRESHOLD = 0.01; // rad ≈ 0.6°, the body's facing
 const HEAD_THRESHOLD = 0.005; // rad ≈ 0.3°, the head's yaw or pitch
 const MIN_SEND_INTERVAL_MS = 50; // 20Hz ceiling during a turn/wiggle; stops bypass it
+/** A screwing-in MAV Unit's depth is sent each time it goes this much further (0–1). */
+const MAV_DEPTH_THRESHOLD = 0.05;
 const VEL_SMOOTH = 0.35; // EMA factor on the instantaneous velocity
 
 /** A frame-to-frame speed above this is a relocation (respawn/teleport), not a velocity. */
-const TELEPORT_SPEED = 200; // u/s
+const TELEPORT_SPEED = 800; // u/s: well above the intro's fastest dive (world/domains/overworld/intro/constants.ts); a relocation moves hundreds of units in one frame
 
 const _dir = new THREE.Vector3();
 
@@ -39,6 +41,9 @@ type SendReason = "stop" | "change";
 type Velocity = { x: number; y: number; z: number };
 
 const avatarChanged = (body: PlayerBodyState, sent: PlayerAvatar): boolean =>
+  body.form !== sent.fm ||
+  body.mavHost !== sent.mh ||
+  Math.abs(body.mavDepth - sent.md) > MAV_DEPTH_THRESHOLD ||
   body.clip !== sent.clip ||
   body.loop !== sent.loop ||
   body.clipSpeed !== sent.cs ||
@@ -69,7 +74,7 @@ export const LocalPlayerSync = () => {
   const vel = useRef(new THREE.Vector3());
   const sentVel = useRef(new THREE.Vector3());
   const sentYaw = useRef(0);
-  const sentAvatar = useRef<PlayerAvatar>({ hy: 0, hp: 0, clip: "", cs: 1, loop: "repeat" }).current;
+  const sentAvatar = useRef<PlayerAvatar>({ fm: "host", mh: "", md: 0, hy: 0, hp: 0, clip: "", cs: 1, loop: "repeat" }).current;
   const sentAt = useRef(0);
   const forceSend = useRef(false);
 
@@ -140,6 +145,9 @@ export const LocalPlayerSync = () => {
       clip: body?.clip ?? PLAYER_CLIPS.idle,
       cs: body?.clipSpeed ?? 1,
       loop: body?.loop ?? "repeat",
+      fm: body?.form ?? "host",
+      mh: body?.mavHost ?? "",
+      md: body?.mavDepth ?? 0,
     });
     if (!ok) return; // the next init forces a full send anyway
 
@@ -154,6 +162,9 @@ export const LocalPlayerSync = () => {
       sentAvatar.clip = body.clip;
       sentAvatar.cs = body.clipSpeed;
       sentAvatar.loop = body.loop;
+      sentAvatar.fm = body.form;
+      sentAvatar.mh = body.mavHost;
+      sentAvatar.md = body.mavDepth;
     }
   }, -2);
 

@@ -47,7 +47,7 @@ export const createApp = (): Express => {
     }),
   );
 
-  // Every path is a client-side pushState route: "/" is home, anything else an in-map address.
+  // Every path is a client-side pushState route: "/" is the bare site, anything else an in-map address or the 404.
   app.get("*", (req, res, next) => {
     if (req.method !== "GET" || req.path.includes(".")) return next();
     res.setHeader("Cache-Control", "no-cache");
@@ -99,6 +99,9 @@ const routeToWorld = (world: World, sessionId: string, msg: Exclude<ClientMessag
       return;
     case "player:click":
       world.clickPlayer(sessionId, msg.id);
+      return;
+    case "host":
+      world.host(sessionId, msg.id, msg.step);
       return;
   }
 };

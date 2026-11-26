@@ -23,6 +23,7 @@ import { findBiomePatch, findSlopeSpot } from "../src/cli/utils.js";
 import type { SlopeSample } from "../src/cli/types.js";
 import { stepCharacter } from "../../src/physics";
 import type { CharacterInput } from "../../src/physics/types";
+import { TERMINAL_VELOCITY } from "../../src/physics/constants";
 import { TERRAIN_SEGMENTS } from "../src/game/physics/constants.js";
 
 /** The tests run from the BUNDLE (build.mjs --tests), so the worker is the built one beside it. */
@@ -481,4 +482,53 @@ describe("movement modifiers", () => {
     assert.ok(Math.abs(snow.along / neutral.along - 0.5) < 0.15, `wading: ${snow.along.toFixed(2)}u vs ${neutral.along.toFixed(2)}u`);
     assert.ok(Math.abs(snow.slideAngle - neutral.slideAngle * 1.2) < 1e-6, `slide angle ${snow.slideAngle} vs ${neutral.slideAngle} × 1.2`);
   });
+});
+
+describe("falling at terminal velocity", () => {
+  // TERMINAL_VELOCITY is safe at any value: the ground look-ahead (physics/index.ts updateVertical) slows a fall
+  // before the ground, so no frame rate drops a capsule through it, flat or steep.
+  const drop = async (slopeDeg: number, dt: number): Promise<{ lowest: number; rest: number }> => {
+    const world = await PhysicsWorld.create();
+    try {
+      const [N, SIZE] = [21, 200];
+      const slope = Math.tan((slopeDeg * Math.PI) / 180);
+      const heights = new Float32Array(N * N);
+      for (let ix = 0; ix < N; ix++) for (let iz = 0; iz < N; iz++) heights[ix * N + iz] = (ix / (N - 1) - 0.5) * SIZE * slope;
+      const ground = world.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+      world.world.createCollider(RAPIER.ColliderDesc.heightfield(N - 1, N - 1, heights, { x: SIZE, y: 1, z: SIZE }), ground);
+      world.step();
+      world.ensureQueries();
+      const w = new Walker(world, 3.3, 400, -2.7, CAPSULE);
+      w.character.state.vy = TERMINAL_VELOCITY;
+      const input: CharacterInput = { dirX: 0, dirZ: 0, speed: 0, jump: false, vyOverride: null, surface: null };
+      const down = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+      const surfaceUnder = (x: number, z: number): number => {
+        down.origin = { x, y: 1000, z };
+        const hit = world.world.castRay(down, 2000, true, undefined, undefined, undefined, w.body);
+        return hit ? 1000 - hit.timeOfImpact : -Infinity;
+      };
+      let lowest = Infinity;
+      for (let t = 0; t < 6; t += dt) {
+        const p = w.position();
+        stepCharacter(world.world, w.character, w.body, w.collider, p.x, p.y, p.z, input, dt, w.lastStep);
+        world.step();
+        const q = w.position();
+        lowest = Math.min(lowest, q.y - CAPSULE.height / 2 - surfaceUnder(q.x, q.z));
+      }
+      const q = w.position();
+      return { lowest, rest: q.y - CAPSULE.height / 2 - surfaceUnder(q.x, q.z) };
+    } finally {
+      world.free();
+    }
+  };
+
+  for (const slopeDeg of [0, 40]) {
+    for (const hz of [144, 60, 20]) {
+      it(`lands on ${slopeDeg}° ground at ${hz}fps without passing through it`, async () => {
+        const r = await drop(slopeDeg, 1 / hz);
+        assert.ok(r.lowest > -0.3, `feet reached ${r.lowest.toFixed(3)}u under the surface`);
+        assert.ok(r.rest > -0.3 && r.rest < 1, `came to rest ${r.rest.toFixed(3)}u over it`);
+      });
+    }
+  }
 });

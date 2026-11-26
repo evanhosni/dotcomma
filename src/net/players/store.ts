@@ -35,7 +35,7 @@ const snapshotOf = (m: PlayerSnapshot | ServerMoveMessage): Snapshot => ({
   vz: m.vz,
 });
 
-const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ st: m.st, hy: m.hy, hp: m.hp, clip: m.clip, cs: m.cs, loop: m.loop });
+const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ st: m.st, hy: m.hy, hp: m.hp, clip: m.clip, cs: m.cs, loop: m.loop, fm: m.fm, mh: m.mh, md: m.md });
 
 const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   id: p.id,
@@ -47,8 +47,9 @@ const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   z: p.z,
   avatars: [avatarOf(p)],
   meshes: [],
-  body: { feetX: p.x, feetY: p.y - PLAYER_HEIGHT / 2, feetZ: p.z, yaw: p.ry, headYaw: p.hy, headPitch: p.hp, clip: p.clip, clipSpeed: p.cs, loop: p.loop, visible: false },
+  body: { form: p.fm, mavHost: p.mh, mavDepth: p.md, feetX: p.x, feetY: p.y - PLAYER_HEIGHT / 2, feetZ: p.z, yaw: p.ry, headYaw: p.hy, headPitch: p.hp, clip: p.clip, clipSpeed: p.cs, loop: p.loop, visible: false },
   lastStamp: { x: Infinity, z: Infinity },
+  shownMavHost: "",
 });
 
 /** The live map — iterate it, never copy per frame. */

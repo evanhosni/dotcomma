@@ -6,7 +6,7 @@ import { useGameContext } from "../../../context/hooks";
 import { traceEvent } from "../../../utils/spike-trace";
 import { getActiveActors, getActiveDomainConfig } from "../../../world/domains/store";
 import { DEFAULT_FRUSTUM_PADDING } from "../constants";
-import { driveActorFrames } from "../store";
+import { driveActorFrames, isActorRetired, onActorRetired } from "../store";
 import type { ModelActorAttributes } from "../model/ModelActor";
 import { SPAWN_CHUNK_SIZE } from "./constants";
 import { setWorkFocus } from "../../../utils/task-queue/TaskQueue";
@@ -42,7 +42,8 @@ interface MountedObject {
   point: SpawnPoint;
 }
 
-/** Coordinates stored, not re-parsed from the id: the ledger is swept every batch. */
+/** Coordinates stored, not re-parsed from the id: the ledger is swept every batch. A retired actor's record
+ *  is despawned at +Infinity: its cooldown never ends. */
 interface DespawnRecord {
   despawnedAt: number;
   x: number;
@@ -245,13 +246,14 @@ export const ActorPool = () => {
     return false;
   }, []);
 
-  /** An actor destroyed itself: unmount it and block its respawn (CLAUDE.md → Actor Spawn Lifecycle). */
-  const recordDespawn = useCallback((id: string, point: SpawnPoint): void => {
+  /** An actor destroyed itself: unmount it and block its respawn (CLAUDE.md → Actor Spawn Lifecycle); a
+   *  `despawnedAt` of +Infinity blocks it for good. */
+  const recordDespawn = useCallback((id: string, point: SpawnPoint, despawnedAt = Date.now()): void => {
     // A stale onDestroy after a sweep + remount must not orphan the NEW point.
     const entry = objectsMapRef.current.get(id);
     const livePoint = entry ? entry.point : point;
     const rec: DespawnRecord = {
-      despawnedAt: Date.now(),
+      despawnedAt,
       x: point.x,
       z: point.z,
       descriptorId: point.descriptorId,
@@ -263,6 +265,16 @@ export const ActorPool = () => {
     mountedPointsRef.current.delete(livePoint);
     dirtyRef.current = true;
   }, []);
+
+  /** An NPC that became a player (objects/actors/store.ts): gone now, and its point blocked for good. */
+  useEffect(
+    () =>
+      onActorRetired((id) => {
+        const entry = objectsMapRef.current.get(id);
+        if (entry) recordDespawn(id, entry.point, Infinity);
+      }),
+    [recordDespawn],
+  );
 
   // Not a "destroy" (no ledger entry): re-entering the spawn radius remounts it.
   const sweepOutOfRange = useCallback((): boolean => {
@@ -332,6 +344,12 @@ export const ActorPool = () => {
       for (const { point, desc } of candidates) {
         const objId = objIdOf(point);
         if (repointRedelivered(objId, point)) continue;
+        if (isActorRetired(objId)) {
+          const rec: DespawnRecord = { despawnedAt: Infinity, x: point.x, z: point.z, descriptorId: point.descriptorId, point };
+          respawnBlockedRef.current.set(objId, rec);
+          ledgerPointsRef.current.set(point, rec);
+          continue;
+        }
 
         const Component = desc.component;
         const props = actorPropsOf(desc, point, objId, (id: string) => recordDespawn(id, point), spriteKinds.has(desc.id));

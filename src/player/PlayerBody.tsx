@@ -8,6 +8,9 @@ import { HEAD_PITCH_INPUT, HEAD_YAW_INPUT } from "../objects/actors/beeble/anima
 import { BEEBLE_SPEC } from "../objects/actors/beeble/spec";
 import { collectSkinnedMeshes } from "../objects/actors/model/geometry";
 import { acquireModelClone, markPoseChanged, reclaimModelClone, releaseModelClone } from "../objects/actors/model/store";
+import { getLiveModelActor } from "../objects/actors/model/registry";
+import { createMavUnit, mavSeatOf, poseAlone, poseOnSeat } from "../objects/actors/mav-unit";
+import type { MavSeat } from "../objects/actors/mav-unit/types";
 import { registerPlayerBody } from "./registry";
 import type { PlayerBodyState } from "./types";
 
@@ -23,6 +26,10 @@ const ANIMATION = BEEBLE_SPEC.animation;
  * person) or a remote one's (net/players/RemotePlayers.tsx: the pose its moves carried), posed by that
  * owner's frame loop through the registry (registry.ts). `meshes` is filled with its posed skinned meshes
  * while mounted, for the crosshair to pick (as an NPC's).
+ *
+ * It also draws the player's MAV Unit (objects/actors/mav-unit/), by the state's form: alone where the state
+ * stands (falling from the sky), screwing into its host NPC's head (while that NPC is mounted here), or worn
+ * on this beeble's own head once it is the host, turning with every turn of it.
  */
 export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?: THREE.SkinnedMesh[] }) => {
   const gltf = useGLTF(MODEL, false);
@@ -33,6 +40,40 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
     return new AnimationChannel({ defaults: ANIMATION, durations: { ...durations, ...proceduralDurations(ANIMATION?.procedural) } });
   }, [clone]);
   const [player] = useState(() => new AnimationPlayer(ANIMATION));
+  const [mav] = useState(createMavUnit);
+  const holderRef = useRef<THREE.Group>(null);
+  const ownSeat = useMemo(() => mavSeatOf(clone.scene), [clone]);
+  /** Seats on the NPC hosts this unit has screwed into, by their model. */
+  const hostSeats = useRef(new WeakMap<THREE.Object3D, MavSeat | null>()).current;
+  /** The seat on the NPC `id` while it is mounted here. */
+  const hostSeatOf = (id: string): MavSeat | null => {
+    const host = getLiveModelActor(id);
+    if (!host) return null;
+    let seat = hostSeats.get(host.model);
+    if (seat === undefined) hostSeats.set(host.model, (seat = mavSeatOf(host.model)));
+    return seat;
+  };
+
+  useEffect(() => () => void mav.removeFromParent(), [mav]);
+
+  /** Where the unit is drawn this frame (see the component doc). */
+  const placeMav = (): void => {
+    if (state.form === "host" && ownSeat) {
+      poseOnSeat(mav, ownSeat, 1, 0);
+      mav.visible = true;
+      return;
+    }
+    const hostSeat = state.form === "mav" && state.mavHost ? hostSeatOf(state.mavHost) : null;
+    if (hostSeat) {
+      poseOnSeat(mav, hostSeat, state.mavDepth, state.yaw);
+      mav.visible = state.visible;
+      return;
+    }
+    const holder = holderRef.current;
+    if (!holder) return;
+    poseAlone(mav, holder, state.feetX, state.feetY, state.feetZ, state.yaw);
+    mav.visible = state.visible && state.form === "mav";
+  };
 
   useEffect(() => {
     if (!meshes) return;
@@ -57,8 +98,9 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
     () =>
       registerPlayerBody(state, (nowMs) => {
         const group = groupRef.current;
+        placeMav();
         if (!group) return;
-        group.visible = state.visible;
+        group.visible = state.visible && state.form === "host";
         group.position.set(state.feetX, state.feetY, state.feetZ);
         group.rotation.y = state.yaw;
 
@@ -70,12 +112,15 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
         // Posed in first person too: switching views shows the current frame, never a stale one.
         if (player.update(clone, group, channel.state, channel.inputs, nowMs)) markPoseChanged(clone);
       }),
-    [state, clone, channel, player],
+    [state, clone, channel, player, mav, ownSeat],
   );
 
   return (
-    <group ref={groupRef} visible={false}>
-      <primitive object={clone.scene} scale={BEEBLE_SPEC.scale ?? [1, 1, 1]} />
-    </group>
+    <>
+      <group ref={groupRef} visible={false}>
+        <primitive object={clone.scene} scale={BEEBLE_SPEC.scale ?? [1, 1, 1]} />
+      </group>
+      <group ref={holderRef} />
+    </>
   );
 };

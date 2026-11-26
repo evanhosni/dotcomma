@@ -8,9 +8,29 @@
     <meta name="[dotcomma]" content="explore the digital world of [dotcomma]" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
     <title>[dotcomma]</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kode+Mono:wght@400..700&display=swap" />
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="dotcomma"></div>
+    <!-- The intro's title, on screen before any script has run (src/world/domains/overworld/intro/IntroOverlay.ts
+         takes it over and re-lays it out from its constants; these are the same numbers for the default camera). -->
+    <div id="intro-title" style="position: fixed; inset: 0; background: #000; z-index: 999; color: #fff; user-select: none; font-family: 'Kode Mono', 'Courier New', Courier, monospace">
+      <div id="intro-title-name" style="position: absolute; left: 0; right: 0; top: 33.135vh; transform: translateY(calc(-50% - 0.06em)); text-align: center; font-size: 5.326vh; line-height: 1; white-space: nowrap">dotcomma</div>
+      <div id="intro-title-prompt" style="position: absolute; left: 0; right: 0; top: 49.578vh; transform: translateY(calc(-50% - 0.06em)); text-align: center; font-size: 2.343vh; line-height: 1; white-space: nowrap">- click to enter -</div>
+    </div>
+    <script>
+      // A click before the game is up is kept: the intro enters as soon as it is (IntroOverlay.ts openGate).
+      (function () {
+        var title = document.getElementById("intro-title");
+        title.addEventListener("click", function () {
+          if (title.dataset.ready) return;
+          title.dataset.early = "1";
+          document.getElementById("intro-title-prompt").textContent = "- loading -";
+        });
+      })();
+    </script>
   </body>
 </html>

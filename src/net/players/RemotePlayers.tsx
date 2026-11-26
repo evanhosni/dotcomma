@@ -11,12 +11,13 @@ import type { CapsuleColliderSpec } from "../../objects/actors/spec";
 import { MOUSE_RAYCAST_INTERVAL_FRAMES, RAYCAST_RANGE_PAD } from "../../objects/actors/state/constants";
 import { PlayerBody } from "../../player/PlayerBody";
 import { posePlayerBody } from "../../player/registry";
-import { PLAYER_HEIGHT } from "../../player/spec";
+import { isPlayerSolid, PLAYER_HEIGHT } from "../../player/spec";
 import { aimFromCamera } from "../../player/utils";
 import { stampSnowTrailAlong } from "../../objects/dressing/snow-drift/store";
 import { claimHover, releaseHover } from "../../utils/cursor";
 import type { HoverTarget } from "../../utils/cursor/types";
 import { getRemotePlayers, useRosterVersion } from "./store";
+import { retireActor } from "../../objects/actors/store";
 import type { RemotePlayer } from "./types";
 
 /**
@@ -57,6 +58,8 @@ const showAvatarAt = (p: RemotePlayer, renderTime: number): void => {
   body.clip = a.clip;
   body.clipSpeed = a.cs;
   body.loop = a.loop;
+  body.form = a.fm;
+  body.mavHost = a.mh;
   let t = 0;
   if (b && renderTime > a.st) {
     const from = Math.max(a.st, b.st - HEAD_BLEND_MS);
@@ -64,6 +67,7 @@ const showAvatarAt = (p: RemotePlayer, renderTime: number): void => {
   }
   body.headYaw = b ? a.hy + (b.hy - a.hy) * t : a.hy;
   body.headPitch = b ? a.hp + (b.hp - a.hp) * t : a.hp;
+  body.mavDepth = b && b.mh === a.mh ? a.md + (b.md - a.md) * t : a.md;
 };
 
 export const RemotePlayers = () => {
@@ -142,10 +146,13 @@ export const RemotePlayers = () => {
       p.y = pose.y;
       p.z = pose.z;
       showAvatarAt(p, p.playback.renderTime);
+      if (p.shownMavHost && p.body.form === "host") retireActor(p.shownMavHost);
+      p.shownMavHost = p.body.form === "mav" ? p.body.mavHost : "";
 
       const body = p.body;
       body.feetX = p.x;
-      body.feetY = p.y - PLAYER_HEIGHT / 2;
+      // A lone MAV Unit's position is its origin; a beeble's is its capsule's centre.
+      body.feetY = body.form === "mav" ? p.y : p.y - PLAYER_HEIGHT / 2;
       body.feetZ = p.z;
       body.yaw = pose.ry;
       body.visible = true;
@@ -154,7 +161,10 @@ export const RemotePlayers = () => {
       _next.x = p.x;
       _next.y = p.y;
       _next.z = p.z;
-      bodies.get(p.id)?.setNextKinematicTranslation(_next);
+      const capsule = bodies.get(p.id);
+      capsule?.setNextKinematicTranslation(_next);
+      // A lone MAV Unit is no obstacle: it falls from the sky and ends up inside its host's head.
+      capsule?.collider(0)?.setEnabled(isPlayerSolid(body.form));
       // Their tracks in the snow too (a stamp dents only where the sheet has snow under it).
       stampSnowTrailAlong(p.lastStamp, p.x, p.z);
     }

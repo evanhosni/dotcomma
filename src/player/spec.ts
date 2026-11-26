@@ -1,3 +1,5 @@
+import type { PlayerForm } from "../net/protocol/types";
+
 /** The player's capsule, shared by Player.tsx, RemotePlayers.tsx and the server's
  *  server/src/game/physics/bodies/PlayerBodies.ts. Published player positions are the capsule CENTER; NPC positions are FEET. */
 export const PLAYER_HEIGHT = 2;
@@ -10,3 +12,14 @@ export const PLAYER_EYE_HEIGHT = 1.82;
 
 /** A player's eye height from its capsule CENTER's (published player positions are centers). */
 export const playerEyeY = (centerY: number): number => centerY - PLAYER_HEIGHT / 2 + PLAYER_EYE_HEIGHT;
+
+/** How noticeable a player of each form is to NPCs, 0 (never) to 1 (fully). A lone MAV Unit is never noticed:
+ *  NPCs see only the beeble it has become. Every machine's "nearest player" skips a player at 0, on the
+ *  server and on each client's mirror alike; the levels between are left for stealth. */
+export const PLAYER_DETECTABILITY: Readonly<Record<PlayerForm, number>> = { mav: 0, host: 1 };
+
+/** A lone MAV Unit is also no obstacle: no capsule, here or on the server. */
+export const isPlayerSolid = (form: PlayerForm): boolean => form === "host";
+
+/** A placed capsule starts this far over its feet's ground, never inside it (Player.tsx). */
+export const SPAWN_CLEARANCE = 0.05;

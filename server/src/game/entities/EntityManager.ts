@@ -4,6 +4,9 @@ import { DOOR_INTERACT_REACH } from "../../../../src/objects/actors/building/spe
 import { INTERACT_REACH_SLACK, serverInteractReachSq } from "../../../../src/objects/actors/spec";
 import type { ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/StateMachineRunner";
+import { RAGDOLL_IMPULSE_KEY } from "../../../../src/objects/actors/state/constants";
+import { isPlayerSolid, PLAYER_DETECTABILITY } from "../../../../src/player/spec";
+import type { RagdollImpulse } from "../../../../src/objects/actors/state/types";
 import { createBuildingCollider, doorOffsetsFor, createNpcBody } from "../physics/bodies/index.js";
 import type { Pose } from "../physics/bodies/types.js";
 import { DEFAULT_WORK_BUDGET_MS, PHYSICS_DOMAIN } from "../physics/constants.js";
@@ -33,6 +36,7 @@ const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: numb
   let best: PlayerView | null = null;
   let bestSq = Infinity;
   for (const p of players) {
+    if (PLAYER_DETECTABILITY[p.form] <= 0) continue;
     const dSq = (p.x - e.x) ** 2 + (p.z - e.z) ** 2;
     if (dSq < bestSq) {
       bestSq = dSq;
@@ -84,6 +88,7 @@ export class EntityManager {
 
   register(sessionId: string, domain: DomainId, items: EntityRegisterItem[]): void {
     for (const item of items) {
+      if (this.host.isRetired?.(domain, item.id)) continue;
       let e = this.entities.get(item.id);
       if (e && e.domain !== domain) continue;
       if (!e) e = this.create(item, domain);
@@ -166,6 +171,26 @@ export class EntityManager {
     }
     e.hull?.dispose();
     this.entities.delete(e.id);
+  }
+
+  /** Limp or back up (the machine's built-in ragdoll states). The impulse is replicated with the entity's
+   *  state, so every client starts the same fall. */
+  setRagdoll(id: string, on: boolean, impulse?: RagdollImpulse, hold = false): void {
+    const e = this.entities.get(id);
+    if (!e?.runner) return;
+    e.runner.setRagdoll(on, impulse, hold);
+    const { [RAGDOLL_IMPULSE_KEY]: _previous, ...rest } = e.state;
+    e.state = on && impulse ? { ...rest, [RAGDOLL_IMPULSE_KEY]: impulse } : rest;
+    this.send(e, { state: e.state });
+  }
+
+  /** Forgets an entity for good (an NPC that became a player): its registrants keep nothing, and the
+   *  host's `isRetired` refuses it from now on. */
+  retire(id: string): void {
+    const e = this.entities.get(id);
+    if (!e) return;
+    for (const sessionId of e.registrants) this.bySession.get(sessionId)?.delete(id);
+    this.dispose(e);
   }
 
   /** A mouse action becomes the machine's blackboard flag (its own triggers decide);
@@ -252,7 +277,7 @@ export class EntityManager {
     if (simulate) {
       const domains = new Set<DomainId>();
       for (const e of this.entities.values()) if (e.npc) domains.add(e.domain);
-      this.playerBodies!.sync([...domains].flatMap((d) => playersOf(d)));
+      this.playerBodies!.sync([...domains].flatMap((d) => playersOf(d)).filter((p) => isPlayerSolid(p.form)));
     }
     pw.ensureQueries();
     return simulate;

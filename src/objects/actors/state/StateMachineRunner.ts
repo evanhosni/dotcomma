@@ -1,7 +1,8 @@
 import { AnimationChannel } from "../../../animation/AnimationChannel";
 import { Input } from "./input";
 import { Motion } from "./motion";
-import type { Vec3Like, BehaviorContext, StateDef, StateMachineConfig, ResolvedTransition, RunnerOptions } from "./types";
+import type { Vec3Like, BehaviorContext, StateDef, StateMachineConfig, ResolvedTransition, RunnerOptions, RagdollImpulse } from "./types";
+import { RAGDOLL_IMPULSE_KEY, RAGDOLL_STATE, RECOVER_HOLD_KEY, RECOVER_STATE } from "./constants";
 import { getConfigMaps, mouseFlagOf } from "./utils";
 import { MOUSE_ONE_SHOT_FLAGS } from "./enums";
 
@@ -62,6 +63,21 @@ export class StateMachineRunner {
 
   forceTransition(stateId: string): void {
     this.blackboard.__forcedTransition = stateId;
+  }
+
+  /** Limp, or back up from limp (a no-op when it is not limp). The impulse is kept on the blackboard for
+   *  whoever simulates the fall (objects/actors/ragdoll/); `hold` keeps it in the recover state once up. */
+  setRagdoll(on: boolean, impulse?: RagdollImpulse, hold = false): void {
+    const bb = this.blackboard;
+    if (on) {
+      bb[RAGDOLL_IMPULSE_KEY] = impulse ?? null;
+      this.forceTransition(RAGDOLL_STATE);
+      return;
+    }
+    if (this.stateId !== RAGDOLL_STATE && bb.__forcedTransition !== RAGDOLL_STATE) return;
+    bb[RAGDOLL_IMPULSE_KEY] = null;
+    bb[RECOVER_HOLD_KEY] = hold;
+    this.forceTransition(RECOVER_STATE);
   }
 
   private runExitCleanup(): void {

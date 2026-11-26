@@ -26,6 +26,7 @@ const flattenTileCache = new Map<string, FlattenPoint[]>();
 // Boundary cells are shared by overlapping tile windows (~2.2× re-evaluation without this). null = rolled/filtered out.
 const flattenCandCache = new Map<string, FlattenCandidate | null>();
 let flattenReach = 0; // max(radius + skirt) — vertex lookup reach
+let flattenMaxRadius = 0;
 let flattenSpacingPad = 0; // max footprint — spacing window pad
 let flattenBiomes: Set<number> | null = null; // union of descs' biomeIds; null = unrestricted
 /** Recursion guard: pad candidates evaluate their filters against the RAW (pad-free) height. */
@@ -194,6 +195,18 @@ export function getFlattenPoints(
   return out;
 }
 
+/** Whether (x, z) stands on a pad (a building's ground), or within `clearance` of one. Deterministic like the
+ *  pads themselves: whatever chunk asks, and in whatever order. */
+export const onFlattenPad = (x: number, z: number, clearance = 0): boolean => {
+  const reach = flattenMaxRadius + clearance;
+  if (reach <= 0) return false;
+  for (const p of getFlattenPoints(x - reach, z - reach, x + reach, z + reach)) {
+    const r = p.radius + clearance;
+    if ((p.x - x) ** 2 + (p.z - z) ** 2 < r * r) return true;
+  }
+  return false;
+};
+
 // Influences apply in ASCENDING mask order so the dominant pad lands last (a dense neighbor's skirt
 // would otherwise tilt the footing). Parallel reused buffers, almost always ≤3 entries.
 const padInfluenceHeights: number[] = [];
@@ -251,12 +264,14 @@ export const initFlattenPads = (config: DomainConfig): void => {
   flattenTileCache.clear();
   flattenCandCache.clear();
   flattenReach = 0;
+  flattenMaxRadius = 0;
   flattenSpacingPad = 0;
   flattenBiomes = new Set<number>();
   descriptorsById.clear();
   for (const d of config.flattenDescriptors ?? []) descriptorsById.set(d.id, d);
   for (const d of config.flattenDescriptors ?? []) {
     flattenReach = Math.max(flattenReach, d.radius + d.skirt);
+    flattenMaxRadius = Math.max(flattenMaxRadius, d.radius);
     // Round-k spacing decisions depend on ≤ k×footprint neighborhoods.
     flattenSpacingPad = Math.max(flattenSpacingPad, d.footprint * FLATTEN_SPACING_ROUNDS);
     if (d.biomeIds && d.biomeIds.length > 0) {
