@@ -30,7 +30,7 @@ export const PROMPT_ENTER = "- click to enter -";
 export const PROMPT_SCANNING = "- scanning for host -";
 export const PROMPT_FOUND = "- host found -";
 /** An address with no free beeble in its cell: the scan widens to the places around it. */
-export const PROMPT_EXPANDING = "- no suitable host here · expanding scan -";
+export const PROMPT_EXPANDING = "- no host found. expanding scan -";
 /** No free beeble anywhere near: the player falls as one already wearing its unit. */
 export const PROMPT_NONE = "- no host found -";
 

@@ -9,7 +9,6 @@ varying vec3 vWorldNormal;
 varying vec3 vWorldPosWrapped;
 
 void main() {
-  vec2 adjustedUV = fract(vWorldUv);
   float texScale = 1.0 / TEXTURE_TILE;
 
   // One octave: it only nudges the slope threshold by ±0.05; three cost 12 sin() per fragment.
@@ -24,19 +23,19 @@ void main() {
   float totalWeight = grassWeight + grassDirtWeight + dirtWeight;
   if (totalWeight > 0.0) { grassWeight /= totalWeight; grassDirtWeight /= totalWeight; dirtWeight /= totalWeight; }
 
-  // Sample each layer only where its weight is visible (up to 3 triplanar reads each).
+  // Sample each layer only where its weight is visible in the quad (up to 3 triplanar reads each).
   float tri = smoothstep(0.3, 0.6, vSlopeAngle);
   vec4 terrainColor = vec4(0.0);
-  if (grassWeight > 0.002) {
-    vec4 gc = slopeBlendedSample(grasstexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
+  if (quadGate(grassWeight, 0.002)) {
+    vec4 gc = slopeBlendedSample(grasstexture, vWorldUv, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += gc * grassWeight;
   }
-  if (grassDirtWeight > 0.002) {
-    vec4 gdc = slopeBlendedSample(grassdirttexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
+  if (quadGate(grassDirtWeight, 0.002)) {
+    vec4 gdc = slopeBlendedSample(grassdirttexture, vWorldUv, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += gdc * grassDirtWeight;
   }
-  if (dirtWeight > 0.002) {
-    vec4 dc = slopeBlendedSample(dirttexture, adjustedUV, tri, vWorldPosWrapped, vWorldNormal, texScale);
+  if (quadGate(dirtWeight, 0.002)) {
+    vec4 dc = slopeBlendedSample(dirttexture, vWorldUv, tri, vWorldPosWrapped, vWorldNormal, texScale);
     terrainColor += dc * dirtWeight;
   }
 

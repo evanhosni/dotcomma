@@ -80,11 +80,12 @@ export const Intro = () => {
     parts.current?.overlay.setPrompt(text);
     run.promptAt = performance.now();
   };
-  /** Changes the prompt once the current message has been up PROMPT_MIN_SECONDS. */
-  const showPrompt = async (text: string): Promise<void> => {
+  /** Changes the prompt once the current message has been up PROMPT_MIN_SECONDS, unless `stale()` says the
+   *  scan has moved on meanwhile (its timeout put "no host found" up: never overwritten). */
+  const showPrompt = async (text: string, stale: () => boolean): Promise<void> => {
     const wait = run.promptAt + PROMPT_MIN_SECONDS * 1000 - performance.now();
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    setPrompt(text);
+    if (!stale()) setPrompt(text);
   };
   const promptAged = (): boolean => performance.now() - run.promptAt >= PROMPT_MIN_SECONDS * 1000;
 
@@ -161,7 +162,9 @@ export const Intro = () => {
       for (const host of hosts) {
         if (cancelled.current || run.searchDone) return true;
         if (await claimHost(host.id)) {
-          run.host = host;
+          // Granted after the scan timed out ("no host found", the unit already falling as a beeble): let it go.
+          if (run.searchDone) send({ t: "host", id: host.id, step: "release" });
+          else run.host = host;
           run.searchDone = true;
           return true;
         }
@@ -171,7 +174,8 @@ export const Intro = () => {
     (async () => {
       if (run.address) {
         if (await claimFirst(await hostsAround(run.start, ADDRESS_SEARCH_RADIUS, run.address))) return;
-        await showPrompt(PROMPT_EXPANDING);
+        await showPrompt(PROMPT_EXPANDING, () => cancelled.current || run.searchDone);
+        if (cancelled.current || run.searchDone) return;
         run.expanding = true;
       }
       for (const place of searchPlaces(run.start)) {

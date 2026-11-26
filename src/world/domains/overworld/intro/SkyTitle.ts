@@ -37,9 +37,11 @@ export class SkyTitle {
     this.prompt.setText(text);
   }
 
-  /** 0 = clear, 1 = black. */
+  /** 0 = clear, 1 = black. Cleared, the full-screen blend stops drawing (it stays faded out from mid-fall to
+   *  the hand-off). */
   setBlack(opacity: number): void {
     this.black.material.uniforms.uOpacity.value = opacity;
+    this.black.visible = opacity > 0;
   }
 
   /** The title and the prompt under the unit's origin `unit`, as its camera sees them from there. */

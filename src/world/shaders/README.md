@@ -5,7 +5,7 @@
 The terrain is ONE `ShaderMaterial` whose fragment shader is generated at domain commit from every region's base shader and every biome's shader. Biomes blend per pixel; there is no biome id in the shader.
 
 - [vertex.glsl](vertex.glsl): passes the worker's per-vertex attributes through as varyings; builds world position as a wrapped chunk origin plus a local offset (never an absolute float32 coordinate); applies quantization and curvature.
-- [common.glsl](common.glsl): helpers for every fragment: `hash`, `valueNoise`, `worldFbm`, `triplanarSample`, `slopeBlendedSample` (the flat texture read fading into a triplanar one on steep ground) and `fakeSunLight` (the unlit ground's directional shade).
+- [common.glsl](common.glsl): helpers for every fragment: `hash`, `valueNoise`, `worldFbm`, `triplanarSample`, `slopeBlendedSample` (the flat texture read fading into a triplanar one on steep ground), `quadGate` (THE gate for any texture sample behind a branch: the same for the whole 2×2 quad, so mip derivatives stay defined) and `fakeSunLight` (the unlit ground's directional shade).
 - [material.ts](material.ts): the shared GLSL chunks and their uniforms:
   - `lodFadeDiscards`, the LOD cross-fade screen door.
   - `lodBlur` and `blurStep`, the paint edges softening with the LOD rings' vertex spacing (terrain/DECISIONS.md §9). A biome frag may read `lodBlur` (world units) and call `blurStep` for any edge on an interpolated field.
