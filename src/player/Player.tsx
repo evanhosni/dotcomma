@@ -362,8 +362,9 @@ export const Player = () => {
   };
 
   /** Places the body and picks this frame's clip. Moving, the body faces the walk; standing in first person,
-   *  the head follows the look and past IN_PLACE_TURN_START the body turns in place after it (the NPCs' way);
-   *  standing in third person, it stays put and only the head turns. */
+   *  or in third person with something in hand (it aims where the player looks: equippables/), the head
+   *  follows the look and past IN_PLACE_TURN_START the body turns in place after it (the NPCs' way); standing
+   *  empty-handed in third person, it stays put and only the head turns. */
   const driveBody = (at: { x: number; y: number; z: number }, rb: RapierRigidBody, move: THREE.Vector3, dt: number): void => {
     action.speed = Number.isNaN(lastFeet.x) ? 0 : Math.hypot(at.x - lastFeet.x, at.z - lastFeet.z) / Math.max(dt, 1e-4);
     lastFeet.x = at.x;
@@ -377,7 +378,7 @@ export const Player = () => {
       // Swimming and flying always face the way they go: their clips have no backward or sideways.
       const facingOffset = action.swimming || action.noclip ? 0 : HEADING_FACING_OFFSET[action.heading];
       body.yaw += wrapAngle(Math.atan2(move.x, move.z) + facingOffset - body.yaw) * (1 - Math.exp(-BODY_TURN_RATE * dt));
-    } else if (thirdPerson.current) action.turningInPlace = false;
+    } else if (thirdPerson.current && !body.equipped) action.turningInPlace = false;
     else {
       const off = Math.abs(wrapAngle(lookYaw - body.yaw));
       if (off > IN_PLACE_TURN_START) action.turningInPlace = true;
