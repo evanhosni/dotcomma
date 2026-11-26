@@ -77,7 +77,7 @@ export const useActorRagdoll = ({ stateMachine, machine, motion, mover, animPlay
       const synced = !!ctx.sync && ctx.sync.known;
       const impulse = limb.predicted?.impulse ?? ((synced ? ctx.sync!.state?.[RAGDOLL_IMPULSE_KEY] : machine.blackboard[RAGDOLL_IMPULSE_KEY]) as RagdollImpulse | null | undefined) ?? null;
       const target = ctx.sync?.target;
-      const velocity = serverDriven && target?.valid ? target : { x: motion.vx, y: motion.vy ?? 0, z: motion.vz };
+      const velocity = serverDriven && target?.valid ? { x: target.vx, y: target.vy, z: target.vz } : { x: motion.vx, y: motion.vy ?? 0, z: motion.vz };
       ragdoll.start(impulse, velocity);
       mover.setSolid(false);
       limb.recoverFromMs = NaN;
