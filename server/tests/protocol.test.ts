@@ -9,7 +9,7 @@ import { parseClientMessage } from "../src/transport/utils.js";
  * the message lose every move: these pin what the client must send.
  */
 
-const MOVE = { t: "move", x: 1, y: 2, z: 3, vx: 0.5, vy: 0, vz: -0.5, ry: 0.25, hy: 0.1, hp: -0.2, clip: "walk", cs: 1.5, loop: "repeat", fm: "host", mh: "", md: 0 };
+const MOVE = { t: "move", x: 1, y: 2, z: 3, vx: 0.5, vy: 0, vz: -0.5, ry: 0.25, hy: 0.1, hp: -0.2, clip: "walk", cs: 1.5, loop: "repeat", fm: "host", mh: "", md: 0, wp: "" };
 
 describe("client messages", () => {
   it("passes a move with its drawn pose through whole", () => {
@@ -18,7 +18,7 @@ describe("client messages", () => {
   });
 
   it("drops a move missing any pose field", () => {
-    for (const key of ["hy", "hp", "clip", "cs", "loop", "fm", "mh", "md"]) {
+    for (const key of ["hy", "hp", "clip", "cs", "loop", "fm", "mh", "md", "wp"]) {
       const { [key]: _, ...without } = MOVE as Record<string, unknown>;
       assert.equal(parseClientMessage(without), null, `without ${key}`);
     }
@@ -40,6 +40,26 @@ describe("client messages", () => {
   it("passes a lone MAV Unit screwing into its host", () => {
     const screwing = { ...MOVE, fm: "mav", mh: "12_34_beeble", md: 0.4 };
     assert.deepEqual(parseClientMessage(screwing), screwing);
+  });
+
+  it("passes a shot, a miss or hits through bodies with their wounds, and drops a malformed one", () => {
+    const miss = { t: "shoot", weapon: "revolver", o: [1, 2, 3], d: [0, 0, 1], hits: [], end: { at: [1, 2, 40], n: [0, 0, -1] } };
+    assert.deepEqual(parseClientMessage(miss), miss);
+    assert.deepEqual(parseClientMessage({ ...miss, end: null }), { ...miss, end: null }, "a shot into the sky");
+    assert.equal(parseClientMessage({ ...miss, end: { at: [1, 2, 40], n: [0, 0, -3] } }), null, "not a unit normal");
+    const hole = { b: ["spine", "body"], w: [0.7, 0.3], x: 0.1, y: 1.2, z: -0.1, nx: 0, ny: 0, nz: -1, r: 0.09 };
+    const wound = { entry: hole, exit: { ...hole, z: 0.1 } };
+    const npc = { kind: "npc", id: "12_34_beeble", at: [1, 2, 9], wounds: [wound, { entry: hole, exit: null }] };
+    const through = { ...miss, hits: [npc, { kind: "corpse", id: "p~1", at: [1, 2, 12], wounds: [wound] }, { ...npc, id: "13_34_beeble", at: [1, 2, 15] }] };
+    assert.deepEqual(parseClientMessage(through), through);
+    assert.equal(parseClientMessage({ ...miss, hits: Array(17).fill(npc) }), null, "too many bodies for one bullet");
+    assert.equal(parseClientMessage({ ...miss, d: [0, 0, 2] }), null, "not a unit direction");
+    assert.equal(parseClientMessage({ ...miss, o: [1, 2] }), null);
+    assert.equal(parseClientMessage({ ...miss, hits: [{ ...npc, kind: "wall" }] }), null);
+    assert.equal(parseClientMessage({ ...miss, hits: [{ ...npc, wounds: [{ entry: { ...hole, r: 5 }, exit: null }] }] }), null, "a hole too wide");
+    assert.equal(parseClientMessage({ ...miss, hits: [{ ...npc, wounds: [{ entry: { ...hole, w: [1] }, exit: null }] }] }), null, "a weight per bone");
+    assert.equal(parseClientMessage({ ...miss, hits: [{ ...npc, wounds: [{ entry: { ...hole, nx: "up" }, exit: null }] }] }), null, "a normal of numbers");
+    assert.equal(parseClientMessage({ ...miss, hits: [{ ...npc, wounds: Array(3).fill(wound) }] }), null, "too many wounds for one shot");
   });
 
   it("passes each host step and drops anything else", () => {

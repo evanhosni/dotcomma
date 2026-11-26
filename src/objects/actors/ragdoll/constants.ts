@@ -1,3 +1,5 @@
+import { CHARACTER_GROUP } from "../../../physics/constants";
+
 /** A bone gets a body of its own only when at least this many vertices follow it most, and a bone with no
  *  child bones only when its box is at least MIN_LEAF_PART_SIZE across: a finger rides its parent's body. */
 export const MIN_PART_VERTICES = 12;
@@ -21,9 +23,10 @@ export const LINEAR_DAMPING = 0.3;
 export const ANGULAR_DAMPING = 3;
 
 /** Rapier interaction groups (memberships << 16 | filter): every part is in bit 15 and collides with
- *  everything but bit 15, so a ragdoll's parts never push each other apart at the joints. */
+ *  everything but bit 15, so a ragdoll's parts never push each other apart at the joints, and but the
+ *  characters' capsules (CHARACTER_GROUP): nobody kicks a corpse across the street. */
 const RAGDOLL_GROUP = 0x8000;
-export const RAGDOLL_COLLISION_GROUPS = ((RAGDOLL_GROUP << 16) | (0xffff & ~RAGDOLL_GROUP)) >>> 0;
+export const RAGDOLL_COLLISION_GROUPS = ((RAGDOLL_GROUP << 16) | (0xffff & ~RAGDOLL_GROUP & ~CHARACTER_GROUP)) >>> 0;
 
 /** A part that falls this far below where the ragdoll started went through the ground (a heightfield swapped
  *  under it): the ragdoll freezes where it is instead of falling forever. */

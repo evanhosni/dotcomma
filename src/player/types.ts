@@ -1,6 +1,6 @@
 import type { Character, CharacterStepResult } from "../physics/types";
 import type { CameraWaterColors } from "../vfx/screen-pass/types";
-import type { PlayerForm } from "../net/protocol/types";
+import type { PlayerForm, Wound } from "../net/protocol/types";
 
 export interface GroundSafetyNets {
   /** Stuck escape: a capsule slightly embedded (under the backstop tolerance, e.g. after a LOD swap)
@@ -65,6 +65,12 @@ export interface PlayerBodyState {
   /** The NPC a lone unit is screwing into ("" none) and how far in (0–1): drawn on that NPC's head. */
   mavHost: string;
   mavDepth: number;
+  /** What it holds (equippables/spec.ts id), "" nothing: drawn in its hands in third person and to other players. */
+  equipped: string;
+  /** The bullet holes in its beeble (objects/actors/wounds/). */
+  wounds: Wound[];
+  /** Shots fired, counted: each new one flashes the muzzle of the weapon in its hand. */
+  shots: number;
   feetX: number;
   feetY: number;
   feetZ: number;

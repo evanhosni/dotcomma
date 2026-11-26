@@ -31,4 +31,6 @@ export interface RemotePlayer {
   /** The NPC its lone MAV Unit was last shown screwing into ("" none): retired the moment it is shown as the
    *  beeble instead (RemotePlayers.tsx), so the NPC and the player's body swap in one frame. */
   shownMavHost: string;
+  /** Its host died: its beeble is hidden (its corpse lies there instead) until it is shown as a MAV Unit again. */
+  dead: boolean;
 }

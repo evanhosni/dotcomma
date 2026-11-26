@@ -23,3 +23,6 @@ export const isPlayerSolid = (form: PlayerForm): boolean => form === "host";
 
 /** A placed capsule starts this far over its feet's ground, never inside it (Player.tsx). */
 export const SPAWN_CLEARANCE = 0.05;
+
+/** A player's host's health when it takes it over (weapons/spec.ts damage). */
+export const PLAYER_HEALTH = 100;

@@ -1,4 +1,5 @@
 import { useFrame } from "@react-three/fiber";
+import { CHARACTER_COLLISION_GROUPS } from "../../physics/constants";
 import { useRapier } from "@react-three/rapier";
 import type { RapierRigidBody } from "@react-three/rapier";
 import { Suspense, useEffect, useMemo, useRef } from "react";
@@ -60,6 +61,7 @@ const showAvatarAt = (p: RemotePlayer, renderTime: number): void => {
   body.loop = a.loop;
   body.form = a.fm;
   body.mavHost = a.mh;
+  body.equipped = a.wp;
   let t = 0;
   if (b && renderTime > a.st) {
     const from = Math.max(a.st, b.st - HEAD_BLEND_MS);
@@ -99,7 +101,7 @@ export const RemotePlayers = () => {
     for (const p of live.values()) {
       if (bodies.has(p.id)) continue;
       const body = world.createRigidBody(rapier.RigidBodyDesc.kinematicPositionBased().setTranslation(p.x, p.y, p.z));
-      world.createCollider(rapier.ColliderDesc.capsule(HALF_HEIGHT - COLLIDER.radius, COLLIDER.radius), body);
+      world.createCollider(rapier.ColliderDesc.capsule(HALF_HEIGHT - COLLIDER.radius, COLLIDER.radius).setCollisionGroups(CHARACTER_COLLISION_GROUPS), body);
       bodies.set(p.id, body);
     }
   }, [version, world, rapier, bodies]);
@@ -148,6 +150,8 @@ export const RemotePlayers = () => {
       showAvatarAt(p, p.playback.renderTime);
       if (p.shownMavHost && p.body.form === "host") retireActor(p.shownMavHost);
       p.shownMavHost = p.body.form === "mav" ? p.body.mavHost : "";
+      // Dead, it is a corpse (player/Corpses.tsx) until its MAV Unit is shown rescanning.
+      if (p.dead && p.body.form === "mav") p.dead = false;
 
       const body = p.body;
       body.feetX = p.x;
@@ -155,7 +159,7 @@ export const RemotePlayers = () => {
       body.feetY = body.form === "mav" ? p.y : p.y - PLAYER_HEIGHT / 2;
       body.feetZ = p.z;
       body.yaw = pose.ry;
-      body.visible = true;
+      body.visible = !p.dead;
       posePlayerBody(body, nowMs);
       // Published positions are the capsule CENTER, which is the collider's.
       _next.x = p.x;

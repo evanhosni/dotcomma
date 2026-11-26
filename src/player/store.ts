@@ -1,4 +1,4 @@
-import { PLAYER_DETECTABILITY } from "./spec";
+import { PLAYER_DETECTABILITY, PLAYER_HEALTH } from "./spec";
 import type { PlayerBodyState, PlayerPlacement, ScreenSide } from "./types";
 
 /** How far the camera hangs behind the player's head along the look: 0 in first person (Player.tsx). */
@@ -27,6 +27,23 @@ let localBody: PlayerBodyState | null = null;
 export const getLocalPlayerBody = (): PlayerBodyState | null => localBody;
 export const setLocalPlayerBody = (body: PlayerBodyState | null): void => {
   localBody = body;
+};
+
+/** The local player's host's health (the server's: net/players/store.ts player:hurt). */
+let health = PLAYER_HEALTH;
+const healthListeners = new Set<(health: number, hurt: boolean) => void>();
+
+export const getLocalHealth = (): number => health;
+export const setLocalHealth = (next: number): void => {
+  const hurt = next < health;
+  health = next;
+  healthListeners.forEach((fn) => fn(next, hurt));
+};
+export const onLocalHealth = (fn: (health: number, hurt: boolean) => void): (() => void) => {
+  healthListeners.add(fn);
+  return () => {
+    healthListeners.delete(fn);
+  };
 };
 
 /** While held, the Player does nothing but pose its body: a cutscene owns the camera, the position the

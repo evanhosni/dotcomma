@@ -1,4 +1,5 @@
 import { useRapier } from "@react-three/rapier";
+import { CHARACTER_COLLISION_GROUPS } from "../../../physics/constants";
 import type { RapierRigidBody } from "@react-three/rapier";
 import { useEffect, useRef } from "react";
 import { createCharacter, createStepResult, disposeCharacter, stepCharacter } from "../../../physics";
@@ -44,7 +45,7 @@ export const useKinematicMover = ({
     const body = world.createRigidBody(
       rapier.RigidBodyDesc.kinematicPositionBased().setTranslation(spawnX, spawnY + halfHeight, spawnZ),
     );
-    world.createCollider(rapier.ColliderDesc.capsule(halfHeight - collider.radius, collider.radius), body);
+    world.createCollider(rapier.ColliderDesc.capsule(halfHeight - collider.radius, collider.radius).setCollisionGroups(CHARACTER_COLLISION_GROUPS), body);
     rigidBodyRef.current = body;
     return () => {
       rigidBodyRef.current = null;

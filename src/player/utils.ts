@@ -1,5 +1,6 @@
 import type * as THREE from "three";
-import { PLAYER_CLIPS, PLAYER_MOVING_SPEED, WALK_CLIP_GROUND_SPEED } from "./constants";
+import { MAX_HEAD_PITCH } from "../objects/actors/beeble/animations";
+import { MAX_LOOK_PITCH, PLAYER_CLIPS, PLAYER_MOVING_SPEED, WALK_CLIP_GROUND_SPEED } from "./constants";
 import { getCameraBoom } from "./store";
 import type { InputState, MoveHeading, PlayerActionSample, PlayerBodyState } from "./types";
 
@@ -55,3 +56,10 @@ export const aimFromCamera = (camera: THREE.Camera, out: THREE.Ray): THREE.Ray =
   out.origin.addScaledVector(out.direction, getCameraBoom());
   return out;
 };
+
+/** Where a body looks, from its drawn head (what every client has of it): the look's yaw (the body's plus
+ *  its head's) and pitch (the head's scaled back onto the look's range: Player.tsx headPitchOf). */
+export const lookOfBody = (body: PlayerBodyState): { yaw: number; pitch: number } => ({
+  yaw: body.yaw + (body.headYaw ?? 0),
+  pitch: ((body.headPitch ?? 0) * MAX_LOOK_PITCH) / MAX_HEAD_PITCH,
+});

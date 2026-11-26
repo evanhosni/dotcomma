@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { ActorFrameContext } from "../types";
 import type { ColliderSpec, MovementKind } from "../spec";
 import type { MotionOutput } from "../state/types";
+import type { WoundSet } from "../wounds/WoundSet";
 
 export interface KinematicMoverOptions {
   enabled: boolean;
@@ -28,6 +29,8 @@ export interface PooledModelClone {
   skeletons: THREE.Skeleton[];
   mixer: THREE.AnimationMixer | null;
   actions: Map<string, THREE.AnimationAction>;
+  /** Its bullet holes: whoever draws the clone sets them; the pool clears them. */
+  wounds: WoundSet;
   /** Unscaled bind-pose bounding radius; per-instance radius = this × max(scale). */
   baseRadius: number;
   releaseTimer: ReturnType<typeof setTimeout> | null;

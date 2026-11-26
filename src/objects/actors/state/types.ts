@@ -103,13 +103,15 @@ export interface RagdollConfig {
   recoverSeconds?: number;
 }
 
-/** A push given to one bone's body as the ragdoll starts (world units: mass × u/s). A bone the model lacks
- *  pushes the ragdoll's root. */
+/** A push given to one bone's body as the ragdoll starts: a change of its velocity (u/s). A bone the model
+ *  lacks pushes the ragdoll's root. `carry`: the share of it every other part takes too (default 0: the
+ *  bone alone, the rest dragged along by the joints). */
 export interface RagdollImpulse {
   bone: string;
   x: number;
   y: number;
   z: number;
+  carry?: number;
 }
 
 export interface StateMachineConfig {

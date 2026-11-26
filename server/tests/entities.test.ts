@@ -12,6 +12,10 @@ import { type EntityManagerOptions, type PlayerView } from "../src/game/entities
 import { TICK_MS } from "../src/game/constants.js";
 import { createPublished, fullUpdate, wirePosition, wireYaw } from "../src/game/entities/utils.js";
 import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
+import { BEEBLE_SPEC } from "../../src/objects/actors/beeble/spec";
+import { RAGDOLL_STATE } from "../../src/objects/actors/state/constants";
+import { CORPSE_SECONDS } from "../../src/objects/actors/wounds/constants";
+import { REVOLVER_SPEC } from "../../src/weapons/spec";
 
 /** One physics world for the suite (WASM init once); an unbounded budget builds chunks on the first tick. */
 let pw: PhysicsWorld;
@@ -374,6 +378,30 @@ describe("EntityManager (server authority)", () => {
     assert.equal(m.size, 1);
     m.removeSession("B");
     assert.equal(m.size, 0);
+  });
+  it("shot dead, an NPC keeps its wounds, lies limp for good, and is retired once its corpse has lain its time", () => {
+    const h = makeHost();
+    const gone: string[] = [];
+    const m = manager({ ...h, host: { ...h.host, onCorpseGone: (_domain: string, id: string) => void gone.push(id) } });
+    h.setPlayer("A", 10, 25);
+    regBeeble(m, "A");
+    const wound = { entry: { b: ["body"], w: [1], x: 0, y: 1.3, z: 0.1, nx: 0, ny: 0, nz: 1, r: REVOLVER_SPEC.woundRadius }, exit: null };
+    const t0 = Date.now();
+    const shots = Math.ceil(BEEBLE_SPEC.health! / REVOLVER_SPEC.damage);
+    for (let i = 0; i < shots; i++) assert.ok(m.shoot(ID, "overworld", REVOLVER_SPEC, [wound], [0, 0, -1], [10, 4, 20], t0));
+    const e = m.get(ID)!;
+    assert.ok(m.isDead(ID));
+    assert.equal(e.state.dead, true);
+    assert.equal((e.state.wounds as unknown[]).length, shots);
+    m.tick(t0 + TICK_MS);
+    assert.equal(e.runner!.currentStateId, RAGDOLL_STATE, "limp");
+    m.setRagdoll(ID, false);
+    m.tick(t0 + 2 * TICK_MS);
+    assert.equal(e.runner!.currentStateId, RAGDOLL_STATE, "a dead body never gets up");
+    assert.equal(m.shoot(ID, "overworld", REVOLVER_SPEC, [wound], [0, 0, -1], [90, 4, 20], t0), false, "a hit far from it is not its");
+    m.tick(t0 + CORPSE_SECONDS * 1000 + TICK_MS);
+    assert.deepEqual(gone, [ID]);
+    assert.equal(m.get(ID), undefined);
   });
 });
 

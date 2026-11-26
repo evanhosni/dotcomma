@@ -1,6 +1,12 @@
 // 0.02 let a fast glancing contact penetrate the terrain trimesh, and a sweep
 // that STARTS inside a triangle passes through it (fall-through-the-map).
 export const CONTROLLER_CONTACT_OFFSET = 0.08;
+/** Rapier interaction groups (memberships << 16 | filter). Every character's capsule (the players', an NPC's
+ *  kinematic body) is in bit 14 alone, colliding with everything: a ragdoll's parts leave it out of their
+ *  filter (objects/actors/ragdoll/constants.ts), because a kinematic capsule walked into a corpse flung it away
+ *  at the parts' top speed. */
+export const CHARACTER_GROUP = 0x4000;
+export const CHARACTER_COLLISION_GROUPS = ((CHARACTER_GROUP << 16) | 0xffff) >>> 0;
 export const SNAP_TO_GROUND = 0.3;
 
 // Uphill input fades to 0 across SOFT_START..SOFT_END; above SLIDE_ANGLE the

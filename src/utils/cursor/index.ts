@@ -80,8 +80,11 @@ const MOUSE_EVENTS = ["click", "contextmenu", "pointerdown", "pointerup", "dblcl
 
 const claims = new Set<HoverTarget>();
 let mouseBound = false;
+/** While a weapon is in hand the mouse fires it: nothing under the crosshair takes a click or grows it. */
+let hoverSuspended = false;
 
 const nearestClaim = (): HoverTarget | null => {
+  if (hoverSuspended) return null;
   let best: HoverTarget | null = null;
   for (const claim of claims) if (!best || claim.distance < best.distance) best = claim;
   return best;
@@ -89,7 +92,7 @@ const nearestClaim = (): HoverTarget | null => {
 
 const syncCursorSize = (): void => {
   let grown = false;
-  for (const claim of claims) grown ||= claim.growsCursor;
+  if (!hoverSuspended) for (const claim of claims) grown ||= claim.growsCursor;
   const el = getOrCreateCursor();
   el.style.width = el.style.height = grown ? "6px" : "2px";
 };
@@ -105,6 +108,12 @@ export const claimHover = (target: HoverTarget): void => {
   if (claims.has(target)) return;
   claims.add(target);
   bindMouse();
+  syncCursorSize();
+};
+
+export const setHoverSuspended = (suspended: boolean): void => {
+  if (suspended === hoverSuspended) return;
+  hoverSuspended = suspended;
   syncCursorSize();
 };
 

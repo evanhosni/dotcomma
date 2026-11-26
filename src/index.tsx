@@ -5,6 +5,8 @@ import { initDevmodeFromUrl } from "./context/utils";
 import { DevOverlay } from "./menus/overlay/DevOverlay";
 import { LogsOverlay } from "./menus/overlay/LogsOverlay";
 import { NetOverlay } from "./menus/overlay/NetOverlay";
+import { HealthOverlay } from "./menus/overlay/HealthOverlay";
+import { EquipWheelOverlay } from "./menus/overlay/EquipWheelOverlay";
 import { startConnection } from "./net";
 import "./net/store"; // subscribes to the connection (persisted player data)
 import "./style.css";
@@ -43,6 +45,8 @@ const Dotcomma = () => {
       <DevOverlay />
       <LogsOverlay />
       <NetOverlay />
+      <HealthOverlay />
+      <EquipWheelOverlay />
       <CustomCanvas>{tree}</CustomCanvas>
     </DevContextProvider>
   );

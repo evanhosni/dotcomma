@@ -13,6 +13,10 @@ export interface Session extends Omit<PlayerSnapshot, "st"> {
   /** Persistence key — NOT broadcast. */
   identity: string;
   domain: DomainId;
+  /** Its host died: no shots taken or fired until it takes another (World.host possess). */
+  dead: boolean;
+  /** When it last fired (ms): the weapon's rate is the server's. */
+  lastShotAt: number;
   /** Server time of the last move: the `st` its snapshots and relayed moves carry. */
   lastMoveAt: number;
 }

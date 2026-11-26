@@ -10,6 +10,7 @@ import type { PooledModelClone } from "./types";
 import { RootRelativeSkeleton, updateMatrixWorldKeepBind, applyBoneTransformRootRelative } from "./RootRelativeSkeleton";
 import { mergeSkinnedSiblings } from "./geometry";
 import { SKINNED_BOUNDS_PAD, MAX_POOLED_PER_KEY } from "./constants";
+import { WoundSet } from "../wounds/WoundSet";
 
 const pools = new Map<string, PooledModelClone[]>();
 
@@ -157,11 +158,13 @@ const createClone = (key: string, gltf: any, quantization: number | undefined): 
     node.boundingSphere.radius += pad;
   }
 
+  const materials = Array.from(materialSet);
   return {
     key,
     scene,
     animations,
-    materials: Array.from(materialSet),
+    materials,
+    wounds: new WoundSet(scene, materials),
     skeletons: Array.from(skeletonSet),
     mixer: animations.length > 0 ? new THREE.AnimationMixer(scene) : null,
     actions: new Map(),
@@ -213,6 +216,7 @@ export const releaseModelClone = (clone: PooledModelClone): void => {
     clone.releaseTimer = null;
     clone.mixer?.stopAllAction();
     stripAttachments(clone.scene);
+    clone.wounds.dispose();
     let pool = pools.get(clone.key);
     if (!pool) {
       pool = [];

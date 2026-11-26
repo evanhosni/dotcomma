@@ -54,6 +54,8 @@ export interface ActorSimulationAttributes {
   movement?: MovementKind;
   /** Farthest ray distance a player can hover/click it from. Default DEFAULT_INTERACT_REACH. */
   interactReach?: number;
+  /** It can be shot and killed: its health (weapons/spec.ts damage). Unset: bullets only wound it. */
+  health?: number;
 }
 
 /** An actor's biomes are the biomes that list it (`BiomeSpec.actors`), never a field: neither a spec

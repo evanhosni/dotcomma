@@ -5,7 +5,7 @@
 THE way into the overworld: every boot of `/` or of an address plays it. The player starts as a MAV Unit
 (manual anti virus, [objects/actors/mav-unit/](../../../../objects/actors/mav-unit/spec.ts)): the device that
 connects a player in the real world to dotcomma. It needs an organic host, so it falls from the sky into a
-beeble NPC's skull, and the player wakes up as that beeble. [Intro.tsx](Intro.tsx) runs it, one phase after
+beeble NPC's skull, and the player wakes up as that beeble. [IntroRun.tsx](IntroRun.tsx) runs it, one phase after
 another ([types.ts](types.ts) `IntroPhase`), owning the camera and the player's body state while it does
 (`setPlayerHeld`, [player/store.ts](../../../../player/store.ts)):
 
@@ -55,16 +55,24 @@ another ([types.ts](types.ts) `IntroPhase`), owning the camera and the player's 
    (`BLINKS`).
 7. **standing**: `wake` stands the host up on every client (the ragdoll blending into its recover clip,
    held there by the server); the camera rises and levels into exactly the Player's first view (its eyes over the host's feet, facing the host's REAL yaw: the drawn one is stepped to each camera) and hands off only once fully risen, then
-   `possess` retires the NPC for everyone (`host:taken`) and the player stands where it stood
-   (`placePlayer`), a beeble wearing its unit. Other players swap the NPC for the player's beeble in one frame: RemotePlayers retires it as that player is first SHOWN in its beeble form (its move is played back late), not when `host:taken` arrives.
+   `possess` retires the NPC for everyone (`actor:retired`) and the player stands where it stood
+   (`placePlayer`), a beeble wearing its unit, whole (the server resets its health and wounds). Other players swap the NPC for the player's beeble in one frame: RemotePlayers retires it as that player is first SHOWN in its beeble form (its move is played back late), not when `actor:retired` arrives.
 
 What other players see comes through the player's own `move`s (`fm`, `mh`, `md`,
 [net/protocol/types.ts](../../../../net/protocol/types.ts)): the unit falling, the unit screwing into the
 NPC's head (where that NPC is mounted for them), then the beeble wearing it ([player/PlayerBody.tsx](../../../../player/PlayerBody.tsx)).
 The title, the black and the blinking are this player's alone.
 
+## Death: the rescan
+
+[Intro.tsx](Intro.tsx) mounts one IntroRun at boot and a fresh one each time the local player's host dies
+(`player:died`, weapons/README.md): the player is held and its body hidden at once (its corpse falls in its
+place, [player/corpses/](../../../../player/corpses/Corpses.tsx)), and after `DEATH_HOLD_SECONDS` the run
+starts again with `rescanAt`, the death spot: no address, no click, the title back over the black with
+"- host lost -", then the scan by itself. The dead host is gone for good: an NPC corpse is retired after
+`CORPSE_SECONDS`, a player's corpse removed.
+
 ## How to add another
 
-N/A — one way in. Planned (Nov 2026): a player's death kills its host for good and replays the intro from
-the scan; a shared link will skip it (a beeble already wearing its unit, falling from the sky). Timings and
-distances are in [constants.ts](constants.ts).
+N/A — one way in. Planned: a shared link will skip it (a beeble already wearing its unit, falling from the
+sky). Timings and distances are in [constants.ts](constants.ts).

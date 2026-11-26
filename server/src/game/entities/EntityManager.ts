@@ -5,6 +5,9 @@ import { INTERACT_REACH_SLACK, serverInteractReachSq } from "../../../../src/obj
 import type { ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/StateMachineRunner";
 import { RAGDOLL_IMPULSE_KEY } from "../../../../src/objects/actors/state/constants";
+import type { Wound } from "../../../../src/net/protocol/types";
+import { CORPSE_SECONDS, KILL_CARRY, KILL_PUSH, MAX_WOUNDS } from "../../../../src/objects/actors/wounds/constants";
+import type { WeaponSpec } from "../../../../src/weapons/spec";
 import { isPlayerSolid, PLAYER_DETECTABILITY } from "../../../../src/player/spec";
 import type { RagdollImpulse } from "../../../../src/objects/actors/state/types";
 import { createBuildingCollider, doorOffsetsFor, createNpcBody } from "../physics/bodies/index.js";
@@ -31,6 +34,8 @@ const SLOW_TICK_WARN_MS = 50;
 const NO_PLAYER_POSITION = { x: 1e9, y: 0, z: 1e9 };
 const DOOR_ACTION = /^door:(\d+)$/;
 const DOOR_REACH_SQ = (DOOR_INTERACT_REACH + INTERACT_REACH_SLACK) ** 2;
+/** A shot's hit point may stand this far from the entity's published feet (a ragdoll lies off them). */
+const HIT_REACH = 8;
 
 const nearestPlayer = (e: EntityRecord, players: PlayerView[]): { pos: { x: number; y: number; z: number }; distSq: number } => {
   let best: PlayerView | null = null;
@@ -64,6 +69,9 @@ export class EntityManager {
   private readonly specs: (kind: string) => ActorSpec | undefined;
   private readonly poseScratch: Pose = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
   private tickNo = 0;
+  /** NPCs dead, by id → when (ms): their corpses lie CORPSE_SECONDS, and an NPC forgotten and registered
+   *  again meanwhile comes back dead. */
+  private readonly deadAt = new Map<string, { domain: DomainId; at: number }>();
   private maxTickMs = 0;
   private npcCount = 0;
 
@@ -148,6 +156,11 @@ export class EntityManager {
     };
     this.entities.set(e.id, e);
     if (spec?.hull && physical) this.queueHull(e.id);
+    // Dead before it was forgotten: it comes back dead.
+    if (this.deadAt.has(e.id)) {
+      e.state = { dead: true, health: 0 };
+      e.runner?.setRagdoll(true);
+    }
     return e;
   }
 
@@ -173,11 +186,40 @@ export class EntityManager {
     this.entities.delete(e.id);
   }
 
+  isDead(id: string): boolean {
+    return this.deadAt.has(id);
+  }
+
+  /** A hit (World.shoot): the wounds are kept with the entity's state for every client to draw; an NPC with
+   *  health loses it, and at 0 dies: limp for good, thrown along the bullet. False when the hit cannot be
+   *  this entity's (another domain, or too far from it). */
+  shoot(id: string, domain: DomainId, weapon: WeaponSpec, wounds: Wound[], dir: [number, number, number], at: [number, number, number], now = Date.now()): boolean {
+    const e = this.entities.get(id);
+    if (!e || e.domain !== domain || (at[0] - e.x) ** 2 + (at[2] - e.z) ** 2 > HIT_REACH * HIT_REACH) return false;
+    const kept = [...((e.state.wounds as Wound[] | undefined) ?? []), ...wounds].slice(-MAX_WOUNDS);
+    const maxHealth = this.specs(e.kind)?.health;
+    if (maxHealth === undefined) {
+      e.state = { ...e.state, wounds: kept };
+      this.send(e, { state: e.state });
+      return true;
+    }
+    const health = Math.max(0, ((e.state.health as number | undefined) ?? maxHealth) - weapon.damage);
+    e.state = { ...e.state, wounds: kept, health };
+    if (health > 0 || this.deadAt.has(id)) {
+      this.send(e, { state: e.state });
+      return true;
+    }
+    this.deadAt.set(id, { domain, at: now });
+    e.state = { ...e.state, dead: true };
+    this.setRagdoll(id, true, { bone: wounds[0]?.entry.b[0] ?? "", x: dir[0] * KILL_PUSH, y: dir[1] * KILL_PUSH, z: dir[2] * KILL_PUSH, carry: KILL_CARRY });
+    return true;
+  }
+
   /** Limp or back up (the machine's built-in ragdoll states). The impulse is replicated with the entity's
    *  state, so every client starts the same fall. */
   setRagdoll(id: string, on: boolean, impulse?: RagdollImpulse, hold = false): void {
     const e = this.entities.get(id);
-    if (!e?.runner) return;
+    if (!e?.runner || (!on && this.deadAt.has(id))) return;
     e.runner.setRagdoll(on, impulse, hold);
     const { [RAGDOLL_IMPULSE_KEY]: _previous, ...rest } = e.state;
     e.state = on && impulse ? { ...rest, [RAGDOLL_IMPULSE_KEY]: impulse } : rest;
@@ -260,11 +302,22 @@ export class EntityManager {
       return list;
     };
 
+    this.clearCorpses(now);
     const simulate = this.preparePhysics(playersOf);
     this.stepMachines(dt, now, playersOf);
     if (simulate) this.physics!.step();
     this.publishPoses(dt, now);
     this.logTick(performance.now() - tickStart);
+  }
+
+  /** Corpses that have lain their time are gone for good. */
+  private clearCorpses(now: number): void {
+    for (const [id, dead] of this.deadAt) {
+      if (now - dead.at < CORPSE_SECONDS * 1000) continue;
+      this.deadAt.delete(id);
+      this.retire(id);
+      this.host.onCorpseGone?.(dead.domain, id);
+    }
   }
 
   /** Runs the physics world's budgeted generation, syncs the player capsules and refreshes the query

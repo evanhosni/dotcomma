@@ -139,13 +139,31 @@ export class Ragdoll {
       this.parts.push(part);
     }
 
-    if (impulse && this.parts.length > 0) {
-      const hit = this.parts.find((p) => p.bone.name === impulse.bone) ?? this.parts[0];
-      const v = hit.body.linvel();
-      hit.body.setLinvel({ x: v.x + impulse.x, y: v.y + impulse.y, z: v.z + impulse.z }, true);
-    }
+    if (impulse) this.push(impulse);
     this.lowestY = rootY - MAX_DROP;
     this.frozen = false;
+  }
+
+  /** Shoves the limp body (a no-op while it stands, or once it fell through the ground): `impulse` to its
+   *  bone's part, its `carry` to the rest. */
+  push(impulse: RagdollImpulse): void {
+    if (!this.active || this.frozen) return;
+    const hit = this.parts.find((p) => p.bone.name === impulse.bone) ?? this.parts[0];
+    const carry = impulse.carry ?? 0;
+    for (const part of this.parts) {
+      const share = part === hit ? 1 : carry;
+      if (share === 0) continue;
+      const v = part.body.linvel();
+      part.body.setLinvel({ x: v.x + impulse.x * share, y: v.y + impulse.y * share, z: v.z + impulse.z * share }, true);
+    }
+  }
+
+  /** Where the body lies now: its root part's centre (null while not limp). */
+  center(out: THREE.Vector3): THREE.Vector3 | null {
+    const root = this.parts.find((part) => !part.parent);
+    if (!root) return null;
+    const t = root.body.translation();
+    return out.set(t.x, t.y, t.z);
   }
 
   /** Writes the bones from the bodies (parents first: each bone is set in its parent's fresh world frame). */

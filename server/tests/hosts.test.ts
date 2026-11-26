@@ -70,12 +70,12 @@ describe("hosts", () => {
     world.addSession("B", "identity-b", "overworld");
     world.host("A", HOST, "claim");
     world.host("B", HOST, "possess");
-    assert.equal(to("A", "host:taken").length, 0, "only the claimer's steps count");
+    assert.equal(to("A", "actor:retired").length, 0, "only the claimer's steps count");
     world.host("A", HOST, "possess");
-    assert.deepEqual(to("A", "host:taken"), [{ t: "host:taken", id: HOST }]);
-    assert.deepEqual(to("B", "host:taken"), [{ t: "host:taken", id: HOST }]);
+    assert.deepEqual(to("A", "actor:retired"), [{ t: "actor:retired", id: HOST }]);
+    assert.deepEqual(to("B", "actor:retired"), [{ t: "actor:retired", id: HOST }]);
     world.addSession("C", "identity-c", "overworld");
-    assert.deepEqual(to("C", "init")[0].hostsTaken, [HOST]);
+    assert.deepEqual(to("C", "init")[0].retired, [HOST]);
     world.host("C", HOST, "claim");
     assert.deepEqual(to("C", "host:claim"), [{ t: "host:claim", id: HOST, ok: false }]);
   });

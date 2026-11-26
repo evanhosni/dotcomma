@@ -3,7 +3,11 @@
  * a domain change is leave + join), entities and persistence. Transport-agnostic: the
  * `Outbox` is the ONLY abstraction, kept thin so the transport could be swapped.
  */
-import type { DomainId, EntityRegisterItem, HostStep, MoveIntent, PlayerData, PlayerSnapshot } from "../../../src/net/protocol/types";
+import type { DomainId, EntityRegisterItem, HostStep, MoveIntent, PlayerData, PlayerSnapshot, ShootMessage, ShotHit, Vec3Tuple, Wound } from "../../../src/net/protocol/types";
+import { PLAYER_HEALTH } from "../../../src/player/spec";
+import { CORPSE_SECONDS, MAX_WOUNDS } from "../../../src/objects/actors/wounds/constants";
+import { weaponOf } from "../../../src/weapons/spec";
+import type { WeaponSpec } from "../../../src/weapons/spec";
 import { mavImpactOf } from "../../../src/objects/actors/mav-unit/spec";
 import { PLAYER_CLIPS } from "../../../src/player/constants";
 import { EntityManager } from "./entities/EntityManager.js";
@@ -17,8 +21,19 @@ const GOLDEN_ANGLE_DEG = 137.508;
 const SPAWN_RING_RADIUS = 3;
 /** Open manholes and doors kept per domain: a client spamming forged ids stops opening more here. */
 const MAX_OPEN_TUNNELS = 20000;
-/** NPCs that became players, kept per domain: past it, a possession still happens but is forgotten. */
-const MAX_HOSTS_TAKEN = 100000;
+/** NPCs gone for good (taken as hosts, or dead and lain their time), kept per domain: past it, one still
+ *  goes but is forgotten. */
+const MAX_RETIRED = 100000;
+/** A shot may come this much faster than its weapon's rate (the client's clock and the network jitter). */
+const FIRE_RATE_SLACK = 0.8;
+/** A shot starts within this of the shooter's reported position (its eye, a step it has taken since). */
+const SHOT_ORIGIN_REACH = 6;
+/** A hit on a player lies within this of its reported position. */
+const PLAYER_HIT_REACH = 4;
+/** A hit on a player's corpse lies within this of where it died (u: a thrown, shoved body slides). */
+const CORPSE_HIT_REACH = 25;
+/** A bullet's stop lies at most this past the weapon's range (u: the hit test's rounding). */
+const END_SLACK = 1;
 
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
@@ -53,7 +68,13 @@ const snapshotOf = (s: Session): PlayerSnapshot => ({
   fm: s.fm,
   mh: s.mh,
   md: s.md,
+  wp: s.wp,
+  health: s.health,
+  wounds: s.wounds,
 });
+
+const distance = (a: Vec3Tuple, b: { x: number; y: number; z: number } | Vec3Tuple): number =>
+  Array.isArray(b) ? Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) : Math.hypot(a[0] - b.x, a[1] - b.y, a[2] - b.z);
 
 export class World {
   private readonly sessions = new Map<string, Session>();
@@ -65,17 +86,23 @@ export class World {
   /** The open manholes and doors, per domain (TunnelToggleMessage): the server's, so its NPCs fall into
    *  the open manholes every player sees. Not persisted: a restart closes them. */
   private readonly openTunnels = new Map<DomainId, Set<string>>();
-  /** The intro's possessions, per domain: each claimed NPC → the session whose MAV Unit is taking it, and
-   *  the NPCs already taken (never simulated or drawn again). Not persisted: a restart brings them back. */
+  /** The intro's possessions, per domain: each claimed NPC → the session whose MAV Unit is taking it. */
   private readonly hostClaims = new Map<DomainId, Map<string, string>>();
-  private readonly hostsTaken = new Map<DomainId, Set<string>>();
+  /** NPCs gone for good, per domain (taken as hosts, dead and lain their time): never simulated or drawn
+   *  again. Not persisted: a restart brings them back. */
+  private readonly retired = new Map<DomainId, Set<string>>();
+  /** Dead players' corpses (each client draws its own; the server only checks shots at them): id → where
+   *  and until when (ms) it lies. */
+  private readonly corpses = new Map<string, { domain: DomainId; at: Vec3Tuple; until: number }>();
+  private corpseCount = 0;
 
   constructor(private readonly out: Outbox, private readonly physics: PhysicsWorld | null = null) {
     this.entities = new EntityManager(
       {
         playersIn: (domain) => this.playerViews(domain),
         sendMany: (ids, msg) => this.out.sendMany(ids, msg),
-        isRetired: (domain, id) => this.hostsTakenIn(domain).has(id),
+        isRetired: (domain, id) => this.retiredIn(domain).has(id),
+        onCorpseGone: (domain, id) => this.retireActor(domain, id),
       },
       physics,
     );
@@ -112,6 +139,11 @@ export class World {
       fm: "mav",
       mh: "",
       md: 0,
+      wp: "",
+      health: PLAYER_HEALTH,
+      wounds: [],
+      dead: false,
+      lastShotAt: 0,
       lastMoveAt: Date.now(),
     };
     this.joinCount++;
@@ -151,6 +183,7 @@ export class World {
     s.fm = m.fm;
     s.mh = m.mh;
     s.md = m.md;
+    s.wp = m.wp;
     s.lastMoveAt = Math.max(Date.now(), s.lastMoveAt + 1);
     this.out.sendMany(this.room(s.domain), { t: "move", id, st: s.lastMoveAt, ...m }, id);
   }
@@ -218,13 +251,13 @@ export class World {
     if (!s) return;
     const claims = this.hostClaimsIn(s.domain);
     if (step === "claim") {
-      const ok = !this.hostsTakenIn(s.domain).has(entityId) && (claims.get(entityId) ?? id) === id;
+      const ok = !this.retiredIn(s.domain).has(entityId) && !this.entities.isDead(entityId) && (claims.get(entityId) ?? id) === id;
       if (ok && claims.get(entityId) !== id) this.claimHostFor(s, entityId);
       this.out.send(id, { t: "host:claim", id: entityId, ok });
       return;
     }
     // A step with no claim on record claims the host now (a server restart between claim and impact lost it).
-    if (!claims.has(entityId) && !this.hostsTakenIn(s.domain).has(entityId) && step !== "release") this.claimHostFor(s, entityId);
+    if (!claims.has(entityId) && !this.retiredIn(s.domain).has(entityId) && !this.entities.isDead(entityId) && step !== "release") this.claimHostFor(s, entityId);
     if (claims.get(entityId) !== id) return;
     switch (step) {
       case "impact":
@@ -239,10 +272,11 @@ export class World {
         return;
       case "possess": {
         claims.delete(entityId);
-        const taken = this.hostsTakenIn(s.domain);
-        if (taken.size < MAX_HOSTS_TAKEN) taken.add(entityId);
         this.entities.retire(entityId);
-        this.out.sendMany(this.room(s.domain), { t: "host:taken", id: entityId });
+        this.retireActor(s.domain, entityId);
+        // A fresh host: whole, unhurt.
+        this.setHealth(s, PLAYER_HEALTH, []);
+        s.dead = false;
         return;
       }
     }
@@ -270,10 +304,71 @@ export class World {
     return claims;
   }
 
-  private hostsTakenIn(domain: DomainId): Set<string> {
-    let taken = this.hostsTaken.get(domain);
-    if (!taken) this.hostsTaken.set(domain, (taken = new Set()));
-    return taken;
+  /** An NPC gone for good: every player in the domain is told, and later ones are by `init`. */
+  private retireActor(domain: DomainId, id: string): void {
+    const retired = this.retiredIn(domain);
+    if (retired.size < MAX_RETIRED) retired.add(id);
+    this.out.sendMany(this.room(domain), { t: "actor:retired", id });
+  }
+
+  private retiredIn(domain: DomainId): Set<string> {
+    let retired = this.retired.get(domain);
+    if (!retired) this.retired.set(domain, (retired = new Set()));
+    return retired;
+  }
+
+  /** A shot (ShootMessage). The shooter's own hit test is trusted, within limits: it must hold the weapon
+   *  (its last move's `wp`) in a live host, fire no faster than the weapon allows, from where it stands, and
+   *  hit within the weapon's reach what stands (or lies) where it says, each body once: the bullet goes
+   *  through every one. Everyone else in the domain sees it, with the hits that landed. */
+  shoot(id: string, m: ShootMessage, now = Date.now()): void {
+    const s = this.sessions.get(id);
+    const weapon = weaponOf(m.weapon);
+    if (!s || !weapon || s.dead || s.fm !== "host" || s.wp !== weapon.id) return;
+    if (now - s.lastShotAt < weapon.fireInterval * 1000 * FIRE_RATE_SLACK) return;
+    if (distance(m.o, s) > SHOT_ORIGIN_REACH) return;
+    s.lastShotAt = now;
+    const landed: ShotHit[] = [];
+    const seen = new Set<string>();
+    for (const hit of m.hits) {
+      const key = hit.kind + ":" + hit.id;
+      if (seen.has(key) || distance(m.o, hit.at) > weapon.range) continue;
+      seen.add(key);
+      if (this.applyHit(s, hit, weapon, m.d, now)) landed.push(hit);
+    }
+    const end = m.end && distance(m.o, m.end.at) <= weapon.range + END_SLACK ? m.end : null;
+    this.out.sendMany(this.room(s.domain), { t: "shot", id, weapon: weapon.id, o: m.o, d: m.d, hits: landed, end }, id);
+  }
+
+  /** One body a shot went through; false when it cannot be that body (another domain, not where it is said
+   *  to be, already gone). */
+  private applyHit(s: Session, hit: ShotHit, weapon: WeaponSpec, dir: Vec3Tuple, now: number): boolean {
+    if (hit.kind === "npc") return this.entities.shoot(hit.id, s.domain, weapon, hit.wounds, dir, hit.at, now);
+    if (hit.kind === "corpse") {
+      const corpse = this.corpses.get(hit.id);
+      return !!corpse && corpse.until > now && corpse.domain === s.domain && distance(hit.at, corpse.at) <= CORPSE_HIT_REACH;
+    }
+    const target = this.sessions.get(hit.id);
+    if (!target || target === s || target.domain !== s.domain || target.dead || target.fm !== "host" || distance(hit.at, target) > PLAYER_HIT_REACH) return false;
+    this.hurtPlayer(target, weapon.damage, hit.wounds, dir, now);
+    return true;
+  }
+
+  /** A player is hit: its wounds kept, its health taken; at 0 its host is a corpse (everyone told). */
+  private hurtPlayer(s: Session, damage: number, wounds: Wound[], dir: Vec3Tuple, now: number): void {
+    this.setHealth(s, Math.max(0, s.health - damage), [...s.wounds, ...wounds].slice(-MAX_WOUNDS));
+    if (s.health > 0) return;
+    s.dead = true;
+    for (const [key, c] of this.corpses) if (c.until <= now) this.corpses.delete(key);
+    const corpse = `${s.id}~${++this.corpseCount}`;
+    this.corpses.set(corpse, { domain: s.domain, at: [s.x, s.y, s.z], until: now + CORPSE_SECONDS * 1000 });
+    this.out.sendMany(this.room(s.domain), { t: "player:died", id: s.id, d: dir, corpse });
+  }
+
+  private setHealth(s: Session, health: number, wounds: Wound[]): void {
+    s.health = health;
+    s.wounds = wounds;
+    this.out.sendMany(this.room(s.domain), { t: "player:hurt", id: s.id, health, wounds });
   }
 
   private tunnelsOpenIn(domain: DomainId): Set<string> {
@@ -327,7 +422,7 @@ export class World {
       serverTime: Date.now(),
       data: this.persistence.get(s.identity)?.data ?? {},
       tunnelsOpen: [...this.tunnelsOpenIn(s.domain)],
-      hostsTaken: [...this.hostsTakenIn(s.domain)],
+      retired: [...this.retiredIn(s.domain)],
     });
     this.out.sendMany(room, { t: "join", player: snapshotOf(s) }, s.id);
   }

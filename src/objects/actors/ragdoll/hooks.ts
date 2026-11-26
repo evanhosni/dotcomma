@@ -1,7 +1,7 @@
 import { RootState } from "@react-three/fiber";
 import { useRapier } from "@react-three/rapier";
 import { useRef } from "react";
-import type * as THREE from "three";
+import * as THREE from "three";
 import type { AnimationPlayer } from "../../../animation/AnimationPlayer";
 import { smoothstep } from "../../../utils/math";
 import { markPoseChanged } from "../model/store";
@@ -117,6 +117,10 @@ export const useActorRagdoll = ({ stateMachine, machine, motion, mover, animPlay
     attach,
     setRagdoll,
     pose,
+    /** Shoves the limp body (a shot at a corpse); nothing while it stands. */
+    push: (impulse: RagdollImpulse): void => limb.ragdoll?.push(impulse),
+    /** Where the limp body lies (null while it stands): it falls away from the actor's own position. */
+    center: (out: THREE.Vector3): THREE.Vector3 | null => (limb.ragdoll?.active ? limb.ragdoll.center(out) : null),
     get phase(): RagdollPhase {
       return limb.phase;
     },

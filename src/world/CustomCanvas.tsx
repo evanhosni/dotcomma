@@ -7,6 +7,10 @@ import { StatsOverlay } from "../menus/overlay/StatsOverlay";
 import { Player } from "../player/Player";
 import { LocalPlayerSync } from "../net/players/LocalPlayerSync";
 import { RemotePlayers } from "../net/players/RemotePlayers";
+import { Corpses } from "../player/corpses/Corpses";
+import { WeaponDriver } from "../weapons/WeaponDriver";
+import { BloodSprays } from "../vfx/blood/BloodSprays";
+import { Decals } from "../vfx/decals/Decals";
 import { LampGlowDriver } from "../lighting/lamp-glow/LampGlowDriver";
 import { GRAVITY } from "../physics/constants";
 import { initCursor } from "../utils/cursor";
@@ -90,7 +94,12 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
         <Player />
         {/* Inside: each remote player is a kinematic capsule in this world. */}
         <RemotePlayers />
+        {/* Inside: a shot stops at the world's solid surfaces; a corpse falls through it. */}
+        <WeaponDriver />
+        <Corpses />
+        <BloodSprays />
       </Physics>
+      <Decals />
       <LocalPlayerSync />
     </>
   );

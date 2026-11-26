@@ -8,7 +8,7 @@ import { useDevContext, useGameContext } from "../context/hooks";
 import { getAssignedSpawnOffset } from "../net";
 import { fetchSurfaceModifiers } from "../objects/dressing/worker";
 import { createCharacter, createStepResult, disposeCharacter, stepCharacter } from "../physics";
-import { GRAVITY, TERMINAL_VELOCITY } from "../physics/constants";
+import { CHARACTER_COLLISION_GROUPS, GRAVITY, TERMINAL_VELOCITY } from "../physics/constants";
 import type { Character, SwimInput } from "../physics/types";
 import { createSurfaceSampler } from "../physics/movement-modifiers";
 import { setCameraWaterDepth } from "../vfx/screen-pass/store";
@@ -21,7 +21,7 @@ import { BEEBLE_SPEC } from "../objects/actors/beeble/spec";
 import { ModelActor } from "../objects/actors/model/ModelActor";
 import { createMavUnit } from "../objects/actors/mav-unit";
 import { warmPrograms } from "../utils/render";
-import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, HEADING_FACING_OFFSET, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
+import { BODY_TURN_RATE, CAMERA_FAR, CAMERA_PITCH_MARGIN, FRONT_VIEW_ANGLE, HEADING_FACING_OFFSET, FRONT_VIEW_MAX_PITCH, FRONT_VIEW_RELEASE_ANGLE, FRONT_VIEW_SECONDS, HEAD_TURN_RATE, IN_PLACE_TURN_DONE, IN_PLACE_TURN_RATE, IN_PLACE_TURN_START, MAX_HEAD_TURN, MAX_LOOK_PITCH, PLAYER_CLIPS, PLAYER_MOVING_SPEED, THIRD_PERSON_DISTANCE, THIRD_PERSON_RISE, THIRD_PERSON_SHOULDER, THIRD_PERSON_WALL_MARGIN, CROSSHAIR_AIM_FAR, VIEW_SWITCH_AIM_SHARPNESS, VIEW_SWITCH_MIN_AIM } from "./constants";
 import { useGroundSafetyNets, useUndergroundMode, useInput, useReloadGuard, useThirdPersonToggle, useWaterProbe } from "./hooks";
 import { PlayerBody } from "./PlayerBody";
 import { posePlayerBody } from "./registry";
@@ -76,8 +76,6 @@ const _boom = new THREE.Vector3();
 const _right = new THREE.Vector3();
 /** Look-and-place rounds after a re-aim, for a boom a wall pulled in (the exact solve assumes its full length). */
 const WALLED_AIM_ROUNDS = 3;
-/** The look's pitch limit (PointerLockControls' clamp). */
-const MAX_LOOK_PITCH = Math.PI / 2 - CAMERA_PITCH_MARGIN;
 
 /** The head's pitch for a look pitch: the whole look range onto the head's, linearly. */
 const headPitchOf = (lookPitch: number): number => (MAX_HEAD_PITCH * lookPitch) / MAX_LOOK_PITCH;
@@ -134,7 +132,7 @@ export const Player = () => {
   const lastStamp = useRef({ x: Infinity, z: Infinity }).current;
   const thirdPerson = useThirdPersonToggle();
   const action = useRef<PlayerActionSample>({ noclip: false, swimming: false, airborne: false, sliding: false, climbing: false, jumped: false, vy: 0, speed: 0, sprint: false, turningInPlace: false, heading: "forward" }).current;
-  const body = useRef<PlayerBodyState>({ form: "host", mavHost: "", mavDepth: 0, feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
+  const body = useRef<PlayerBodyState>({ form: "host", mavHost: "", mavDepth: 0, equipped: "", wounds: [], shots: 0, feetX: 0, feetY: 0, feetZ: 0, yaw: 0, headYaw: undefined, headPitch: undefined, clip: PLAYER_CLIPS.idle, clipSpeed: 1, loop: "repeat", visible: false }).current;
   /** The head the camera follows (eased), and where the body stood last frame (its speed). */
   const pivot = useRef(new THREE.Vector3()).current;
   const lastFeet = useRef({ x: NaN, z: NaN }).current;
@@ -529,7 +527,7 @@ export const Player = () => {
     <>
       <PointerLockControls minPolarAngle={CAMERA_PITCH_MARGIN} maxPolarAngle={Math.PI - CAMERA_PITCH_MARGIN} />
       <RigidBody ref={rigidBodyRef} type="kinematicPosition" position={spawn} colliders={false} ccd>
-        <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} />
+        <CapsuleCollider args={[CAPSULE_HALF_HEIGHT, PLAYER_RADIUS]} collisionGroups={CHARACTER_COLLISION_GROUPS} />
       </RigidBody>
       <Suspense fallback={null}>
         <PlayerBody state={body} />

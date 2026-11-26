@@ -36,8 +36,10 @@ export interface PlayerView {
 export interface EntityHost {
   playersIn(domain: DomainId): Iterable<PlayerView>;
   sendMany(sessionIds: Iterable<string>, msg: ServerMessage): void;
-  /** An id that must never be simulated again in the domain (an NPC that became a player). */
+  /** An id that must never be simulated again in the domain (an NPC that became a player, or a corpse gone). */
   isRetired?(domain: DomainId, id: string): boolean;
+  /** A dead NPC has lain its CORPSE_SECONDS: retire it for good. */
+  onCorpseGone?(domain: DomainId, id: string): void;
 }
 
 export interface EntityRecord extends Published {

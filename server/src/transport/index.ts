@@ -103,6 +103,9 @@ const routeToWorld = (world: World, sessionId: string, msg: Exclude<ClientMessag
     case "host":
       world.host(sessionId, msg.id, msg.step);
       return;
+    case "shoot":
+      world.shoot(sessionId, msg);
+      return;
   }
 };
 

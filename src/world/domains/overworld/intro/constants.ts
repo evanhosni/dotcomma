@@ -28,6 +28,8 @@ export const LABEL_RENDER_ORDER = 10001;
 
 export const PROMPT_ENTER = "- click to enter -";
 export const PROMPT_SCANNING = "- scanning for host -";
+/** A rescan's first message: the host died. */
+export const PROMPT_HOST_LOST = "- host lost -";
 export const PROMPT_FOUND = "- host found -";
 /** An address with no free beeble in its cell: the scan widens to the places around it. */
 export const PROMPT_EXPANDING = "- no host found. expanding scan -";
@@ -136,3 +138,6 @@ export const BLINKS: readonly [number, number][] = [
 export const BLINK_SECONDS = BLINKS[BLINKS.length - 1][0];
 /** Getting up must not take longer than this (the server's word lost): the player stands regardless. */
 export const STAND_TIMEOUT_SECONDS = 8;
+
+/** A host's death: the view holds over its fall this long before the rescan starts. */
+export const DEATH_HOLD_SECONDS = 2;

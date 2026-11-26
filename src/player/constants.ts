@@ -6,6 +6,8 @@ export const CAMERA_FAR = 7200;
 
 /** Radians the look stops short of straight up or down: 89.9° of pitch each way. */
 export const CAMERA_PITCH_MARGIN = (0.1 * Math.PI) / 180;
+/** The look's pitch limit (PointerLockControls' clamp). */
+export const MAX_LOOK_PITCH = Math.PI / 2 - CAMERA_PITCH_MARGIN;
 
 /** A worker sample older than this is given up on (lost to a worker reset). */
 export const SAMPLE_GIVE_UP_MS = 1000;

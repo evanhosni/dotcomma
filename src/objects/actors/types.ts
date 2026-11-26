@@ -31,6 +31,9 @@ export interface ActorLifecycleOptions {
   spriteHandoffDistance?: number;
   /** Omit to skip the frustum test (meshes that cull themselves). */
   boundsRadius?: number;
+  /** Where the bounds are centred this frame, when not on the actor's position (a ragdoll lying away from
+   *  where it stood); null: on the position. */
+  boundsCenter?: (out: THREE.Vector3) => THREE.Vector3 | null;
   frustumPadding?: number;
   /** Frames held visible after mount so the uploadOnFirstDraw warm draw can happen. Default 3. */
   forceVisibleFrames?: number;

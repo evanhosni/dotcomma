@@ -37,6 +37,7 @@ export const useActorLifecycle = ({
   fadeOut = false,
   spriteHandoffDistance,
   boundsRadius,
+  boundsCenter,
   frustumPadding = DEFAULT_FRUSTUM_PADDING,
   forceVisibleFrames = 3,
   colliderDistance,
@@ -147,7 +148,7 @@ export const useActorLifecycle = ({
     if (boundsRadius === undefined && spriteHandoffDistance === undefined) return true;
     let visible = true;
     if (boundsRadius !== undefined) {
-      boundsRef.center.copy(position);
+      if (!boundsCenter?.(boundsRef.center)) boundsRef.center.copy(position);
       boundsRef.radius = paddedBoundsRadius;
       visible = frustum.intersectsSphere(boundsRef) || distanceSq < closeThresholdSq;
     }

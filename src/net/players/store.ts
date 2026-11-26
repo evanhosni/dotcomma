@@ -8,7 +8,9 @@ import { onServerMessage } from "..";
 import { PosePlayback } from "../entities/posePlayback";
 import { pushSnapshot } from "../entities/utils";
 import type { Snapshot } from "../entities/types";
-import type { PlayerSnapshot, ServerMoveMessage } from "../protocol/types";
+import type { PlayerSnapshot, ServerMoveMessage, Vec3Tuple } from "../protocol/types";
+import { getConnectionState } from "..";
+import { getLocalPlayerBody, setLocalHealth } from "../../player/store";
 import { PLAYER_HEIGHT } from "../../player/spec";
 import type { AvatarSnapshot, RemotePlayer } from "./types";
 
@@ -35,7 +37,7 @@ const snapshotOf = (m: PlayerSnapshot | ServerMoveMessage): Snapshot => ({
   vz: m.vz,
 });
 
-const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ st: m.st, hy: m.hy, hp: m.hp, clip: m.clip, cs: m.cs, loop: m.loop, fm: m.fm, mh: m.mh, md: m.md });
+const avatarOf = (m: PlayerSnapshot | ServerMoveMessage): AvatarSnapshot => ({ st: m.st, hy: m.hy, hp: m.hp, clip: m.clip, cs: m.cs, loop: m.loop, fm: m.fm, mh: m.mh, md: m.md, wp: m.wp });
 
 const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   id: p.id,
@@ -47,10 +49,20 @@ const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
   z: p.z,
   avatars: [avatarOf(p)],
   meshes: [],
-  body: { form: p.fm, mavHost: p.mh, mavDepth: p.md, feetX: p.x, feetY: p.y - PLAYER_HEIGHT / 2, feetZ: p.z, yaw: p.ry, headYaw: p.hy, headPitch: p.hp, clip: p.clip, clipSpeed: p.cs, loop: p.loop, visible: false },
+  body: { form: p.fm, mavHost: p.mh, mavDepth: p.md, equipped: p.wp, wounds: p.wounds, shots: 0, feetX: p.x, feetY: p.y - PLAYER_HEIGHT / 2, feetZ: p.z, yaw: p.ry, headYaw: p.hy, headPitch: p.hp, clip: p.clip, clipSpeed: p.cs, loop: p.loop, visible: false },
   lastStamp: { x: Infinity, z: Infinity },
   shownMavHost: "",
+  dead: p.health <= 0,
 });
+
+/** A player's host died (player:died): the corpse drawers and, for the local player, the intro's rescan listen. */
+const deathListeners = new Set<(id: string, dir: Vec3Tuple, corpse: string) => void>();
+export const onPlayerDied = (fn: (id: string, dir: Vec3Tuple, corpse: string) => void): (() => void) => {
+  deathListeners.add(fn);
+  return () => {
+    deathListeners.delete(fn);
+  };
+};
 
 /** The live map — iterate it, never copy per frame. */
 export const getRemotePlayers = (): ReadonlyMap<string, RemotePlayer> => players;
@@ -89,5 +101,21 @@ onServerMessage((msg) => {
     case "player:clicked":
       console.log("you were clicked");
       break;
+    case "player:hurt": {
+      const p = players.get(msg.id);
+      if (p) p.body.wounds = msg.wounds;
+      else if (msg.id === getConnectionState().selfId) {
+        const body = getLocalPlayerBody();
+        if (body) body.wounds = msg.wounds;
+        setLocalHealth(msg.health);
+      }
+      break;
+    }
+    case "player:died": {
+      const p = players.get(msg.id);
+      if (p) p.dead = true;
+      deathListeners.forEach((fn) => fn(msg.id, msg.d, msg.corpse));
+      break;
+    }
   }
 });

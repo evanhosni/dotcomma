@@ -11,8 +11,11 @@ import { acquireModelClone, markPoseChanged, reclaimModelClone, releaseModelClon
 import { getLiveModelActor } from "../objects/actors/model/registry";
 import { createMavUnit, mavSeatOf, poseAlone, poseOnSeat } from "../objects/actors/mav-unit";
 import type { MavSeat } from "../objects/actors/mav-unit/types";
+import { EquippableHolder } from "../equippables/EquippableHolder";
+import { flashMuzzle, settleMuzzle } from "../weapons";
 import { registerPlayerBody } from "./registry";
 import type { PlayerBodyState } from "./types";
+import { lookOfBody } from "./utils";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
@@ -30,6 +33,9 @@ const ANIMATION = BEEBLE_SPEC.animation;
  * It also draws the player's MAV Unit (objects/actors/mav-unit/), by the state's form: alone where the state
  * stands (falling from the sky), screwing into its host NPC's head (while that NPC is mounted here), or worn
  * on this beeble's own head once it is the host, turning with every turn of it.
+ *
+ * A host's body bears its wounds (objects/actors/wounds/) and holds what it has equipped (equippables/: its
+ * arms posed over the animation to hold it where it looks), a weapon flashing at each of its shots (weapons/).
  */
 export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?: THREE.SkinnedMesh[] }) => {
   const gltf = useGLTF(MODEL, false);
@@ -54,7 +60,26 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
     return seat;
   };
 
+  const [items] = useState(() => new THREE.Group());
+  const holding = useMemo(() => new EquippableHolder(clone.scene, items), [clone, items]);
+  const shotsSeen = useRef(state.shots);
+  const lastMs = useRef(NaN);
+
   useEffect(() => () => void mav.removeFromParent(), [mav]);
+  useEffect(() => () => holding.dispose(), [holding]);
+
+  /** What it holds, after the animation: its arms up to hold it, a weapon flashing once per new shot. */
+  const hold = (nowMs: number): void => {
+    const dt = Number.isNaN(lastMs.current) ? 0 : Math.min(0.1, (nowMs - lastMs.current) / 1000);
+    lastMs.current = nowMs;
+    const host = state.form === "host";
+    const look = lookOfBody(state);
+    const item = holding.pose(host ? state.equipped : "", look.yaw, look.pitch, dt, host && state.visible);
+    if (holding.posing) markPoseChanged(clone);
+    if (item && state.shots !== shotsSeen.current) flashMuzzle(item, nowMs / 1000);
+    if (item) settleMuzzle(item, nowMs / 1000);
+    shotsSeen.current = state.shots;
+  };
 
   /** Where the unit is drawn this frame (see the component doc). */
   const placeMav = (): void => {
@@ -99,6 +124,7 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
       registerPlayerBody(state, (nowMs) => {
         const group = groupRef.current;
         placeMav();
+        clone.wounds.set(state.wounds);
         if (!group) return;
         group.visible = state.visible && state.form === "host";
         group.position.set(state.feetX, state.feetY, state.feetZ);
@@ -111,8 +137,9 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
         channel.setInput(HEAD_PITCH_INPUT, state.headPitch);
         // Posed in first person too: switching views shows the current frame, never a stale one.
         if (player.update(clone, group, channel.state, channel.inputs, nowMs)) markPoseChanged(clone);
-      }),
-    [state, clone, channel, player, mav, ownSeat],
+        hold(nowMs);
+      }, clone.scene),
+    [state, clone, channel, player, mav, ownSeat, holding],
   );
 
   return (
@@ -121,6 +148,7 @@ export const PlayerBody = ({ state, meshes }: { state: PlayerBodyState; meshes?:
         <primitive object={clone.scene} scale={BEEBLE_SPEC.scale ?? [1, 1, 1]} />
       </group>
       <group ref={holderRef} />
+      <primitive object={items} />
     </>
   );
 };

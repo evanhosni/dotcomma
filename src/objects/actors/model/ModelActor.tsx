@@ -28,6 +28,7 @@ import { MOUSE_RAYCAST_INTERVAL_FRAMES } from "../state/constants";
 import { useMouseEvents, useStateMachine } from "../state/hooks";
 import { useActorRagdoll } from "../ragdoll/hooks";
 import { registerLiveModelActor } from "./registry";
+import type { Wound } from "../../../net/protocol/types";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
@@ -196,6 +197,7 @@ export const ModelActor = ({
     rotationStep: motionConfig?.rotationStep,
     motionFrameRate: motionConfig?.frameRate,
     boundsRadius: pooled ? pooled.baseRadius * Math.max(scale[0], scale[1], scale[2]) : undefined,
+    boundsCenter: (out) => ragdoll.center(out),
     fadeOut: true,
     // Colliders gate on DISTANCE only: gating on the frustum rebuilt the Rapier
     // colliders every time the player turned around.
@@ -213,6 +215,7 @@ export const ModelActor = ({
       ctx.motion = motion;
       onFrame?.(state, delta, ctx);
       mover.step(delta, ctx, motion, serverDriven);
+      pooled?.wounds.set(ctx.sync?.state?.wounds as Wound[] | undefined);
       if (ragdoll.pose(pooled, state, ctx, serverDriven)) return;
       if (pooled) animate(pooled, state, ctx, serverDriven);
     },
@@ -246,7 +249,12 @@ export const ModelActor = ({
       get group() {
         return groupRef.current;
       },
+      get synced() {
+        return !!lifecycle.sync?.known;
+      },
+      bodyCenter: (out) => ragdoll.center(out) ?? out.copy(positionRef.current),
       setRagdoll: (on, impulse, hold) => ragdoll.setRagdoll(on, impulse, hold, !!lifecycle.sync?.known),
+      push: ragdoll.push,
       get ragdollPhase() {
         return ragdoll.phase;
       },

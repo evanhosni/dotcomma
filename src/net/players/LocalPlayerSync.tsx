@@ -42,6 +42,7 @@ type Velocity = { x: number; y: number; z: number };
 
 const avatarChanged = (body: PlayerBodyState, sent: PlayerAvatar): boolean =>
   body.form !== sent.fm ||
+  body.equipped !== sent.wp ||
   body.mavHost !== sent.mh ||
   Math.abs(body.mavDepth - sent.md) > MAV_DEPTH_THRESHOLD ||
   body.clip !== sent.clip ||
@@ -74,7 +75,7 @@ export const LocalPlayerSync = () => {
   const vel = useRef(new THREE.Vector3());
   const sentVel = useRef(new THREE.Vector3());
   const sentYaw = useRef(0);
-  const sentAvatar = useRef<PlayerAvatar>({ fm: "host", mh: "", md: 0, hy: 0, hp: 0, clip: "", cs: 1, loop: "repeat" }).current;
+  const sentAvatar = useRef<PlayerAvatar>({ fm: "host", mh: "", md: 0, wp: "", hy: 0, hp: 0, clip: "", cs: 1, loop: "repeat" }).current;
   const sentAt = useRef(0);
   const forceSend = useRef(false);
 
@@ -148,6 +149,7 @@ export const LocalPlayerSync = () => {
       fm: body?.form ?? "host",
       mh: body?.mavHost ?? "",
       md: body?.mavDepth ?? 0,
+      wp: body?.equipped ?? "",
     });
     if (!ok) return; // the next init forces a full send anyway
 
@@ -165,6 +167,7 @@ export const LocalPlayerSync = () => {
       sentAvatar.fm = body.form;
       sentAvatar.mh = body.mavHost;
       sentAvatar.md = body.mavDepth;
+      sentAvatar.wp = body.equipped;
     }
   }, -2);
 

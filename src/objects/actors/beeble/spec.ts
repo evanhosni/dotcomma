@@ -19,6 +19,7 @@ export const BEEBLE_SPEC: ActorSpec = {
   body: "kinematic",
   collider: BEEBLE_COLLIDER,
   movement: "ground",
+  health: 100,
   model: "/models/beeble.glb",
   footprint: 5,
   density: 200,
