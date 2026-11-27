@@ -17,7 +17,7 @@ export const Intro = () => {
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = onPlayerDied((id) => {
+    const unsubscribe = onPlayerDied(({ id }) => {
       const body = getLocalPlayerBody();
       if (id !== getConnectionState().selfId || !body) return;
       setPlayerHeld(true);

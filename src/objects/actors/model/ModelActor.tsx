@@ -28,13 +28,20 @@ import { MOUSE_RAYCAST_INTERVAL_FRAMES } from "../state/constants";
 import { useMouseEvents, useStateMachine } from "../state/hooks";
 import { useActorRagdoll } from "../ragdoll/hooks";
 import { registerLiveModelActor } from "./registry";
-import type { Wound } from "../../../net/protocol/types";
+import type { Cut, Vec3Tuple, Wound } from "../../../net/protocol/types";
+import { GIB_SPEED, GIB_SPIN } from "../slices/constants";
+import { cutKey } from "../slices/utils";
+import { fleshTemplatesOf } from "../slices/material";
 
 // A per-module path: drei 9.87's index re-exports SpotLight, which imports LinearEncoding (removed in three r162).
 
 // Animation LOD: no posing while frustum-culled, and every other frame past this fraction of the render distance.
 const ANIM_HALF_RATE_FRACTION = 0.4;
 const NO_INPUTS: AnimationInputs = {};
+const NO_CUTS: readonly Cut[] = [];
+/** A blow drawn here before the server's state says the same lasts this long without it (ms). */
+const STRIKE_PREDICTION_MS = 3000;
+const _blast = new THREE.Vector3();
 
 const taskQueue = new TaskQueue();
 
@@ -148,6 +155,9 @@ export const ModelActor = ({
   const localMotion = useRef(createMotionOutput()).current;
   const motion = machine ? machine.motion.out : localMotion;
   const [animPlayer] = useState(() => new AnimationPlayer(animation));
+  /** Its cuts and burst: the server's (state `cuts`, `gib`), and this client's own blow until they arrive.
+   *  `sawWhole`: it was seen uncut, so cuts that come now are FRESH (they bleed, a burst flings). */
+  const strike = useRef({ cuts: [] as Cut[], gib: null as Vec3Tuple | null, untilMs: 0, nowMs: 0, sawWhole: false, exploded: false }).current;
 
   // Phase-offset per instance, or a whole batch re-poses (and skips half-rate frames) on the same frame. The actor
   // base steps drawn movement on the same phase, so equal rates step body and pose together.
@@ -216,7 +226,9 @@ export const ModelActor = ({
       onFrame?.(state, delta, ctx);
       mover.step(delta, ctx, motion, serverDriven);
       pooled?.wounds.set(ctx.sync?.state?.wounds as Wound[] | undefined);
-      if (ragdoll.pose(pooled, state, ctx, serverDriven)) return;
+      const limp = ragdoll.pose(pooled, state, ctx, serverDriven);
+      if (pooled) slice(pooled, ctx, state.clock.elapsedTime * 1000);
+      if (limp) return;
       if (pooled) animate(pooled, state, ctx, serverDriven);
     },
   });
@@ -234,6 +246,32 @@ export const ModelActor = ({
   });
   const ragdoll = useActorRagdoll({ stateMachine, machine, motion, mover, animPlayer, animate });
 
+  /** The body's cuts, once it lies limp (a standing body's animation would pull its pieces about): the
+   *  server's, with this client's own blow until they arrive. A change rebuilds the ragdoll; a fresh burst
+   *  flings its pieces from the blast. */
+  const slice = (clone: PooledModelClone, ctx: ActorFrameContext, nowMs: number): void => {
+    strike.nowMs = nowMs;
+    const synced = ctx.sync?.known ? ctx.sync.state : undefined;
+    const serverCuts = (synced?.cuts as Cut[] | undefined) ?? NO_CUTS;
+    const serverGib = synced?.gib as Vec3Tuple | undefined;
+    if (ctx.sync?.known && serverCuts.length === 0 && !serverGib) strike.sawWhole = true;
+    if (ragdoll.phase !== "limp") return;
+    if (nowMs > strike.untilMs) {
+      strike.cuts = [];
+      strike.gib = null;
+    }
+    const kept = new Set(serverCuts.map(cutKey));
+    const mine = strike.cuts.filter((cut) => !kept.has(cutKey(cut)));
+    const gib = serverGib ?? strike.gib;
+    const fresh = strike.sawWhole || mine.length > 0 || strike.gib !== null;
+    if (!clone.slices.set(mine.length > 0 ? [...serverCuts, ...mine] : serverCuts, gib ? id : null, fresh)) return;
+    ragdoll.rebuild();
+    if (gib && fresh && !strike.exploded) {
+      strike.exploded = true;
+      ragdoll.explode(_blast.set(gib[0], gib[1], gib[2]), GIB_SPEED, GIB_SPIN);
+    }
+  };
+
   // reclaim/release are StrictMode-safe: the dev remount's cleanup schedules a
   // DEFERRED release that the immediate re-setup cancels.
   useEffect(() => {
@@ -241,6 +279,7 @@ export const ModelActor = ({
     reclaimModelClone(pooled);
     lifecycle.resetLife();
     animPlayer.reset();
+    Object.assign(strike, { cuts: [], gib: null, untilMs: 0, sawWhole: false, exploded: false });
     markPoseChanged(pooled);
     const detachRagdoll = ragdoll.attach(pooled.scene);
     const unregister = registerLiveModelActor({
@@ -255,6 +294,11 @@ export const ModelActor = ({
       bodyCenter: (out) => ragdoll.center(out) ?? out.copy(positionRef.current),
       setRagdoll: (on, impulse, hold) => ragdoll.setRagdoll(on, impulse, hold, !!lifecycle.sync?.known),
       push: ragdoll.push,
+      strike: (blow) => {
+        if (blow.cuts) strike.cuts = [...strike.cuts, ...blow.cuts];
+        if (blow.gib) strike.gib = blow.gib;
+        strike.untilMs = strike.nowMs + STRIKE_PREDICTION_MS;
+      },
       get ragdollPhase() {
         return ragdoll.phase;
       },
@@ -269,6 +313,8 @@ export const ModelActor = ({
 
     return () => {
       unregister();
+      // Before the ragdoll lets go: it restores the standing pose onto bones the slices put back.
+      pooled.slices.dispose();
       detachRagdoll();
       pooled.scene.visible = true;
       animPlayer.reset();
@@ -345,7 +391,7 @@ const ModelActorWarmup = ({ descriptor }: { descriptor: Pick<ModelActorAttribute
   const scene = useThree((state) => state.scene);
   useEffect(() => {
     const clone = acquireModelClone(model, gltf, quantization);
-    return warmPrograms(scene, [clone.scene], () => releaseModelClone(clone));
+    return warmPrograms(scene, [clone.scene, ...fleshTemplatesOf(clone.scene, quantization)], () => releaseModelClone(clone));
   }, [gltf, model, quantization, scene]);
   return null;
 };

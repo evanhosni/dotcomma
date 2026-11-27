@@ -1,5 +1,5 @@
 import type * as THREE from "three";
-import type { Vec3Tuple, Wound } from "../../net/protocol/types";
+import type { Cut, Vec3Tuple, Wound } from "../../net/protocol/types";
 
 /** A dead player's host, lying where it fell (Corpses.tsx). */
 export interface CorpseOrder {
@@ -10,6 +10,9 @@ export interface CorpseOrder {
   wounds: Wound[];
   /** The killing shot's direction: the body is thrown along it. */
   dir: Vec3Tuple;
+  /** The killing blow's cuts, and the blast it burst from (PlayerDiedMessage). */
+  cuts: Cut[];
+  gib?: Vec3Tuple;
 }
 
 /** A mounted corpse's part of the shared frame. */

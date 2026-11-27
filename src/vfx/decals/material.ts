@@ -93,3 +93,13 @@ export const BULLET_HOLE_SHAPE = /* glsl */ `
   else if (d < rim) decalColor = vec4(vec3(0.018, 0.015, 0.013), mix(0.9, 0.35, (d - core) / (rim - core)));
   else decalColor = vec4(vec3(0.01), 0.6);
 `;
+
+/** A blast's scorch: soot, darkest at its middle, its edge torn into flames' tongues. */
+export const SCORCH_SHAPE = /* glsl */ `
+  float a = atan(p.y, p.x);
+  float d = length(p);
+  float edge = 0.72 + 0.12 * decalWave(a, seed, 5.0) + 0.07 * decalWave(a, seed, 13.0);
+  if (d > edge) discard;
+  float soot = 1.0 - smoothstep(0.0, edge, d);
+  decalColor = vec4(vec3(0.012, 0.010, 0.008), mix(0.3, 0.95, soot));
+`;

@@ -10,6 +10,7 @@ import { RemotePlayers } from "../net/players/RemotePlayers";
 import { Corpses } from "../player/corpses/Corpses";
 import { WeaponDriver } from "../weapons/WeaponDriver";
 import { BloodSprays } from "../vfx/blood/BloodSprays";
+import { Explosions } from "../vfx/explosions/Explosions";
 import { Decals } from "../vfx/decals/Decals";
 import { LampGlowDriver } from "../lighting/lamp-glow/LampGlowDriver";
 import { GRAVITY } from "../physics/constants";
@@ -98,6 +99,7 @@ const CanvasContents = ({ children }: React.PropsWithChildren) => {
         <WeaponDriver />
         <Corpses />
         <BloodSprays />
+        <Explosions />
       </Physics>
       <Decals />
       <LocalPlayerSync />

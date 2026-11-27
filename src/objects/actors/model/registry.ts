@@ -1,6 +1,7 @@
 import type * as THREE from "three";
 import type { RagdollPhase } from "../ragdoll/types";
 import type { RagdollImpulse } from "../state/types";
+import type { Cut, Vec3Tuple } from "../../../net/protocol/types";
 
 /** A mounted model actor as code outside it reaches it, by its spawn id (the intro's host beeble, the MAV
  *  Unit screwing into its head). */
@@ -18,6 +19,9 @@ export interface LiveModelActor {
   setRagdoll(on: boolean, impulse?: RagdollImpulse, hold?: boolean): void;
   /** Shoves its limp body, as each client simulates it (a shot at a corpse); nothing while it stands. */
   push(impulse: RagdollImpulse): void;
+  /** A blow that cuts it (a blade) or bursts it from a blast at `gib` (slices/), drawn here as soon as it lies limp,
+   *  until the server's state says the same (or a few seconds pass without it). */
+  strike(blow: { cuts?: Cut[]; gib?: Vec3Tuple }): void;
   readonly ragdollPhase: RagdollPhase;
   /** Its real facing (rotation.y): the server's for a synced actor. The group's is the DRAWN one, stepped to
    *  each viewer's camera (MotionConfig.rotationStep). */

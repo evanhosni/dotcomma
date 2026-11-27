@@ -32,5 +32,12 @@ export const RAGDOLL_COLLISION_GROUPS = ((RAGDOLL_GROUP << 16) | (0xffff & ~RAGD
  *  under it): the ragdoll freezes where it is instead of falling forever. */
 export const MAX_DROP = 20;
 
+/** A piece sunk this far (u) below where its body was made is looked for under the ground: a ray from
+ *  RESCUE_ABOVE over where it was made, down to it. A surface there means it went through: it is put back
+ *  RESCUE_LIFT above it (Ragdoll.rescue). The ray starts low so a bridge or a roof over the body is never it. */
+export const RESCUE_DROP = 1.5;
+export const RESCUE_ABOVE = 0.5;
+export const RESCUE_LIFT = 0.15;
+
 /** A synced actor's predicted limp (LiveModelActor.setRagdoll) lasts this long without the server's word. */
 export const RAGDOLL_PREDICTION_MS = 3000;

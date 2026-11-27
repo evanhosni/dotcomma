@@ -119,6 +119,10 @@ export const useActorRagdoll = ({ stateMachine, machine, motion, mover, animPlay
     pose,
     /** Shoves the limp body (a shot at a corpse); nothing while it stands. */
     push: (impulse: RagdollImpulse): void => limb.ragdoll?.push(impulse),
+    /** The body was cut apart: new bodies for its pieces (Ragdoll.rebuild). */
+    rebuild: (): void => limb.ragdoll?.rebuild(),
+    /** A blast flings the limp body's parts (Ragdoll.explode). */
+    explode: (at: THREE.Vector3, speed: number, spin: number): void => limb.ragdoll?.explode(at, speed, spin),
     /** Where the limp body lies (null while it stands): it falls away from the actor's own position. */
     center: (out: THREE.Vector3): THREE.Vector3 | null => (limb.ragdoll?.active ? limb.ragdoll.center(out) : null),
     get phase(): RagdollPhase {

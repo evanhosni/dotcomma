@@ -1,8 +1,9 @@
 import * as THREE from "three";
-import type { ShotHit, Wound, WoundHole } from "../net/protocol/types";
+import type { CutPlane, ShotHit, Wound, WoundHole } from "../net/protocol/types";
 import { MAX_SHOT_HITS, MAX_WOUNDS_PER_SHOT } from "../objects/actors/wounds/constants";
+import { MAX_CUT_PLANES } from "../objects/actors/slices/constants";
 import type { ShotTarget } from "./types";
-import { BODY_TEST_RADIUS, EXIT_WOUND_SCALE, MAX_BODY_DEPTH } from "./constants";
+import { BODY_TEST_RADIUS, EXIT_WOUND_SCALE, MAX_BODY_DEPTH, SWING_ARC_COS } from "./constants";
 
 interface SurfaceHit {
   distance: number;
@@ -118,3 +119,79 @@ export const shotHitsOf = (ray: THREE.Ray, far: number, targets: Iterable<ShotTa
     .slice(0, MAX_SHOT_HITS)
     .map(({ target, hits }) => ({ kind: target.kind, id: target.id, at: [hits[0].point.x, hits[0].point.y, hits[0].point.z], wounds: woundsOf(ray, hits, woundRadius) }));
 };
+
+const _p = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const _q = new THREE.Vector3();
+const _to = new THREE.Vector3();
+const _bind = new THREE.Matrix4();
+const _planePoint = new THREE.Vector3();
+const _planeNormal = new THREE.Vector3();
+
+/**
+ * Every body a blade's swing cuts: the plane through `eye` with unit `normal` (across the swing, at right
+ * angles to the look) crossing the body's posed triangles in front of the eye within `reach` and the swing's
+ * arc. Each body's cut names every bone of every crossed triangle, with the swing's plane carried into the
+ * bind space as that bone has it now (net/protocol/types.ts Cut), so every client cuts the same body the same
+ * way. `at` is the crossing nearest the crosshair (the blood). Nearest first.
+ */
+export const sliceHitsOf = (eye: THREE.Vector3, look: THREE.Vector3, normal: THREE.Vector3, reach: number, targets: Iterable<ShotTarget>): ShotHit[] => {
+  const hits: { hit: ShotHit; distance: number }[] = [];
+  const ray = new THREE.Ray(eye, look);
+  for (const target of targets) {
+    if (target.origin.distanceTo(eye) > reach + BODY_TEST_RADIUS) continue;
+    const bones = new Set<number>();
+    let skeleton: THREE.Skeleton | null = null;
+    let best = Infinity;
+    const at = new THREE.Vector3();
+    for (const mesh of target.meshes) {
+      const index = mesh.geometry.index;
+      const skinIndex = mesh.geometry.getAttribute("skinIndex");
+      const skinWeight = mesh.geometry.getAttribute("skinWeight");
+      if (!index || !mesh.skeleton || !skinIndex || !skinWeight) continue;
+      skeleton = mesh.skeleton;
+      for (let i = 0; i < index.count; i += 3) {
+        const corners = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+        const side = corners.map((v, k) => normal.dot(_to.subVectors(mesh.getVertexPosition(v, _p[k]).applyMatrix4(mesh.matrixWorld), eye)));
+        if ((side[0] > 0) === (side[1] > 0) && (side[1] > 0) === (side[2] > 0)) continue;
+        let crossed = false;
+        for (let k = 0; k < 3; k++) {
+          const a = k;
+          const b = (k + 1) % 3;
+          if ((side[a] > 0) === (side[b] > 0)) continue;
+          _q.lerpVectors(_p[a], _p[b], side[a] / (side[a] - side[b]));
+          _to.subVectors(_q, eye);
+          const distance = _to.length();
+          if (distance > reach || _to.dot(look) < distance * SWING_ARC_COS) continue;
+          crossed = true;
+          const off = ray.distanceSqToPoint(_q);
+          if (off < best) {
+            best = off;
+            at.copy(_q);
+          }
+        }
+        if (!crossed) continue;
+        for (const v of corners) for (let c = 0; c < 4; c++) if (skinWeight.getComponent(v, c) > 0) bones.add(skinIndex.getComponent(v, c));
+      }
+    }
+    if (!skeleton || bones.size === 0) continue;
+    const planes: CutPlane[] = [];
+    for (const b of [...bones].slice(0, MAX_CUT_PLANES)) {
+      // World → the bind space as this bone carries it now (bone · bind⁻¹, inverted).
+      _bind.multiplyMatrices(skeleton.bones[b].matrixWorld, skeleton.boneInverses[b]).invert();
+      _planePoint.copy(eye).applyMatrix4(_bind);
+      _planeNormal.copy(normal).transformDirection(_bind);
+      planes.push({ b: skeleton.bones[b].name, nx: _planeNormal.x, ny: _planeNormal.y, nz: _planeNormal.z, d: _planeNormal.dot(_planePoint) });
+    }
+    hits.push({ hit: { kind: target.kind, id: target.id, at: [at.x, at.y, at.z], wounds: [], cuts: [{ p: planes }] }, distance: at.distanceTo(eye) });
+  }
+  return hits.sort((p, q) => p.distance - q.distance).slice(0, MAX_SHOT_HITS).map((h) => h.hit);
+};
+
+/** Every body within `radius` of a blast at `center` (its origin: the cheap test), nearest first: each bursts. */
+export const blastHitsOf = (center: THREE.Vector3, radius: number, targets: Iterable<ShotTarget>): ShotHit[] =>
+  [...targets]
+    .map((target) => ({ target, distance: target.origin.distanceTo(center) }))
+    .filter(({ distance }) => distance <= radius)
+    .sort((p, q) => p.distance - q.distance)
+    .slice(0, MAX_SHOT_HITS)
+    .map(({ target: t }) => ({ kind: t.kind, id: t.id, at: [t.origin.x, t.origin.y, t.origin.z], wounds: [], gib: true }));

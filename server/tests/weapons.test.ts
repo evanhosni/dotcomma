@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import type { MoveIntent, ServerMessage, ShootMessage, ShotHit, Wound } from "../../src/net/protocol/types";
+import type { Cut, MoveIntent, ServerMessage, ShootMessage, ShotHit, Wound } from "../../src/net/protocol/types";
 import { PLAYER_HEALTH } from "../../src/player/spec";
-import { REVOLVER_SPEC } from "../../src/weapons/spec";
+import { REVOLVER_SPEC, ROCKET_LAUNCHER_SPEC, SWORD_SPEC } from "../../src/weapons/spec";
 import { CORPSE_SECONDS } from "../../src/objects/actors/wounds/constants";
 
 // The data layer prepares statements at import against DATABASE_PATH, so the env is set BEFORE the
@@ -141,5 +141,45 @@ describe("weapons", () => {
     assert.equal(to("B", "player:hurt").length, 0);
     assert.equal(to("B", "shot").length, 2, "the shots themselves still fly");
     assert.deepEqual(to("B", "shot")[0].hits, []);
+  });
+
+  const CUT: Cut = { p: [{ b: "spine", nx: 0, ny: 1, nz: 0, d: 1 }] };
+
+  it("a blade's swing kills, and the corpse falls sliced by it; a bullet never cuts", () => {
+    const { world, to } = duel();
+    world.move("A", standing(0, SWORD_SPEC.id));
+    world.move("B", standing(2));
+    world.shoot("A", { t: "shoot", weapon: SWORD_SPEC.id, o: [0, 2, 0], d: [1, 0, 0], hits: [{ kind: "player", id: "B", at: [1.6, 1.2, 0], wounds: [], cuts: [CUT] }], end: null }, 1000);
+    assert.deepEqual(to("A", "player:died")[0].cuts, [CUT]);
+    assert.deepEqual(to("B", "shot")[0].hits[0].cuts, [CUT], "everyone else cuts it too");
+
+    const other = duel();
+    other.world.shoot("A", { ...shotAtB(), hits: [{ ...HIT_B, cuts: [CUT], gib: true }] }, 1000);
+    assert.deepEqual(other.to("B", "shot")[0].hits, [HIT_B], "a revolver's hit is a bullet's, whatever it claims");
+  });
+
+  it("a blast bursts every body near where it exploded, and none farther", () => {
+    const { world, to } = duel();
+    world.addSession("C", "identity-c", "overworld");
+    world.move("C", standing(20));
+    world.move("A", standing(0, ROCKET_LAUNCHER_SPEC.id));
+    const blast: ShootMessage = {
+      t: "shoot",
+      weapon: ROCKET_LAUNCHER_SPEC.id,
+      o: [0, 2, 0],
+      d: [1, 0, 0],
+      hits: [
+        { kind: "player", id: "B", at: [10, 1.2, 0], wounds: [] },
+        { kind: "player", id: "C", at: [20, 1.2, 0], wounds: [] },
+      ],
+      end: { at: [10.5, 1, 0], n: [-1, 0, 0] },
+    };
+    world.shoot("A", { ...blast, end: null }, 1000);
+    assert.equal(to("B", "shot").length, 0, "a blast is where it exploded, or nothing");
+    world.shoot("A", blast, 5000);
+    const died = to("A", "player:died");
+    assert.deepEqual(died.map((m) => m.id), ["B"], "C stood too far from it");
+    assert.deepEqual(died[0].gib, [10.5, 1, 0]);
+    assert.deepEqual(to("C", "shot")[0].hits, [{ kind: "player", id: "B", at: [10, 1.2, 0], wounds: [], gib: true }]);
   });
 });

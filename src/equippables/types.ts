@@ -21,6 +21,9 @@ export interface EquippableSpec {
   scale: number;
   /** For a two-armed AIM: how far before the chest the hands meet (u). */
   reach?: number;
+  /** First person: where it is drawn before the eye (camera space, u; weapons/constants.ts VIEW_OFFSET when
+   *  unset). */
+  view?: readonly [number, number, number];
   /** The weapon it fires (weapons/spec.ts id); none for a tool or a thing. */
   weapon?: string;
 }

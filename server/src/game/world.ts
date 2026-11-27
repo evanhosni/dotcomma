@@ -26,6 +26,9 @@ const MAX_OPEN_TUNNELS = 20000;
 const MAX_RETIRED = 100000;
 /** A shot may come this much faster than its weapon's rate (the client's clock and the network jitter). */
 const FIRE_RATE_SLACK = 0.8;
+/** A blast is sent where its rocket went off, after a flight of any length: two can come much closer
+ *  together than they were fired. */
+const BLAST_RATE_SLACK = 0.25;
 /** A shot starts within this of the shooter's reported position (its eye, a step it has taken since). */
 const SHOT_ORIGIN_REACH = 6;
 /** A hit on a player lies within this of its reported position. */
@@ -34,6 +37,8 @@ const PLAYER_HIT_REACH = 4;
 const CORPSE_HIT_REACH = 25;
 /** A bullet's stop lies at most this past the weapon's range (u: the hit test's rounding). */
 const END_SLACK = 1;
+/** A body a blast burst lies within this past its radius (u: a body's origin is not its nearest point). */
+const BLAST_SLACK = 1.5;
 
 const hslToHex = (h: number, s: number, l: number): string => {
   const sat = s / 100;
@@ -325,44 +330,50 @@ export class World {
     const s = this.sessions.get(id);
     const weapon = weaponOf(m.weapon);
     if (!s || !weapon || s.dead || s.fm !== "host" || s.wp !== weapon.id) return;
-    if (now - s.lastShotAt < weapon.fireInterval * 1000 * FIRE_RATE_SLACK) return;
+    if (now - s.lastShotAt < weapon.fireInterval * 1000 * (weapon.attack === "blast" ? BLAST_RATE_SLACK : FIRE_RATE_SLACK)) return;
+    // A blast's `o` is the shooter's eye as it went off: it may have walked since it fired.
     if (distance(m.o, s) > SHOT_ORIGIN_REACH) return;
+    const end = m.end && distance(m.o, m.end.at) <= weapon.range + (weapon.blastRadius ?? 0) + END_SLACK ? m.end : null;
+    // A blast is where it exploded, or nothing.
+    if (weapon.attack === "blast" && !end) return;
     s.lastShotAt = now;
     const landed: ShotHit[] = [];
     const seen = new Set<string>();
-    for (const hit of m.hits) {
+    for (const raw of m.hits) {
+      const hit = strikeOf(raw, weapon);
       const key = hit.kind + ":" + hit.id;
-      if (seen.has(key) || distance(m.o, hit.at) > weapon.range) continue;
+      if (seen.has(key) || distance(m.o, hit.at) > weapon.range + (weapon.blastRadius ?? 0)) continue;
+      if (weapon.attack === "blast" && distance(end!.at, hit.at) > weapon.blastRadius! + BLAST_SLACK) continue;
       seen.add(key);
-      if (this.applyHit(s, hit, weapon, m.d, now)) landed.push(hit);
+      if (this.applyHit(s, hit, weapon, m.d, hit.gib ? end!.at : undefined, now)) landed.push(hit);
     }
-    const end = m.end && distance(m.o, m.end.at) <= weapon.range + END_SLACK ? m.end : null;
     this.out.sendMany(this.room(s.domain), { t: "shot", id, weapon: weapon.id, o: m.o, d: m.d, hits: landed, end }, id);
   }
 
   /** One body a shot went through; false when it cannot be that body (another domain, not where it is said
    *  to be, already gone). */
-  private applyHit(s: Session, hit: ShotHit, weapon: WeaponSpec, dir: Vec3Tuple, now: number): boolean {
-    if (hit.kind === "npc") return this.entities.shoot(hit.id, s.domain, weapon, hit.wounds, dir, hit.at, now);
+  private applyHit(s: Session, hit: ShotHit, weapon: WeaponSpec, dir: Vec3Tuple, gib: Vec3Tuple | undefined, now: number): boolean {
+    if (hit.kind === "npc") return this.entities.shoot(hit.id, s.domain, weapon, { wounds: hit.wounds, cuts: hit.cuts, gib }, dir, hit.at, now);
     if (hit.kind === "corpse") {
       const corpse = this.corpses.get(hit.id);
       return !!corpse && corpse.until > now && corpse.domain === s.domain && distance(hit.at, corpse.at) <= CORPSE_HIT_REACH;
     }
     const target = this.sessions.get(hit.id);
     if (!target || target === s || target.domain !== s.domain || target.dead || target.fm !== "host" || distance(hit.at, target) > PLAYER_HIT_REACH) return false;
-    this.hurtPlayer(target, weapon.damage, hit.wounds, dir, now);
+    this.hurtPlayer(target, weapon.damage, hit, dir, gib, now);
     return true;
   }
 
-  /** A player is hit: its wounds kept, its health taken; at 0 its host is a corpse (everyone told). */
-  private hurtPlayer(s: Session, damage: number, wounds: Wound[], dir: Vec3Tuple, now: number): void {
-    this.setHealth(s, Math.max(0, s.health - damage), [...s.wounds, ...wounds].slice(-MAX_WOUNDS));
+  /** A player is hit: its wounds kept, its health taken; at 0 its host is a corpse (everyone told), sliced or
+   *  burst by the blow that killed it. */
+  private hurtPlayer(s: Session, damage: number, hit: ShotHit, dir: Vec3Tuple, gib: Vec3Tuple | undefined, now: number): void {
+    this.setHealth(s, Math.max(0, s.health - damage), [...s.wounds, ...hit.wounds].slice(-MAX_WOUNDS));
     if (s.health > 0) return;
     s.dead = true;
     for (const [key, c] of this.corpses) if (c.until <= now) this.corpses.delete(key);
     const corpse = `${s.id}~${++this.corpseCount}`;
     this.corpses.set(corpse, { domain: s.domain, at: [s.x, s.y, s.z], until: now + CORPSE_SECONDS * 1000 });
-    this.out.sendMany(this.room(s.domain), { t: "player:died", id: s.id, d: dir, corpse });
+    this.out.sendMany(this.room(s.domain), { t: "player:died", id: s.id, d: dir, corpse, ...(hit.cuts ? { cuts: hit.cuts } : {}), ...(gib ? { gib } : {}) });
   }
 
   private setHealth(s: Session, health: number, wounds: Wound[]): void {
@@ -446,3 +457,11 @@ export class World {
     }
   }
 }
+
+/** A hit as its weapon can strike: only a blade cuts, only a blast bursts (every body it reaches). */
+const strikeOf = (hit: ShotHit, weapon: WeaponSpec): ShotHit => {
+  const { cuts, gib, ...rest } = hit;
+  if (weapon.attack === "blade" && cuts) return { ...rest, cuts };
+  if (weapon.attack === "blast") return { ...rest, gib: true };
+  return rest;
+};

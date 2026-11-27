@@ -8,7 +8,7 @@ import { onServerMessage } from "..";
 import { PosePlayback } from "../entities/posePlayback";
 import { pushSnapshot } from "../entities/utils";
 import type { Snapshot } from "../entities/types";
-import type { PlayerSnapshot, ServerMoveMessage, Vec3Tuple } from "../protocol/types";
+import type { PlayerDiedMessage, PlayerSnapshot, ServerMoveMessage, Vec3Tuple } from "../protocol/types";
 import { getConnectionState } from "..";
 import { getLocalPlayerBody, setLocalHealth } from "../../player/store";
 import { PLAYER_HEIGHT } from "../../player/spec";
@@ -56,8 +56,8 @@ const fromSnapshot = (p: PlayerSnapshot): RemotePlayer => ({
 });
 
 /** A player's host died (player:died): the corpse drawers and, for the local player, the intro's rescan listen. */
-const deathListeners = new Set<(id: string, dir: Vec3Tuple, corpse: string) => void>();
-export const onPlayerDied = (fn: (id: string, dir: Vec3Tuple, corpse: string) => void): (() => void) => {
+const deathListeners = new Set<(death: PlayerDiedMessage) => void>();
+export const onPlayerDied = (fn: (death: PlayerDiedMessage) => void): (() => void) => {
   deathListeners.add(fn);
   return () => {
     deathListeners.delete(fn);
@@ -114,7 +114,7 @@ onServerMessage((msg) => {
     case "player:died": {
       const p = players.get(msg.id);
       if (p) p.dead = true;
-      deathListeners.forEach((fn) => fn(msg.id, msg.d, msg.corpse));
+      deathListeners.forEach((fn) => fn(msg));
       break;
     }
   }

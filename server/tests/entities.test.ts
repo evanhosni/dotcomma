@@ -15,7 +15,7 @@ import { PhysicsWorld } from "../src/game/physics/physicsWorld.js";
 import { BEEBLE_SPEC } from "../../src/objects/actors/beeble/spec";
 import { RAGDOLL_STATE } from "../../src/objects/actors/state/constants";
 import { CORPSE_SECONDS } from "../../src/objects/actors/wounds/constants";
-import { REVOLVER_SPEC } from "../../src/weapons/spec";
+import { REVOLVER_SPEC, ROCKET_LAUNCHER_SPEC, SWORD_SPEC } from "../../src/weapons/spec";
 
 /** One physics world for the suite (WASM init once); an unbounded budget builds chunks on the first tick. */
 let pw: PhysicsWorld;
@@ -388,7 +388,7 @@ describe("EntityManager (server authority)", () => {
     const wound = { entry: { b: ["body"], w: [1], x: 0, y: 1.3, z: 0.1, nx: 0, ny: 0, nz: 1, r: REVOLVER_SPEC.woundRadius }, exit: null };
     const t0 = Date.now();
     const shots = Math.ceil(BEEBLE_SPEC.health! / REVOLVER_SPEC.damage);
-    for (let i = 0; i < shots; i++) assert.ok(m.shoot(ID, "overworld", REVOLVER_SPEC, [wound], [0, 0, -1], [10, 4, 20], t0));
+    for (let i = 0; i < shots; i++) assert.ok(m.shoot(ID, "overworld", REVOLVER_SPEC, { wounds: [wound] }, [0, 0, -1], [10, 4, 20], t0));
     const e = m.get(ID)!;
     assert.ok(m.isDead(ID));
     assert.equal(e.state.dead, true);
@@ -398,10 +398,27 @@ describe("EntityManager (server authority)", () => {
     m.setRagdoll(ID, false);
     m.tick(t0 + 2 * TICK_MS);
     assert.equal(e.runner!.currentStateId, RAGDOLL_STATE, "a dead body never gets up");
-    assert.equal(m.shoot(ID, "overworld", REVOLVER_SPEC, [wound], [0, 0, -1], [90, 4, 20], t0), false, "a hit far from it is not its");
+    assert.equal(m.shoot(ID, "overworld", REVOLVER_SPEC, { wounds: [wound] }, [0, 0, -1], [90, 4, 20], t0), false, "a hit far from it is not its");
     m.tick(t0 + CORPSE_SECONDS * 1000 + TICK_MS);
     assert.deepEqual(gone, [ID]);
     assert.equal(m.get(ID), undefined);
+  });
+
+  it("a dead NPC keeps the cuts it took, in order, and the first blast that burst it", () => {
+    const h = makeHost();
+    const m = manager(h);
+    h.setPlayer("A", 10, 25);
+    regBeeble(m, "A");
+    const cut = (d: number) => ({ p: [{ b: "spine", nx: 0, ny: 1, nz: 0, d }] });
+    const t0 = Date.now();
+    assert.ok(m.shoot(ID, "overworld", SWORD_SPEC, { wounds: [], cuts: [cut(1)] }, [0, 0, -1], [10, 4, 20], t0));
+    assert.ok(m.isDead(ID), "one swing kills");
+    m.shoot(ID, "overworld", SWORD_SPEC, { wounds: [], cuts: [cut(2)] }, [0, 0, -1], [10, 4, 20], t0);
+    m.shoot(ID, "overworld", ROCKET_LAUNCHER_SPEC, { wounds: [], gib: [10, 4, 21] }, [0, 0, -1], [10, 4, 20], t0);
+    m.shoot(ID, "overworld", ROCKET_LAUNCHER_SPEC, { wounds: [], gib: [99, 4, 21] }, [0, 0, -1], [10, 4, 20], t0);
+    const e = m.get(ID)!;
+    assert.deepEqual(e.state.cuts, [cut(1), cut(2)]);
+    assert.deepEqual(e.state.gib, [10, 4, 21]);
   });
 });
 

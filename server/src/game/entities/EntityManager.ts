@@ -5,7 +5,8 @@ import { INTERACT_REACH_SLACK, serverInteractReachSq } from "../../../../src/obj
 import type { ActorSpec } from "../../../../src/objects/actors/spec";
 import { StateMachineRunner } from "../../../../src/objects/actors/state/StateMachineRunner";
 import { RAGDOLL_IMPULSE_KEY } from "../../../../src/objects/actors/state/constants";
-import type { Wound } from "../../../../src/net/protocol/types";
+import type { Cut, Vec3Tuple, Wound } from "../../../../src/net/protocol/types";
+import { MAX_CUTS } from "../../../../src/objects/actors/slices/constants";
 import { CORPSE_SECONDS, KILL_CARRY, KILL_PUSH, MAX_WOUNDS } from "../../../../src/objects/actors/wounds/constants";
 import type { WeaponSpec } from "../../../../src/weapons/spec";
 import { isPlayerSolid, PLAYER_DETECTABILITY } from "../../../../src/player/spec";
@@ -191,9 +192,19 @@ export class EntityManager {
   }
 
   /** A hit (World.shoot): the wounds are kept with the entity's state for every client to draw; an NPC with
-   *  health loses it, and at 0 dies: limp for good, thrown along the bullet. False when the hit cannot be
-   *  this entity's (another domain, or too far from it). */
-  shoot(id: string, domain: DomainId, weapon: WeaponSpec, wounds: Wound[], dir: [number, number, number], at: [number, number, number], now = Date.now()): boolean {
+   *  health loses it, and at 0 dies: limp for good, thrown along the bullet. A dead body keeps a blade's
+   *  cuts (the first MAX_CUTS: every client cuts them in that order) and a blast's centre (`gib`: it burst).
+   *  False when the hit cannot be this entity's (another domain, or too far from it). */
+  shoot(
+    id: string,
+    domain: DomainId,
+    weapon: WeaponSpec,
+    blow: { wounds: Wound[]; cuts?: Cut[]; gib?: Vec3Tuple },
+    dir: [number, number, number],
+    at: [number, number, number],
+    now = Date.now(),
+  ): boolean {
+    const { wounds } = blow;
     const e = this.entities.get(id);
     if (!e || e.domain !== domain || (at[0] - e.x) ** 2 + (at[2] - e.z) ** 2 > HIT_REACH * HIT_REACH) return false;
     const kept = [...((e.state.wounds as Wound[] | undefined) ?? []), ...wounds].slice(-MAX_WOUNDS);
@@ -205,6 +216,7 @@ export class EntityManager {
     }
     const health = Math.max(0, ((e.state.health as number | undefined) ?? maxHealth) - weapon.damage);
     e.state = { ...e.state, wounds: kept, health };
+    if (health <= 0) e.state = withBlow(e.state, blow);
     if (health > 0 || this.deadAt.has(id)) {
       this.send(e, { state: e.state });
       return true;
@@ -386,3 +398,11 @@ export class EntityManager {
     );
   }
 }
+
+/** A dead body's state with a blow's cuts (the first MAX_CUTS kept) and burst (the first blast's centre). */
+const withBlow = (state: Record<string, unknown>, blow: { cuts?: Cut[]; gib?: Vec3Tuple }): Record<string, unknown> => {
+  const next = { ...state };
+  if (blow.cuts?.length) next.cuts = [...((state.cuts as Cut[] | undefined) ?? []), ...blow.cuts].slice(0, MAX_CUTS);
+  if (blow.gib && !state.gib) next.gib = blow.gib;
+  return next;
+};

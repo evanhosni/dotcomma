@@ -25,8 +25,9 @@
  *   server → shot    {id, weapon, o, d, hits, end} to the rest of the domain: draw it (flash, blood, holes
  *                                                 in a player's corpse, the bullet hole where it stopped)
  *   server → player:hurt {id, health, wounds}      to the domain: a player's health and every wound it bears
- *   server → player:died {id, d, corpse}           to the domain, the victim included: its beeble is a corpse
- *                                                 (id `corpse`, thrown along d), its MAV Unit rescans from the sky
+ *   server → player:died {id, d, corpse, cuts?, gib?}  to the domain, the victim included: its beeble is a corpse
+ *                                                 (id `corpse`, thrown along d, sliced by `cuts`, burst from `gib`),
+ *                                                 its MAV Unit rescans from the sky
  *   client → player:click {id}                    a click on another player's beeble
  *   server → player:clicked {by}                  to the clicked player only (same domain)
  *   client → domain  {domain}                     leave old room + join new + fresh init
@@ -84,14 +85,34 @@ export interface Wound {
   exit: WoundHole | null;
 }
 
+/** One bone's share of a blade's cut: the blade's plane in the model's BIND space as that bone carried it
+ *  when the blade passed (n·p = d, n unit). A vertex is cut by the plane of its heaviest bone named in the
+ *  cut; `b` "*" is every bone (an explosion's cuts, objects/actors/slices/). */
+export interface CutPlane {
+  b: string;
+  nx: number;
+  ny: number;
+  nz: number;
+  d: number;
+}
+
+/** A slice through a body (objects/actors/slices/): its surface is cut along the planes, and whatever the
+ *  cut parts falls apart, each piece capped with flesh. */
+export interface Cut {
+  p: CutPlane[];
+}
+
 /** What a shot hit: an NPC entity, a player (session id) or a dead player's corpse (its PlayerDiedMessage
  *  `corpse`), where (world point: the blood), and the wounds it left, the entry and (when it passed through)
- *  the exit. */
+ *  the exit. A blade's hit carries its `cuts`; a blast's hit is `gib`: the body bursts into chunks, flung
+ *  from the shot's `end`. */
 export interface ShotHit {
   kind: "npc" | "player" | "corpse";
   id: string;
   at: Vec3Tuple;
   wounds: Wound[];
+  cuts?: Cut[];
+  gib?: boolean;
 }
 
 /** What a player's beeble shows beyond its position and facing (player/PlayerBody.tsx). */
@@ -310,6 +331,9 @@ export interface PlayerDiedMessage {
   d: Vec3Tuple;
   /** The corpse's id, unique in the server's run: shots at it name it (ShotHit kind "corpse"). */
   corpse: string;
+  /** The killing blow's slices, and the blast's centre when it burst the body (ShotHit). */
+  cuts?: Cut[];
+  gib?: Vec3Tuple;
 }
 
 /** A manhole or door of the domain changed: to every player in it, the toggler included. */

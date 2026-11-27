@@ -1,6 +1,6 @@
 # Equippables
 
-Anything a beeble holds in its hands: today the revolver. One system for every one, the player's and (later)
+Anything a beeble holds in its hands: today the revolver, the AK-47, the sword and the rocket launcher. One system for every one, the player's and (later)
 an NPC's.
 
 ## How it works
@@ -9,11 +9,14 @@ an NPC's.
   id a player holds from `move.wp`): its `arms` (an array of `ARM.LEFT` / `ARM.RIGHT`, [enums.ts](enums.ts):
   the item sits in the FIRST one's hand), its `hold` (`HOLD.AIM`: the arms point where the holder looks;
   `HOLD.CARRY`: the arms are left to the animation), its `grip` (the point of the model the hand closes on),
-  `scale`, a two-armed aim's `reach`, and the `weapon` it fires (weapons/spec.ts), if any.
+  `scale`, a two-armed aim's `reach`, where first person draws it (`view`), and the `weapon` it fires
+  (weapons/spec.ts), if any.
 - **The model** ([registry.ts](registry.ts) `EQUIPPABLE_MODELS`, by id): a builder per item, one fresh model
   per hand that holds it and one for the first-person view. Its own space: forward +z, up +y, the grip where
-  the spec says. The revolver's is a PLACEHOLDER ([revolver/](revolver/index.ts): procedural geometry); its
-  GLB replaces the builder, nothing else.
+  the spec says. Each is a PLACEHOLDER of procedural shapes (its own folder: [revolver/](revolver/index.ts),
+  [ak47/](ak47/index.ts), [sword/](sword/index.ts), [rocket-launcher/](rocket-launcher/index.ts), which also
+  builds the rocket in flight), merged by look and assembled with its muzzle flash by [utils.ts](utils.ts)
+  over the shared looks in [material.ts](material.ts); its GLB replaces the builder, nothing else.
 - **What the local player has** ([store.ts](store.ts)): what it carries (`STARTING_EQUIPPABLES`) and what is in
   its hands ("" empty-handed). **Hold Tab** for the wheel ([menus/overlay/EquipWheelOverlay.tsx](../menus/overlay/EquipWheelOverlay.tsx)):
   the mouse steers to a slice instead of turning the view; letting go of Tab takes it in hand. Only a beeble

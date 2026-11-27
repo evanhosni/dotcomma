@@ -158,7 +158,7 @@ src/
     bridges/ (chains rules crossings deck ground census)  underground/ (field caves sewers chunks)  snow/  rocks/
   objects/  THE GAME OBJECTS; types.ts = the attribute hierarchy  README
     actors/  base: hooks.ts (useActorLifecycle) material.ts store.ts spec.ts registry.ts
-      model/ (ModelActor, clone pool, colliders/)  spawning/ (ActorPool, spawn.worker)  state/  ragdoll/  mav-unit/  beeble/  building/
+      model/ (ModelActor, clone pool, colliders/)  spawning/ (ActorPool, spawn.worker)  state/  ragdoll/  wounds/  slices/ (cuts, bursts)  mav-unit/  beeble/  building/
     dressing/  base: hooks.tsx (useSolidDressing) geometry.ts (instancing) registry.ts (enumerators, collider specs)
       street-lamps/ road-markers/ traffic-lights/ power-lines/ bridges/ rocks/ snow-drift/ waterfall-boulders/
     foliage/  base: FoliageField.tsx (createFoliage) + foliage.worker; grass/ seaweed/
@@ -178,7 +178,7 @@ src/
     underground/  the tunnels: Caves Sewers Rooms .tsx, TunnelsDriver, underground.worker   water/  sky/
   animation/ (AnimationChannel, AnimationPlayer)  lighting/ (day-night lamp-glow personal-light)  physics/ (THE capsule
   resolver, movement-modifiers, tunnel-rules)  player/  net/ (protocol/ = THE wire copy)  context/  save/  menus/overlay/
-  vfx/ (PostProcessing, material.ts patchers, spawn-fade/, screen-pass/ = THE post chain)
+  vfx/ (PostProcessing, material.ts patchers, spawn-fade/, screen-pass/ = THE post chain, blood/ decals/ explosions/)
   utils/  utils.ts (reportContentError) math/ cursor/ task-queue/ spike-trace/ worker-client/ render/ (three: warm-up, freezing)
 config/jest/rendererStub.js  what jest maps a worker client to
 server/  src/{index.ts transport/ data/ game/ cli/}, tests/; build.mjs is THE build  README

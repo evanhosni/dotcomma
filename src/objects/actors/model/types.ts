@@ -3,6 +3,7 @@ import type { ActorFrameContext } from "../types";
 import type { ColliderSpec, MovementKind } from "../spec";
 import type { MotionOutput } from "../state/types";
 import type { WoundSet } from "../wounds/WoundSet";
+import type { SliceSet } from "../slices/SliceSet";
 
 export interface KinematicMoverOptions {
   enabled: boolean;
@@ -31,6 +32,10 @@ export interface PooledModelClone {
   actions: Map<string, THREE.AnimationAction>;
   /** Its bullet holes: whoever draws the clone sets them; the pool clears them. */
   wounds: WoundSet;
+  /** Its cuts (a blade's, a blast's): whoever draws the clone sets them, before its ragdoll lets go. */
+  slices: SliceSet;
+  /** The quantization grid baked into its materials (undefined: the global one). */
+  quantization: number | undefined;
   /** Unscaled bind-pose bounding radius; per-instance radius = this × max(scale). */
   baseRadius: number;
   releaseTimer: ReturnType<typeof setTimeout> | null;

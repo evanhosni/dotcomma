@@ -1,14 +1,29 @@
 import type Rapier from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
 import type { RagdollImpulse } from "../state/types";
-import { ANGULAR_DAMPING, LINEAR_DAMPING, MAX_DROP, MAX_PART_MASS, MAX_PART_SPEED, MAX_PART_SPIN, MIN_LEAF_PART_SIZE, MIN_PART_HALF_EXTENT, MIN_PART_MASS, MIN_PART_VERTICES, PART_BOX_SCALE, PART_DENSITY, PART_FRICTION, RAGDOLL_COLLISION_GROUPS } from "./constants";
+import { ANGULAR_DAMPING, LINEAR_DAMPING, MAX_DROP, RESCUE_ABOVE, RESCUE_DROP, RESCUE_LIFT, MAX_PART_MASS, MAX_PART_SPEED, MAX_PART_SPIN, MIN_LEAF_PART_SIZE, MIN_PART_HALF_EXTENT, MIN_PART_MASS, MIN_PART_VERTICES, PART_BOX_SCALE, PART_DENSITY, PART_FRICTION, RAGDOLL_COLLISION_GROUPS } from "./constants";
 import type { SkeletonLayout } from "./types";
+import { skeletonLayoutOf } from "./utils";
 
 interface Part {
   bone: THREE.Bone;
   body: Rapier.RigidBody;
   /** The nearest ancestor with a body of its own; null for a root of the ragdoll. */
   parent: Part | null;
+  /** Its height when its body was made (a root's: where the ground it may sink through lies). */
+  restY: number;
+}
+
+interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** How a part moves as a body is (re)built. */
+interface PartMotion {
+  linear: Vec3;
+  angular: Vec3 | null;
 }
 
 interface BonePose {
@@ -57,6 +72,7 @@ const capture = (poses: BonePose[]): void => {
  */
 export class Ragdoll {
   private parts: Part[] = [];
+  /** The model's own bones (a slice adds copies: slices/SliceSet.ts; they are found again at each build). */
   private readonly bones: THREE.Bone[] = [];
   /** The bones as they stood when it went limp: what a re-pose starts from (a clip that does not move a
    *  bone must find it where it was, not where the ragdoll dropped it). */
@@ -71,7 +87,7 @@ export class Ragdoll {
     private readonly rapier: typeof Rapier,
     /** The actor's root: its bones are under it. */
     private readonly root: THREE.Object3D,
-    private readonly layout: SkeletonLayout,
+    private layout: SkeletonLayout,
   ) {
     root.traverse((node) => {
       if ((node as THREE.Bone).isBone) this.bones.push(node as THREE.Bone);
@@ -88,17 +104,72 @@ export class Ragdoll {
    *  a change of velocity given to one bone's body. */
   start(impulse: RagdollImpulse | null, velocity: { x: number; y: number; z: number } | null): void {
     if (this.active) return;
-    const { world, rapier } = this;
     this.root.updateWorldMatrix(true, true);
     capture(this.standing);
+    const rootY = this.build(() => (velocity ? { linear: velocity, angular: null } : null));
+    if (impulse) this.push(impulse);
+    this.lowestY = rootY - MAX_DROP;
+    this.frozen = false;
+  }
+
+  /** The body was cut apart (slices/SliceSet.ts): new bodies for the bones as they hang now, each moving as
+   *  the part it came from did (a bone's copy as its source), so the fall carries on. */
+  rebuild(): void {
+    if (!this.active) return;
+    const motion = new Map<THREE.Object3D, PartMotion>();
+    for (const part of this.parts) motion.set(part.bone, { linear: part.body.linvel(), angular: part.body.angvel() });
+    this.removeBodies();
+    this.layout = skeletonLayoutOf(this.root) ?? this.layout;
+    this.root.updateWorldMatrix(true, true);
+    this.build((bone) => {
+      for (let node: THREE.Object3D | null = bone; node; node = (node.userData.sliceSource as THREE.Object3D | undefined) ?? node.parent) {
+        const found = motion.get(node);
+        if (found) return found;
+      }
+      return null;
+    });
+    if (this.frozen) this.freeze();
+  }
+
+  /** Flings every part away from `at` (a blast), up to `speed` (u/s), tumbling up to `spin` (rad/s). */
+  explode(at: THREE.Vector3, speed: number, spin: number): void {
+    if (!this.active || this.frozen) return;
+    for (const part of this.parts) {
+      const t = part.body.translation();
+      _v.set(t.x - at.x, t.y - at.y, t.z - at.z);
+      const falloff = 1 / (1 + _v.length() * 0.35);
+      _v.normalize();
+      // Out and up, never down: a chunk at the ground flung into it would go through.
+      _v.y = Math.abs(_v.y) + 0.6;
+      _v.normalize().multiplyScalar(speed * falloff * (0.55 + Math.random() * 0.45));
+      const v = part.body.linvel();
+      part.body.setLinvel({ x: v.x + _v.x, y: v.y + _v.y, z: v.z + _v.z }, true);
+      part.body.setAngvel({ x: (Math.random() - 0.5) * 2 * spin, y: (Math.random() - 0.5) * 2 * spin, z: (Math.random() - 0.5) * 2 * spin }, true);
+    }
+  }
+
+  /** A body per bone that enough of the mesh follows, joined to its nearest bodied ancestor; a bone with no
+   *  bodied ancestor (the hips, or the top of a piece a cut parted) always gets one when any vertex follows
+   *  it. Returns the lowest root's height. */
+  private build(motionOf: (bone: THREE.Bone) => PartMotion | null): number {
+    const { world, rapier } = this;
+    const bones: THREE.Bone[] = [];
+    this.root.traverse((node) => {
+      if ((node as THREE.Bone).isBone) bones.push(node as THREE.Bone);
+    });
     const byBone = new Map<THREE.Object3D, Part>();
     let rootY = Infinity;
 
-    for (const bone of this.bones) {
+    for (const bone of bones) {
       const shape = this.layout.shapes.get(bone.name);
-      if (!shape || shape.vertices < MIN_PART_VERTICES) continue;
-      const leaf = !bone.children.some((child) => (child as THREE.Bone).isBone);
-      if (leaf && shape.max.distanceTo(shape.min) < MIN_LEAF_PART_SIZE) continue;
+      if (!shape) continue;
+      let parent: Part | null = null;
+      for (let node = bone.parent; node && node !== this.root && !parent; node = node.parent) parent = byBone.get(node) ?? null;
+      if (parent) {
+        if (shape.vertices < MIN_PART_VERTICES) continue;
+        const leaf = !bone.children.some((child) => (child as THREE.Bone).isBone);
+        if (leaf && shape.max.distanceTo(shape.min) < MIN_LEAF_PART_SIZE) continue;
+      }
       bone.matrixWorld.decompose(_position, _quaternion, _scale);
       const body = world.createRigidBody(
         rapier.RigidBodyDesc.dynamic()
@@ -123,8 +194,6 @@ export class Ragdoll {
         body,
       );
 
-      let parent: Part | null = null;
-      for (let node = bone.parent; node && node !== this.root && !parent; node = node.parent) parent = byBone.get(node) ?? null;
       if (parent) {
         const p = parent.body.translation();
         const r = parent.body.rotation();
@@ -133,17 +202,17 @@ export class Ragdoll {
       } else {
         rootY = Math.min(rootY, _position.y);
       }
-      if (velocity) body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
-      const part: Part = { bone, body, parent };
+      const motion = motionOf(bone);
+      if (motion) {
+        body.setLinvel({ x: motion.linear.x, y: motion.linear.y, z: motion.linear.z }, true);
+        if (motion.angular) body.setAngvel({ x: motion.angular.x, y: motion.angular.y, z: motion.angular.z }, true);
+      }
+      const part: Part = { bone, body, parent, restY: _position.y };
       byBone.set(bone, part);
       this.parts.push(part);
     }
-
-    if (impulse) this.push(impulse);
-    this.lowestY = rootY - MAX_DROP;
-    this.frozen = false;
+    return rootY;
   }
-
   /** Shoves the limp body (a no-op while it stands, or once it fell through the ground): `impulse` to its
    *  bone's part, its `carry` to the rest. */
   push(impulse: RagdollImpulse): void {
@@ -171,6 +240,7 @@ export class Ragdoll {
     if (!this.active) return;
     for (const part of this.parts) {
       clampSpeed(part.body);
+      if (!this.frozen && !part.parent && part.body.translation().y < part.restY - RESCUE_DROP) this.rescue(part, part.body.translation());
       const t = part.body.translation();
       const r = part.body.rotation();
       const parent = part.bone.parent!;
@@ -179,6 +249,26 @@ export class Ragdoll {
       part.bone.quaternion.copy(_parentQuaternion).invert().multiply(_q.set(r.x, r.y, r.z, r.w));
       if (!part.parent) part.bone.position.set(t.x, t.y, t.z).applyMatrix4(_parentInverse.copy(parent.matrixWorld).invert());
       if (!this.frozen && !part.parent && t.y < this.lowestY) this.freeze();
+    }
+  }
+
+  /** A root's piece fell through the ground (a long frame's physics step, a fast chunk): when a fixed surface
+   *  lies between where it was made and where it is now, the whole piece is put back on it, at rest. A body
+   *  falling off a ledge has nothing above it, and falls on. */
+  private rescue(root: Part, t: Vec3): void {
+    const from = root.restY + RESCUE_ABOVE;
+    const ray = new this.rapier.Ray({ x: t.x, y: from, z: t.z }, { x: 0, y: -1, z: 0 });
+    const hit = this.world.castRay(ray, from - t.y, true, this.rapier.QueryFilterFlags.ONLY_FIXED | this.rapier.QueryFilterFlags.EXCLUDE_SENSORS);
+    if (!hit) return;
+    const dy = from - hit.timeOfImpact + RESCUE_LIFT - t.y;
+    for (const part of this.parts) {
+      let top = part;
+      while (top.parent) top = top.parent;
+      if (top !== root) continue;
+      const p = part.body.translation();
+      part.body.setTranslation({ x: p.x, y: p.y + dy, z: p.z }, true);
+      part.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      part.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
   }
 

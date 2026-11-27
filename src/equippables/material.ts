@@ -1,18 +1,29 @@
 import * as THREE from "three";
-import { prepareActorMaterial } from "../../objects/actors/material";
+import { prepareActorMaterial } from "../objects/actors/material";
 
-/** The placeholder's look: blued steel and a walnut grip. */
-let materials: { metal: THREE.Material; wood: THREE.Material; flash: THREE.SpriteMaterial } | null = null;
+/** Every equippable's look (the placeholders' until their GLBs): blued steel, walnut, polished blade steel,
+ *  olive drab, black grip tape, and the muzzle flash. */
+let materials: {
+  metal: THREE.Material;
+  wood: THREE.Material;
+  blade: THREE.Material;
+  drab: THREE.Material;
+  grip: THREE.Material;
+  flash: THREE.SpriteMaterial;
+} | null = null;
 
-export const revolverMaterials = () => {
+export const equippableMaterials = () => {
   if (materials) return materials;
   // Low metalness: the world has no environment map (as the MAV Unit's, mav-unit/material.ts).
   const metal = new THREE.MeshStandardMaterial({ color: "#3c4148", metalness: 0.35, roughness: 0.35, flatShading: true });
   const wood = new THREE.MeshStandardMaterial({ color: "#5b3720", metalness: 0, roughness: 0.7, flatShading: true });
+  const blade = new THREE.MeshStandardMaterial({ color: "#c9d0d6", metalness: 0.45, roughness: 0.18, flatShading: true });
+  const drab = new THREE.MeshStandardMaterial({ color: "#4c5233", metalness: 0.1, roughness: 0.6, flatShading: true });
+  const grip = new THREE.MeshStandardMaterial({ color: "#1b1a19", metalness: 0, roughness: 0.85, flatShading: true });
   // Procedural geometry is off the quantization lattice.
-  for (const m of [metal, wood]) prepareActorMaterial(m, { skipQuantization: true });
+  for (const m of [metal, wood, blade, drab, grip]) prepareActorMaterial(m, { skipQuantization: true });
   const flash = new THREE.SpriteMaterial({ color: new THREE.Color(1, 0.85, 0.45), map: flashTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
-  materials = { metal, wood, flash };
+  materials = { metal, wood, blade, drab, grip, flash };
   return materials;
 };
 

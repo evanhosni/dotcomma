@@ -8,7 +8,8 @@ import { Ragdoll } from "../../objects/actors/ragdoll/Ragdoll";
 import { skeletonLayoutOf } from "../../objects/actors/ragdoll/utils";
 import { collectSkinnedMeshes } from "../../objects/actors/model/geometry";
 import { KILL_CARRY, KILL_PUSH, MAX_WOUNDS } from "../../objects/actors/wounds/constants";
-import type { Wound } from "../../net/protocol/types";
+import type { Cut, Wound } from "../../net/protocol/types";
+import { GIB_SPEED, GIB_SPIN } from "../../objects/actors/slices/constants";
 import { registerCorpse } from "./registry";
 import type { CorpseOrder, CorpseStep } from "./types";
 
@@ -58,6 +59,18 @@ export const Corpse = ({ order, steps }: { order: CorpseOrder; steps: Set<Corpse
     const ragdoll = new Ragdoll(world, rapier, clone.scene, layout);
     const [dx, dy, dz] = order.dir;
     ragdoll.start({ bone: order.wounds[order.wounds.length - 1]?.entry.b[0] ?? "", x: dx * KILL_PUSH, y: dy * KILL_PUSH, z: dz * KILL_PUSH, carry: KILL_CARRY }, null);
+    let cuts: Cut[] = order.cuts;
+    let gib = order.gib ?? null;
+    let exploded = false;
+    /** Its cuts and burst (slices/): the killing blow's, then every later strike's. */
+    const slice = (): void => {
+      if (!clone.slices.set(cuts, gib ? order.id : null, true)) return;
+      ragdoll.rebuild();
+      if (!gib || exploded) return;
+      exploded = true;
+      ragdoll.explode(new THREE.Vector3(gib[0], gib[1], gib[2]), GIB_SPEED, GIB_SPIN);
+    };
+    slice();
     const meshes: THREE.SkinnedMesh[] = [];
     collectSkinnedMeshes(clone.scene as THREE.Group, meshes);
     const unregister = registerCorpse({
@@ -69,6 +82,11 @@ export const Corpse = ({ order, steps }: { order: CorpseOrder; steps: Set<Corpse
         clone.wounds.set(wounds);
       },
       push: (impulse) => ragdoll.push(impulse),
+      strike: (blow) => {
+        if (blow.cuts) cuts = [...cuts, ...blow.cuts];
+        if (blow.gib) gib ??= blow.gib;
+        slice();
+      },
     });
     const step: CorpseStep = () => {
       ragdoll.step();
@@ -78,6 +96,8 @@ export const Corpse = ({ order, steps }: { order: CorpseOrder; steps: Set<Corpse
     return () => {
       unregister();
       steps.delete(step);
+      // Before the ragdoll lets go: it restores the standing pose onto bones the slices put back.
+      clone.slices.dispose();
       ragdoll.dispose();
       markPoseChanged(clone);
       releaseModelClone(clone);

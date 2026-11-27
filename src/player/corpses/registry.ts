@@ -1,5 +1,5 @@
 import type * as THREE from "three";
-import type { Wound } from "../../net/protocol/types";
+import type { Cut, Vec3Tuple, Wound } from "../../net/protocol/types";
 import type { RagdollImpulse } from "../../objects/actors/state/types";
 
 /** A dead player's corpse lying on this client, as a shot reaches it (weapons/). */
@@ -11,6 +11,8 @@ export interface LiveCorpse {
   /** A shot's new holes, kept with the ones it died with. */
   wound(wounds: readonly Wound[]): void;
   push(impulse: RagdollImpulse): void;
+  /** A blade's cuts, or a blast's burst from `gib` (objects/actors/slices/). */
+  strike(blow: { cuts?: Cut[]; gib?: Vec3Tuple }): void;
 }
 
 const live = new Map<string, LiveCorpse>();

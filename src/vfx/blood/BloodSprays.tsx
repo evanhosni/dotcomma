@@ -5,11 +5,11 @@ import * as THREE from "three";
 import { prepareActorMaterial } from "../../objects/actors/material";
 import { instancedTemplate, warmPrograms } from "../../utils/render";
 import { stampDecal } from "../decals";
-import { takeBloodBursts } from ".";
+import { liveBleeders, sprayBlood, takeBloodBursts } from ".";
 import type { BloodBurst } from ".";
 
 /** Bursts in the air at once: a new one past it takes the oldest's place. */
-const MAX_BURSTS = 48;
+const MAX_BURSTS = 64;
 const DROPS = 180;
 const DROP_SIZE: [number, number] = [0.03, 0.1];
 const GRAVITY = 9.8;
@@ -20,6 +20,9 @@ const BACK_SPEED: [number, number] = [0.8, 3.5];
 const SPREAD = 3.2;
 /** In the air at most this long (s), unless it lands first. */
 const FLIGHT_SECONDS: [number, number] = [0.9, 1.6];
+/** A stump's spurt: every BLEED_INTERVAL (s), this share of a burst, out of the stump. */
+const BLEED_INTERVAL = 0.14;
+const BLEED_AMOUNT = 0.22;
 /** A landed drop's decal is this much wider than the drop. */
 const SPLAT_SPREAD: [number, number] = [2, 5];
 
@@ -40,15 +43,21 @@ const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
 const between = ([lo, hi]: [number, number]): number => lo + Math.random() * (hi - lo);
 
 /** Launches a burst's drops from its wound (the mesh's origin: positions stay small, COORDINATE_PRECISION.md). */
-const launch = (burst: Burst, { at, dir }: BloodBurst, now: number): void => {
+const launch = (burst: Burst, { at, dir, amount }: BloodBurst, now: number): void => {
   burst.mesh.position.set(at[0], at[1], at[2]);
   burst.mesh.updateMatrix();
   burst.mesh.updateMatrixWorld();
   burst.mesh.visible = true;
   burst.bornAt = now;
   const d = burst.drops;
+  const drops = Math.round(DROPS * Math.min(1, Math.max(0, amount)));
   for (let i = 0; i < DROPS; i++) {
     const o = i * STRIDE;
+    if (i >= drops) {
+      d[o + 6] = 0;
+      burst.mesh.setMatrixAt(i, HIDDEN);
+      continue;
+    }
     const forward = Math.random() < FORWARD_SHARE;
     const speed = forward ? between(FORWARD_SPEED) : -between(BACK_SPEED);
     d[o] = d[o + 1] = d[o + 2] = 0;
@@ -154,6 +163,12 @@ export const BloodSprays = () => {
 
   useFrame((state, delta) => {
     const now = state.clock.elapsedTime;
+    const spurt = Math.floor(now / BLEED_INTERVAL) !== Math.floor((now - delta) / BLEED_INTERVAL);
+    for (const bleeder of liveBleeders()) {
+      bleeder.until ??= now + bleeder.seconds;
+      if (now > bleeder.until) liveBleeders().delete(bleeder);
+      else if (spurt && bleeder.frame(_p, _s)) sprayBlood([_p.x, _p.y, _p.z], [_s.x, _s.y, _s.z], BLEED_AMOUNT);
+    }
     for (const asked of takeBloodBursts()) {
       const free = bursts.find((b) => !b.mesh.visible) ?? bursts.reduce((oldest, b) => (b.bornAt < oldest.bornAt ? b : oldest));
       launch(free, asked, now);

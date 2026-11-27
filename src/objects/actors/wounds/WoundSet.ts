@@ -4,17 +4,12 @@ import { ATTACHMENT_FLAG } from "../model/store";
 import { MAX_WOUNDS } from "./constants";
 import { woundRimGeometry, woundTunnelGeometry } from "./geometry";
 import { woundTunnelMaterial, woundUniformsOf } from "./material";
+import { skinnedFrameOf, skinnedPointWorld } from "./utils";
+import type { SkinnedPoint } from "./utils";
 import type { WoundUniforms } from "./material";
 
-/** A hole as drawn: its bind-space point and normal, and the bones (with their bind inverses) that move it,
- *  by weight. */
-interface PlacedHole {
-  bones: THREE.Bone[];
-  inverses: THREE.Matrix4[];
-  weights: number[];
-  bind: THREE.Vector3;
-  /** The skin's outward normal at the hole. */
-  normal: THREE.Vector3;
+/** A hole as drawn: a point skinned as the surface under it, and its radius. */
+interface PlacedHole extends SkinnedPoint {
   radius: number;
 }
 
@@ -29,29 +24,7 @@ const _exit = new THREE.Vector3();
 const _along = new THREE.Vector3();
 const _turn = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
-const _blend = new THREE.Matrix4();
-const _part = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
-
-/** The hole's skinning now: Σ weight · bone · bind⁻¹, as the surface around it is skinned (the root-relative
- *  skinning, model/RootRelativeSkeleton.ts, draws the same world points). */
-const blendOf = (hole: PlacedHole): THREE.Matrix4 => {
-  _blend.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-  for (let i = 0; i < hole.bones.length; i++) {
-    _part.multiplyMatrices(hole.bones[i].matrixWorld, hole.inverses[i]);
-    for (let e = 0; e < 16; e++) _blend.elements[e] += _part.elements[e] * hole.weights[i];
-  }
-  return _blend;
-};
-
-const worldPointOf = (hole: PlacedHole, out: THREE.Vector3): THREE.Vector3 => out.copy(hole.bind).applyMatrix4(blendOf(hole));
-
-/** Where a hole is now, and which way its skin faces there. */
-const worldFrameOf = (hole: PlacedHole, point: THREE.Vector3, normal: THREE.Vector3): void => {
-  const blend = blendOf(hole);
-  point.copy(hole.bind).applyMatrix4(blend);
-  normal.copy(hole.normal).transformDirection(blend);
-};
 
 /** A mesh's world matrix: at `at`, its +y along the unit `direction`, scaled (sx, sy, sx). */
 const standAlong = (mesh: THREE.Object3D, at: THREE.Vector3, direction: THREE.Vector3, sx: number, sy: number): void => {
@@ -76,7 +49,6 @@ export class WoundSet {
   private source: readonly Wound[] = [];
   private readonly uniforms: WoundUniforms[];
   private readonly meshes: THREE.Mesh[] = [];
-  private skeleton: THREE.Skeleton | null = null;
   private readonly writeForCamera = (_r: unknown, _s: unknown, camera: THREE.Camera): void => this.write(camera);
 
   constructor(private readonly root: THREE.Object3D, materials: readonly THREE.Material[]) {
@@ -85,8 +57,6 @@ export class WoundSet {
       const mesh = node as THREE.SkinnedMesh;
       if (!mesh.isSkinnedMesh) return;
       this.meshes.push(mesh);
-      // One skeleton per clone (model/store.ts dedupes them by source).
-      this.skeleton ??= mesh.skeleton;
     });
   }
 
@@ -115,7 +85,8 @@ export class WoundSet {
   }
 
   private place(hole: WoundHole): PlacedHole | null {
-    const skeleton = this.skeleton;
+    // One skeleton per clone (model/store.ts dedupes them by source), read live: a slice replaces it.
+    const skeleton = (this.meshes[0] as THREE.SkinnedMesh | undefined)?.skeleton;
     if (!skeleton) return null;
     const normal = new THREE.Vector3(hole.nx, hole.ny, hole.nz).normalize();
     const placed: PlacedHole = { bones: [], inverses: [], weights: [], bind: new THREE.Vector3(hole.x, hole.y, hole.z), normal, radius: hole.r };
@@ -148,8 +119,8 @@ export class WoundSet {
   /** The tunnel from `entry` to `exit`, or, with no exit, a pocket closing POCKET_DEPTH radii into the body. */
   private addTunnel(entry: PlacedHole, exit: PlacedHole | null, seed: number): void {
     this.addFlesh(woundTunnelGeometry(entry.radius, exit ? exit.radius : 0, seed), (mesh) => {
-      worldFrameOf(entry, _point, _normal);
-      if (exit) _along.subVectors(worldPointOf(exit, _exit), _point);
+      skinnedFrameOf(entry, _point, _normal);
+      if (exit) _along.subVectors(skinnedPointWorld(exit, _exit), _point);
       else _along.copy(_normal).multiplyScalar(-entry.radius * POCKET_DEPTH);
       const length = _along.length();
       standAlong(mesh, _point, length > 0 ? _along.divideScalar(length) : _normal, 1, length);
@@ -159,7 +130,7 @@ export class WoundSet {
   /** The hole's rim, along its skin. */
   private addRim(hole: PlacedHole, seed: number): void {
     this.addFlesh(woundRimGeometry(seed), (mesh) => {
-      worldFrameOf(hole, _point, _normal);
+      skinnedFrameOf(hole, _point, _normal);
       standAlong(mesh, _point, _normal, hole.radius, hole.radius);
     });
   }
@@ -175,7 +146,7 @@ export class WoundSet {
   private write(camera: THREE.Camera): void {
     for (let i = 0; i < this.holes.length; i++) {
       const hole = this.holes[i];
-      worldPointOf(hole, _point).applyMatrix4(camera.matrixWorldInverse);
+      skinnedPointWorld(hole, _point).applyMatrix4(camera.matrixWorldInverse);
       for (const u of this.uniforms) u.uHoles.value[i].set(_point.x, _point.y, _point.z, hole.radius);
     }
   }

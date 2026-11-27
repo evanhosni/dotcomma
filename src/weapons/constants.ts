@@ -20,3 +20,16 @@ export const MAX_BODY_DEPTH = 1.5;
 export const BODY_TEST_RADIUS = 2.5;
 /** An exit hole is wider than its entry. */
 export const EXIT_WOUND_SCALE = 1.3;
+
+/** A blade cuts what its swing's plane crosses in front of the eye, within this angle of the look (cos). */
+export const SWING_ARC_COS = Math.cos((75 * Math.PI) / 180);
+/** First person: a swing sweeps the blade this far across (radians) over SWING_SECONDS. */
+export const SWING_SWEEP = 2.2;
+export const SWING_SECONDS = 0.22;
+/** Each swing turns its plane off the horizontal by up to this (radians), alternating sides. */
+export const SWING_TILT = 0.9;
+/** A rocket flies this fast (u/s), and strikes a body passing within ROCKET_BODY_RADIUS of its origin. */
+export const ROCKET_SPEED = 45;
+export const ROCKET_BODY_RADIUS = 0.8;
+/** An automatic's kick, as a share of a single shot's. */
+export const AUTOMATIC_RECOIL = 0.4;

@@ -19,11 +19,11 @@ export const Corpses = () => {
 
   useEffect(
     () =>
-      onPlayerDied((id, dir, corpse) => {
+      onPlayerDied(({ id, d: dir, corpse, cuts, gib }) => {
         const body = id === getConnectionState().selfId ? getLocalPlayerBody() : getRemotePlayers().get(id)?.body;
         const from = body && playerBodyModel(body);
         if (!body || !from) return;
-        const order: CorpseOrder = { id: corpse, from, wounds: body.wounds, dir };
+        const order: CorpseOrder = { id: corpse, from, wounds: body.wounds, dir, cuts: cuts ?? [], gib };
         setOrders((list) => [...list, order]);
         setTimeout(() => setOrders((list) => list.filter((o) => o !== order)), CORPSE_SECONDS * 1000);
       }),

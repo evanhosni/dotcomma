@@ -1,8 +1,9 @@
 import { isDomainId } from "../../../src/net/protocol/utils";
 import { MAX_CLIP_NAME_LENGTH, MAX_CLIP_SPEED, PLAYER_DATA_MAX_BYTES, TUNNEL_TOGGLE_ID } from "../../../src/net/protocol/constants";
 import { HOST_STEPS } from "../../../src/net/protocol/enums";
-import type { ClientMessage, EntityRegisterItem, HostStep, MoveIntent, ShotHit, ShotImpact, Vec3Tuple, Wound, WoundHole } from "../../../src/net/protocol/types";
+import type { ClientMessage, Cut, CutPlane, EntityRegisterItem, HostStep, MoveIntent, ShotHit, ShotImpact, Vec3Tuple, Wound, WoundHole } from "../../../src/net/protocol/types";
 import { MAX_SHOT_HITS, MAX_WOUNDS_PER_SHOT } from "../../../src/objects/actors/wounds/constants";
+import { MAX_CUT_PLANES } from "../../../src/objects/actors/slices/constants";
 import { MAX_ID_LENGTH, MAX_ENTITIES_PER_MESSAGE } from "./constants";
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -65,12 +66,38 @@ const parseWounds = (raw: unknown): Wound[] | null => {
 
 const isUnit = (v: Vec3Tuple): boolean => Math.abs(Math.hypot(...v) - 1) <= 0.01;
 
+const parseCutPlane = (raw: unknown): CutPlane | null => {
+  if (!isPlainObject(raw)) return null;
+  const { b, nx, ny, nz, d } = raw;
+  if (!isId(b) || ![nx, ny, nz, d].every(isFiniteNumber) || !isUnit([nx as number, ny as number, nz as number])) return null;
+  return { b, nx: nx as number, ny: ny as number, nz: nz as number, d: d as number };
+};
+
+/** A hit's slices: one blade's swing cuts a body once. undefined: malformed. */
+const parseCuts = (raw: unknown): Cut[] | null | undefined => {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw) || raw.length > 1) return undefined;
+  const out: Cut[] = [];
+  for (const cut of raw) {
+    if (!isPlainObject(cut) || !Array.isArray(cut.p) || cut.p.length === 0 || cut.p.length > MAX_CUT_PLANES) return undefined;
+    const planes = cut.p.map(parseCutPlane);
+    if (!planes.every((p): p is CutPlane => p !== null)) return undefined;
+    out.push({ p: planes });
+  }
+  return out;
+};
+
 const parseShotHit = (raw: unknown): ShotHit | null => {
   if (!isPlainObject(raw)) return null;
   const at = parseVec3(raw.at);
   const wounds = parseWounds(raw.wounds);
-  if ((raw.kind !== "npc" && raw.kind !== "player" && raw.kind !== "corpse") || !isId(raw.id) || !at || !wounds) return null;
-  return { kind: raw.kind, id: raw.id, at, wounds };
+  const cuts = parseCuts(raw.cuts);
+  if ((raw.kind !== "npc" && raw.kind !== "player" && raw.kind !== "corpse") || !isId(raw.id) || !at || !wounds || cuts === undefined) return null;
+  if (raw.gib !== undefined && raw.gib !== true) return null;
+  const hit: ShotHit = { kind: raw.kind, id: raw.id, at, wounds };
+  if (cuts && cuts.length > 0) hit.cuts = cuts;
+  if (raw.gib) hit.gib = true;
+  return hit;
 };
 
 const parseShotHits = (raw: unknown): ShotHit[] | null => {
